@@ -43,11 +43,22 @@ Five groups, one role each:
    lose on some axis, reported anyway.
 4. **Multimodal — Ackley / Rastrigin**, d=100 (drop to 50 if cost bites). A
    lattice/funnel of local minima. Serves **P①**. NAAdam appears **only** here.
-5. **Invariance panel — unit-rescaling consistency.** Run the headline problem
-   (or the diag control) re-measured in two unit systems. Show soar-lite's
-   trajectory is unit-equivalent under the coordinate transform with **zero
-   retune**, while Adam needs a different `α`. This is a *property demo*, not a
-   race — it is the cleanest exhibit of invariant #2.
+5. **Invariance panel — unit-rescaling consistency.** Run on the diag control
+   (or the headline in its single-basin regime): re-measure in two unit
+   systems, **zero retune**. Claim is **outcome-level, not trajectory-level**:
+   the best-so-far vs nfev curves overlap in both unit systems, while Adam's
+   separate (one system needs a different `α`). Exact per-step covariance
+   (`x̃=c·x ⇒ d̃=c²d, Δx̃=c·Δx`) is real but holds only for the secant-based
+   steady state: the **Armijo warmup is by design not coordinate-invariant** (a
+   scalar `α` applied uniformly across mixed-unit coords), so the first secant
+   pair — and anything seeded by it — is not the transformed pair
+   (`ALGORITHM.md` §1.4/§7). On the diagonal quadratic this self-corrects in
+   one step (`d` reads `1/Hᵢ` exactly, independent of the seed pair's scale),
+   so the diag control gives clean overlap; a general/multimodal problem would
+   **not** guarantee same basin, so never use one for this panel. The exact
+   claim is asserted at the step level (injected secant pair, as in
+   `test_diag_step_scales_with_the_coordinate_unit`); the end-to-end claim is
+   asserted statistically. A *property demo*, not a race.
 
 ## dfbench (Learn2Design-2026) relationship
 
