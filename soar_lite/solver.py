@@ -1,0 +1,242 @@
+"""The default local solver: diagonal secant preconditioning (first order).
+
+`DiagonalPreconditioner` descends along ``-d ⊙ g``, where the per-coordinate
+scale ``d`` is the magnitude ratio of one secant pair (|Δx|/|Δy| in ``abs``
+mode, √(Δx²/Δy²) in ``rms`` mode), smoothed over the path's history. It
+implements the engine's `LocalSolver` contract and owns only direction, step
+size and acceptance - no curvature model, no Hessian.
+"""
+
+import math
+
+import jax.numpy as jnp
+
+from soar_lite.engine import LocalSolver, PathPoint, Verdict
+
+
+class DiagonalPreconditioner(LocalSolver):
+    """Per-coordinate secant magnitude ratio with a gradient-norm floor.
+
+    Each coordinate carries its own effective inverse curvature d_i, of
+    dimension [x]²/[f], estimated from the magnitude ratio of one secant
+    (s = x_k - x_{k-1}, y = g_k - g_{k-1}), and the step is Δx_i = -d_i·g_i.
+    Two equivalent spellings, picked by ``l1`` (default L2):
+
+        L1: S₁ = EMA(|s|), Y₁ = EMA(|y|), d = S₁/max(Y₁, λ)
+        L2: S₂ = EMA(s²), Y₂ = EMA(y²), d = √(S₂/max(Y₂, λ))
+
+    Both are unit-invariant: scaling x by c scales d by c² and the step by c,
+    while scaling f by c_f scales d by 1/c_f and leaves the step alone. The
+    floor λ = θ·|g_i| (L1) or θ·g_i² (L2), θ dimensionless, is anchored to the
+    *current* gradient, so a flat-but-not-converged coordinate (y → 0 while
+    g ≠ 0) still gets a finite step; a truly converged coordinate is caught by
+    the stopping test below instead. The floor joins via ``max``, not ``+``:
+    λ is a pure guard on Y → 0, never a deflation of a curvature-dominated
+    coordinate (the additive spelling shrinks every d by √(Y/(Y+λ)), measured
+    as dead weight in the unbounded-space probe — the max-floor arm).
+    d ≥ 0 by construction, so -d⊙g is always a
+    descent direction and needs no acceptance test. Named "diagonal
+    preconditioner", not "diagonal Newton": coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside
+    |y_i| and makes d a biased estimator of 1/Hᵢᵢ.
+
+    Two phases per path. The warm-up (the first step) is a plain backtracking
+    line search along -g from a fixed start length ``alpha`` = 1 - a magnitude
+    ratio needs one secant pair before it can estimate anything. The shrink
+    factor (``backtrack``) and the Armijo slope c (``armijo_c``) make the
+    backtracking's
+    own step-length sequence coordinate-free (alpha multiplies the direction,
+    and both constants are dimensionless), but the direction scales the wrong
+    way: a step must add a
+    length-like direction, while -g scales like a gradient (with 1/x under
+    x̃=cx), not like a length, so the warm-up step still carries the coordinate
+    scale. Nothing scalar can repair that; a length-like direction could
+    (physical spans, or a box-width scaling), which matters
+    only if the working box ever stops being [0,1]ᵈ - where the engine's clip
+    absorbs it today. Nothing nonmonotone is used: the reference is the step's
+    own start f, so the test is monotone. Once that pair is in hand the default
+    (ls_rounds=1) accepts the full step unconditionally: no backoff, an
+    overshoot is left to the next secant to correct (Zhang-Li is deliberately
+    dropped). With ls_rounds >= 2 the step samples an alpha grid along -d⊙g and
+    takes the argmin, handing the win to the engine's per-step argmin cache and
+    folding it through ``fold``.
+
+    The stopping test is a gradient-norm test: ‖g‖ ≤ τ_rel·‖g_0‖ gives up, the
+    engine's only way to report a path that is done. The norm (not the
+    per-coordinate test |g_i| ≤ τ_rel·|g_0,i|) keeps one flat coordinate from
+    pinning a path "alive" (a flat-start coordinate that never satisfies the
+    test) or "dead" (a huge-start coordinate that passes immediately): only the
+    gradient's aggregated size relative to its starting size counts, and τ_rel
+    stays dimensionless. That is also the hook a Zhang-Li / λ_min saddle escape
+    would attach to; it is not implemented.
+
+    Derivation: the secant equation ``B·s = y`` read one coordinate at a time
+    (``y_i = B_ii·s_i``, couplings dropped) gives ``d_i = 1/B_ii = s_i/y_i`` -
+    the ratio of the observed displacement to the observed gradient change in
+    that coordinate. The step is then ``dx = -diag(B)^{-1}·g = -d⊙g``:
+    multiplying by ``d`` is what turns a gradient-like direction (whose scale
+    runs opposite to the coordinate's) into a displacement-like one. The same
+    object falls out of the diagonal degeneration of the SR1 update; the secant
+    equation is the shorter route to it. Nothing here is a matrix method: no B
+    is stored, and the smoothing acts on the secant pair, not on the ratio.
+    """
+
+    def __init__(  # noqa: PLR0913 - each knob is a distinct, independently-swept facet
+        self,
+        *,
+        beta: float = 0.95,  # EMA decay; the window is ≈ 1/(1-β) steps
+        theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| (L1) / θ·g_i² (L2)
+        tau_rel: float = 1e-6,  # gradient-norm stopping test vs ‖g_0‖
+        l1: bool = False,  # False = L2 (mean-square ratio), True = L1 (mean ratio)
+        ls_rounds: int = 1,  # post-warmup alpha-grid size; 1 = no line search
+        backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
+        armijo_c: float = 1e-4,  # warm-up Armijo sufficient-decrease slope
+    ) -> None:
+        """Store the knobs; per-path state is seeded by init.
+
+        ``backtrack`` is one step-length constant for the whole class: it is
+        the warm-up Armijo shrink AND the post-warmup alpha grid's spacing
+        (ls_rounds >= 2). ``armijo_c`` is the warm-up Armijo sufficient-decrease
+        slope c (dimensionless): a trial above f + c·gᵀd is rejected and shrunk.
+        """
+        self.beta = beta
+        self.theta = theta
+        self.tau_rel = tau_rel
+        self.l1 = l1
+        self.ls_rounds = ls_rounds
+        self.backtrack = backtrack
+        self.armijo_c = armijo_c
+        self.alpha: dict[int, float] = {}  # per path: current step multiplier
+        self.g0: dict[int, jnp.ndarray] = {}  # per path: the stopping test's anchor
+        self.has_secant: dict[int, bool] = {}  # per path: first pair in hand?
+        self.s_ema: dict[int, jnp.ndarray] = {}  # per path: S₁ (L1) or S₂ (L2)
+        self.y_ema: dict[int, jnp.ndarray] = {}  # per path: Y₁ (L1) or Y₂ (L2)
+        self.ls_round: dict[int, int] = {}  # per path: alpha samples served this step
+        self.saw_finite: dict[int, bool] = {}  # per path: any finite sample this step?
+
+    def init(self, i: int, p: PathPoint) -> None:
+        """Seed path i: warm-up armed at alpha = 1, g0 kept, no estimate yet."""
+        # alpha_0 = 1: fixed start length; see the class docstring for what it
+        # does not fix (the direction -g carries the coordinate scale)
+        self.g0[i] = p.g
+        self.has_secant[i] = False
+        self.s_ema[i] = jnp.zeros_like(p.g)
+        self.y_ema[i] = jnp.zeros_like(p.g)
+        self._reset_step(i)
+
+    def restart(self, i: int, p: PathPoint) -> None:
+        """Cold-start path i after a restart: the secant history does not carry."""
+        self.init(i, p)
+
+    def _reset_step(self, i: int) -> None:
+        """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
+        self.alpha[i] = 1.0
+        self.ls_round[i] = 0
+        self.saw_finite[i] = False
+
+    def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
+        """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - d⊙g."""
+        if not self.has_secant[i]:
+            return p.x + self.alpha[i] * (-p.g)
+        # λ anchors to the current gradient's own magnitude, so a coordinate
+        # with no usable secant (y_i = 0) still steps instead of 0/0. It is a
+        # floor (max), not an addend: where Y ≥ λ the estimate is the faithful
+        # S/Y ratio, and λ only caps d below that.
+        floor = self.theta * (jnp.abs(p.g) if self.l1 else jnp.square(p.g))
+        den = jnp.maximum(self.y_ema[i], floor)
+        # den_i == 0 means y_i = 0 *and* g_i = 0: no curvature information and
+        # already stationary in i, so step nowhere there rather than NaN. One
+        # guard is enough - `where` is a total select and d is never
+        # differentiated, so an inf/nan in the unselected lane cannot leak
+        # anywhere; a derivative of this line would see it, so revisit then.
+        d = jnp.where(den > 0.0, self.s_ema[i] / den, 0.0)
+        if not self.l1:
+            d = jnp.sqrt(d)
+        return p.x - self.alpha[i] * (d * p.g)
+
+    def verdict(self, i: int, p: PathPoint, trial: PathPoint) -> Verdict:
+        """Give up at a stationary point; otherwise accept (the warm-up may retry)."""
+        # Checked on the *current* point, so a path that has just landed on a
+        # stationary one gives up on the next round (costing that one trial's
+        # eval, which the engine's incumbent still counts) rather than stepping
+        # off it. g0 is the anchor: the same test at the start is ‖g0‖ ≤ τ‖g0‖,
+        # true only for a zero-gradient start.
+        if bool(jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self.g0[i])):
+            return "give_up"
+        if not self.has_secant[i]:
+            # Monotone Armijo on the served (projected) step, reference = the
+            # step's own start f; a reject shrinks alpha and retries, and the
+            # engine's max_ls bounds that loop. -inf passes the `<=` below and
+            # would commit a non-objective, hence the finiteness gate too.
+            delta = trial.x - p.x
+            gtd = jnp.vdot(p.g, delta).item()  # gᵀd for d = delta (delta carries alpha)
+            if not math.isfinite(trial.f) or trial.f > p.f + self.armijo_c * gtd:
+                self.alpha[i] *= self.backtrack
+                return "retry"
+            self._reset_step(i)  # first post-warmup step starts at a full step
+            return "accept"
+        return self._step_verdict(i, trial)
+
+    def _step_verdict(self, i: int, trial: PathPoint) -> Verdict:
+        """Judge a served post-warmup step; never fold here.
+
+        One alpha grid of ``ls_rounds`` samples along the current -d⊙g step,
+        shrinking alpha by the warm-up backtrack constant each retry; the win
+        is handed to the engine on "accept", which commits its per-step argmin
+        and folds the winner through ``fold``. ``ls_rounds = 1`` (the
+        default) is the no-line-search case in the same code: the single
+        sample is accepted if finite, else the path gives up.
+        """
+        finite = math.isfinite(trial.f) and bool(jnp.all(jnp.isfinite(trial.g)))
+        # Nothing non-finite may reach _fold: one inf folded into Y leaves
+        # den = inf forever, and that coordinate never steps again. The
+        # gradient is checked too - a finite loss with an inf component would
+        # poison the EMA just the same. A non-finite sample drops out of the
+        # candidate set: the sweep keeps shrinking alpha (a real line search
+        # probes past a NaN), so ls_rounds > 1 survives a bad early sample; at
+        # ls_rounds = 1 there is no next sample and a retry would re-propose
+        # the identical point for max_ls rounds, so the path gives up instead
+        # and a rule may revive it.
+        if finite:
+            self.saw_finite[i] = True
+        self.ls_round[i] += 1
+        if self.ls_round[i] < self.ls_rounds:
+            self.alpha[i] *= self.backtrack
+            return "retry"
+        if not self.saw_finite[i]:  # every sample this step was non-finite
+            return "give_up"
+        self._reset_step(i)
+        return "accept"
+
+    def _fold(self, i: int, s: jnp.ndarray, y: jnp.ndarray, *, first: bool) -> None:
+        """Fold one accepted secant (s, y) into path i's per-coordinate magnitude EMAs.
+
+        The warm-up pair seeds the EMA outright (weight 1, no β-mixing against a
+        zero); later pairs blend at β. Signed quantities are reduced to
+        magnitudes first (|·| for L1, squaring for L2), which is what makes the
+        ratio positive and cancels the sign cancellation `E[s]/E[y]` suffers.
+        """
+        if self.l1:
+            s_ema, y_ema = jnp.abs(s), jnp.abs(y)
+        else:
+            s_ema, y_ema = jnp.square(s), jnp.square(y)
+        if first:
+            self.s_ema[i], self.y_ema[i] = s_ema, y_ema
+        else:
+            self.s_ema[i] = self.beta * self.s_ema[i] + (1.0 - self.beta) * s_ema
+            self.y_ema[i] = self.beta * self.y_ema[i] + (1.0 - self.beta) * y_ema
+
+    def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
+        """Fold the engine's committed argmin for path i (the step that won).
+
+        Only the winner is folded, never an intermediate grid sample: an
+        intermediate secant is a step the path never took, and folding it would
+        smear the magnitude EMAs. The engine calls this with the exact point it
+        just committed on "accept", so the folded secant is the accepted step
+        and the two can never disagree. The first call after init/restart is
+        the warm-up pair and seeds the EMAs outright (weight 1); later calls
+        blend at beta - `has_secant` doubles as the first-fold marker, so it is
+        set here rather than in ``verdict``.
+        """
+        first = not self.has_secant[i]
+        self._fold(i, best.x - p.x, best.g - p.g, first=first)
+        self.has_secant[i] = True

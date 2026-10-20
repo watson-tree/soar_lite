@@ -1,0 +1,63 @@
+[project]
+name = "soar-lite"
+version = "0.1.0"
+description = "First-order diagonal-preconditioned K-path descent with sample-based (expected-improvement) restarts"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+# TODO(release): add `authors` and a [project.urls] block (Repository, Homepage)
+# with the real name/URL before the first PyPI upload.
+keywords = [
+  "optimization",
+  "first-order",
+  "gradient-descent",
+  "quasi-newton",
+  "restart",
+  "multi-start",
+  "jax",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = ["jax"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["ruff", "pyright"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812", "ISC001",
+  "S101",                 # assert 式自检
+  "T201",
+  "PLR2004",              # 数值容差是测试的一部分
+  "CPY001",               # 版权头是仪式，LICENSE 已覆盖
+  "D203", "D213",         # 与 D211/D212 互斥，显式写明让位的一侧
+]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "strict"
+# jax 桩不完整带来的 unknown 噪音，降为 information
+reportUnknownVariableType = "information"
+reportUnknownParameterType = "information"
+reportUnknownArgumentType = "information"
+reportUnknownMemberType = "information"
+reportUnknownLambdaType = "information"
+reportUnknownCallResultType = "information"
+reportMissingTypeStubs = "information"
