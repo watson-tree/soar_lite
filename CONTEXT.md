@@ -40,19 +40,26 @@ _Avoid_: paused, idle, dead
 ### Evaluation
 
 **evaluation (eval)**:
-One oracle call's worth of a point: its loss (and, through the batch, its
-gradient). `nfev` counts evaluations or served batches, depending on billing.
+One point's worth of one `evaluate_batch` call: its loss (and, through the
+batch, its gradient). `nfev` counts evaluations or served batches, depending on
+billing.
 _Avoid_: query, sample (when counting cost)
 
 **batch**:
-One oracle call serving several points at once — the next candidates of every
-active path in one pass.
+One `evaluate_batch` call serving several points at once — the next candidates
+of every active path in one pass.
 _Avoid_: lot, chunk
 
-**oracle (evaluate_batch)**:
-The caller's per-batch callable: points in, `(loss, gradient, feas?)` out. The
-engine is blind to what lies behind it.
-_Avoid_: objective, cost function, black box (as a name for the *callable*)
+**objective** (目标 f):
+The scalar function being minimized; its per-point values are the losses the
+engine records. Distinct from the *cost model* (billing), which counts work.
+_Avoid_: cost, fitness
+
+**evaluate_batch** (批量求值函数):
+The caller's per-batch callable (type `BatchEvaluator`): points in,
+`(loss, gradient, feas?)` out. The seam to the objective's values and
+gradients; the engine is blind to it otherwise.
+_Avoid_: oracle, evaluator, black box
 
 **feasibility mask**:
 The optional per-point boolean saying which served points may count toward the

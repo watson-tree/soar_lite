@@ -295,7 +295,7 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
     # serial-cost model (`nfev = batch size`).
     # True charges one eval per *batch* - a round of parallel evaluations, one
     # wall-clock unit when the objective is batched (jax.vmap or any parallel
-    # oracle). These are two different cost models, never the same number: a
+    # evaluator). These are two different cost models, never the same number: a
     # K-path round costs K points serially, 1 round in parallel.
     per_round_evals: bool = False,
 ) -> KPathResult:
