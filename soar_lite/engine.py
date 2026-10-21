@@ -483,7 +483,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     # A path's point is one object, not three parallel lists: it is what every
     # seam call takes, and a step commits one path at a time (so a list, whose
     # item assignment is the commit, beats a stacked array).
-    points: list[PathPoint] = list(init_starts)
+    points = init_starts
     # a start with no finite evidence never steps: it waits for EI
     stalled: list[bool] = [not math.isfinite(point.f) for point in points]
     # The continue side's sample is priced like the probe it is compared with,
@@ -503,12 +503,10 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         from soar_lite.restart import EIRestartRule  # noqa: PLC0415
 
         restart_rule = EIRestartRule()
-    method: LocalSolver = solver
-    rule: RestartRule = restart_rule
     for i, point in enumerate(points):
-        method.init(i, point)
+        solver.init(i, point)
     for point in points:  # cold-start evidence: init group-mins, into the one pool
-        rule.observe_restart(point.f)
+        restart_rule.observe_restart(point.f)
 
     def apply_restarts(idxs: list[int], step: int) -> None:
         """Restart the given paths from one fresh probe-select event.
@@ -523,11 +521,11 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         if starts is None:
             return  # the meter refused; nothing to restart from
         for point in starts:  # the event's group-mins extend the shared pool
-            rule.observe_restart(point.f)
+            restart_rule.observe_restart(point.f)
         for i, point in zip(idxs, starts, strict=True):
             points[i] = point
-            method.restart(i, point)
-            rule.restart(i)  # the next Δ opens this path's next stage
+            solver.restart(i, point)
+            restart_rule.restart(i)  # the next Δ opens this path's next stage
             stalled[i] = not math.isfinite(point.f)
             horizon.restart_at(i, point.f, step)
 
@@ -543,7 +541,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         to_restart = [
             i
             for i in range(n_paths)
-            if rule.should_restart(i, points[i].f, incumbent.fun)
+            if restart_rule.should_restart(i, points[i].f, incumbent.fun)
         ]
         if to_restart:
             apply_restarts(to_restart, step)
@@ -581,7 +579,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             # `bounds`, so the caller's map never sees a point outside the
             # box the engine advertised. The clipped step is the actual one, so
             # verdict() is handed the served point.
-            raw = jnp.stack([method.propose(i, points[i]) for i in rejecting])
+            raw = jnp.stack([solver.propose(i, points[i]) for i in rejecting])
             x_trial = jnp.clip(raw, lo, hi)
             out = eval_x(x_trial)
             if out is None:
@@ -594,13 +592,13 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
                 finite = math.isfinite(trial.f) and bool(jnp.all(jnp.isfinite(trial.g)))
                 if finite and (i not in best or trial.f < best[i].f):
                     best[i] = trial
-                verdict = method.verdict(i, point, trial)
+                verdict = solver.verdict(i, point, trial)
                 if verdict == "accept":
                     if i not in best:  # no finite sample served: nothing to win
                         stalled[i] = True
                     else:
                         points[i] = best[i]
-                        method.fold(i, point, best[i])
+                        solver.fold(i, point, best[i])
                 elif verdict == "retry":
                     still_rejecting.append(i)
                 else:  # "give_up": the method's own convergence test fired
@@ -638,7 +636,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         # batch budget is not what bounds it. Once every path is stalled no eval
         # can fire later, so points / B / nfev are untouched.
         if all(stalled):
-            needed = rule.samples_until_verdict()
+            needed = restart_rule.samples_until_verdict()
             stagger = min(
                 horizon.rounds_until_sample(i, step) for i in range(n_paths)
             )
@@ -648,7 +646,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         nit += 1  # a round that got past the restart phase is an attempted one
         step_paths()
         for i, delta in horizon.samples(step, [p.f for p in points], stalled):
-            rule.observe_continue(i, delta)
+            restart_rule.observe_continue(i, delta)
         if budget.refused:
             break
 
