@@ -102,8 +102,7 @@ class LocalSolver(Protocol):
         engine's per-step argmin (this trial, for a first-acceptant or
         single-sample method) which is then folded through ``fold``;
         "give_up" aborts the path's enumeration outright, the hook for a
-        method's own convergence test. The model itself is only ever mutated
-        in ``fold``, never here.
+        method's own convergence test.
         """
         ...
 
@@ -402,46 +401,28 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     else:
         draw = sample
     budget = _Budget(max_steps, budget_check, per_round_evals=per_round_evals)
-    best_fun = math.inf
-    # d is the sampler's business: when the box does not supply it, this is an
-    # empty placeholder until the first served point fills it in.
-    best_x = jnp.full(0 if d_bounds is None else d_bounds, math.nan)
+    incumbent = _Incumbent(d_bounds)
 
     def eval_x(
         x_batch: jnp.ndarray,
     ) -> tuple[list[float], jnp.ndarray] | None:
-        """Charge one batch, then serve it with one evaluate_batch call.
+        """Charge one batch, serve it, fold it into B.
 
         The charge comes first, so a refused batch serves nothing - no partial
         prefix of a batch is ever evaluated. A refusal is global: the whole run
         stops, not just the path that asked. Returns (f_vals, g_batch), or None
         when the meter refused; the meter is the sole owner of both gates.
-        Only feasible points' values fold into the incumbent B; the seam's third
-        return is a per-point feas mask (None = no aux, every point counts).
         """
-        nonlocal best_fun, best_x
         if not budget.charge(x_batch.shape[0]):
             return None
         f_batch, g_batch, feas = evaluate_batch(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
         f_vals = f_batch.tolist()
-        # B (incumbent) is defined over feasible designs only; with no aux
-        # every point is treated as feasible.
-        feas_list = [True] * len(f_vals) if feas is None else feas.tolist()
-        candidates = [j for j, ok in enumerate(feas_list) if ok]
-        if candidates:
-            pos = _argmin_finite([f_vals[j] for j in candidates])
-            if pos is not None:  # every feasible point was non-finite: no B update
-                j_min = candidates[pos]
-                if f_vals[j_min] < best_fun:
-                    best_fun = f_vals[j_min]
-                    best_x = x_batch[j_min]
+        incumbent.observe(f_vals, x_batch, feas)
         return f_vals, g_batch
 
-    def probe_select(
-        n: int,
-    ) -> tuple[jnp.ndarray, list[float], jnp.ndarray] | None:
+    def probe_select(n: int) -> list[PathPoint] | None:
         """Draw n_probe_rounds rounds of n points, return n group-min starts.
 
         Each round is one (n,d) batch sized exactly n (value-only
@@ -453,14 +434,11 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         arrives stalled - it waits for an EI verdict instead of stepping).
         At n_probe_rounds = 2 (default) a group is a pair ("min of
         2 random points"); the 2-3 range is empirical (1 -> plain
-        init, inf -> random search), pinned at 2 by design. Returns (x, f, g)
-        — (n,d) x-stack, value list, (n,d) grad-stack — or None when the
-        budget gate is already False.
+        init, inf -> random search), pinned at 2 by design. Returns the n
+        starts, or None when the meter refused a probe round.
         """
         nonlocal rng
-        x_rounds: list[jnp.ndarray] = []
-        f_rounds: list[list[float]] = []
-        g_rounds: list[jnp.ndarray] = []
+        rounds: list[list[PathPoint]] = []
         for _ in range(n_probe_rounds):
             rng, sub = jax.random.split(rng)
             x_cand = draw(sub, n)
@@ -475,45 +453,42 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             out = eval_x(x_cand)
             if out is None:  # the meter refused; nothing more can be served
                 return None
-            p_f, p_g = out
-            x_rounds.append(x_cand)
-            f_rounds.append(p_f)
-            g_rounds.append(p_g)
-        x_list: list[jnp.ndarray] = []
-        f_list: list[float] = []
-        g_list: list[jnp.ndarray] = []
+            f_vals, g_batch = out
+            rounds.append(
+                [PathPoint(x_cand[j], f_vals[j], g_batch[j]) for j in range(n)]
+            )
+        starts: list[PathPoint] = []
         for j in range(n):
             # Finite-only group-min: a failed (non-finite) probe ranked before
             # a real one would be selected as the start, poisoning that path's
             # local method state for the rest of the run.
-            best = _argmin_finite([f_rounds[i][j] for i in range(n_probe_rounds)])
-            if best is None:
-                # Whole group non-finite: keep round 0 rather than invent a
-                # point. Its f is non-finite, so init/restart stalls this
-                # path on arrival and only an EI verdict revives it.
-                best = 0
-            x_list.append(x_rounds[best][j])
-            f_list.append(f_rounds[best][j])
-            g_list.append(g_rounds[best][j])
-        return jnp.stack(x_list), f_list, jnp.stack(g_list)
+            best = _argmin_finite([rounds[r][j].f for r in range(n_probe_rounds)])
+            # Whole group non-finite: keep round 0 rather than invent a point.
+            # Its f is non-finite, so init/restart stalls this path on arrival
+            # and only an EI verdict revives it.
+            starts.append(rounds[0 if best is None else best][j])
+        return starts
 
-    init = probe_select(n_paths)
-    if init is None:
+    init_starts = probe_select(n_paths)
+    if init_starts is None:
         # Nothing was served, so there is no x to report: the budget refused
         # even the init probe (max_steps < n_probe_rounds, or the caller's gate).
         return NPathResult(
-            x=best_x,
-            fun=best_fun,
+            x=incumbent.x,
+            fun=incumbent.fun,
             nfev=budget.nfev,
             nit=0,
             status=budget.stop_status(),
         )
-    x, f, g = init
+    # A path's point is one object, not three parallel lists: it is what every
+    # seam call takes, and a step commits one path at a time (so a list, whose
+    # item assignment is the commit, beats a stacked array).
+    points: list[PathPoint] = list(init_starts)
     # a start with no finite evidence never steps: it waits for EI
-    stalled: list[bool] = [not math.isfinite(v) for v in f]
+    stalled: list[bool] = [not math.isfinite(point.f) for point in points]
     # The continue side's sample is priced like the probe it is compared with,
     # so the clock that hands it out lives in _Horizon, not in the loop.
-    horizon = _Horizon(f, n_probe_rounds)
+    horizon = _Horizon([point.f for point in points], n_probe_rounds)
     # The seam check: presence, not signatures. The seam's own members run per
     # path per round and stay unvalidated.
     _check_seam(solver, LocalSolver, "solver")
@@ -530,12 +505,12 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         restart_rule = EIRestartRule()
     method: LocalSolver = solver
     rule: RestartRule = restart_rule
-    for i in range(n_paths):
-        method.init(i, PathPoint(x[i], f[i], g[i]))
-    for v in f:  # cold-start evidence: the n_paths init group-mins, into the one pool
-        rule.observe_restart(v)
+    for i, point in enumerate(points):
+        method.init(i, point)
+    for point in points:  # cold-start evidence: init group-mins, into the one pool
+        rule.observe_restart(point.f)
 
-    def restart_paths(idxs: list[int], step: int) -> None:
+    def apply_restarts(idxs: list[int], step: int) -> None:
         """Restart the given paths from one fresh probe-select event.
 
         The event's group-min list extends the rule's one shared payoff pool;
@@ -544,23 +519,19 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         group-min is non-finite arrives stalled and waits for the next EI
         verdict.
         """
-        nonlocal x, g
-        out = probe_select(len(idxs))
-        if out is None:
+        starts = probe_select(len(idxs))
+        if starts is None:
             return  # the meter refused; nothing to restart from
-        r_x, r_f, r_g = out
-        for v in r_f:  # the event's group-mins extend the shared payoff pool
-            rule.observe_restart(v)
-        for j, i in enumerate(idxs):
-            x = x.at[i].set(r_x[j])
-            g = g.at[i].set(r_g[j])
-            f[i] = r_f[j]
-            method.restart(i, PathPoint(r_x[j], r_f[j], r_g[j]))
+        for point in starts:  # the event's group-mins extend the shared pool
+            rule.observe_restart(point.f)
+        for i, point in zip(idxs, starts, strict=True):
+            points[i] = point
+            method.restart(i, point)
             rule.restart(i)  # the next Δ opens this path's next stage
-            stalled[i] = not math.isfinite(r_f[j])
-            horizon.restart_at(i, f[i], step)
+            stalled[i] = not math.isfinite(point.f)
+            horizon.restart_at(i, point.f, step)
 
-    def restart_phase(step: int) -> None:
+    def decide_restarts(step: int) -> None:
         """Decide which paths to restart against B.
 
         B is passed to each verdict (the engine is its only writer), so every
@@ -570,10 +541,12 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         advancing cohort instead of leading it by one round.
         """
         to_restart = [
-            i for i in range(n_paths) if rule.should_restart(i, f[i], best_fun)
+            i
+            for i in range(n_paths)
+            if rule.should_restart(i, points[i].f, incumbent.fun)
         ]
         if to_restart:
-            restart_paths(to_restart, step)
+            apply_restarts(to_restart, step)
 
     def step_paths() -> None:  # noqa: C901 - per-path verdict dispatch
         """One batched engine step for every non-stalled path.
@@ -588,7 +561,6 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         ("accept"; gave up, or max_ls exhausted on rejects),
         so the caller reads "accepted" as `not stalled[i]`.
         """
-        nonlocal x, g
         active = [i for i in range(n_paths) if not stalled[i]]
         if not active:
             return  # everyone stalled; verdicts may revive paths next iteration
@@ -599,54 +571,41 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         # sole owner of "who won": the method learns the winner only through
         # the fold callback, never by tracking its own argmin (two copies
         # would drift).
-        best_f: dict[int, float] = {}
-        best_x: dict[int, jnp.ndarray] = {}
-        best_g: dict[int, jnp.ndarray] = {}
-        # max_ls caps every retry verdict (the warm-up Armijo, which has no
-        # solver-side round counter, plus the post-warmup grid whose own
-        # ls_rounds is its real bound), and stays engine-side as a failsafe: a
-        # solver that returned "retry" forever would hang the engine without
-        # this cap.
-        for _ls in range(max_ls):
+        best: dict[int, PathPoint] = {}
+        # max_ls stays engine-side as a failsafe: a solver that returned
+        # "retry" forever would hang the engine without this cap.
+        for _ in range(max_ls):
             if not rejecting or budget.refused:
                 break
             # The method proposes raw candidates; the engine clips them into
             # `bounds`, so the caller's map never sees a point outside the
             # box the engine advertised. The clipped step is the actual one, so
             # verdict() is handed the served point.
-            raw = jnp.stack(
-                [method.propose(i, PathPoint(x[i], f[i], g[i])) for i in rejecting]
-            )
+            raw = jnp.stack([method.propose(i, points[i]) for i in rejecting])
             x_trial = jnp.clip(raw, lo, hi)
-            outcome = eval_x(x_trial)
-            if outcome is None:
+            out = eval_x(x_trial)
+            if out is None:
                 break
-            s_f, s_g = outcome
-            still: list[int] = []
+            f_trial, g_trial = out
+            still_rejecting: list[int] = []
             for pos, i in enumerate(rejecting):
-                point = PathPoint(x[i], f[i], g[i])
-                trial = PathPoint(x_trial[pos], s_f[pos], s_g[pos])
+                point = points[i]
+                trial = PathPoint(x_trial[pos], f_trial[pos], g_trial[pos])
                 finite = math.isfinite(trial.f) and bool(jnp.all(jnp.isfinite(trial.g)))
-                if finite and (i not in best_f or trial.f < best_f[i]):
-                    best_f[i] = trial.f
-                    best_x[i] = trial.x
-                    best_g[i] = trial.g
+                if finite and (i not in best or trial.f < best[i].f):
+                    best[i] = trial
                 verdict = method.verdict(i, point, trial)
                 if verdict == "accept":
-                    if i not in best_f:  # no finite sample served: nothing to win
+                    if i not in best:  # no finite sample served: nothing to win
                         stalled[i] = True
                     else:
-                        x = x.at[i].set(best_x[i])
-                        g = g.at[i].set(best_g[i])
-                        f[i] = best_f[i]
-                        method.fold(
-                            i, point, PathPoint(best_x[i], best_f[i], best_g[i])
-                        )
+                        points[i] = best[i]
+                        method.fold(i, point, best[i])
                 elif verdict == "retry":
-                    still.append(i)
+                    still_rejecting.append(i)
                 else:  # "give_up": the method's own convergence test fired
                     stalled[i] = True
-            rejecting = still
+            rejecting = still_rejecting
         for i in rejecting:  # max_ls exhausted: stall; an EI verdict may revive
             stalled[i] = True
 
@@ -661,11 +620,11 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         # cadence, without spending anything.
         if budget.at_cap():
             break
-        restart_phase(step)
+        decide_restarts(step)
         if budget.refused:
             break
         # All paths are stuck and this round's restart votes (asked in
-        # restart_phase above) revived nothing. The next vote cannot be due
+        # decide_restarts above) revived nothing. The next vote cannot be due
         # before the earliest path's stage fills: samples_until_verdict() more
         # samples, each priced n_probe_rounds rounds, the first of them no
         # sooner than that path's own next sample, plus the round the vote
@@ -677,7 +636,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         # above is then the only bound). The wait is in rounds and so is the
         # remaining round budget: a waiting round serves nothing here, so the
         # batch budget is not what bounds it. Once every path is stalled no eval
-        # can fire later, so x / best_fun / nfev are untouched.
+        # can fire later, so points / B / nfev are untouched.
         if all(stalled):
             needed = rule.samples_until_verdict()
             stagger = min(
@@ -688,7 +647,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
                 break
         nit += 1  # a round that got past the restart phase is an attempted one
         step_paths()
-        for i, delta in horizon.samples(step, f, stalled):
+        for i, delta in horizon.samples(step, [p.f for p in points], stalled):
             rule.observe_continue(i, delta)
         if budget.refused:
             break
@@ -700,7 +659,41 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         status = "all_stalled"
     else:
         status = "max_steps"
-    return NPathResult(x=best_x, fun=best_fun, nfev=budget.nfev, nit=nit, status=status)
+    return NPathResult(
+        x=incumbent.x, fun=incumbent.fun, nfev=budget.nfev, nit=nit, status=status
+    )
+
+
+class _Incumbent:
+    """B, the incumbent: the best feasible finite point served so far.
+
+    Defined over feasible designs only - with no aux, every point is feasible -
+    and over finite values only, so a NaN or inf trial neither becomes B nor
+    displaces one. It is the objective every restart verdict is asked against,
+    which is why it starts at inf: until something feasible arrives, no verdict
+    has anything to compare against.
+    """
+
+    def __init__(self, d: int | None) -> None:
+        self.fun = math.inf
+        # d is the sampler's business: when the box does not supply it, this is
+        # an empty placeholder until the first served point fills it in.
+        self.x = jnp.full(0 if d is None else d, math.nan)
+
+    def observe(
+        self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None
+    ) -> None:
+        """Fold one served batch's feasible finite values in."""
+        # With no aux a batch has no feasibility mask and every point counts.
+        ok_feas = [True] * len(f_vals) if feas is None else feas.tolist()
+        candidates = [j for j, feasible in enumerate(ok_feas) if feasible]
+        pos = _argmin_finite([f_vals[j] for j in candidates])
+        if pos is None:  # nothing feasible served, or all of it non-finite
+            return
+        j = candidates[pos]
+        if f_vals[j] < self.fun:
+            self.fun = f_vals[j]
+            self.x = x_batch[j]
 
 
 class _Budget:
