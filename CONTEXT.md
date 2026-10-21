@@ -140,10 +140,19 @@ point (serial cost). Per-round: one eval per served batch (parallel cost).
 They are different numbers and must never share a chart or table.
 _Avoid_: budget accounting (billing counts work; it is not the objective)
 
-**budget gate**:
+**budget (`max_steps`)**:
+The engine's own allowance, counted in batches: every batch the seam serves
+costs one, so the init probe and each restart event cost `n_probe_rounds` of
+it. A stalled round serves nothing and costs nothing. `max_steps` also caps the
+run's rounds at the same number — a second bound that only bites on a stalling
+run.
+_Avoid_: iterations, function-call budget (that is `nfev`, a different axis)
+
+**budget gate** (`budget_check`):
 The batch-level predicate consulted once per batch — serve the whole batch or
-nothing, never a partial prefix. The budget is the caller's; the engine only
-consumes it.
+nothing, never a partial prefix. It exists for a budget the engine cannot see
+(points, wall-clock, dollars); the engine's own batch budget is `max_steps`.
+Such an external gate can over-run by less than one batch.
 _Avoid_: stopping budget
 
 **box**:

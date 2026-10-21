@@ -110,7 +110,7 @@ class RecordingRule:
         self.verdicts.append(i)
         return False
 
-    def rounds_until_verdict(self) -> int:
+    def samples_until_verdict(self) -> int:
         """Report an unknown cadence: the engine keeps its round-by-round rounds."""
         return 0
 
@@ -138,7 +138,7 @@ def test_injected_solver_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_steps=1,
+        max_steps=PROBE_ROUNDS + 1,  # the init probe is billed too
         n_probe_rounds=PROBE_ROUNDS,
         solver=solver,
         restart_rule=RecordingRule(),
@@ -160,7 +160,7 @@ def test_give_up_stalls_a_path() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_steps=5,
+        max_steps=PROBE_ROUNDS + 1,  # the init probe is billed too
         n_probe_rounds=PROBE_ROUNDS,
         solver=solver,
         restart_rule=RecordingRule(),
@@ -182,15 +182,17 @@ def test_injected_rule_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_steps=1,
+        max_steps=PROBE_ROUNDS + PROBE_ROUNDS,  # init probe + one horizon
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),
         restart_rule=rule,
         key=jax.random.PRNGKey(2),
     )
     assert len(rule.group_mins) == k  # cold start: the n_paths init group-mins, once
-    assert rule.verdicts == [0, 1]  # restart_phase asks once per path per step
-    assert [i for i, _delta in rule.deltas] == [0, 1]  # Δf per advanced path
+    # One horizon is n_probe_rounds rounds, so this run has one feed per path -
+    # the continue side's sample is priced like a probe, not like a step.
+    assert rule.verdicts == [0, 1] * PROBE_ROUNDS  # asked once per path per round
+    assert [i for i, _delta in rule.deltas] == [0, 1]  # Δf over one horizon each
     assert rule.restarts == []
     assert res.status == "max_steps"
 
@@ -206,7 +208,8 @@ def test_rule_can_force_restarts() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_steps=2,
+        # each round buys a restart probe (PROBE_ROUNDS batches) plus its step
+        max_steps=PROBE_ROUNDS + 2 * (PROBE_ROUNDS + 1),
         n_probe_rounds=PROBE_ROUNDS,
         solver=solver,
         restart_rule=rule,
@@ -221,6 +224,34 @@ def test_rule_can_force_restarts() -> None:
     assert res.status == "max_steps"
 
 
+def test_budget_is_never_exceeded_under_restart_storm() -> None:
+    """Probes are billed, so a restart storm cannot buy evals outside the budget.
+
+    The expensive event in the engine is the restart probe, and the deepest
+    accounting bug this engine had was that the probes were never charged: a
+    rule that restarts every round would then have served far more than
+    `max_steps` batches. The budget is odd here so the last round cannot be
+    bought whole, which is where an unbilled probe would show up.
+    """
+    k = 3
+    for max_steps in (1, PROBE_ROUNDS, 2 * PROBE_ROUNDS + 1, 7):
+        evaluate_batch, shapes = evaluator()
+        res = n_path_schedule(
+            evaluate_batch,
+            bounds=unit_bounds(),
+            n_paths=k,
+            max_steps=max_steps,
+            n_probe_rounds=PROBE_ROUNDS,
+            solver=StubSolver(),
+            restart_rule=AlwaysRestartRule(),
+            key=jax.random.PRNGKey(7),
+        )
+        # served batches * points per batch, and never one batch more than asked
+        assert res.nfev == sum(w for w, _d in shapes) <= max_steps * k
+        assert len(shapes) <= max_steps, (max_steps, shapes)
+        assert res.status == "max_steps", res
+
+
 def test_no_budget_run_reports_max_steps() -> None:
     """No gate passed at all (the keyword defaults to None): max_steps only."""
     k = 2
@@ -229,7 +260,7 @@ def test_no_budget_run_reports_max_steps() -> None:
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=k,
-        max_steps=3,
+        max_steps=PROBE_ROUNDS + 3,  # the init probe plus three round-batches
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),
         restart_rule=RecordingRule(),
@@ -331,14 +362,16 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
     assert default_nfev == ours_nfev, (default_nfev, ours_nfev)
 
 
-def test_every_path_steps_exactly_once_per_round() -> None:
-    """Pin that every path feeds observe_continue exactly once per round.
+def test_every_path_feeds_once_per_completed_horizon() -> None:
+    """Pin that every path feeds observe_continue once per completed horizon.
 
     Column 0 is non-finite in both init probe rounds, so path 0 arrives
     stalled and never steps; the engine must still feed it one
-    `observe_continue(0, inf)` every round, so its step counter advances in
+    `observe_continue(0, inf)` per horizon, so its sample count advances in
     lockstep with its advancing cohort instead of leading it by one verdict
-    (the off-by-one a top-of-round stall count would cause).
+    (the off-by-one a top-of-round stall count would cause). One horizon is
+    n_probe_rounds rounds - the continue side's sample is priced like a probe -
+    so three horizons take 3 * n_probe_rounds rounds.
     """
     k = 2
     calls = [0]
@@ -356,7 +389,7 @@ def test_every_path_steps_exactly_once_per_round() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_steps=3,
+        max_steps=PROBE_ROUNDS + 3 * PROBE_ROUNDS,  # init probe + three horizons
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),
         restart_rule=rule,
@@ -387,7 +420,7 @@ def test_per_round_evals_bills_a_parallel_round_as_one() -> None:
             bounds=unit_bounds(),
             budget_check=lambda: True,
             n_paths=k,
-            max_steps=1,
+            max_steps=PROBE_ROUNDS + 1,  # init probe + one accepted round
             n_probe_rounds=PROBE_ROUNDS,
             solver=StubSolver(),
             restart_rule=RecordingRule(),

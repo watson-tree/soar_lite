@@ -106,17 +106,20 @@ class EIRestartRule(RestartRule):
         self.deltas[i] = []  # the stage's one read is taken; the next Δ opens one
         return restart
 
-    def rounds_until_verdict(self) -> int:
-        """Report the rounds until the earliest path's stage fills up.
+    def samples_until_verdict(self) -> int:
+        """Report how many more samples until the earliest path's stage fills up.
 
         `window - folds` per path: exact while the pool stands still and an
         underestimate once it grows, since `window` only lengthens. That
         direction is the safe one - the engine stops when this says a vote is out
         of reach, and an overestimated cadence there would be a stop for a vote
-        that was still due. A path that has just restarted counts from 0, i.e. as
-        a full window: it folds its first Δ at the end of the current round. 0
-        with no path evidence at all - no cadence to bound, so the engine keeps
-        its ordinary rounds, which is only reachable before the first fold.
+        that was still due. Samples, not rounds: the engine prices one at its
+        own horizon (`n_probe_rounds` rounds), which is the same cost as one
+        probe and therefore the same cost as a payoff sample. A path that has
+        just restarted counts from 0, i.e. as a full window: it folds its first
+        sample once its new horizon completes. 0 with no path evidence at all -
+        no cadence to bound, so the engine keeps its ordinary rounds, which is
+        only reachable before the first fold.
         """
         window = self._stage_window()
         return min((window - len(d) for d in self.deltas.values()), default=0)
@@ -137,7 +140,7 @@ class EIRestartRule(RestartRule):
 
         The only floor is 1, and it is not a prior: a window of zero samples has
         no centre to read (`_continue_payoff` returns 0.0 on an empty stage, and
-        `rounds_until_verdict` would go negative), which is reachable only
+        `samples_until_verdict` would go negative), which is reachable only
         before any finite restart payoff exists. At M = 1 the read is its own
         degenerate branch - a stage of one fold has no spread, and a pool of one
         gives `sigma_r = 0`, so no restart can fire until a second payoff lands.

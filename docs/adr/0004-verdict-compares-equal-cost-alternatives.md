@@ -17,10 +17,15 @@ The decision, in three parts:
    `f(t) - f(t - n_probe_rounds)` once per horizon, non-overlapping, and feeds
    `inf` for that sample if any round inside it stalled. Both sides of the
    verdict are then "what `n_probe_rounds` rounds buy".
-2. **The engine bills probes.** The init probe and every restart event charge
-   `n_probe_rounds` rounds of `max_steps`, so the budget means served batches.
-   `nit` stays "rounds the main loop attempted"; the billed quantity is `nfev`,
-   whose counter is `n_charged` because its unit follows the billing mode.
+2. **The engine bills served batches.** Every batch the seam serves costs one
+   unit of `max_steps`, so the init probe and each restart event cost
+   `n_probe_rounds` units and the budget means batches, exactly. A run also
+   attempts no more rounds than `max_steps`: a round serves at least one batch
+   unless every path is stalled, so that cap only bites on a stalling run - a
+   stalled round is free, and the cap is what stops a permanently stalled run
+   whose rule can state no cadence. `nit` stays "rounds the main loop
+   attempted"; the billed quantity is `nfev`, whose counter is `n_charged`
+   because its unit follows the billing mode.
 3. **The horizon lives in the engine, not the rule.** `n_probe_rounds` is a
    fact of the schedule the engine owns, so the engine feeds equal-cost samples
    and `EIRestartRule` stays knob-free: it keeps reading a plain mean and
@@ -45,11 +50,14 @@ Consequences:
 - One accounting authority: once the engine bills probes, a caller no longer
   needs a batch gate of its own. `experiments/methods.py` drops
   `budget_check=lambda: n_rounds < max_steps` and lets `max_steps` govern.
+  `budget_check` survives only for a budget the engine cannot see (points,
+  wall-clock, dollars), and such a gate can over-run by <M points because it
+  flips only between batches; `max_steps` itself is exact in batches.
 - Do not add a `horizon` knob to the rule "for experiments". A horizon that is
   not the probe's own cost reintroduces the mismatch in the other direction.
 
-Implementation follow-ups: continue-side horizon and its stall flag in the
-engine; probe billing and the `spent` loop bound; the scheduler/seam tests
-updated, plus three invariants (samples produced per rounds, batch budget under
-restarts, a stall inside a horizon poisons that sample); `ALGORITHM.md`, section
-on the restart rule.
+Implemented with this decision: the per-path horizon and its stall flag in the
+engine, per-batch billing with the `spent` meter, the scheduler and seam tests
+restated in batches, and three new invariants (samples produced per completed
+horizon, the budget never exceeded under restart storms, a stall inside a
+horizon poisons that sample). `ALGORITHM.md` carries the resulting wording.

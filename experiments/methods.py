@@ -4,11 +4,11 @@ Every driver returns a :class:`Trace` - best-so-far against both cost axes:
 
 * ``points`` - objective points served (one per served coordinate vector), the
   fair information unit shared by an n-path method and a single chain;
-* ``rounds`` - sequential batched calls. For soar-lite that is one engine round
-  (n_paths points served at once); for a single-chain method it equals ``points``.
-  This is the wall-clock axis for a batched/GPU setting, where an n-path
-  round costs one sequential unit - the parallelism claim lives here, but it is
-  not free, which is why the points axis is the primary one.
+* ``batches`` - sequential batched calls, the budget unit: for soar-lite one
+  served batch (n_paths points at once), for a single-chain method one point.
+  This is the wall-clock axis of a batched/GPU setting, where an n-path batch
+  costs one sequential unit - the parallel claim lives here, but a batch is not
+  free, which is why the points axis is read off the same runs.
 
 NAAdam is Adam plus decaying Gaussian noise, ``sigma_t = sigma0/sqrt(t)``, the
 brute-force escape mechanism the restart proposition is compared against. All
@@ -37,15 +37,15 @@ class Trace:
     """Best-so-far trajectory of one run, keyed by both cost axes."""
 
     points: list[int] = field(default_factory=list)
-    rounds: list[int] = field(default_factory=list)
+    batches: list[int] = field(default_factory=list)
     best: list[float] = field(default_factory=list)
     fun: float = math.inf  # final incumbent
 
     def as_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return (points, rounds, best) as float arrays for aggregation."""
+        """Return (points, batches, best) as float arrays for aggregation."""
         return (
             np.asarray(self.points, dtype=float),
-            np.asarray(self.rounds, dtype=float),
+            np.asarray(self.batches, dtype=float),
             np.asarray(self.best, dtype=float),
         )
 
@@ -63,25 +63,26 @@ def run_soar_lite(
     """Drive the n-path engine, recording best-so-far after every batch.
 
     The budget is ``max_steps`` **batches** - one round of parallel evaluations,
-    the axis a single chain pays one point per step on. The engine gate is
-    consulted before each batch, so a run serves at most that many and stops
-    early on its own convergence criterion.
+    the axis a single chain pays one point per step on. The engine charges a
+    batch against that budget before it serves it, so the ceiling is exact: a
+    probe or a rejected trial batch costs one each, and the run stops early on
+    its own convergence criterion.
     """
     trace = Trace()
     n_points = 0
-    n_rounds = 0
+    n_batches = 0
     best = math.inf
 
     def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        nonlocal n_points, n_rounds, best
+        nonlocal n_points, n_batches, best
         f, g, _ = problem.evaluate_batch(x)
-        n_rounds += 1
+        n_batches += 1
         n_points += int(x.shape[0])
         for v in f.tolist():
             if math.isfinite(v) and v < best:
                 best = v
         trace.points.append(n_points)
-        trace.rounds.append(n_rounds)
+        trace.batches.append(n_batches)
         trace.best.append(best)
         return f, g, None
 
@@ -90,7 +91,6 @@ def run_soar_lite(
         bounds=problem.bounds,
         n_paths=n_paths,
         max_steps=max_steps,
-        budget_check=lambda: n_rounds < max_steps,
         solver=DiagonalPreconditioner(),
         key=jax.random.PRNGKey(seed),
     )
@@ -155,7 +155,7 @@ def _single_chain(
     grid = np.arange(1, max_steps + 1)
     return Trace(
         points=grid.tolist(),
-        rounds=grid.tolist(),
+        batches=grid.tolist(),
         best=values.tolist(),
         fun=float(values[-1]),
     )
@@ -186,7 +186,7 @@ def run_lbfgs(problem: Problem, *, max_steps: int, seed: int) -> Trace:
         if math.isfinite(fval) and fval < best:
             best = fval
         trace.points.append(n_points)
-        trace.rounds.append(n_points)
+        trace.batches.append(n_points)
         trace.best.append(best)
         return fval, np.asarray(g[0])
 

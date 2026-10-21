@@ -182,8 +182,14 @@ EI_restart  = σ_r·[z·Φ(z) + φ(z)],  z = (B − μ_r)/σ_r     任一路径�
 ```text
 restart_phase()   对每条路径问一次判决（只在它的 stage 填满时真的问），重启那些胜出的
 step_paths()      propose → clip 进 box → 批量 serve → 逐路径 verdict → commit
-observe_continue 把本轮 Δf 喂回规则（stalled 路径喂 inf：值不被读，但 fold 计数，节奏不落后）
+observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_rounds 轮，与一次探测等成本）
 ```
+
+`observe_continue` 的样本跨一个 **horizon = `n_probe_rounds` 轮**，不是一轮：一次探测的成本就是
+`n_probe_rounds` 轮，继续侧必须买同样多的东西，否则判决是在拿「两轮探索的收益」比「一步的收益」，
+系统性偏向重启（ADR-0004）。horizon 非重叠、每条路径各自计时（重启开一个新的 horizon），期间
+任意一轮 stalled 就喂 `inf`——宁可丢一个样本，也不让横跨停顿的 Δ 冒充进步。于是 stage 里的 `M` 个
+样本 = `M · n_probe_rounds` 轮，与池子里那 `M` 次探测花的轮数一致；判决的两侧是等价的购买。
 
 ### 3.3 单一 argmin 所有者与 `fold`
 
@@ -194,18 +200,24 @@ observe_continue 把本轮 Δf 喂回规则（stalled 路径喂 inf：值不被�
 ### 3.4 `stalled` 是唯一的路径状态
 
 一条路径在某一轮「没提交步」就叫 stalled——可能是自己的收敛判据 `give_up`，也可能是重试次数
-`max_ls` 耗尽。stalled 路径不进 `step_paths`，但每轮仍然喂一个 inf 的 `Δf`（让它的判决节奏与同批
-前进的路径对齐，而不是领先一轮），直到某次 EI 判决把它唤醒。
+`max_ls` 耗尽。stalled 路径不进 `step_paths`，但每个完成的 horizon 仍然喂一个 inf 的 `Δf`（让它的
+判决节奏与同批前进的路径对齐，而不是领先一个样本），直到某次 EI 判决把它唤醒。
 
-### 3.5 预算门控在批边界
+### 3.5 预算计在批边界（引擎自己记账）
 
-预算谓词每批只问一次：要么整批服务、要么整批不做，不做部分前缀。代价是最后一批可能超跑不到一个
-批大小。这是刻意的——批量目标的一次调用本来就是一个不可分割的成本单位。
+`max_steps` 是引擎自己的预算，单位是**批**：服务一批就记一笔，所以一次探测（`n_probe_rounds` 批，
+初始化探测也算）自己就吃掉 `n_probe_rounds`——探测不是免费的（ADR-0004）。记账在批之前问：要么整批
+服务、要么整批不做，不做部分前缀。同一个数字还封顶轮数：一轮除非全程停滞，否则至少服务一批，所以
+这个轮数上界只在停滞时生效，用来结束「规则报不出节奏」的长期空转；停滞轮不服务任何东西，也就不记账。
+
+`budget_check` 只留给引擎看不见的预算（点数、墙钟、钱）。它同样在批边界翻转，所以那类外部预算可能
+超跑不到一个批大小；`max_steps` 本身在批上是精确的，一个方法不会比另一个多拿一批。
 
 ### 3.6 全停早退
 
-所有路径都 stalled、且下一张判决票按 `rounds_until_verdict()` 也落在 `max_steps` 之外时，引擎直接
-结束（`all_stalled`），不再空转——没有 eval 会再发生，`x`/`f`/`nfev` 不会再变。
+所有路径都 stalled、且下一张判决票按 `samples_until_verdict()` 折算成轮数（样本数 × horizon，加上
+最近一条路径收满样本还要等几轮）也落在剩余轮数（`max_steps` 减去已尝试轮数）之外时，引擎直接结束
+（`all_stalled`），不再空转——没有 eval 会再发生，`x`/`f`/`nfev` 不会再变。
 
 ## 4. 适用界
 
@@ -285,7 +297,7 @@ n_paths 条路径的一轮就是一次并行调用的成本，「多样本 + 自
 - 判决节奏与可比样本数：`test_window_is_the_pool_size`、
   `test_the_two_sides_read_the_same_samples_the_same_way`、
   `test_verdict_is_due_once_per_window_and_closes_the_stage`、
-  `test_rounds_until_verdict_counts_to_the_next_full_stage`。
+  `test_samples_until_verdict_counts_to_the_next_full_stage`。
 - 池子共享 / stage 独立 / 重启保留池子：`test_payoff_pool_is_shared_across_paths`、
   `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_payoff_pool`。
 - `n_paths = 1` 退化（`σ_r = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
@@ -297,7 +309,9 @@ n_paths 条路径的一轮就是一次并行调用的成本，「多样本 + 自
   `test_ei_restart_empty_single_and_nonfinite_skipped`。
 - **两种计费**：`test_per_round_evals_bills_a_parallel_round_as_one`（per-round 的 `nfev` 与 `n_paths`
   无关；`n_paths=3` 的 per-round 等于 `n_paths=1` 的 per-point）。
-- 预算门控在批边界：`test_budget_exhaustion_stops_everything`、`test_no_budget_run_reports_max_steps`。
+- 预算计在批边界：`test_budget_exhaustion_stops_everything`、`test_no_budget_run_reports_max_steps`、
+  `test_budget_is_never_exceeded_under_restart_storm`（探测记账：重启风暴也超不过 `max_steps` 批）、
+  `test_every_path_feeds_once_per_completed_horizon`（每个完成 horizon 恰好一个样本，停顿的那个喂 inf）。
 - 盒是数据：`test_box_is_data_not_a_unit_cube_assumption`、`test_bounds_spellings_are_the_same_box`、
   `test_unbounded_or_absent_box_needs_an_injected_sampler`、
   `test_the_sampler_is_the_only_authority_on_d`、`test_an_injected_sampler_searches_outside_the_old_box`。

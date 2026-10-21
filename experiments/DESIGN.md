@@ -137,20 +137,23 @@ diagonal error is worth one short step and not a standing setting.
 
 ## Budget, statistics, outputs
 
-- Every method gets the same number of **rounds**: `--max-steps 3000` (one round
-  = one batch; a single chain spends one point per round). Runs stop earlier on
-  their own criterion (the engine's gradient-norm test, L-BFGS-B's tolerance),
-  so 3000 is an upper bound, not a fixed cost. `L-BFGS-B` takes the same cap as
-  `maxfun`/`maxiter` and is a serial reference, not the same cost axis.
+- Every method gets the same number of **batches**: `--max-steps 3000` (one
+  batch = one round of parallel evaluations; a single chain spends one point per
+  round). The engine charges every batch it serves against that budget, probes
+  included, so the ceiling is exact — a run that restarts buys fewer rounds, not
+  more work. Runs stop earlier on their own criterion (the engine's
+  gradient-norm test, L-BFGS-B's tolerance), so 3000 is an upper bound, not a
+  fixed cost. `L-BFGS-B` takes the same cap as `maxfun`/`maxiter` and is a serial
+  reference, not the same cost axis.
 - Two honest budgets, both read off the **same** runs, no re-runs:
-  - **rounds** figure — every method 3000 rounds. This is the wall-clock axis of
-    a batched setting, and the only axis where `n_paths=16` and a single chain
+  - **batches** figure — every method 3000 batches. This is the wall-clock axis
+    of a batched setting, and the only axis where `n_paths=16` and a single chain
     compare at equal cost per step; it is the main chart.
   - **points** figure — each run truncated at 3000 objective points, the fair
     information unit of a serial setting. A chain spends exactly one point per
-    round, so `n_paths=16` shows only its first ~187 rounds there.
+    batch, so `n_paths=16` shows only its first ~187 batches there.
 - Seeds `N=20`; report **mean ± std** (shaded), log-y, log x.
-- Outputs: `experiments/results_{group}_{rounds,points}.png` +
+- Outputs: `experiments/results_{group}_{batches,points}.png` +
   `results_{group}.json` per group, plus `results_invariance.png` and
   `results_lr_sweep.png`. The JSON holds the best-so-far mean/std arrays per
   problem×method for both axes, keyed by `max_steps`.

@@ -143,13 +143,22 @@ class RestartRule(Protocol):
     a restart decision could ever use. A wider interface would not widen what a
     rule can see; only the engine's call sites could.
 
-    These methods are called by the engine, once per path per round, so they
-    trust their arguments: `n_path_schedule` validates the object once (that
-    it carries this contract) at the entry, and nothing here re-checks.
+    These methods are called by the engine on its own schedule - `should_restart`
+    once per path per round, `observe_continue` once per path per completed
+    horizon - so they trust their arguments: `n_path_schedule` validates the
+    object once (that it carries this contract) at the entry, and nothing here
+    re-checks.
     """
 
     def observe_continue(self, i: int, delta: float) -> None:
-        """Fold path i's one-step value change Δf into its continuation evidence."""
+        """Fold path i's value change over one horizon into its continuation evidence.
+
+        The horizon is the engine's: `n_probe_rounds` rounds, which is one
+        probe's cost, so a sample on this side and an `observe_restart` sample
+        buy the same amount of work. A stall anywhere inside the horizon arrives
+        as `inf` (the rule stores it and drops it at the read), never as a Δ that
+        spans the stall.
+        """
         ...
 
     def observe_restart(self, r: float) -> None:
@@ -166,15 +175,17 @@ class RestartRule(Protocol):
         """Return True iff path i should restart from f_k with incumbent B."""
         ...
 
-    def rounds_until_verdict(self) -> int:
-        """Report the rounds until any path's verdict can be due again (0 = any round).
+    def samples_until_verdict(self) -> int:
+        """Report how many more samples until a verdict can be due (0 = unknown).
 
         A cadence hint, not evidence, and the engine asks it only once every
         path has stalled: it is what separates "waiting for a verdict" from
-        "nothing can happen again". A verdict unreachable before max_steps
-        makes the remaining rounds pure spin - no eval, no state change - and
-        the engine stops there instead of burning the step budget. 0 means
-        "may be due any round" and disables that shortcut, so a rule with no
+        "nothing can happen again". It counts *samples*, not rounds, because
+        the horizon - and so what one sample costs in rounds - is the engine's
+        `n_probe_rounds`; the engine prices it. A verdict unreachable before
+        max_steps makes the remaining rounds pure spin - no eval, no state
+        change - and the engine stops there instead of burning the budget. 0
+        means "unknown cadence" and disables that shortcut, so a rule with no
         cadence of its own is never mistaken for a dead one.
         """
         ...
@@ -250,13 +261,16 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     sample: Sampler | None = None,
     n_paths: int = 16,  # number of paths advanced each round, the engine's width
     n_probe_rounds: int = 2,  # draws/start; 1=init, inf=search; 2-3 empirical, pinned 2
-    # The two round budgets, adjacent: max_steps caps the run, max_ls caps one step.
+    # The two batch budgets, adjacent: max_steps caps the run, max_ls caps one
+    # step. A batch is one round of parallel evaluations - the wall-clock unit a
+    # batched objective actually bills - so a probe (n_probe_rounds batches)
+    # costs n_probe_rounds of max_steps, init included.
     max_steps: int = 1000,
-    max_ls: int = 20,  # engine rounds per step before stalling a path
-    # Keyword-only and defaulted, like scipy's `callback`: only the caller
-    # knows where a budget lives, and None means unbounded - the run then
-    # stops on max_steps alone. The gate is the shell's job, not the
-    # engine's.
+    max_ls: int = 20,  # batches one step may serve before stalling a path
+    # Keyword-only and defaulted, like scipy's `callback`: an extra gate for a
+    # budget the engine cannot see (points, wall-clock, dollars), consulted once
+    # per batch. None means "no extra gate" - the run then stops on max_steps
+    # alone. The engine's own batch budget lives in max_steps, not here.
     budget_check: Callable[[], bool] | None = None,
     # The two plugins, adjacent: the search method and the restart decision.
     solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
@@ -294,12 +308,16 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     trial, restart probe - counts exactly one eval (nfev = batch size), the
     serial-cost model; with True each served batch
     counts one (nfev = number of batches), the parallel-cost proxy where a
-    n-path round is one wall-clock unit. budget_check() is the
-    shell's batch-level predicate consulted once per
-    batch (whole batch or None), a False verdict stops all paths globally,
-    and None means unbounded (no gate consulted, runs to max_steps); the
-    terminal batch may over-run the budget by <M points (the gate
-    flips only between batches). fun is the true min over every feasible
+    n-path round is one wall-clock unit. max_steps is the engine's own budget
+    and it is always counted in batches, whatever the billing: every served
+    batch is charged one, a probe costs n_probe_rounds of them, and the run
+    stops when they are gone (status "max_steps"). budget_check() is the
+    caller's additional batch-level predicate consulted once per
+    batch (whole batch or None), for a budget the engine cannot see; a False
+    verdict stops all paths globally (status "budget_exhausted"), and None
+    means no extra gate; that external budget may over-run by <M points (the
+    gate flips only between batches), while max_steps is exact in batches.
+    fun is the true min over every feasible
     recorded eval with a finite value - every served point when the seam
     reports no aux;
     with aux, only points whose feas mask is True update it. The trajectory
@@ -326,8 +344,15 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     degenerate EI_restart = 0 -> the single path never restarts. Every restart
     event extends {r_i} with the event's group-mins for all paths at once (a
     payoff is a property of the sampler, not of one path). A path whose trials
-    exhaust max_ls rounds stalls (observe_continue(i, inf) counts the fold, the
-    read drops the value) until an EI verdict revives it.
+    exhaust max_ls rounds stalls until an EI verdict revives it.
+
+    The verdict compares equal-cost alternatives: a probe spends
+    n_probe_rounds rounds, so the continue side's evidence is one Δf per
+    completed horizon of n_probe_rounds rounds, non-overlapping, each path on
+    its own clock (a restart opens a new horizon). A stall anywhere inside the
+    horizon feeds inf - the read drops the value - rather than a Δ that spans
+    the stall. One sample is therefore worth one probe, and a stage of M samples
+    costs M * n_probe_rounds rounds.
 
     The caller's inputs are validated here, once per run: knob ranges and the
     box's own shape/ordering raise ValueError, and a seam object that does not
@@ -373,7 +398,8 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
         draw: Sampler = default_sample
     else:
         draw = sample
-    evals = 0
+    n_charged = 0  # what nfev reports, in the caller's billing unit
+    spent = 0  # batches served - the engine's own budget meter
     best_fun = math.inf
     # d is the sampler's business: when the box does not supply it, this is an
     # empty placeholder until the first served point fills it in.
@@ -385,25 +411,29 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     ) -> tuple[list[float], jnp.ndarray] | None:
         """One budget gate check, one batched evaluate_batch call.
 
-        budget_check() is the shell's batch-level predicate (it only flips
-        after a batch is served, never between the rows of one batch), so we
-        consult it once and serve the whole batch or None - no partial
-        prefix. None means unbounded: no gate is consulted at all. Returns
-        (f_vals, g_batch) or None when the gate is already
-        False; alive goes False (global stop). A served batch may over-run a
-        budget by <M points (the gate flips only between batches). Each point
-        counts exactly one eval. Only feasible points' values fold into the
-        incumbent B; the seam's third return is a per-point feas mask (None = no
-        aux, every point counts).
+        Two gates, both batch-level and both consulted once (they only flip
+        after a batch is served, never between the rows of one batch), so the
+        whole batch is served or none of it - no partial prefix. The engine's
+        own gate is `max_steps`: one served batch is one round of parallel
+        evaluations and costs one, which is what makes a probe cost
+        n_probe_rounds and the budget comparable with a serial method's step
+        count. `budget_check()` is the caller's extra gate for a budget the
+        engine cannot see, and None means there is none. Returns
+        (f_vals, g_batch) or None when either gate refuses; alive goes False
+        (global stop). Only feasible points' values fold into the incumbent B;
+        the seam's third return is a per-point feas mask (None = no aux, every
+        point counts).
         """
-        nonlocal evals, best_fun, best_x, alive
-        if budget_check is not None and not budget_check():
+        nonlocal n_charged, spent, best_fun, best_x, alive
+        if spent >= max_steps or (budget_check is not None and not budget_check()):
             alive = False
             return None
         f_batch, g_batch, feas = evaluate_batch(x_batch)
-        # One batch is one round of parallel evaluations: charge it as one eval
-        # under per_round_evals, else one per point (the serial model).
-        evals += 1 if per_round_evals else x_batch.shape[0]
+        # Two counters, two units: spent is the budget meter and is always
+        # batches (a round of parallel evaluations); n_charged is what nfev
+        # reports, so under per_round_evals it is batches too, else points.
+        spent += 1
+        n_charged += 1 if per_round_evals else x_batch.shape[0]
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
         f_vals = f_batch.tolist()
@@ -480,12 +510,27 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
 
     init = probe_select(n_paths)
     if init is None:
+        # Nothing was served, so there is no x to report: the budget refused
+        # even the init probe (max_steps < n_probe_rounds, or the caller's gate).
         return NPathResult(
-            x=best_x, fun=best_fun, nfev=evals, nit=0, status="budget_exhausted"
+            x=best_x,
+            fun=best_fun,
+            nfev=n_charged,
+            nit=0,
+            status="max_steps" if spent >= max_steps else "budget_exhausted",
         )
     x, f, g = init
     # a start with no finite evidence never steps: it waits for EI
     stalled: list[bool] = [not math.isfinite(v) for v in f]
+    # The continue side's sample, priced like the thing it is compared with: one
+    # probe costs n_probe_rounds rounds, so one continue sample must too. Each
+    # path owns its clock, so every sample spans exactly n_probe_rounds rounds
+    # even right after a restart; next_feed is the 1-based round at which that
+    # path's current sample completes. f_anchor is where the horizon started,
+    # stalled_in_horizon records any stall since - one is enough to poison it.
+    f_anchor = list(f)
+    stalled_in_horizon = [False] * n_paths
+    next_feed = [n_probe_rounds] * n_paths
     # The seam check: presence, not signatures. The seam's own members run per
     # path per round and stay unvalidated.
     _check_seam(solver, LocalSolver, "solver")
@@ -507,7 +552,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     for v in f:  # cold-start evidence: the n_paths init group-mins, into the one pool
         rule.observe_restart(v)
 
-    def restart_paths(idxs: list[int]) -> None:
+    def restart_paths(idxs: list[int], step: int) -> None:
         """Restart the given paths from one fresh probe-select event.
 
         The event's group-min list extends the rule's one shared payoff pool;
@@ -530,8 +575,13 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
             method.restart(i, PathPoint(r_x[j], r_f[j], r_g[j]))
             rule.restart(i)  # the next Δ opens this path's next stage
             stalled[i] = not math.isfinite(r_f[j])
+            # A restart opens a new horizon: the old anchor's Δ would span the
+            # jump to the fresh start, which is a probe's payoff, not a step's.
+            f_anchor[i] = f[i]
+            stalled_in_horizon[i] = False
+            next_feed[i] = step + n_probe_rounds
 
-    def restart_phase() -> None:
+    def restart_phase(step: int) -> None:
         """Decide which paths to restart against B.
 
         B is passed to each verdict (the engine is its only writer), so every
@@ -544,7 +594,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
             i for i in range(n_paths) if rule.should_restart(i, f[i], best_fun)
         ]
         if to_restart:
-            restart_paths(to_restart)
+            restart_paths(to_restart, step)
 
     def step_paths() -> None:  # noqa: C901 - per-path verdict dispatch
         """One batched engine step for every non-stalled path.
@@ -624,44 +674,66 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     nit = 0
     all_stalled = False
     for step in range(max_steps):
-        restart_phase()
+        # The budget meter: max_steps caps served batches (the work), and the
+        # range caps attempted rounds at the same number, so a method never gets
+        # more batches than another. A round serves at least one batch unless
+        # every path is stalled, so the round cap only bites on a stalling run -
+        # it is what stops a permanently-stalled run whose rule can state no
+        # cadence, without spending anything.
+        if spent >= max_steps:
+            break
+        restart_phase(step)
         if not alive:
             break
         # All paths are stuck and this round's restart votes (asked in
-        # restart_phase above) revived nothing. The next vote is d rounds away,
-        # d = rounds_until_verdict(): it counts to the next round whose cadence
-        # gate opens; 0 means "unknown cadence", only possible before any
-        # observe, when max_steps - step >= 1 already rules the shortcut out.
-        # Rounds are indexed range(max_steps), so a future vote is reachable
-        # iff its round step + d <= max_steps - 1, i.e. d < max_steps - step;
-        # exit on the complement d >= max_steps - step (>=, not >: a gate that
-        # would first open at round max_steps never runs). Once every path is
-        # stalled no eval can fire later, so x / best_fun / nfev are untouched.
-        if all(stalled) and rule.rounds_until_verdict() >= max_steps - step:
-            all_stalled = True
-            break
+        # restart_phase above) revived nothing. The next vote cannot be due
+        # before the earliest path's stage fills: samples_until_verdict() more
+        # samples, each priced n_probe_rounds rounds, the first of them no
+        # sooner than that path's own feed (next_feed), plus the round the vote
+        # is taken in. Both minima are taken separately, which can only
+        # under-count the wait - the safe direction: an over-counted wait would
+        # stop the engine for a vote that was still due. 0 samples means
+        # "unknown cadence", which only happens before any observe, and the
+        # arithmetic then goes negative, so the shortcut stays off (the round cap
+        # above is then the only bound). The wait is in rounds and so is the
+        # remaining round budget: a waiting round serves nothing here, so the
+        # batch budget is not what bounds it. Once every path is stalled no eval
+        # can fire later, so x / best_fun / nfev are untouched.
+        if all(stalled):
+            needed = rule.samples_until_verdict()
+            stagger = min(next_feed[i] - (step + 1) for i in range(n_paths))
+            if stagger + (needed - 1) * n_probe_rounds + 1 >= max_steps - step:
+                all_stalled = True
+                break
         nit += 1  # a round that got past the restart phase is an attempted one
-        f_prev = list(f)
         step_paths()
-        # The restart rule's Δf feed is the engine's own bookkeeping. Every
-        # path steps exactly once per round: `stalled` now encodes "did not
-        # accept" (step_paths maintains it), so a stalled path feeds inf - the
-        # read drops the value but the fold still counts, and a
-        # stalled path's verdict cadence aligns with its advancing cohort
-        # instead of leading it by a round (the off-by-one a top-of-round
-        # stall count would cause). An advancing path feeds the real Δf.
+        # The continue side's sample: one Δf per completed horizon, each worth
+        # one probe, and the read drops the inf a poisoned horizon feeds. A
+        # stalled path still folds (the inf is evidence of a stall at the read's
+        # eye) so its cadence stays aligned with its advancing cohort rather
+        # than leading it by a round.
         for i in range(n_paths):
-            rule.observe_continue(i, (f[i] - f_prev[i]) if not stalled[i] else math.inf)
+            if stalled[i]:
+                stalled_in_horizon[i] = True
+            if step + 1 >= next_feed[i]:
+                rule.observe_continue(
+                    i, math.inf if stalled_in_horizon[i] else f[i] - f_anchor[i]
+                )
+                f_anchor[i] = f[i]
+                stalled_in_horizon[i] = False
+                next_feed[i] += n_probe_rounds
         if not alive:
             break
 
     if not alive:
-        status: NPathStatus = "budget_exhausted"
+        # Two gates can flip alive; the meter says which one, and max_steps is
+        # exact in batches, so this is not a tie-break.
+        status: NPathStatus = "max_steps" if spent >= max_steps else "budget_exhausted"
     elif all_stalled:
         status = "all_stalled"
     else:
         status = "max_steps"
-    return NPathResult(x=best_x, fun=best_fun, nfev=evals, nit=nit, status=status)
+    return NPathResult(x=best_x, fun=best_fun, nfev=n_charged, nit=nit, status=status)
 
 
 def _check_seam(obj: object | None, proto: type, what: str) -> None:

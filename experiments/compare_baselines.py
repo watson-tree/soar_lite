@@ -13,7 +13,7 @@ setting, and the only axis on which an n_paths=16 run and a single chain compare
 at equal cost per step. The second figure replots the same runs against
 objective points served, the fair information unit for a serial setting: there a
 chain serves one point per batch, so the point axis is truncated at
-``--max-steps`` points and a batched run shows only the rounds it could afford -
+``--max-steps`` points and a batched run shows only the batches it could afford -
 no figure re-runs anything. Curves are mean of best-so-far over seeds, shaded
 +-1 standard deviation, log y.
 
@@ -146,8 +146,8 @@ def resample(
     """Aggregate seeds onto ``grid``: mean and std of the best-so-far step curve."""
     stacked = []
     for trace in traces:
-        points, rounds, best = trace.as_arrays()
-        x = points if axis == "points" else rounds
+        points, batches, best = trace.as_arrays()
+        x = points if axis == "points" else batches
         idx = np.searchsorted(x, grid, side="right") - 1
         idx = np.clip(idx, 0, len(best) - 1)
         # The step curve exists only between a run's first and last cost unit:
@@ -167,7 +167,7 @@ def _up_to(trace: Trace, max_points: int) -> Trace:
     stop = sum(1 for p in trace.points if p <= max_points)
     return Trace(
         points=trace.points[:stop],
-        rounds=trace.rounds[:stop],
+        batches=trace.batches[:stop],
         best=trace.best[:stop],
         fun=trace.fun,
     )
@@ -191,12 +191,12 @@ def run_panel(
             fins = [t.fun for t in traces[label]]
             tail = f"final mean best = {np.mean(fins):.4e}"
             print(f"  {prob.name:26s} {label:16s} {tail}")
-        for axis in ("points", "rounds"):
+        for axis in ("points", "batches"):
             col = 0 if axis == "points" else 1
-            # Equal rounds is the batched budget, equal points the serial one,
+            # Equal batches is the batched budget, equal points the serial one,
             # and they are the same runs seen twice. Truncating the point axis
             # at max_steps is what a chain's own run costs, so an n-path run
-            # shows exactly the rounds it could afford there.
+            # shows exactly the batches it could afford there.
             shown = {
                 label: [
                     _up_to(t, max_steps) if axis == "points" else t
@@ -210,7 +210,7 @@ def run_panel(
                 for t in ts
                 if len(t.points) > 0
             )
-            # Log-spaced: an n-path run finishes its rounds far earlier
+            # Log-spaced: an n-path run finishes its batches far earlier
             # than a single chain finishes its points, and a linear grid
             # would squash the batched curve into the left edge of the axis.
             grid = np.logspace(0.0, np.log10(xmax), 120)
@@ -255,7 +255,7 @@ def plot(
         ax.set_yscale("log")
         ax.set_xscale("log")
         ax.set_xlabel(
-            "objective points served" if axis == "points" else "batched rounds"
+            "objective points served" if axis == "points" else "batches served"
         )
         ax.set_ylabel("best-so-far (mean over seeds)")
         ax.set_title(f"{name}\n{labels[name]}", fontsize=9)
@@ -422,7 +422,7 @@ def main() -> None:
         print(f"[{group}] seeds={seeds} max_steps={max_steps}")
         curves, labels = run_panel(group, seeds, max_steps)
         star = {p.name: p.f_star for p in problems.build(group)}
-        for axis in ("points", "rounds"):
+        for axis in ("points", "batches"):
             plot(
                 curves,
                 labels,
