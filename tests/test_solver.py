@@ -13,7 +13,7 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 
-from soar_lite.engine import PathPoint, kpath_schedule
+from soar_lite.engine import PathPoint, n_path_schedule
 from soar_lite.solver import DiagonalPreconditioner
 
 jax.config.update("jax_enable_x64", val=True)
@@ -299,11 +299,11 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
         """Return value and gradient of f = ½Σhᵢ(xᵢ-cᵢ)², grad = h⊙(x-c)."""
         return jnp.sum(0.5 * h * (x - center) ** 2, axis=1), h * (x - center), None
 
-    result = kpath_schedule(
+    result = n_path_schedule(
         evaluate_batch,
         jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         jax.random.PRNGKey(0),
-        K=1,
+        n_paths=1,
         max_steps=50,
         solver=DiagonalPreconditioner(theta=0.0),
     )
@@ -383,11 +383,11 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
         """Return value and gradient of f = ½Σhᵢ(xᵢ-cᵢ)², grad = h⊙(x-c)."""
         return jnp.sum(0.5 * h * (x - center) ** 2, axis=1), h * (x - center), None
 
-    result = kpath_schedule(
+    result = n_path_schedule(
         evaluate_batch,
         jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         jax.random.PRNGKey(0),
-        K=1,
+        n_paths=1,
         max_steps=50,
         solver=DiagonalPreconditioner(theta=0.0, ls_rounds=3),
     )

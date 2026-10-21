@@ -1,4 +1,4 @@
-"""K-path scheduler self-checks.
+"""n-path scheduler self-checks.
 
 Seam (拍板): the engine consumes callables plus the box it searches
 
@@ -23,11 +23,11 @@ import jax
 import jax.numpy as jnp
 
 from soar_lite.engine import (
-    KPathResult,
+    NPathResult,
     PathPoint,
     Verdict,
     argmin_finite,  # helper contract pinned directly
-    kpath_schedule,
+    n_path_schedule,
 )
 from soar_lite.restart import EIRestartRule
 
@@ -107,7 +107,7 @@ class Recorder:
 
 
 def test_batch_shape_and_per_point_counting() -> None:
-    """evaluate_batch receives (K,d) batches; each point counts exactly 1 eval.
+    """evaluate_batch receives (n_paths,d) batches; each point counts exactly 1 eval.
 
     reported evals == points the seam actually served.
     """
@@ -121,16 +121,16 @@ def test_batch_shape_and_per_point_counting() -> None:
         return jnp.sum(d**4 + d**2), 4.0 * d**3 + 2.0 * d
 
     rec = Recorder(quartic)
-    res = kpath_schedule(
+    res = n_path_schedule(
         rec,
         unit_bounds(),
         jax.random.PRNGKey(0),
         budget_check=rec.limit_check(500),
-        K=4,
+        n_paths=4,
         max_steps=50,
         solver=HalfStep(),
     )
-    assert isinstance(res, KPathResult)
+    assert isinstance(res, NPathResult)
     assert res.nfev == rec.evals, (res.nfev, rec.evals)
     assert res.nfev <= 500
     # nit counts engine rounds, not the linesearch rounds inside them (one round
@@ -138,7 +138,7 @@ def test_batch_shape_and_per_point_counting() -> None:
     # and stays far below the eval count - but it is not the cap itself: a run
     # that ends on all_stalled stops counting short of it.
     assert 0 < res.nit <= 50
-    assert res.nfev >= res.nit * 4  # a round serves at least the K paths
+    assert res.nfev >= res.nit * 4  # a round serves at least the n_paths paths
     # batched concurrency: at least one call served >1 point at once
     assert any(m > 1 for (m, _d) in rec.batch_shapes), rec.batch_shapes
     # all batches carry the same width d
@@ -146,18 +146,18 @@ def test_batch_shape_and_per_point_counting() -> None:
 
 
 def test_budget_exhaustion_stops_everything() -> None:
-    """budget_check() False -> global stop; terminal batch over-runs < K."""
+    """budget_check() False -> global stop; terminal batch over-runs < n_paths."""
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum((theta - 0.7) ** 2), 2.0 * (theta - 0.7)
 
     rec = Recorder(quad)
-    res = kpath_schedule(
+    res = n_path_schedule(
         rec,
         unit_bounds(),
         jax.random.PRNGKey(1),
         budget_check=rec.limit_check(30),
-        K=8,
+        n_paths=8,
         max_steps=100,
         solver=HalfStep(),
     )
@@ -168,12 +168,12 @@ def test_budget_exhaustion_stops_everything() -> None:
 
     # gate already False on entry: nothing evaluated at all
     rec0 = Recorder(quad)
-    res0 = kpath_schedule(
+    res0 = n_path_schedule(
         rec0,
         unit_bounds(),
         jax.random.PRNGKey(2),
         budget_check=rec0.limit_check(0),
-        K=4,
+        n_paths=4,
         solver=HalfStep(),
     )
     assert res0.nfev == 0
@@ -191,12 +191,12 @@ def test_fun_is_true_min_over_history() -> None:
         return jnp.sum((theta - 0.7) ** 2), 2.0 * (theta - 0.7)
 
     rec = Recorder(quad)
-    res = kpath_schedule(
+    res = n_path_schedule(
         rec,
         unit_bounds(),
         jax.random.PRNGKey(3),
         budget_check=rec.limit_check(500),
-        K=4,
+        n_paths=4,
         max_steps=50,
         solver=HalfStep(),
     )
@@ -214,8 +214,8 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     x0 ~ uniform(0,1) and the identity map makes θ = x, so the single
     path's fate depends on its pair-min start (min of 2 draws) relative
     to the saddle.  Cold-start
-    evidence asymmetry: K=1 feeds one group-min -> sigma_r = 0 -> degenerate
-    EI_restart = 0 -> the single path never restarts; K=16 feeds a real
+    evidence asymmetry: n_paths=1 feeds one group-min -> sigma_r = 0 -> degenerate
+    EI_restart = 0 -> the single path never restarts; n_paths=16 feeds a real
     spread -> sigma_r > 0 -> stalled paths may probe their way to the
     global well.
     """
@@ -243,27 +243,27 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
 
     budget = 320
     rec_k = Recorder(pointwise)
-    res_k = kpath_schedule(
+    res_k = n_path_schedule(
         rec_k,
         unit_bounds(),
         jax.random.PRNGKey(2),
         budget_check=rec_k.limit_check(budget),
-        K=16,
+        n_paths=16,
         max_steps=100,
         solver=HalfStep(),
     )
     rec_1 = Recorder(pointwise)
-    res_1 = kpath_schedule(
+    res_1 = n_path_schedule(
         rec_1,
         unit_bounds(),
         jax.random.PRNGKey(2),
         budget_check=rec_1.limit_check(budget),
-        K=1,
+        n_paths=1,
         max_steps=100,
         solver=HalfStep(),
     )
     # the single path must be trapped in the shallow well: replicate the
-    # engine's K=1 init key chain (split -> probe round 1, split -> round 2)
+    # engine's n_paths=1 init key chain (split -> probe round 1, split -> round 2)
     # and verify the pair-min start lands in the shallow basin (x > 0.505)
     k = jax.random.PRNGKey(2)
     k, k1 = jax.random.split(k)
@@ -293,12 +293,12 @@ def test_projected_descent_reaches_wall_optimum() -> None:
         )
 
     rec = Recorder(wall_quad)
-    res = kpath_schedule(
+    res = n_path_schedule(
         rec,
         unit_bounds(2),
         jax.random.PRNGKey(4),
         budget_check=rec.limit_check(500),
-        K=1,  # K=1 -> sigma_r=0 -> never restart, pure projected descent
+        n_paths=1,  # n_paths=1 -> sigma_r=0 -> never restart, pure projected descent
         max_steps=100,
         solver=HalfStep(),
     )
@@ -336,12 +336,12 @@ def test_feasible_only_incumbent() -> None:
     def budget_check() -> bool:
         return evals < 600
 
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(5),
         budget_check=budget_check,
-        K=4,
+        n_paths=4,
         max_steps=100,
         solver=HalfStep(),
     )
@@ -374,12 +374,12 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
         losses = jnp.where(row0, nan, jnp.asarray(0.01, dtype=theta.dtype))
         return losses, jnp.zeros_like(theta), jnp.ones(theta.shape[0], dtype=bool)
 
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(6),
         budget_check=lambda: served[0] < 40,
-        K=2,
+        n_paths=2,
         max_steps=5,
         solver=HalfStep(),
     )
@@ -388,7 +388,7 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
 
 
 def run_probe_pass_with_nan_round(nan_round: int) -> None:
-    """One K=2 init pass serving NaN for the whole probe round `nan_round`."""
+    """One n_paths=2 init pass serving NaN for the whole probe round `nan_round`."""
     n_paths = 2
     calls = [0]
     served = [0]
@@ -416,12 +416,12 @@ def run_probe_pass_with_nan_round(nan_round: int) -> None:
             starts.append(theta)
         return losses, grads, None
 
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(7),
         budget_check=lambda: served[0] < 40,
-        K=n_paths,
+        n_paths=n_paths,
         max_steps=5,
         solver=HalfStep(),
     )
@@ -500,12 +500,12 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
             losses = jnp.full((theta.shape[0],), 1.0, dtype=theta.dtype)
         return losses, jnp.zeros_like(theta), None
 
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(0),
         budget_check=lambda: served[0] < 60,
-        K=n_paths,
+        n_paths=n_paths,
         max_steps=max_steps,
         restart_rule=ForcedWindow(2),
         solver=HalfStep(),
@@ -542,12 +542,12 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
             losses = losses.at[0].set(jnp.inf)
         return losses, grads, None
 
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(0),
         budget_check=lambda: served[0] < 60,
-        K=n_paths,
+        n_paths=n_paths,
         max_steps=max_steps,
         restart_rule=ForcedWindow(10**9),
         solver=HalfStep(),
@@ -575,7 +575,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     n_paths, max_ls, max_steps, n_probe_rounds = 4, 3, 3, 2
     bad = 10.0
 
-    def seam_run(window: int) -> tuple[list[tuple[int, int]], int, KPathResult]:
+    def seam_run(window: int) -> tuple[list[tuple[int, int]], int, NPathResult]:
         shapes: list[tuple[int, int]] = []
         evals = [0]
 
@@ -590,13 +590,13 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
                 None,
             )
 
-        res = kpath_schedule(
+        res = n_path_schedule(
             evaluate_batch,
             unit_bounds(),
             jax.random.PRNGKey(8),
             # the step cap ends both runs
             budget_check=lambda: evals[0] < 10**6,
-            K=n_paths,
+            n_paths=n_paths,
             max_steps=max_steps,
             max_ls=max_ls,
             restart_rule=ForcedWindow(window),
@@ -644,12 +644,12 @@ def test_bounds_spellings_are_the_same_box() -> None:
         bounds: jnp.ndarray | list[tuple[float, float]],
     ) -> tuple[list[float], float]:
         rec = Recorder(quad)
-        res = kpath_schedule(
+        res = n_path_schedule(
             rec,
             bounds,
             jax.random.PRNGKey(3),
             budget_check=rec.limit_check(80),
-            K=4,
+            n_paths=4,
             max_steps=10,
             solver=HalfStep(),
         )
@@ -676,11 +676,11 @@ def test_unbounded_or_absent_box_needs_an_injected_sampler() -> None:
     for bounds in ([(-jnp.inf, 1.0)], [(None, None)], None):
         rec = Recorder(quad)
         try:
-            kpath_schedule(
+            n_path_schedule(
                 rec,
                 bounds,
                 jax.random.PRNGKey(0),
-                K=2,
+                n_paths=2,
                 max_steps=1,
                 solver=HalfStep(),
             )
@@ -706,13 +706,13 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
         return jax.random.logistic(sub, (n, 3))
 
     rec_none = Recorder(quad)
-    res = kpath_schedule(
+    res = n_path_schedule(
         rec_none,
         None,
         jax.random.PRNGKey(4),
         sample=sample,
         budget_check=rec_none.limit_check(60),
-        K=2,
+        n_paths=2,
         max_steps=3,
         solver=HalfStep(),
     )
@@ -720,13 +720,13 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
     assert res.x.shape == (3,)
 
     rec_pairs = Recorder(quad)
-    kpath_schedule(
+    n_path_schedule(
         rec_pairs,
         [(None, None)] * 3,
         jax.random.PRNGKey(4),
         sample=sample,
         budget_check=rec_pairs.limit_check(60),
-        K=2,
+        n_paths=2,
         max_steps=3,
         solver=HalfStep(),
     )
@@ -734,12 +734,12 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
 
     # a box and a sampler that disagree on d is the wiring bug this catches
     try:
-        kpath_schedule(
+        n_path_schedule(
             Recorder(quad),
             unit_bounds(2),
             jax.random.PRNGKey(4),
             sample=sample,
-            K=2,
+            n_paths=2,
             max_steps=1,
             solver=HalfStep(),
         )
@@ -766,13 +766,13 @@ def test_an_injected_sampler_searches_outside_the_old_box() -> None:
     def sample(sub: jnp.ndarray, n: int) -> jnp.ndarray:
         return jax.random.logistic(sub, (n, 1)) + 3.0  # starts near the well
 
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         [(None, None)],
         jax.random.PRNGKey(5),
         sample=sample,
         budget_check=lambda: True,
-        K=4,
+        n_paths=4,
         max_steps=40,
         solver=HalfStep(),
     )

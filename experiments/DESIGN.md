@@ -78,19 +78,29 @@ Five groups, one role each:
 
 Four curves per panel:
 
-- **Panel "preconditioning"** (groups 2+3, **P②**): `soar-lite K=1`, `Adam`,
+- **Panel "preconditioning"** (groups 2+3, **P②**): `soar-lite n_paths=1`, `Adam`,
   `L-BFGS-B` (ceiling *reference*, not a head-to-head baseline — full-memory +
-  serial line search vs our per-coordinate + batched K), plus `soar-lite K=16`
+  serial line search vs our per-coordinate + batched n_paths), plus `soar-lite n_paths=16`
   as a supplementary "what parallelism buys" curve.
-- **Panel "escape"** (group 4, **P①**): `soar-lite K=16`, `soar-lite K=1`,
+- **Panel "escape"** (group 4, **P①**): `soar-lite n_paths=16`, `soar-lite n_paths=1`,
   `Adam`, `NAAdam`.
-- **Invariance panel** (group 5): `soar-lite` (one K) vs `Adam`, two unit
+- **Invariance panel** (group 5): `soar-lite` (n_paths=1) vs `Adam`, two unit
   systems, overlaid after the coordinate transform.
 
 NAAdam definition: Adam + `σ_t = σ0/√t` decaying Gaussian noise, `σ0=1e-2`
-(demo value, tunable). Gate: NAAdam runs **only** on non-random multimodal
+(tunable). A `σ0` sweep on ackley/rastrigin at d=100 shows the noise never
+escapes — larger `σ0` is flat (rastrigin) to worse (ackley) — so the honest
+escape baseline is effectively Adam; this *is* evidence for P①. NAAdam keeps
+`σ0=1e-2` untuned. Gate: NAAdam runs **only** on non-random multimodal
 objectives (R5 feedback — Adam beat NAAdam on the hidden topologies in both
 mean and variance).
+
+Adam/NAAdam learning rate is **per-problem grid-tuned**: the optimal lr spans
+over two orders of magnitude (diag 1e-2 → rotated 2.0), and a wrong lr costs
+~68 orders of magnitude on diag. The grid and picks live in `ADAM_LR` /
+`--lr-sweep` in `compare_baselines.py`; soar-lite has no learning rate. Tuning
+is itself budget — every trial is more objective points, and it is manual, not
+adaptive.
 
 ## Budget, statistics, outputs
 
@@ -118,12 +128,12 @@ mean and variance).
 1. Add experiment deps via a dependency group (`optax`, `matplotlib`).
 2. `experiments/problems.py` — the five groups + a thin oracle wrapper matching
    the soar-lite seam `x_batch → (loss, grad, feas)`.
-3. `experiments/methods.py` — drivers: soar-lite K=1/K=16, Adam, NAAdam,
+3. `experiments/methods.py` — drivers: soar-lite n_paths=1/n_paths=16, Adam, NAAdam,
    L-BFGS-B.
 4. `experiments/compare_baselines.py` — harness over `N=20` seeds, collects
    per-round best-so-far.
 5. Plot + dump `results.json`. **Self-check first**: two curves on the diag
-   quadratic (soar-lite K=1 vs Adam) before running everything.
+   quadratic (soar-lite n_paths=1 vs Adam) before running everything.
 6. `experiments/README.md` — run instructions, written alongside the code.
 
 ## Open TODOs (release hygiene, outside this experiment)

@@ -19,7 +19,7 @@ from collections.abc import Callable
 import jax
 import jax.numpy as jnp
 
-from soar_lite.engine import PathPoint, Verdict, kpath_schedule
+from soar_lite.engine import PathPoint, Verdict, n_path_schedule
 
 jax.config.update("jax_enable_x64", val=True)
 
@@ -133,12 +133,12 @@ def test_injected_solver_is_driven() -> None:
     k = 3
     evaluate_batch, shapes = evaluator()
     solver = StubSolver()
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(0),
         budget_check=lambda: True,
-        K=k,
+        n_paths=k,
         max_steps=1,
         n_probe_rounds=PROBE_ROUNDS,
         solver=solver,
@@ -155,12 +155,12 @@ def test_give_up_stalls_a_path() -> None:
     k = 3
     evaluate_batch, shapes = evaluator()
     solver = StubSolver(give_up=True)
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(1),
         budget_check=lambda: True,
-        K=k,
+        n_paths=k,
         max_steps=5,
         n_probe_rounds=PROBE_ROUNDS,
         solver=solver,
@@ -177,18 +177,18 @@ def test_injected_rule_is_driven() -> None:
     k = 2
     evaluate_batch, _shapes = evaluator()
     rule = RecordingRule()
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(2),
         budget_check=lambda: True,
-        K=k,
+        n_paths=k,
         max_steps=1,
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),
         restart_rule=rule,
     )
-    assert len(rule.group_mins) == k  # cold start: the K init group-mins, once
+    assert len(rule.group_mins) == k  # cold start: the n_paths init group-mins, once
     assert rule.verdicts == [0, 1]  # restart_phase asks once per path per step
     assert [i for i, _delta in rule.deltas] == [0, 1]  # Δf per advanced path
     assert rule.restarts == []
@@ -201,12 +201,12 @@ def test_rule_can_force_restarts() -> None:
     evaluate_batch, shapes = evaluator()
     solver = StubSolver()
     rule = AlwaysRestartRule()
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(3),
         budget_check=lambda: True,
-        K=k,
+        n_paths=k,
         max_steps=2,
         n_probe_rounds=PROBE_ROUNDS,
         solver=solver,
@@ -216,7 +216,7 @@ def test_rule_can_force_restarts() -> None:
     assert res.nfev == sum(w for w, _d in shapes)
     assert res.nfev == PROBE_ROUNDS * k + 2 * (PROBE_ROUNDS * k + k)
     assert rule.restarts == [0, 1] * 2  # every path restarted, every step
-    assert len(rule.group_mins) == k + 2 * k  # K init + a payoff per restarted path
+    assert len(rule.group_mins) == k + 2 * k  # n_paths init + payoff per restart
     assert solver.verdicts == [0, 1] * 2
     assert res.status == "max_steps"
 
@@ -225,11 +225,11 @@ def test_no_budget_run_reports_max_steps() -> None:
     """No gate passed at all (the keyword defaults to None): max_steps only."""
     k = 2
     evaluate_batch, shapes = evaluator()
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(4),
-        K=k,
+        n_paths=k,
         max_steps=3,
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),
@@ -257,12 +257,12 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
         return jnp.sum((theta - 4.0) ** 2, axis=-1), 2.0 * (theta - 4.0), None
 
     bounds = jnp.stack([jnp.full(1, lo), jnp.full(1, hi)], axis=1)
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         bounds,
         jax.random.PRNGKey(5),
         budget_check=None,
-        K=2,
+        n_paths=2,
         max_steps=3,
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
@@ -306,13 +306,13 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
             losses, grads = jax.vmap(pointwise)(x)
             return losses, grads, None
 
-        res = kpath_schedule(
+        res = n_path_schedule(
             evaluate_batch,
             box,
             jax.random.PRNGKey(7),
             sample=sample,
             budget_check=None,
-            K=2,
+            n_paths=2,
             max_steps=3,
             n_probe_rounds=PROBE_ROUNDS,
             solver=StubSolver(),
@@ -351,12 +351,12 @@ def test_every_path_steps_exactly_once_per_round() -> None:
         return losses, jnp.zeros_like(x), None
 
     rule = RecordingRule()
-    res = kpath_schedule(
+    res = n_path_schedule(
         evaluate_batch,
         unit_bounds(),
         jax.random.PRNGKey(6),
         budget_check=lambda: True,
-        K=k,
+        n_paths=k,
         max_steps=3,
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),
@@ -373,21 +373,21 @@ def test_every_path_steps_exactly_once_per_round() -> None:
 def test_per_round_evals_bills_a_parallel_round_as_one() -> None:
     """The two billing modes are different cost models, never the same number.
 
-    Default per-point: a K-path round serves K points, so it bills K. Under
+    Default per-point: a n-path round serves n_paths points, so it bills n_paths. Under
     `per_round_evals` the same round is one parallel batch and bills 1 - which
-    is exactly why K parallel paths can cost what one serial path costs. This
-    pins that equivalence: K=3 per-round and K=1 per-point report the same
-    nfev, while K=3 per-point reports K times that.
+    is exactly why n_paths parallel paths can cost what one serial path costs. This
+    pins that equivalence: n_paths=3 per-round and n_paths=1 per-point report the same
+    nfev, while n_paths=3 per-point reports n_paths times that.
     """
 
     def run(*, per_round: bool, k: int) -> int:
         evaluate_batch, _shapes = evaluator()
-        res = kpath_schedule(
+        res = n_path_schedule(
             evaluate_batch,
             unit_bounds(),
             jax.random.PRNGKey(8),
             budget_check=lambda: True,
-            K=k,
+            n_paths=k,
             max_steps=1,
             n_probe_rounds=PROBE_ROUNDS,
             solver=StubSolver(),
@@ -397,7 +397,7 @@ def test_per_round_evals_bills_a_parallel_round_as_one() -> None:
         return res.nfev
 
     # one probe round is PROBE_ROUNDS(=2) batches, then one accepted step round
-    rounds = PROBE_ROUNDS + 1  # = 3 batches, independent of K
+    rounds = PROBE_ROUNDS + 1  # = 3 batches, independent of n_paths
     assert run(per_round=False, k=3) == PROBE_ROUNDS * 3 + 3  # 9 points
     assert run(per_round=True, k=3) == rounds  # 3 batches
     assert run(per_round=False, k=1) == rounds  # 3 points

@@ -2,18 +2,27 @@
 
 Two panels per method family, following the design in `DESIGN.md`:
 
-* smooth + headline (preconditioning proposition): soar-lite K=1, soar-lite
-  K=16, Adam, L-BFGS-B (ceiling reference);
-* multimodal (escape proposition): soar-lite K=1, soar-lite K=16, Adam, NAAdam.
+* smooth + headline (preconditioning proposition): soar-lite n_paths=1,
+  soar-lite n_paths=16, Adam, L-BFGS-B (ceiling reference);
+* multimodal (escape proposition): soar-lite n_paths=1, soar-lite n_paths=16,
+  Adam, NAAdam.
 
-Cost axis is objective evaluations (the fair information unit); a second figure
+Cost axis is objective points served (the fair information unit); a second figure
 replots the same runs against sequential batched rounds, the wall-clock axis
 for a batched setting. Curves are mean of best-so-far over seeds, shaded +-1
 standard deviation, log y.
 
+Adam and NAAdam carry a per-problem learning rate, picked on a coarse 1-seed
+grid sweep (reproduce it with --lr-sweep): the best lr spans over two orders of
+magnitude across smooth problems and a wrong lr costs ~68 orders of magnitude
+on the diagonal quadratic. That tuning is budget the axis never shows -- every
+trial is more objective points served, and it is manual rather than adaptive.
+soar-lite has no learning rate to tune.
+
 Usage:
     python -m experiments.compare_baselines --quick     # 2-seed smoke check
     python -m experiments.compare_baselines             # the full run
+    python -m experiments.compare_baselines --lr-sweep  # Adam lr sensitivity panel
 """
 
 import argparse
@@ -41,21 +50,41 @@ from experiments.methods import (
 HERE = Path(__file__).parent
 Runner = Callable[..., Trace]
 
+# Per-problem Adam/NAAdam learning rate, chosen on a coarse 1-seed grid sweep
+# (see --lr-sweep): the optimal lr spans over two orders of magnitude across the
+# smooth problems, and a wrong lr costs ~68 orders of magnitude on the diagonal
+# quadratic. Tuning is itself budget the y axis never shows -- every trial is
+# more objective points served, and it is manual, not adaptive. soar-lite has
+# no learning rate at all. The rotated optimum only appears above lr=1 (peak
+# 2.0, ~11x better than 1.0), so it is the hardest dial to find by hand.
+ADAM_LR: dict[str, float] = {
+    "oscillator_n20_F20": 0.5,
+    "diag_quad_d100_cond10000": 1e-2,
+    "rot_quad_d100_cond1e+06": 2.0,
+    "ackley_d100": 1e-2,
+    "rastrigin_d100": 1e-2,
+}
+
+
+def _adam_lr(prob: problems.Problem) -> float:
+    """Return the grid-tuned Adam/NAAdam lr for this problem (fallback 1e-2)."""
+    return ADAM_LR.get(prob.name, 1e-2)
+
 # Method roster per problem family: (label, runner, style kwargs).
 SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
-        "soar-lite K=1",
-        lambda prob, **kw: run_soar_lite(prob, K=1, **kw),
+        "soar-lite n_paths=1",
+        lambda prob, **kw: run_soar_lite(prob, n_paths=1, **kw),
         {"color": "C0", "lw": 2.0},
     ),
     (
-        "soar-lite K=16",
-        lambda prob, **kw: run_soar_lite(prob, K=16, **kw),
+        "soar-lite n_paths=16",
+        lambda prob, **kw: run_soar_lite(prob, n_paths=16, **kw),
         {"color": "C0", "lw": 1.2, "ls": "--"},
     ),
     (
-        "Adam",
-        lambda prob, **kw: run_adam(prob, lr=0.05, **kw),
+        "Adam (grid lr)",
+        lambda prob, **kw: run_adam(prob, lr=_adam_lr(prob), **kw),
         {"color": "C3", "lw": 1.5},
     ),
     (
@@ -65,25 +94,30 @@ SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     ),
 ]
 
+# NAAdam keeps sigma0=1e-2 (its default, untuned): a sigma0 sweep on ackley and
+# rastrigin at d=100 shows the decaying noise never escapes -- larger sigma0 is
+# flat (rastrigin) to worse (ackley), so the honest escape baseline is plain
+# Adam. That the noise buys nothing is part of P1's case for soar-lite's
+# sample-measured restarts.
 MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
-        "soar-lite K=16",
-        lambda prob, **kw: run_soar_lite(prob, K=16, **kw),
+        "soar-lite n_paths=16",
+        lambda prob, **kw: run_soar_lite(prob, n_paths=16, **kw),
         {"color": "C0", "lw": 2.0},
     ),
     (
-        "soar-lite K=1",
-        lambda prob, **kw: run_soar_lite(prob, K=1, **kw),
+        "soar-lite n_paths=1",
+        lambda prob, **kw: run_soar_lite(prob, n_paths=1, **kw),
         {"color": "C0", "lw": 1.2, "ls": "--"},
     ),
     (
-        "Adam",
-        lambda prob, **kw: run_adam(prob, lr=0.05, **kw),
+        "Adam (grid lr)",
+        lambda prob, **kw: run_adam(prob, lr=_adam_lr(prob), **kw),
         {"color": "C3", "lw": 1.5},
     ),
     (
-        "NAAdam",
-        lambda prob, **kw: run_naadam(prob, lr=0.05, **kw),
+        "NAAdam (grid lr)",
+        lambda prob, **kw: run_naadam(prob, lr=_adam_lr(prob), **kw),
         {"color": "C2", "lw": 1.5, "ls": "-."},
     ),
 ]
@@ -101,8 +135,8 @@ def resample(
     """Aggregate seeds onto ``grid``: mean and std of the best-so-far step curve."""
     stacked = []
     for trace in traces:
-        evals, rounds, best = trace.as_arrays()
-        x = evals if axis == "evals" else rounds
+        points, rounds, best = trace.as_arrays()
+        x = points if axis == "points" else rounds
         idx = np.searchsorted(x, grid, side="right") - 1
         idx = np.clip(idx, 0, len(best) - 1)
         # The step curve exists only between a run's first and last cost unit:
@@ -110,8 +144,8 @@ def resample(
         curve = np.where((grid < x[0]) | (grid > x[-1]), np.nan, best[idx])
         stacked.append(curve)
     arr = np.vstack(stacked)
-    # K-path runs have no data before their first batch (K evals in), so the
-    # leading grid points are all-NaN columns by construction, not an error.
+    # An n-path run has no data before its first batch (n_paths points
+    # in), so the leading grid points are all-NaN columns by construction.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         return np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
@@ -135,17 +169,17 @@ def run_panel(
             fins = [t.fun for t in traces[label]]
             tail = f"final mean best = {np.mean(fins):.4e}"
             print(f"  {prob.name:26s} {label:16s} {tail}")
-        for axis in ("evals", "rounds"):
-            col = 0 if axis == "evals" else 1
+        for axis in ("points", "rounds"):
+            col = 0 if axis == "points" else 1
             xmax = max(
                 float(t.as_arrays()[col].max())
                 for ts in traces.values()
                 for t in ts
-                if len(t.evals) > 0
+                if len(t.points) > 0
             )
-            # Log-spaced: a K-path run finishes its rounds far earlier than a
-            # single chain finishes its evals, and a linear grid would squash
-            # the batched curve into the first few percent of the axis.
+            # Log-spaced: an n-path run finishes its rounds far earlier
+            # than a single chain finishes its points, and a linear grid
+            # would squash the batched curve into the left edge of the axis.
             grid = np.logspace(0.0, np.log10(xmax), 120)
             for label, _, _ in methods:
                 mean, std = resample(traces[label], grid, axis)
@@ -187,13 +221,61 @@ def plot(
         ax.set_yscale("log")
         ax.set_xscale("log")
         ax.set_xlabel(
-            "objective evaluations" if axis == "evals" else "batched rounds"
+            "objective points served" if axis == "points" else "batched rounds"
         )
-        ax.set_ylabel("best-so-far (median over seeds)")
+        ax.set_ylabel("best-so-far (mean over seeds)")
         ax.set_title(f"{name}\n{labels[name]}", fontsize=9)
         ax.legend(fontsize=7)
         ax.grid(alpha=0.25)
     fig.suptitle(f"soar-lite vs first-order baselines - {group} panel ({axis} axis)")
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    print(f"wrote {out}")
+
+
+def run_lr_sweep(out: Path, seeds: int, max_evals: int) -> None:
+    """Plot best-so-far vs Adam lr, one curve per problem (appendix panel).
+
+    Shows the optimal lr drifting across problems and a wrong lr costing many
+    orders of magnitude; the point picked per problem (``ADAM_LR``) is marked
+    with a C0 diamond.
+    """
+    lr_grid = [1e-4, 1e-3, 1e-2, 1e-1, 2e-1, 5e-1, 1.0, 2.0]
+    probs = problems.build("all")
+    fig, axes = plt.subplots(
+        1, len(probs), figsize=(6.4 * len(probs), 4.6), squeeze=False
+    )
+    for ax, prob in zip(axes[0], probs, strict=True):
+        fins = [
+            float(
+                np.mean(
+                    [
+                        run_adam(prob, max_evals=max_evals, seed=s, lr=lr).fun
+                        for s in range(seeds)
+                    ]
+                )
+            )
+            for lr in lr_grid
+        ]
+        ax.plot(lr_grid, np.maximum(fins, 1e-16), marker="o", lw=1.5, color="C3")
+        best_lr = ADAM_LR.get(prob.name)
+        best_idx = lr_grid.index(best_lr) if best_lr in lr_grid else None
+        if best_idx is not None:
+            ax.plot(
+                [lr_grid[best_idx]],
+                [max(fins[best_idx], 1e-16)],
+                marker="D",
+                color="C0",
+                ms=9,
+            )
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("Adam learning rate")
+        ax.set_ylabel("best-so-far (mean over seeds)")
+        ax.set_title(prob.name, fontsize=9)
+        ax.grid(alpha=0.25, which="both")
+    fig.suptitle("Adam lr sensitivity - C0 diamond marks the per-problem pick")
     fig.tight_layout()
     fig.savefig(out, dpi=150)
     plt.close(fig)
@@ -207,7 +289,14 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, default=20)
     parser.add_argument("--max-evals", type=int, default=3000)
     parser.add_argument("--groups", default="headline,smooth,multimodal")
+    parser.add_argument(
+        "--lr-sweep", action="store_true", help="emit the Adam lr sensitivity figure"
+    )
     args = parser.parse_args()
+
+    if args.lr_sweep:
+        run_lr_sweep(HERE / "results_lr_sweep.png", seeds=2, max_evals=args.max_evals)
+        return
 
     groups = ["smooth"] if args.quick else args.groups.split(",")
     seeds = 2 if args.quick else args.seeds
@@ -217,7 +306,7 @@ def main() -> None:
         print(f"[{group}] seeds={seeds} max_evals={max_evals}")
         curves, labels = run_panel(group, seeds, max_evals)
         star = {p.name: p.f_star for p in problems.build(group)}
-        for axis in ("evals", "rounds"):
+        for axis in ("points", "rounds"):
             plot(
                 curves,
                 labels,

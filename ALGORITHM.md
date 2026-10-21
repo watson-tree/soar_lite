@@ -1,4 +1,4 @@
-# 对角预条件 K 路径搜索：算法与原理
+# 对角预条件 n_paths 路径搜索：算法与原理
 
 本文描述**算法与不变式**，不限定接口。文中出现的类型名、函数名、参数名只是参考实现的一种拼法；
 移植时尽可改名、改签名、改文件划分。第 6 节列出哪些东西是真的可换、哪些是不许破的。
@@ -121,7 +121,7 @@ den = Y + λ            ← 被否掉的加法拼法
 
 ### 2.1 为什么不拟合代理模型
 
-K 条路径的起点是 K 个 i.i.d. 抽样。**样本本身就是证据**：一次重启买到多少改进，可以直接用「重启
+n_paths 条路径的起点是 n_paths 个 i.i.d. 抽样。**样本本身就是证据**：一次重启买到多少改进，可以直接用「重启
 事件里那些起点的组最小值」来实测，而不必拟合 `f` 的代理模型。高维下拟合既贵又脆；采样估计的方差
 只随样本数走，与维数无关。这就是 Mathesen et al. 2021 那个「自适应重启」框架的轻量版本。
 
@@ -159,17 +159,17 @@ EI_restart  = σ_r·[z·Φ(z) + φ(z)],  z = (B − μ_r)/σ_r     任一路径�
 跳过（一个 `+inf` 样本会让均值与标准差变 `NaN`，而 `NaN > EI_continue` 恒为 `False`，等于静默关掉
 该路径的重启）。
 
-### 2.4 K=1 的退化
+### 2.4 n_paths=1 的退化
 
-`K = 1` 时池子里只有一个样本 ⇒ `σ_r = 0` ⇒ `EI_restart` 退化为 `max(B − μ_r, 0)`，与继续侧同形，
-样本数也远不够打开判决 ⇒ **单路径永不重启**。这正是「把 K 设成 1 就得到一条纯串行局部下降」的
+`n_paths = 1` 时池子里只有一个样本 ⇒ `σ_r = 0` ⇒ `EI_restart` 退化为 `max(B − μ_r, 0)`，与继续侧同形，
+样本数也远不够打开判决 ⇒ **单路径永不重启**。这正是「把 n_paths 设成 1 就得到一条纯串行局部下降」的
 退化路径，不需要任何模式开关。
 
-## 3. K 路径引擎
+## 3. n_paths 路径引擎
 
 ### 3.1 选择事件不盲降
 
-初始化与重启都走同一个事件：抽 `n_probe_rounds` 轮、每轮 `n` 个点（`n = K` 或本次重启的路径数），
+初始化与重启都走同一个事件：抽 `n_probe_rounds` 轮、每轮 `n` 个点（`n = n_paths` 或本次重启的路径数），
 **按列**取最小值，得到 `n` 个起点；这些点的梯度直接复用（起点零额外 eval）。
 
 为什么按列取最小：每一列跨轮就是从同一抽样器里抽出的一个随机组，组最小值既是「`n_probe_rounds`
@@ -209,7 +209,7 @@ observe_continue 把本轮 Δf 喂回规则（stalled 路径喂 inf：值不被�
 
 ## 4. 适用界
 
-- 这是**局部**方法 + 采样重启，不是全局搜索器；它靠 K 条路径的多样性与重启频率换全局性，收敛
+- 这是**局部**方法 + 采样重启，不是全局搜索器；它靠 n_paths 条路径的多样性与重启频率换全局性，收敛
   保证与 Adam/RMSProp 同级，不追牛顿/拟牛顿。
 - 逐坐标估计忽略耦合项 `Σ_{j≠i} Hᵢⱼ sⱼ`，后者落在 `|yᵢ|` 内使 `d` 成为 `1/Hᵢᵢ` 的有偏估计
   （耦合越强偏差越大，倾向系统性欠步：更稳但更慢）。这是拿「安全」换「潜在快」。
@@ -222,15 +222,15 @@ observe_continue 把本轮 Δf 喂回规则（stalled 路径喂 inf：值不被�
 
 | 口径 | `nfev` 数什么 | 回答的问题 | 用途 |
 | --- | --- | --- | --- |
-| per-point（默认） | 被服务的**点**（一批 K 点计 K） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
-| per-round | 被服务的**批**（一批 K 点计 1） | 并行效率：一轮墙钟买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
+| per-point（默认） | 被服务的**点**（一批 n_paths 点计 n_paths） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
+| per-round | 被服务的**批**（一批 n_paths 点计 1） | 并行效率：一轮墙钟买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
 
-为什么两个都要保留：串行口径下，K 条路径的收益会被 K 除，多路径的账面上限被压低；并行口径下，
-K 条路径的一轮就是一次并行调用的成本，「多样本 + 自适应重启」的收益才如实显形。两者都不等于墙钟
+为什么两个都要保留：串行口径下，n_paths 条路径的收益会被 n_paths 除，多路径的账面上限被压低；并行口径下，
+n_paths 条路径的一轮就是一次并行调用的成本，「多样本 + 自适应重启」的收益才如实显形。两者都不等于墙钟
 （换底层语言能把固定开销压掉，但改变不了「一轮要服务几个点」这个结构量）。
 
 **不许混写**：同一张表、同一张图只能用一种口径，且必须标注。把 per-round 的数字当成 per-point
-的数字去比较，等于把 K 倍的预算差抹平。
+的数字去比较，等于把 n_paths 倍的预算差抹平。
 
 ## 6. 可换的实现选择 vs 不许破的不变式
 
@@ -273,7 +273,7 @@ K 条路径的一轮就是一次并行调用的成本，「多样本 + 自适应
   `test_diag_gives_up_on_a_nonfinite_trial`、`test_diag_gives_up_on_a_nonfinite_gradient`。
 - 暖机重试非有限 trial：`test_diag_warmup_retries_a_nonfinite_trial`。
 
-#### 引擎（跟着 K 路径框架走，`test_solver_seam.py` / `test_scheduler.py` / `test_restart.py`）
+#### 引擎（跟着 n_paths 路径框架走，`test_solver_seam.py` / `test_scheduler.py` / `test_restart.py`）
 
 - 接缝真的被驱动（而不是走默认）：`test_injected_solver_is_driven`、`test_injected_rule_is_driven`。
 - 选择事件不盲降 + 批形状：`test_batch_shape_and_per_point_counting`、
@@ -288,15 +288,15 @@ K 条路径的一轮就是一次并行调用的成本，「多样本 + 自适应
   `test_rounds_until_verdict_counts_to_the_next_full_stage`。
 - 池子共享 / stage 独立 / 重启保留池子：`test_payoff_pool_is_shared_across_paths`、
   `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_payoff_pool`。
-- `K = 1` 退化（`σ_r = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
-  `test_no_incumbent_never_restarts_but_does_not_stall_the_clock` 覆盖 B 缺失；**没有端到端 K=1 断言**
-  ——搬走前可补一条（K=1 跑满 max_steps，断言 `restarts == []`）。
+- `n_paths = 1` 退化（`σ_r = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
+  `test_no_incumbent_never_restarts_but_does_not_stall_the_clock` 覆盖 B 缺失；**没有端到端 n_paths=1 断言**
+  ——搬走前可补一条（n_paths=1 跑满 max_steps，断言 `restarts == []`）。
 - EI 闭式：`test_normal_functions_match_known_values`、`test_ei_continue_exact_degenerate_at_sigma_zero`、
   `test_ei_continue_matches_gaussian_ei_literal`、`test_ei_restart_matches_gaussian_fit_literal`、
   `test_ei_restart_fits_a_population_std`、`test_ei_restart_gaussian_tail_below_all_observations`、
   `test_ei_restart_empty_single_and_nonfinite_skipped`。
-- **两种计费**：`test_per_round_evals_bills_a_parallel_round_as_one`（per-round 的 `nfev` 与 `K`
-  无关；`K=3` 的 per-round 等于 `K=1` 的 per-point）。
+- **两种计费**：`test_per_round_evals_bills_a_parallel_round_as_one`（per-round 的 `nfev` 与 `n_paths`
+  无关；`n_paths=3` 的 per-round 等于 `n_paths=1` 的 per-point）。
 - 预算门控在批边界：`test_budget_exhaustion_stops_everything`、`test_no_budget_run_reports_max_steps`。
 - 盒是数据：`test_box_is_data_not_a_unit_cube_assumption`、`test_bounds_spellings_are_the_same_box`、
   `test_unbounded_or_absent_box_needs_an_injected_sampler`、

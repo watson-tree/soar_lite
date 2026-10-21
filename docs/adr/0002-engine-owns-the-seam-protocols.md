@@ -3,7 +3,7 @@
 `engine.py` defines both injected-interface protocols (`LocalSolver`,
 `RestartRule`); `solver.py` and `restart.py` import them from the engine, and
 the concrete defaults (`DiagonalPreconditioner`, `EIRestartRule`) are injected
-by lazy import inside `kpath_schedule` when the caller passes `None`. This is
+by lazy import inside `n_path_schedule` when the caller passes `None`. This is
 textbook dependency inversion: the engine owns the shape of its seams, and the
 plugins depend on the engine, never the reverse.
 

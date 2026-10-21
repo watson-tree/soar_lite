@@ -260,7 +260,7 @@ def test_payoff_pool_is_shared_across_paths() -> None:
 
     Path 1 never observed a restart itself, yet the event's r values are visible
     to its verdict - that is what makes EI_restart one global quantity instead of
-    K noisy per-path estimates of the same thing (the pre-refactor defect).
+    n_paths noisy per-path estimates of the same thing (the pre-refactor defect).
     """
     policy = EIRestartRule()
     for v in (0.0, 2.0):  # one restart event's group-mins

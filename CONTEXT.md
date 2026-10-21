@@ -1,7 +1,7 @@
 # soar-lite
 
 A first-order multi-path optimizer: value and gradient come back together from
-the caller; `K` independent descent paths advance in lockstep under one shared
+the caller; `n_paths` independent descent paths advance in lockstep under one shared
 budget, each restarted when the sample-measured expected improvement of
 restarting beats that of continuing.
 
@@ -11,10 +11,10 @@ restarting beats that of continuing.
 
 **path**:
 One independent descent chain: a current point plus that chain's own solver
-state. The engine runs `K` of them in lockstep.
+state. The engine runs `n_paths` of them in lockstep.
 _Avoid_: chain, trajectory, thread, particle
 
-**K**:
+**n_paths**:
 The engine's width — the number of paths advanced each round.
 _Avoid_: population size, swarm size
 

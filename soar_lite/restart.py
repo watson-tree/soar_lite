@@ -67,7 +67,7 @@ def ei_restart(incumbent: float, group_mins: list[float]) -> float:
 class EIRestartRule(RestartRule):
     """Sample-based restarts: the paths estimate their own restart payoff.
 
-    The rule fits no surrogate - the K i.i.d. sampled starts are the sample. The
+    The rule fits no surrogate - the n_paths i.i.d. sampled starts are the sample. The
     lightweight restart rule of a SOAR-style adaptive-restart engine
     [Mathesen et al. 2021]: it never fits a model, so it stays cheap in high
     dimension, and it samples rather than learns the restart payoff. Restart

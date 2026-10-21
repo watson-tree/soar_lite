@@ -1,6 +1,6 @@
 # soar-lite
 
-First-order diagonal-preconditioned K-path descent with sample-based
+First-order diagonal-preconditioned n-path descent with sample-based
 (expected-improvement) restarts, for minimizing objectives that are expensive
 enough to make the evaluation budget the binding constraint. Value and gradient
 come back together from the caller; no Hessian, no curvature model, no surrogate
@@ -17,9 +17,9 @@ Three pieces, three modules (`soar_lite/engine.py`, `soar_lite/solver.py`,
   continuing a path against the expected improvement of restarting it, both read
   off the path's own recent loss changes and a pool of restart payoffs shared by
   every path. No surrogate model is fitted.
-- **`kpath_schedule`** — the engine. Runs `K` paths in lockstep, one batched
+- **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep, one batched
   evaluation per round, and owns the box, the shared budget, the restart verdicts
-  and the stall state machine. `K = 1` is the single-path baseline.
+  and the stall state machine. `n_paths = 1` is the single-path baseline.
 
 `ALGORITHM.md` is the derivation: what each piece does, why the floor is a floor
 and not an addend, the two billing notions, what may be redesigned freely, the
@@ -33,7 +33,7 @@ pip install soar-lite
 ```
 
 ```python
-from soar_lite import DiagonalPreconditioner, EIRestartRule, kpath_schedule
+from soar_lite import DiagonalPreconditioner, EIRestartRule, n_path_schedule
 ```
 
 ## Run

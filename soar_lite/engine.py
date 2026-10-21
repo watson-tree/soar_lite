@@ -1,18 +1,18 @@
-"""The K-path engine: contracts, shared types, and the schedule.
+"""The n-path engine: contracts, shared types, and the schedule.
 
 This module is the seam (拍板) of soar_lite: it owns the two plugin contracts
 (`LocalSolver` and `RestartRule`), the data the plugins exchange (`PathPoint`,
-`Verdict`), and the shared plumbing (`KPathResult`, the box/prior seams, the
-`argmin_finite` helper, and the `kpath_schedule` loop). Concretes import *from*
+`Verdict`), and the shared plumbing (`NPathResult`, the box/prior seams, the
+`argmin_finite` helper, and the `n_path_schedule` loop). Concretes import *from*
 here, never the other way around at module level:
 
     soar_lite/
-      engine.py   <- LocalSolver, RestartRule, PathPoint, Verdict, kpath_schedule
+      engine.py   <- LocalSolver, RestartRule, PathPoint, Verdict, n_path_schedule
       solver.py   <- DiagonalPreconditioner (implements LocalSolver)
       restart.py  <- EIRestartRule (implements RestartRule)
 
 Dependency direction: plugins depend on engine types; the engine binds its two
-defaults lazily inside `kpath_schedule` (keeps the module graph acyclic and
+defaults lazily inside `n_path_schedule` (keeps the module graph acyclic and
 `__init__` importable in any order). The engine is first-order (value-and-
 gradient), coordinate-free, and owns the paths, the box, the shared budget,
 the clip-to-bounds and the EI restart cadence; the local solver owns only
@@ -104,10 +104,10 @@ Verdict: TypeAlias = Literal["accept", "retry", "give_up"]
 
 
 class LocalSolver(Protocol):
-    """The search method the K-path engine drives (the engine's plugin point).
+    """The search method the n-path engine drives (the engine's plugin point).
 
     The engine owns the schedule: row composition, projection, the shared
-    budget, the K-path state machine (init/restart/stall), the incumbent B,
+    budget, the n-path state machine (init/restart/stall), the incumbent B,
     and the line-search round count max_ls. The method owns the search: the
     direction, the step size, and the acceptance test. All state is per path,
     lives inside the instance, and is opaque to the engine (the engine never
@@ -174,9 +174,9 @@ class LocalSolver(Protocol):
         ...
 
 
-# --- engine: the K-path schedule ---
+# --- engine: the n-path schedule ---
 
-KPathStatus: TypeAlias = Literal["budget_exhausted", "max_steps", "all_stalled"]
+NPathStatus: TypeAlias = Literal["budget_exhausted", "max_steps", "all_stalled"]
 # "all_stalled" is a third stop, distinct from the two budget ones: every path
 # had stopped and no restart verdict could be reached before max_steps, so the
 # engine ended the run there rather than spinning rounds that serve no eval.
@@ -227,8 +227,8 @@ def finite_box(box: tuple[jnp.ndarray, jnp.ndarray]) -> bool:
 
 
 @dataclass
-class KPathResult:
-    """End state of one kpath_schedule run.
+class NPathResult:
+    """End state of one n_path_schedule run.
 
     Field names follow `scipy.optimize.OptimizeResult` where the concepts
     correspond: `x` is the argmin in the coordinates the engine was handed
@@ -250,7 +250,7 @@ class KPathResult:
     fun: float  # min over feasible finite recorded evals; inf if none yet
     nfev: int  # points evaluated, or served batches under per_round_evals
     nit: int  # engine rounds attempted (not linesearch rounds)
-    status: KPathStatus
+    status: NPathStatus
 
 
 
@@ -270,7 +270,7 @@ def argmin_finite(values: list[float]) -> int | None:
 
 
 
-def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closures keep shared state - a module-level split would need 10+ plumbing params)
+def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closures keep shared state - a module-level split would need 10+ plumbing params)
     evaluate_batch: BatchEvaluator,
     bounds: Bounds,  # scipy-style (lb, ub) pairs, a (d, 2) array, or None
     key: jnp.ndarray,
@@ -285,7 +285,7 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
     # stops on max_steps alone. The gate is the shell's job, not the
     # engine's.
     budget_check: Callable[[], bool] | None = None,
-    K: int = 16,  # noqa: N803 (K = number of paths, the engine's width)
+    n_paths: int = 16,  # number of paths advanced each round, the engine's width
     max_steps: int = 1000,
     solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
     max_ls: int = 20,  # engine rounds per step before stalling a path
@@ -296,14 +296,14 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
     # True charges one eval per *batch* - a round of parallel evaluations, one
     # wall-clock unit when the objective is batched (jax.vmap or any parallel
     # evaluator). These are two different cost models, never the same number: a
-    # K-path round costs K points serially, 1 round in parallel.
+    # a round of n_paths paths costs n_paths points serially, 1 round in parallel.
     per_round_evals: bool = False,
-) -> KPathResult:
-    """Advance K independent chains in x under one shared budget.
+) -> NPathResult:
+    """Advance n_paths independent chains in x under one shared budget.
 
     The engine owns the schedule: it composes and clips the rows into
     `bounds`, serves one batched evaluate_batch call per round, keeps the
-    K-path state machine, and owns the incumbent B. The search itself is
+    n-path state machine, and owns the incumbent B. The search itself is
     injected: `solver` owns direction, step size and
     acceptance and keeps its per-path state in Python floats, and
     `restart_rule` is the engine's one rule instance (default
@@ -319,7 +319,7 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
     trial, restart probe - counts exactly one eval (nfev = batch size), the
     serial-cost model; with True each served batch
     counts one (nfev = number of batches), the parallel-cost proxy where a
-    K-path round is one wall-clock unit. budget_check() is the
+    n-path round is one wall-clock unit. budget_check() is the
     shell's batch-level predicate consulted once per
     batch (whole batch or None), a False verdict stops all paths globally,
     and None means unbounded (no gate consulted, runs to max_steps); the
@@ -331,7 +331,7 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
     itself still moves on the penalized objective.
 
     Selection events (init, restart) never descend blind: each event with n
-    starts to fill (n = K at init, n = N restarting paths on a restart) draws
+    starts to fill (n = n_paths at init, n = N restarting paths on a restart) draws
     n_probe_rounds value-only rounds of n points (pool = n_probe_rounds * n).
     Each round draws n i.i.d. points from the injected sampler (`sample`,
     default uniform over a finite `bounds`: the rule's payoff statistic below
@@ -343,11 +343,11 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
     points" distribution (at the default n_probe_rounds = 2 a group is a pair;
     the 2-3 range is empirical - 1 -> plain init, inf -> random
     search - pinned at 2 by design), identical for init and restart
-    regardless of K vs N
+    regardless of how many paths restart
     (by design). Probe-batch grads are
     reused for the selected starts: starts cost zero extra evals. The rule's
-    one shared payoff pool is cold-started with the K init group-mins
-    (sigma_r > 0 for K >= 2); K=1 yields a single sample -> sigma_r = 0 ->
+    one shared payoff pool is cold-started with the n_paths init group-mins
+    (sigma_r > 0 for n_paths >= 2); n_paths=1 yields a single sample -> sigma_r = 0 ->
     degenerate EI_restart = 0 -> the single path never restarts. Every restart
     event extends {r_i} with the event's group-mins for all paths at once (a
     payoff is a property of the sampler, not of one path). A path whose trials
@@ -482,9 +482,9 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
             g_list.append(g_rounds[best][j])
         return jnp.stack(x_list), f_list, jnp.stack(g_list)
 
-    init = probe_select(K)
+    init = probe_select(n_paths)
     if init is None:
-        return KPathResult(
+        return NPathResult(
             x=best_x, fun=best_fun, nfev=evals, nit=0, status="budget_exhausted"
         )
     x, f, g = init
@@ -502,9 +502,9 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
         restart_rule = EIRestartRule()
     method: LocalSolver = solver
     rule: RestartRule = restart_rule
-    for i in range(K):
+    for i in range(n_paths):
         method.init(i, PathPoint(x[i], f[i], g[i]))
-    for v in f:  # cold-start evidence: the K init group-mins, into the one pool
+    for v in f:  # cold-start evidence: the n_paths init group-mins, into the one pool
         rule.observe_restart(v)
 
     def restart_paths(idxs: list[int]) -> None:
@@ -540,7 +540,9 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
         accepted paths'), so a stalled path's verdict cadence aligns with its
         advancing cohort instead of leading it by one round.
         """
-        to_restart = [i for i in range(K) if rule.should_restart(i, f[i], best_fun)]
+        to_restart = [
+            i for i in range(n_paths) if rule.should_restart(i, f[i], best_fun)
+        ]
         if to_restart:
             restart_paths(to_restart)
 
@@ -558,7 +560,7 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
         so the caller reads "accepted" as `not stalled[i]`.
         """
         nonlocal x, g
-        active = [i for i in range(K) if not stalled[i]]
+        active = [i for i in range(n_paths) if not stalled[i]]
         if not active:
             return  # everyone stalled; verdicts may revive paths next iteration
         rejecting = list(active)
@@ -648,15 +650,15 @@ def kpath_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closu
         # stalled path's verdict cadence aligns with its advancing cohort
         # instead of leading it by a round (the off-by-one a top-of-round
         # stall count would cause). An advancing path feeds the real Δf.
-        for i in range(K):
+        for i in range(n_paths):
             rule.observe_continue(i, (f[i] - f_prev[i]) if not stalled[i] else math.inf)
         if not alive:
             break
 
     if not alive:
-        status: KPathStatus = "budget_exhausted"
+        status: NPathStatus = "budget_exhausted"
     elif all_stalled:
         status = "all_stalled"
     else:
         status = "max_steps"
-    return KPathResult(x=best_x, fun=best_fun, nfev=evals, nit=nit, status=status)
+    return NPathResult(x=best_x, fun=best_fun, nfev=evals, nit=nit, status=status)

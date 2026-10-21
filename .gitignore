@@ -22,3 +22,7 @@ venv/
 
 # Byte-compiled / native
 *.so
+
+# Experiment run artifacts (regenerated, not source)
+experiments/results_*.png
+experiments/results_*.json
