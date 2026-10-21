@@ -95,6 +95,23 @@ def run_soar_lite(
 # --- Adam / NAAdam: one compiled scan per run --------------------------------
 
 
+def run_adam(problem: Problem, *, max_evals: int, seed: int, lr: float) -> Trace:
+    """Plain Adam, one evaluation per step."""
+    return _single_chain(problem, max_evals=max_evals, seed=seed, lr=lr, sigma0=0.0)
+
+
+def run_naadam(
+    problem: Problem,
+    *,
+    max_evals: int,
+    seed: int,
+    lr: float,
+    sigma0: float = 1e-2,
+) -> Trace:
+    """Adam plus decaying Gaussian noise (the brute-force escape baseline)."""
+    return _single_chain(problem, max_evals=max_evals, seed=seed, lr=lr, sigma0=sigma0)
+
+
 def _single_chain(
     problem: Problem,
     *,
@@ -136,23 +153,6 @@ def _single_chain(
         best=values.tolist(),
         fun=float(values[-1]),
     )
-
-
-def run_adam(problem: Problem, *, max_evals: int, seed: int, lr: float) -> Trace:
-    """Plain Adam, one evaluation per step."""
-    return _single_chain(problem, max_evals=max_evals, seed=seed, lr=lr, sigma0=0.0)
-
-
-def run_naadam(
-    problem: Problem,
-    *,
-    max_evals: int,
-    seed: int,
-    lr: float,
-    sigma0: float = 1e-2,
-) -> Trace:
-    """Adam plus decaying Gaussian noise (the brute-force escape baseline)."""
-    return _single_chain(problem, max_evals=max_evals, seed=seed, lr=lr, sigma0=sigma0)
 
 
 # --- L-BFGS-B: the smooth-panel ceiling reference ----------------------------

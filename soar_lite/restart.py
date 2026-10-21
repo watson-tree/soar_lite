@@ -65,29 +65,6 @@ class EIRestartRule(RestartRule):
         self.pool_size = 0  # usable pool samples: the M the window is matched to
         self.deltas: dict[int, list[float]] = {}  # per path: Δ since its last verdict
 
-    def _stage_window(self) -> int:
-        """Return how many Δ a path is read over: the pool's size.
-
-        Read fresh at each verdict rather than fixed per stage, because the pool
-        only grows - samples are appended, never dropped or aged out - so `M` at
-        the verdict is an upper bound on the stage that produced it, and matched
-        counts is the property the verdict needs. Nothing pads it: the read is a
-        plain mean and population sd over the stage, so extra folds are extra
-        evidence and no fold buys more than its weight.
-
-        The only floor is 1, and it is not a prior: a window of zero samples has
-        no centre to read (`_continue_payoff` returns 0.0 on an empty stage, and
-        `rounds_until_verdict` would go negative), which is reachable only
-        before any finite restart payoff exists. At M = 1 the read is its own
-        degenerate branch - a stage of one fold has no spread, and a pool of one
-        gives `sigma_r = 0`, so no restart can fire until a second payoff lands.
-
-        This method is the seam a rule variant moves (a capped window, a forced
-        cadence for an experiment); the rule itself takes no knob, so its own
-        cadence can only follow the evidence.
-        """
-        return max(1, self.pool_size)
-
     def observe_continue(self, i: int, delta: float) -> None:
         """Append path i's one-step value change Δ to its current stage.
 
@@ -110,32 +87,6 @@ class EIRestartRule(RestartRule):
         self.group_mins.append(r)
         if math.isfinite(r):
             self.pool_size += 1
-
-    def _stage_deltas(self, i: int) -> list[float]:
-        """Return path i's finite Δ values from the stage it is in now."""
-        return [d for d in self.deltas.get(i, ()) if math.isfinite(d)]
-
-    def _continue_payoff(self, i: int, f_k: float, incumbent: float) -> float:
-        """Return the expected improvement of path i continuing one more step.
-
-        The stage's plain mean and population std - the same ÷n the restart side
-        fits its pool with, so the read is worth exactly the samples it holds.
-        An empty stage has neither centre nor spread and returns 0.0: the
-        degenerate "continuing buys nothing" read (the same one a zero-spread
-        stage gives), which leaves the verdict resting on the restart side's own
-        evidence. One fold is the other degenerate corner (sigma = 0), where the
-        read is exactly max(B - (f_k + mu), 0).
-        """
-        d = self._stage_deltas(i)
-        if not d:
-            return 0.0
-        mu = sum(d) / len(d)
-        sd = math.sqrt(sum((v - mu) ** 2 for v in d) / len(d))
-        return _ei_continue(sd, incumbent, f_k, mu)
-
-    def _restart_payoff(self, incumbent: float) -> float:
-        """Return the expected improvement of any path restarting (global)."""
-        return _ei_restart(incumbent, self.group_mins)
 
     def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
         """Return True iff path i's verdict is due and restart beats continuing.
@@ -173,6 +124,55 @@ class EIRestartRule(RestartRule):
     def restart(self, i: int) -> None:
         """Drop path i's stage after a restart (the shared payoff pool is kept)."""
         self.deltas[i] = []
+
+    def _stage_window(self) -> int:
+        """Return how many Δ a path is read over: the pool's size.
+
+        Read fresh at each verdict rather than fixed per stage, because the pool
+        only grows - samples are appended, never dropped or aged out - so `M` at
+        the verdict is an upper bound on the stage that produced it, and matched
+        counts is the property the verdict needs. Nothing pads it: the read is a
+        plain mean and population sd over the stage, so extra folds are extra
+        evidence and no fold buys more than its weight.
+
+        The only floor is 1, and it is not a prior: a window of zero samples has
+        no centre to read (`_continue_payoff` returns 0.0 on an empty stage, and
+        `rounds_until_verdict` would go negative), which is reachable only
+        before any finite restart payoff exists. At M = 1 the read is its own
+        degenerate branch - a stage of one fold has no spread, and a pool of one
+        gives `sigma_r = 0`, so no restart can fire until a second payoff lands.
+
+        This method is the seam a rule variant moves (a capped window, a forced
+        cadence for an experiment); the rule itself takes no knob, so its own
+        cadence can only follow the evidence.
+        """
+        return max(1, self.pool_size)
+
+    def _stage_deltas(self, i: int) -> list[float]:
+        """Return path i's finite Δ values from the stage it is in now."""
+        return [d for d in self.deltas.get(i, ()) if math.isfinite(d)]
+
+    def _continue_payoff(self, i: int, f_k: float, incumbent: float) -> float:
+        """Return the expected improvement of path i continuing one more step.
+
+        The stage's plain mean and population std - the same ÷n the restart side
+        fits its pool with, so the read is worth exactly the samples it holds.
+        An empty stage has neither centre nor spread and returns 0.0: the
+        degenerate "continuing buys nothing" read (the same one a zero-spread
+        stage gives), which leaves the verdict resting on the restart side's own
+        evidence. One fold is the other degenerate corner (sigma = 0), where the
+        read is exactly max(B - (f_k + mu), 0).
+        """
+        d = self._stage_deltas(i)
+        if not d:
+            return 0.0
+        mu = sum(d) / len(d)
+        sd = math.sqrt(sum((v - mu) ** 2 for v in d) / len(d))
+        return _ei_continue(sd, incumbent, f_k, mu)
+
+    def _restart_payoff(self, incumbent: float) -> float:
+        """Return the expected improvement of any path restarting (global)."""
+        return _ei_restart(incumbent, self.group_mins)
 
 
 def _ei_continue(sigma_p: float, incumbent: float, f_k: float, mu_p: float) -> float:

@@ -664,19 +664,18 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     return NPathResult(x=best_x, fun=best_fun, nfev=evals, nit=nit, status=status)
 
 
-def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
-    """Normalize `bounds` to (lo, hi) arrays; None (no box at all) -> None.
+def _check_seam(obj: object | None, proto: type, what: str) -> None:
+    """Reject a seam object that does not carry the Protocol's methods.
 
-    A `None` side becomes ∓inf, so every downstream consumer sees one spelling
-    of "unbounded". A `(d, 2)` array carries the same pairs one row each.
+    Presence only, never signatures - a wrong-signature method still fails at
+    its own call site. Static typing already knows the type, so this is the
+    runtime catch for a caller who hands in anything at all; `None` passes, as
+    `n_path_schedule` defaults it right after the check. Deliberately in its own
+    function: the isinstance is redundant to a type checker and needs saying once.
     """
-    if bounds is None:
-        return None
-    if isinstance(bounds, jnp.ndarray):
-        return bounds[:, 0], bounds[:, 1]  # (d, 2) array: one pair per row
-    lo = [-math.inf if pair[0] is None else pair[0] for pair in bounds]
-    hi = [math.inf if pair[1] is None else pair[1] for pair in bounds]
-    return jnp.asarray(lo), jnp.asarray(hi)
+    if obj is not None and not isinstance(obj, proto):
+        msg = f"{what} does not implement {proto.__name__} (a method is missing)"
+        raise TypeError(msg)
 
 
 def _check_bounds(bounds: Bounds | None) -> None:
@@ -713,18 +712,19 @@ def _check_bounds(bounds: Bounds | None) -> None:
             raise ValueError(msg)
 
 
-def _check_seam(obj: object | None, proto: type, what: str) -> None:
-    """Reject a seam object that does not carry the Protocol's methods.
+def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
+    """Normalize `bounds` to (lo, hi) arrays; None (no box at all) -> None.
 
-    Presence only, never signatures - a wrong-signature method still fails at
-    its own call site. Static typing already knows the type, so this is the
-    runtime catch for a caller who hands in anything at all; `None` passes, as
-    the defaulting below replaces it. Deliberately in its own function: the
-    isinstance is redundant to a type checker and needs saying once.
+    A `None` side becomes ∓inf, so every downstream consumer sees one spelling
+    of "unbounded". A `(d, 2)` array carries the same pairs one row each.
     """
-    if obj is not None and not isinstance(obj, proto):
-        msg = f"{what} does not implement {proto.__name__} (a method is missing)"
-        raise TypeError(msg)
+    if bounds is None:
+        return None
+    if isinstance(bounds, jnp.ndarray):
+        return bounds[:, 0], bounds[:, 1]  # (d, 2) array: one pair per row
+    lo = [-math.inf if pair[0] is None else pair[0] for pair in bounds]
+    hi = [math.inf if pair[1] is None else pair[1] for pair in bounds]
+    return jnp.asarray(lo), jnp.asarray(hi)
 
 
 def _finite_box(box: tuple[jnp.ndarray, jnp.ndarray]) -> bool:

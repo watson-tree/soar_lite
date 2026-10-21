@@ -21,13 +21,16 @@ both of which need float64 to be a fair test rather than a rounding study.
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeAlias
 
 import jax
 import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", val=True)
 
-BatchEvaluator = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, None]"]
+BatchEvaluator: TypeAlias = Callable[
+    [jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, None]"
+]
 
 
 @dataclass(frozen=True)
@@ -145,6 +148,7 @@ def ackley(d: int = 100) -> Problem:
 
 def rastrigin(d: int = 100) -> Problem:
     """Rastrigin: a regular lattice of local minima around one global basin."""
+
     def fn(x: jnp.ndarray) -> jnp.ndarray:
         return 10.0 * d + jnp.sum(x**2 - 10.0 * jnp.cos(2.0 * math.pi * x))
 
@@ -216,7 +220,7 @@ def oscillator_chain(
 
         def one_freq(w: jnp.ndarray) -> jnp.ndarray:
             """Payload-to-base ratio at one angular frequency w."""
-            diag = -w**2 * m + 1j * w * (c + c_up) + (k + k_up)
+            diag = -(w**2) * m + 1j * w * (c + c_up) + (k + k_up)
             mat = jnp.diag(diag)
             # off-diagonal A_{i,i+1} = -k_{i+1} - i*w*c_{i+1}
             upper = -k_up - 1j * w * c_up

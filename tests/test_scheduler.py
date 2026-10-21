@@ -22,6 +22,7 @@ without a sampler is a wiring error. Unbounded means a
 
 import math
 from collections.abc import Callable
+from typing import TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -37,7 +38,7 @@ from soar_lite.restart import EIRestartRule
 
 jax.config.update("jax_enable_x64", val=True)
 
-Pointwise = Callable[[jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray]]
+Pointwise: TypeAlias = Callable[[jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray]]
 
 
 def unit_bounds(d: int = 1) -> jnp.ndarray:

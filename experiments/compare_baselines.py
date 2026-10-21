@@ -36,6 +36,8 @@ import matplotlib as mpl
 
 mpl.use("Agg")
 
+from typing import TypeAlias
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -49,7 +51,7 @@ from experiments.methods import (
 )
 
 HERE = Path(__file__).parent
-Runner = Callable[..., Trace]
+Runner: TypeAlias = Callable[..., Trace]
 
 # Per-problem Adam/NAAdam learning rate, chosen on a coarse 1-seed grid sweep
 # (see --lr-sweep): the optimal lr spans over two orders of magnitude across the
@@ -286,31 +288,6 @@ def run_lr_sweep(out: Path, seeds: int, max_evals: int) -> None:
     print(f"wrote {out}")
 
 
-def _rescale(prob: problems.Problem, scale: float) -> problems.Problem:
-    """Return the same physics re-measured in coordinates ``x' = scale * x``.
-
-    The box is ``scale`` wider and the gradient ``1/scale`` smaller (chain rule
-    with ``x = x'/scale``); a runner on this problem is the "second unit
-    system", re-tuned by exactly zero.
-    """
-    bounds = prob.bounds * scale
-
-    def evaluate_batch(xp: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        f, g, _ = prob.evaluate_batch(xp / scale)
-        return f, g / scale, None
-
-    x_star = prob.x_star * scale if prob.x_star is not None else None
-    return problems.Problem(
-        name=f"{prob.name}@x{scale:g}",
-        d=prob.d,
-        bounds=bounds,
-        evaluate_batch=evaluate_batch,
-        f_star=prob.f_star,
-        description=f"{prob.description} (x' = {scale:g} x)",
-        x_star=x_star,
-    )
-
-
 def run_invariance(out_dir: Path, seeds: int, max_evals: int) -> None:
     """Draw panel 5: one physics in two unit systems, zero retune.
 
@@ -359,6 +336,31 @@ def run_invariance(out_dir: Path, seeds: int, max_evals: int) -> None:
     fig.savefig(out_dir / "results_invariance.png", dpi=150)
     plt.close(fig)
     print(f"wrote {out_dir / 'results_invariance.png'}")
+
+
+def _rescale(prob: problems.Problem, scale: float) -> problems.Problem:
+    """Return the same physics re-measured in coordinates ``x' = scale * x``.
+
+    The box is ``scale`` wider and the gradient ``1/scale`` smaller (chain rule
+    with ``x = x'/scale``); a runner on this problem is the "second unit
+    system", re-tuned by exactly zero.
+    """
+    bounds = prob.bounds * scale
+
+    def evaluate_batch(xp: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        f, g, _ = prob.evaluate_batch(xp / scale)
+        return f, g / scale, None
+
+    x_star = prob.x_star * scale if prob.x_star is not None else None
+    return problems.Problem(
+        name=f"{prob.name}@x{scale:g}",
+        d=prob.d,
+        bounds=bounds,
+        evaluate_batch=evaluate_batch,
+        f_star=prob.f_star,
+        description=f"{prob.description} (x' = {scale:g} x)",
+        x_star=x_star,
+    )
 
 
 def main() -> None:
