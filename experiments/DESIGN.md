@@ -103,6 +103,38 @@ over two orders of magnitude (diag 1e-2 → rotated 2.0), and a wrong lr costs
 is itself budget — every trial is more objective points, and it is manual, not
 adaptive.
 
+### Step-length calibration (pending: after the verdict cost fix)
+
+`ls_rounds=1` (the default) makes the "line search" inert: one sample, accepted
+if finite, no comparison across step lengths. It becomes a real line search only
+at `ls_rounds >= 2`, where the solver walks `alpha` down by `backtrack` per retry
+(1, b, b², …) and the engine's per-step argmin commits the winner. The motive is
+the diagonal preconditioner's own error: `-d ⊙ g` is a descent direction even
+when `d` misestimates curvature, so a shorter step may pay where a full one
+overshoots — the rotated quadratic (`cond=1e6`) is where that should show, since
+there the curvature energy sits off the diagonal and the diagonal step is worst.
+
+Sweep (scratch script first, promote to a flag only if the effect is real):
+`ls_rounds ∈ {2, 4, 8}` × `backtrack ∈ {0.5, 0.25, 0.1}` on the rotated
+quadratic, at **both** 300 and 3000 batches, `n_paths ∈ {1, 16}`, 1 seed.
+
+Two hygiene rules, because the budget unit is batches:
+
+1. Sweep `ls_rounds` at fixed `backtrack=0.5` first, then `backtrack`.
+   `backtrack` is also the warm-up Armijo shrink rate, so sweeping both at once
+   cannot tell a better alpha grid from a changed warm-up.
+2. `ls_rounds=L` makes every step cost L batches, and folds the argmin (a
+   shorter step) into the secant EMAs, so `s` and `y` both shrink. It has to
+   earn its keep per batch, and it must be re-checked on the panels soar-lite
+   already wins (`diag`, `oscillator`) before it can be anything but a
+   per-problem choice.
+
+Falsifiable prediction, written down before measuring: a shorter step should
+**win early and lose late** on the rotated quadratic — better for the first
+~10² batches, and if the flat directions are slowed it can be overtaken by 3000.
+Winning at both budgets means it is a real win; winning only early means the
+diagonal error is worth one short step and not a standing setting.
+
 ## Budget, statistics, outputs
 
 - Every method gets the same number of **rounds**: `--max-steps 3000` (one round

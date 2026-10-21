@@ -20,7 +20,9 @@ _Avoid_: population size, swarm size
 
 **round**:
 One engine cycle: serve one batch, then let every active path take at most one
-step. The parallel (wall-clock) unit, and one half of the billing split.
+step. The parallel (wall-clock) unit, and one half of the billing split. A
+probe is not a round: it costs `n_probe_rounds` rounds of the budget, so a run
+that restarts serves fewer rounds than `max_steps`.
 _Avoid_: iteration, epoch
 
 **step**:
@@ -42,7 +44,8 @@ _Avoid_: paused, idle, dead
 **evaluation (eval)**:
 One point's worth of one `evaluate_batch` call: its loss (and, through the
 batch, its gradient). `nfev` counts evaluations or served batches, depending on
-billing.
+billing; the engine's running counter is `n_charged`, whose unit follows the
+same billing mode.
 _Avoid_: query, sample (when counting cost)
 
 **batch**:
@@ -97,10 +100,18 @@ _Avoid_: converge, stop, terminate
 ### Restart
 
 **probe**:
-Drawing fresh starts: several rounds of candidate points, per-column minimum →
-one start each. The same draw is one restart-payoff sample. Initialization and
-restart use the same probe.
+Drawing fresh starts: `n_probe_rounds` rounds of candidate points, per-column
+minimum → one start each. The same draw is one restart-payoff sample, and it
+costs `n_probe_rounds` rounds of the budget. Initialization and restart use the
+same probe.
 _Avoid_: selection event, random init, sampling
+
+**horizon**:
+One continue-side sample's span: a path's value change over `n_probe_rounds`
+consecutive rounds, non-overlapping, poisoned to `inf` if any round inside it
+stalled. Matched to one probe's cost, so both sides of a verdict buy the same
+amount of work.
+_Avoid_: window (that counts how many samples a stage holds), stride
 
 **payoff pool**:
 The shared multiset of restart payoffs (each probe's group minimum), measured
@@ -109,7 +120,10 @@ _Avoid_: restart history, bandit arms
 
 **restart verdict**:
 The per-path comparison of continuing's expected improvement against
-restarting's; `EI_restart > EI_continue` restarts the path.
+restarting's; `EI_restart > EI_continue` restarts the path. Both sides are
+fitted on equal-cost samples — one horizon for continuing, one probe for
+restarting — so the verdict is a decision about what to buy, not a bias toward
+either side.
 _Avoid_: restart check, reset decision
 
 **fold**:
