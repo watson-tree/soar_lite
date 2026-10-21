@@ -1,7 +1,7 @@
 """Assert-style self-checks for the empirical EI restart policy.
 
 The rule takes no cadence knob: a path is read over a window that
-`stage_window()` derives from the payoff pool's size, with the plain sample mean
+`_stage_window()` derives from the payoff pool's size, with the plain sample mean
 and population sd over that window's finite Δ. These tests therefore choose a
 window by growing a pool, and read the stage's evidence back off the rule.
 
@@ -10,14 +10,19 @@ No jax: the policy is pure-Python float bookkeeping. Run with:
     uv run python -m tests.test_restart
 """
 
+# ruff: noqa: SLF001
+# pyright: reportPrivateUsage=false
+# This suite is the spec for the rule's `_`-private reads and closed forms;
+# importing them here is the intended read, not a boundary crossing.
+
 import math
 
 from soar_lite.restart import (
     EIRestartRule,
-    ei_continue,
-    ei_restart,
-    normal_cdf,
-    normal_pdf,
+    _ei_continue,
+    _ei_restart,
+    _normal_cdf,
+    _normal_pdf,
 )
 
 # The window these tests grow the pool to. 8 is arbitrary - the tests are about
@@ -39,18 +44,18 @@ def grow_pool(policy: EIRestartRule, to: int = WINDOW) -> None:
 
 def test_normal_functions_match_known_values() -> None:
     """Φ/φ are the standard normal tables (independent literals)."""
-    assert close(normal_cdf(0.0), 0.5, 1e-12)
-    assert close(normal_cdf(1.0), 0.8413447460685429, 1e-9)
-    assert close(normal_cdf(-1.0), 0.15865525393145707, 1e-9)
-    assert close(normal_pdf(0.0), 0.3989422804014327, 1e-9)  # 1/√(2π)
-    assert close(normal_pdf(1.0), 0.24197072451914337, 1e-9)  # exp(-1/2)/√(2π)
+    assert close(_normal_cdf(0.0), 0.5, 1e-12)
+    assert close(_normal_cdf(1.0), 0.8413447460685429, 1e-9)
+    assert close(_normal_cdf(-1.0), 0.15865525393145707, 1e-9)
+    assert close(_normal_pdf(0.0), 0.3989422804014327, 1e-9)  # 1/√(2π)
+    assert close(_normal_pdf(1.0), 0.24197072451914337, 1e-9)  # exp(-1/2)/√(2π)
 
 
 def test_ei_continue_exact_degenerate_at_sigma_zero() -> None:
     """Degenerate branch: sigma_p = 0 gives EI = max(B - (f_k + μ_p), 0) exactly."""
-    assert close(ei_continue(0.0, 0.0, 1.0, -0.5), 0.0, 1e-15)  # 0 - 0.5 < 0 → 0
-    assert close(ei_continue(0.0, 0.0, -1.0, 0.0), 1.0, 1e-12)  # 0 - (-1) = 1
-    assert close(ei_continue(0.0, 0.5, 1.0, -2.0), 1.5, 1e-12)  # 0.5 - (-1) = 1.5
+    assert close(_ei_continue(0.0, 0.0, 1.0, -0.5), 0.0, 1e-15)  # 0 - 0.5 < 0 → 0
+    assert close(_ei_continue(0.0, 0.0, -1.0, 0.0), 1.0, 1e-12)  # 0 - (-1) = 1
+    assert close(_ei_continue(0.0, 0.5, 1.0, -2.0), 1.5, 1e-12)  # 0.5 - (-1) = 1.5
 
 
 def test_ei_continue_matches_gaussian_ei_literal() -> None:
@@ -58,12 +63,12 @@ def test_ei_continue_matches_gaussian_ei_literal() -> None:
 
     sigma_p = 0.6, B = 0, f_k = 0.3, μ_p = 0.3 give z = -1 and EI ≈ 0.04998928.
     """
-    assert close(ei_continue(0.6, 0.0, 0.3, 0.3), 0.04998928, 1e-6)
+    assert close(_ei_continue(0.6, 0.0, 0.3, 0.3), 0.04998928, 1e-6)
 
 
 def test_ei_restart_matches_gaussian_fit_literal() -> None:
     """Gaussian fit over {r_i}: [0.0, 2.0] → mu_r=1, sigma_r=1, z=0 → EI = φ(0)."""
-    assert close(ei_restart(1.0, [0.0, 2.0]), 0.3989422804014327, 1e-9)
+    assert close(_ei_restart(1.0, [0.0, 2.0]), 0.3989422804014327, 1e-9)
 
 
 def test_ei_restart_fits_a_population_std() -> None:
@@ -72,9 +77,9 @@ def test_ei_restart_fits_a_population_std() -> None:
     [0.0, 2.0] has population sd 1 and sample sd √2 ≈ 1.4142; the fit is the
     former, which is what makes the two sides' reads commensurable.
     """
-    assert close(ei_restart(1.0, [0.0, 2.0]), ei_restart(1.0, [0.0, 2.0]))
+    assert close(_ei_restart(1.0, [0.0, 2.0]), _ei_restart(1.0, [0.0, 2.0]))
     sample_sd = 1.0 / math.sqrt(2.0) * 0.39894228  # what the ÷(n-1) sd would give
-    assert not close(ei_restart(1.0, [0.0, 2.0]), sample_sd, 1e-3)
+    assert not close(_ei_restart(1.0, [0.0, 2.0]), sample_sd, 1e-3)
 
 
 def test_ei_restart_gaussian_tail_below_all_observations() -> None:
@@ -83,21 +88,21 @@ def test_ei_restart_gaussian_tail_below_all_observations() -> None:
     The former empirical positive-part was always 0 here; [1.5, 2.0] →
     mu_r=1.75, sigma_r=0.25, z=-3 → EI ≈ 9.553858e-5.
     """
-    assert close(ei_restart(1.0, [1.5, 2.0]), 9.553857926192428e-5, 1e-9)
+    assert close(_ei_restart(1.0, [1.5, 2.0]), 9.553857926192428e-5, 1e-9)
 
 
 def test_ei_restart_empty_single_and_nonfinite_skipped() -> None:
     """M=0 → 0; M=1 → sigma_r=0 degenerate max(B-mu_r,0); non-finite skipped."""
-    assert ei_restart(1.0, []) == 0.0
-    assert ei_restart(3.0, [2.0]) == 1.0  # max(3 - 2, 0)
-    assert ei_restart(1.0, [2.0]) == 0.0  # max(1 - 2, 0)
-    assert close(ei_restart(1.0, [0.0, 2.0, float("nan")]), 0.3989422804014327, 1e-9)
+    assert _ei_restart(1.0, []) == 0.0
+    assert _ei_restart(3.0, [2.0]) == 1.0  # max(3 - 2, 0)
+    assert _ei_restart(1.0, [2.0]) == 0.0  # max(1 - 2, 0)
+    assert close(_ei_restart(1.0, [0.0, 2.0, float("nan")]), 0.3989422804014327, 1e-9)
     # +inf must be skipped too, not only NaN: keeping it makes mu_r = inf and
     # variance inf - inf = NaN, so EI_restart comes back NaN and every restart
     # is silently disabled (`NaN > EI_continue` is False).
-    assert close(ei_restart(1.0, [float("inf"), 0.0, 2.0]), 0.3989422804014327, 1e-9)
-    assert ei_restart(1.0, [float("inf"), float("inf"), 2.0]) == 0.0
-    assert ei_restart(1.0, [float("inf"), float("-inf")]) == 0.0
+    assert close(_ei_restart(1.0, [float("inf"), 0.0, 2.0]), 0.3989422804014327, 1e-9)
+    assert _ei_restart(1.0, [float("inf"), float("inf"), 2.0]) == 0.0
+    assert _ei_restart(1.0, [float("inf"), float("-inf")]) == 0.0
 
 
 def test_window_is_the_pool_size() -> None:
@@ -112,23 +117,23 @@ def test_window_is_the_pool_size() -> None:
     cannot restart.
     """
     policy = EIRestartRule()
-    assert policy.stage_window() == 1  # empty pool: nothing to read, not a prior
+    assert policy._stage_window() == 1  # empty pool: nothing to read, not a prior
     policy.observe_restart(0.0)
-    assert policy.stage_window() == 1  # M = 1: the degenerate read itself
+    assert policy._stage_window() == 1  # M = 1: the degenerate read itself
     for m in range(2, 12):
         policy.observe_restart(0.0)
-        assert policy.stage_window() == m  # M itself
+        assert policy._stage_window() == m  # M itself
     policy.observe_restart(math.inf)  # stays in the pool, is not fitted
     assert len(policy.group_mins) == 12
     assert policy.pool_size == 11
-    assert policy.stage_window() == 11  # matched to what sigma_r is fitted on
+    assert policy._stage_window() == 11  # matched to what sigma_r is fitted on
 
 
 def test_stage_read_is_mean_and_population_sd_of_its_finite_deltas() -> None:
     """One read per stage: the plain sample mean and population sd of its Δ.
 
     No fading weights, so the estimate is worth exactly the folds it holds; the
-    read is the module's own ei_continue over those two moments (equal weights
+    read is the module's own _ei_continue over those two moments (equal weights
     on the *same* samples must give the same numbers), with `f_k + mu` as the
     next value's mean.
     """
@@ -139,9 +144,9 @@ def test_stage_read_is_mean_and_population_sd_of_its_finite_deltas() -> None:
         policy.observe_continue(0, delta)
     mu = 1.0  # mean of {0, 2}
     sd = 1.0  # population sd of {0, 2}
-    one_ruler = ei_continue(sd, 0.0, -1.0, mu)
-    assert close(policy.ei_continue(0, -1.0, 0.0), one_ruler, 1e-15)
-    assert policy.stage_deltas(0) == deltas
+    one_ruler = _ei_continue(sd, 0.0, -1.0, mu)
+    assert close(policy._continue_payoff(0, -1.0, 0.0), one_ruler, 1e-15)
+    assert policy._stage_deltas(0) == deltas
 
 
 def test_the_two_sides_read_the_same_samples_the_same_way() -> None:
@@ -157,8 +162,8 @@ def test_the_two_sides_read_the_same_samples_the_same_way() -> None:
     for delta in (0.0, 2.0):
         policy.observe_continue(0, delta)
     assert close(
-        policy.ei_continue(0, 0.0, 1.0),  # f_k = 0, mu = 1 -> mean 1 = mu_r
-        policy.ei_restart(1.0),  # pool {0, 2}: mu_r = 1, sigma_r = 1
+        policy._continue_payoff(0, 0.0, 1.0),  # f_k = 0, mu = 1 -> mean 1 = mu_r
+        policy._restart_payoff(1.0),  # pool {0, 2}: mu_r = 1, sigma_r = 1
         tol=1e-15,
     )
 
@@ -177,11 +182,11 @@ def test_nonfinite_delta_counts_towards_the_window_but_is_not_read() -> None:
     grow_pool(policy)  # window = 8, mu_r = 1, sigma_r = 1
     for _ in range(WINDOW - 1):
         policy.observe_continue(0, math.inf)
-    assert policy.stage_deltas(0) == []
+    assert policy._stage_deltas(0) == []
     assert policy.should_restart(0, 0.0, 0.0) is False  # one fold short of due
     policy.observe_continue(0, math.nan)
     assert policy.should_restart(0, 0.0, 0.0) is True  # due, and EI_restart > 0
-    assert policy.ei_continue(0, 0.0, 0.0) == 0.0
+    assert policy._continue_payoff(0, 0.0, 0.0) == 0.0
 
 
 def test_verdict_is_due_once_per_window_and_closes_the_stage() -> None:
@@ -198,7 +203,7 @@ def test_verdict_is_due_once_per_window_and_closes_the_stage() -> None:
             policy.observe_continue(0, 0.1)
             assert policy.should_restart(0, 0.0, 0.0) is (step == WINDOW)
         assert policy.deltas[0] == []  # the stage's one read was taken
-        assert policy.stage_deltas(0) == []
+        assert policy._stage_deltas(0) == []
     # A stage that only closed is not restarted by the rule itself: the engine
     # restarts paths, not the rule, and `restart` only drops evidence.
     assert policy.group_mins == [0.0, 2.0] * (WINDOW // 2)
@@ -250,7 +255,7 @@ def test_no_incumbent_never_restarts_but_does_not_stall_the_clock() -> None:
     for _ in range(WINDOW):
         policy.observe_continue(0, 0.5)
     assert policy.should_restart(0, 0.0, math.inf) is False
-    assert policy.stage_deltas(0) == []  # the read was skipped, the gate was not
+    assert policy._stage_deltas(0) == []  # the read was skipped, the gate was not
     policy.observe_continue(0, 0.5)
     assert policy.rounds_until_verdict() == WINDOW - 1  # a fresh stage is running
 
@@ -266,7 +271,7 @@ def test_payoff_pool_is_shared_across_paths() -> None:
     for v in (0.0, 2.0):  # one restart event's group-mins
         policy.observe_restart(v)
     policy.observe_continue(1, 0.5)  # path 1 has its own continuation evidence
-    assert policy.ei_restart(0.0) == ei_restart(0.0, [0.0, 2.0])
+    assert policy._restart_payoff(0.0) == _ei_restart(0.0, [0.0, 2.0])
     # ... and B = inf gates both paths off regardless of pooled evidence
     assert policy.should_restart(1, 0.0, math.inf) is False
 
@@ -276,13 +281,13 @@ def test_per_path_stage_is_independent() -> None:
     policy = EIRestartRule()
     policy.observe_continue(0, 0.4)
     policy.observe_continue(0, 0.6)
-    assert policy.stage_deltas(0) == [0.4, 0.6]
-    assert policy.stage_deltas(1) == []  # path 1 has folded nothing
+    assert policy._stage_deltas(0) == [0.4, 0.6]
+    assert policy._stage_deltas(1) == []  # path 1 has folded nothing
     policy.observe_continue(1, -0.5)
-    assert policy.stage_deltas(1) == [-0.5]
+    assert policy._stage_deltas(1) == [-0.5]
     policy.restart(0)
-    assert policy.stage_deltas(0) == []  # path 0's stage is dropped
-    assert policy.stage_deltas(1) == [-0.5]  # path 1's is untouched
+    assert policy._stage_deltas(0) == []  # path 0's stage is dropped
+    assert policy._stage_deltas(1) == [-0.5]  # path 1's is untouched
     assert policy.group_mins == []  # restart keeps the (empty) shared pool
 
 
@@ -294,7 +299,7 @@ def test_restart_keeps_the_shared_payoff_pool() -> None:
     policy.observe_continue(0, 0.1)
     policy.restart(0)
     assert policy.group_mins == [0.0, 2.0]
-    assert policy.ei_restart(1.0) == ei_restart(1.0, [0.0, 2.0])
+    assert policy._restart_payoff(1.0) == _ei_restart(1.0, [0.0, 2.0])
 
 
 def test_rounds_until_verdict_counts_to_the_next_full_stage() -> None:

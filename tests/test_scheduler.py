@@ -16,6 +16,10 @@ without a sampler is a wiring error. Unbounded means a
 `test_solver_seam.py`'s evaluator is that composed form.
 """
 
+# pyright: reportPrivateUsage=false
+# This suite is the spec for two `_`-private engine helpers; importing them
+# here is the intended read, not a boundary crossing.
+
 import math
 from collections.abc import Callable
 
@@ -26,7 +30,7 @@ from soar_lite.engine import (
     NPathResult,
     PathPoint,
     Verdict,
-    argmin_finite,  # helper contract pinned directly
+    _argmin_finite,
     n_path_schedule,
 )
 from soar_lite.restart import EIRestartRule
@@ -448,9 +452,9 @@ def test_probe_group_min_skips_nan() -> None:
     run_probe_pass_with_nan_round(1)
     run_probe_pass_with_nan_round(2)
     # helper contract: skip non-finite, None when nothing is finite
-    assert argmin_finite([2.0, 1.0]) == 1
-    assert argmin_finite([math.nan, 0.01, math.inf]) == 1
-    assert argmin_finite([math.nan, math.inf]) is None
+    assert _argmin_finite([2.0, 1.0]) == 1
+    assert _argmin_finite([math.nan, 0.01, math.inf]) == 1
+    assert _argmin_finite([math.nan, math.inf]) is None
 
 
 class ForcedWindow(EIRestartRule):
@@ -468,7 +472,7 @@ class ForcedWindow(EIRestartRule):
         super().__init__()
         self._window = window
 
-    def stage_window(self) -> int:
+    def _stage_window(self) -> int:
         """Return the pinned window (the pool's size is not consulted)."""
         return self._window
 
@@ -567,7 +571,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     with verdicts off (huge window) the very same run serves nothing after the
     stall. The two traces differ by exactly the restart
     events - this is the engine-level wiring (stall -> EI -> restart) the unit
-    tests of ei_restart/EI_continue cannot cover. The huge-period arm also pins
+    tests of _ei_restart/EI_continue cannot cover. The huge-period arm also pins
     the engine's stop for it: every path stalled and the next verdict lies
     ~10**9 rounds out, past max_steps, so the run must end there (status
     "all_stalled", one attempted round) rather than spin out the step budget.
@@ -778,6 +782,90 @@ def test_an_injected_sampler_searches_outside_the_old_box() -> None:
     )
     assert max(seen) > 1.0, seen  # a finite [0,1] box could not have gone there
     assert res.fun < 1e-6, res.fun
+
+
+def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
+    """A bad budget knob fails once, at the entry, naming the knob.
+
+    None of these shapes can run: zero paths advance nothing, and a negative
+    step cap means no round at all. The caller should see the knob, not an
+    empty result later.
+    """
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    def rejects(**knobs: int) -> str:
+        try:
+            # the knob under test is deliberately out of contract
+            n_path_schedule(
+                Recorder(quad),
+                bounds=[(0.0, 1.0)],
+                **knobs,  # pyright: ignore[reportArgumentType]
+            )
+        except ValueError as e:
+            return str(e)
+        msg = f"accepted: {knobs}"
+        raise AssertionError(msg)
+
+    for bad in (
+        {"n_paths": 0},
+        {"n_probe_rounds": 0},
+        {"max_ls": 0},
+        {"max_steps": -1},
+    ):
+        assert next(iter(bad)) in rejects(**bad), bad
+
+
+def test_malformed_bounds_are_rejected_at_the_entry() -> None:
+    """A box that is not a box fails here, not inside a clip.
+
+    Both spellings are checked for the same three defects: an inverted dim, a
+    NaN side (which would silently poison every clip instead of failing), and
+    an array whose second axis is not the pair.
+    """
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    def rejects(bounds: jnp.ndarray | list[tuple[float | None, float | None]]) -> str:
+        try:
+            n_path_schedule(Recorder(quad), bounds=bounds)
+        except ValueError as e:
+            return str(e)
+        msg = f"accepted: {bounds!r}"
+        raise AssertionError(msg)
+
+    assert "lo=1.0 > hi=0.0" in rejects([(1.0, 0.0)])
+    assert "NaN" in rejects([(0.0, float("nan"))])
+    assert "(d, 2)" in rejects(jnp.zeros((3, 3)))
+
+
+def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
+    """The two seams are checked for presence once, before any point is served.
+
+    Static typing already refuses these; the runtime check catches the caller
+    who reaches the engine from untyped code, and it names which seam objected.
+    """
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    def rejects(**knobs: object) -> str:
+        try:
+            # the knob under test is deliberately out of contract
+            n_path_schedule(
+                Recorder(quad),
+                bounds=[(0.0, 1.0)],
+                **knobs,  # pyright: ignore[reportArgumentType]
+            )
+        except TypeError as e:
+            return str(e)
+        msg = f"accepted: {knobs}"
+        raise AssertionError(msg)
+
+    assert "solver" in rejects(solver=object())
+    assert "restart_rule" in rejects(restart_rule=object())
 
 
 if __name__ == "__main__":

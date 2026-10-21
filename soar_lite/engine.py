@@ -3,7 +3,7 @@
 This module is the seam (拍板) of soar_lite: it owns the two plugin contracts
 (`LocalSolver` and `RestartRule`), the data the plugins exchange (`PathPoint`,
 `Verdict`), and the shared plumbing (`NPathResult`, the box/prior seams, the
-`argmin_finite` helper, and the `n_path_schedule` loop). Concretes import *from*
+`_argmin_finite` helper, and the `n_path_schedule` loop). Concretes import *from*
 here, never the other way around at module level:
 
     soar_lite/
@@ -23,7 +23,7 @@ restart decision.
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, TypeAlias
+from typing import Literal, Protocol, TypeAlias, runtime_checkable
 
 import jax
 import jax.numpy as jnp
@@ -41,6 +41,7 @@ class PathPoint:
 Verdict: TypeAlias = Literal["accept", "retry", "give_up"]
 
 
+@runtime_checkable
 class LocalSolver(Protocol):
     """The search method the n-path engine drives (the engine's plugin point).
 
@@ -72,6 +73,10 @@ class LocalSolver(Protocol):
     is split: ``verdict`` rules the enumeration and may only mutate
     enumeration-local state (a step length, a round counter); ``fold`` alone
     mutates the model, so a method folds exactly once per committed step.
+
+    These methods are called by the engine, once per path per round, so they
+    trust their arguments: `n_path_schedule` validates the object once (that
+    it carries this contract) at the entry, and nothing here re-checks.
     """
 
     def init(self, i: int, p: PathPoint) -> None:
@@ -112,6 +117,7 @@ class LocalSolver(Protocol):
         ...
 
 
+@runtime_checkable
 class RestartRule(Protocol):
     """The engine's restart decision module (its second plugin point).
 
@@ -136,6 +142,10 @@ class RestartRule(Protocol):
     any rule must accept to be pluggable - not a claim that two scalars are all
     a restart decision could ever use. A wider interface would not widen what a
     rule can see; only the engine's call sites could.
+
+    These methods are called by the engine, once per path per round, so they
+    trust their arguments: `n_path_schedule` validates the object once (that
+    it carries this contract) at the entry, and nothing here re-checks.
     """
 
     def observe_continue(self, i: int, delta: float) -> None:
@@ -189,7 +199,7 @@ BatchEvaluator: TypeAlias = Callable[
     [jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]"
 ]
 
-# The search box in scipy's spelling (which `box_bounds` normalizes): one
+# The search box in scipy's spelling (which `_box_bounds` normalizes): one
 # `(lb, ub)` pair per dim, a side of None or ±inf meaning unbounded. A `(d, 2)`
 # array is the same data row-wise, for the callers that already hold one. No box
 # at all is spelled `Bounds | None` at the call site (then d is the sampler's).
@@ -318,18 +328,36 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     payoff is a property of the sampler, not of one path). A path whose trials
     exhaust max_ls rounds stalls (observe_continue(i, inf) counts the fold, the
     read drops the value) until an EI verdict revives it.
+
+    The caller's inputs are validated here, once per run: knob ranges and the
+    box's own shape/ordering raise ValueError, and a seam object that does not
+    carry its contract's methods raises TypeError. The seam methods
+    themselves trust the engine - they run per path per round, and the engine
+    is their only caller.
     """
+    # The caller's own inputs are checked here, once per run - the only place
+    # a human hands this engine something. Nothing below re-checks them.
+    for name, value, low in (
+        ("n_paths", n_paths, 1),
+        ("n_probe_rounds", n_probe_rounds, 1),
+        ("max_ls", max_ls, 1),
+        ("max_steps", max_steps, 0),
+    ):
+        if value < low:
+            msg = f"{name} must be >= {low}, got {value}"
+            raise ValueError(msg)
+    _check_bounds(bounds)
     # The random source: an explicit key wins, otherwise the fixed default, so
     # an unseeded call still runs (deterministically).
     rng: jnp.ndarray = jax.random.PRNGKey(0) if key is None else key
-    box = box_bounds(bounds)
+    box = _box_bounds(bounds)
     d_bounds: int | None = None if box is None else box[0].shape[0]
     lo, hi = box if box is not None else (-math.inf, math.inf)
     if sample is None:
         # The sample=None contract: a finite box is the only prior the engine
         # can synthesize, so an unbounded side (or no box at all) is a wiring
         # error, not a run to guess our way out of.
-        if box is None or not finite_box(box):
+        if box is None or not _finite_box(box):
             msg = (
                 "an unbounded or absent box needs `sample`: the engine draws "
                 "its starts from the sampler, and with sample=None it can only "
@@ -384,7 +412,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
         feas_list = [True] * len(f_vals) if feas is None else feas.tolist()
         candidates = [j for j, ok in enumerate(feas_list) if ok]
         if candidates:
-            pos = argmin_finite([f_vals[j] for j in candidates])
+            pos = _argmin_finite([f_vals[j] for j in candidates])
             if pos is not None:  # every feasible point was non-finite: no B update
                 j_min = candidates[pos]
                 if f_vals[j_min] < best_fun:
@@ -439,7 +467,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
             # Finite-only group-min: a failed (non-finite) probe ranked before
             # a real one would be selected as the start, poisoning that path's
             # local method state for the rest of the run.
-            best = argmin_finite([f_rounds[i][j] for i in range(n_probe_rounds)])
+            best = _argmin_finite([f_rounds[i][j] for i in range(n_probe_rounds)])
             if best is None:
                 # Whole group non-finite: keep round 0 rather than invent a
                 # point. Its f is non-finite, so init/restart stalls this
@@ -458,6 +486,10 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     x, f, g = init
     # a start with no finite evidence never steps: it waits for EI
     stalled: list[bool] = [not math.isfinite(v) for v in f]
+    # The seam check: presence, not signatures. The seam's own members run per
+    # path per round and stay unvalidated.
+    _check_seam(solver, LocalSolver, "solver")
+    _check_seam(restart_rule, RestartRule, "restart_rule")
     # Defaults are bound lazily, not at module import: solver and restart
     # import the engine's types, so importing them here would form a cycle.
     if solver is None:
@@ -632,7 +664,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     return NPathResult(x=best_x, fun=best_fun, nfev=evals, nit=nit, status=status)
 
 
-def box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
+def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
     """Normalize `bounds` to (lo, hi) arrays; None (no box at all) -> None.
 
     A `None` side becomes ∓inf, so every downstream consumer sees one spelling
@@ -647,13 +679,61 @@ def box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
     return jnp.asarray(lo), jnp.asarray(hi)
 
 
-def finite_box(box: tuple[jnp.ndarray, jnp.ndarray]) -> bool:
+def _check_bounds(bounds: Bounds | None) -> None:
+    """Reject a malformed box at the entry, not deep inside a clip.
+
+    Both spellings `_box_bounds` accepts are checked: one `(lb, ub)` pair per
+    dim, or a `(d, 2)` array. A NaN side is rejected too - it would poison
+    every clip silently instead of failing; +-inf sides are legitimate
+    (unbounded dim).
+    """
+    if bounds is None:
+        return
+    pairs: list[tuple[float | None, float | None]]
+    if isinstance(bounds, jnp.ndarray):
+        if bounds.ndim != 2 or bounds.shape[1] != 2:
+            msg = f"bounds as an array needs shape (d, 2), got {bounds.shape}"
+            raise ValueError(msg)
+        pairs = list(zip(bounds[:, 0].tolist(), bounds[:, 1].tolist(), strict=True))
+    else:
+        pairs = []
+        for j, pair in enumerate(bounds):
+            if len(pair) != 2:
+                msg = f"bounds[{j}] must be a (lb, ub) pair, got {pair!r}"
+                raise ValueError(msg)
+            pairs.append((pair[0], pair[1]))
+    for j, (low, high) in enumerate(pairs):
+        lo_f = -math.inf if low is None else float(low)
+        hi_f = math.inf if high is None else float(high)
+        if math.isnan(lo_f) or math.isnan(hi_f):
+            msg = f"bounds[{j}] has a NaN side: ({low!r}, {high!r})"
+            raise ValueError(msg)
+        if lo_f > hi_f:
+            msg = f"bounds[{j}] has lo={lo_f} > hi={hi_f}"
+            raise ValueError(msg)
+
+
+def _check_seam(obj: object | None, proto: type, what: str) -> None:
+    """Reject a seam object that does not carry the Protocol's methods.
+
+    Presence only, never signatures - a wrong-signature method still fails at
+    its own call site. Static typing already knows the type, so this is the
+    runtime catch for a caller who hands in anything at all; `None` passes, as
+    the defaulting below replaces it. Deliberately in its own function: the
+    isinstance is redundant to a type checker and needs saying once.
+    """
+    if obj is not None and not isinstance(obj, proto):
+        msg = f"{what} does not implement {proto.__name__} (a method is missing)"
+        raise TypeError(msg)
+
+
+def _finite_box(box: tuple[jnp.ndarray, jnp.ndarray]) -> bool:
     """Report whether every side of every dim is finite (no-sampler precondition)."""
     lo, hi = box
     return bool(jnp.all(jnp.isfinite(lo)) and jnp.all(jnp.isfinite(hi)))
 
 
-def argmin_finite(values: list[float]) -> int | None:
+def _argmin_finite(values: list[float]) -> int | None:
     """Index of the smallest finite value, or None when none of them is finite.
 
     `min(..., key=...)` is not usable for a value list: NaN compares False

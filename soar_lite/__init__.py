@@ -7,9 +7,9 @@ concrete defaults (`DiagonalPreconditioner`, `EIRestartRule`) are re-exported
 for convenience. `n_path_schedule` is the whole algorithm entry point.
 
 Internal helpers (the EI closed forms, the box/argmin utilities) are not
-re-exported here on purpose: they are an implementation detail, reachable only
-from `soar_lite.restart` / `soar_lite.engine` when a test or a contributor
-really needs them.
+re-exported here on purpose; they are `_`-private in their own modules. A test
+or a contributor may still import them, but nothing outside the package is
+meant to.
 """
 
 from soar_lite.engine import (

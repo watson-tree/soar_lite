@@ -12,58 +12,6 @@ from soar_lite.engine import RestartRule
 
 
 # --- restart rule: EI_continue vs EI_restart ---
-def normal_cdf(z: float) -> float:
-    """Return the standard normal CDF Φ(z) = (1 + erf(z/√2))/2."""
-    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
-
-
-def normal_pdf(z: float) -> float:
-    """Return the standard normal PDF φ(z) = exp(-z²/2)/√(2π)."""
-    return math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)
-
-
-def gaussian_ei(sigma: float, incumbent: float, mu: float) -> float:
-    """Return the expected improvement over the incumbent `B` for X ~ N(mu, sigma²).
-
-    EI = sigma·(z·Φ(z) + φ(z)) with z = (B - mu)/sigma; sigma = 0 degenerates
-    exactly to max(B - mu, 0). Shared closed form: EI_continue (mu = f_k + mu_p)
-    and EI_restart (mu = mu_r) both route through here.
-    """
-    if sigma == 0.0:
-        return max(incumbent - mu, 0.0)
-    z = (incumbent - mu) / sigma
-    return sigma * (z * normal_cdf(z) + normal_pdf(z))
-
-
-def ei_continue(sigma_p: float, incumbent: float, f_k: float, mu_p: float) -> float:
-    """Return the expected improvement of one more step from f_k.
-
-    L_next ~ N(f_k + mu_p, sigma_p²), so EI_continue = gaussian_ei(sigma_p, B,
-    f_k + mu_p).
-    """
-    return gaussian_ei(sigma_p, incumbent, f_k + mu_p)
-
-
-def ei_restart(incumbent: float, group_mins: list[float]) -> float:
-    """Return the expected improvement of one restart.
-
-    Fits N(mu_r, sigma_r²) over the probe group-min history {r_i} (mean +
-    population std, non-finite skipped): EI_restart = gaussian_ei(sigma_r, B, mu_r).
-    M = 0 → 0.0 (no evidence); M = 1 → sigma_r = 0 → degenerate max(B - mu_r, 0).
-
-    Skipping isfinite, not just NaN, is load-bearing: one +inf sample makes mu_r
-    inf and variance inf - inf = NaN, so sigma_r = NaN and this returns NaN -
-    and `NaN > EI_continue` is False, which permanently silences every restart.
-    """
-    r = [v for v in group_mins if math.isfinite(v)]
-    if not r:
-        return 0.0
-    mu_r = sum(r) / len(r)
-    variance = sum((v - mu_r) ** 2 for v in r) / len(r)
-    return gaussian_ei(math.sqrt(variance), incumbent, mu_r)
-
-
-
 class EIRestartRule(RestartRule):
     """Sample-based restarts: the paths estimate their own restart payoff.
 
@@ -72,7 +20,7 @@ class EIRestartRule(RestartRule):
     [Mathesen et al. 2021]: it never fits a model, so it stays cheap in high
     dimension, and it samples rather than learns the restart payoff. Restart
     fires only when a fresh draw's expected improvement exceeds continuing the
-    path's (``ei_restart`` vs ``ei_continue``) - both closed forms off the same
+    path's (``_ei_restart`` vs ``_ei_continue``) - both closed forms off the same
     evidence. The i.i.d. assumption is what makes this exact: every path starts
     as an i.i.d. draw from the injected sampler, so each recorded restart payoff
     is a real sample of "what a fresh start buys", and the shared pool below
@@ -86,7 +34,7 @@ class EIRestartRule(RestartRule):
     EI_continue, and the restart tail wins verdicts the evidence does not
     support. That bias never shows up as an error, only as a worse incumbent, so
     the rule **derives** the two counts instead of exposing a knob: the
-    continue side is read over `stage_window()` = the pool's size M, which is the
+    continue side is read over `_stage_window()` = the pool's size M, which is the
     most samples a verdict can have in as many rounds as the restart side
     already has, and a caller cannot ask for a window its own pool cannot back.
 
@@ -98,7 +46,7 @@ class EIRestartRule(RestartRule):
     stage is as long as the pool is large - short. Nothing is lost over a longer
     horizon either: a restart drops the path's stage (the next Δ opens a new one
     against the pool as it stands), and the verdict is asked again every
-    `stage_window()` rounds, so the loop re-reads the path as regularly as it
+    `_stage_window()` rounds, so the loop re-reads the path as regularly as it
     collects evidence.
 
     `group_mins` is **one pool for every path**, not a copy per path: a restart
@@ -117,7 +65,7 @@ class EIRestartRule(RestartRule):
         self.pool_size = 0  # usable pool samples: the M the window is matched to
         self.deltas: dict[int, list[float]] = {}  # per path: Δ since its last verdict
 
-    def stage_window(self) -> int:
+    def _stage_window(self) -> int:
         """Return how many Δ a path is read over: the pool's size.
 
         Read fresh at each verdict rather than fixed per stage, because the pool
@@ -128,7 +76,7 @@ class EIRestartRule(RestartRule):
         evidence and no fold buys more than its weight.
 
         The only floor is 1, and it is not a prior: a window of zero samples has
-        no centre to read (`ei_continue` returns 0.0 on an empty stage, and
+        no centre to read (`_continue_payoff` returns 0.0 on an empty stage, and
         `rounds_until_verdict` would go negative), which is reachable only
         before any finite restart payoff exists. At M = 1 the read is its own
         degenerate branch - a stage of one fold has no spread, and a pool of one
@@ -155,7 +103,7 @@ class EIRestartRule(RestartRule):
     def observe_restart(self, r: float) -> None:
         """Append one restart event's payoff r to the shared payoff pool.
 
-        Non-finite payoffs stay in the list (ei_restart filters them, and a
+        Non-finite payoffs stay in the list (`_ei_restart` filters them, and a
         single +inf must not corrupt the fit) but do not count towards M: the
         window is matched to the samples sigma_r is actually fitted on.
         """
@@ -163,11 +111,11 @@ class EIRestartRule(RestartRule):
         if math.isfinite(r):
             self.pool_size += 1
 
-    def stage_deltas(self, i: int) -> list[float]:
+    def _stage_deltas(self, i: int) -> list[float]:
         """Return path i's finite Δ values from the stage it is in now."""
         return [d for d in self.deltas.get(i, ()) if math.isfinite(d)]
 
-    def ei_continue(self, i: int, f_k: float, incumbent: float) -> float:
+    def _continue_payoff(self, i: int, f_k: float, incumbent: float) -> float:
         """Return the expected improvement of path i continuing one more step.
 
         The stage's plain mean and population std - the same ÷n the restart side
@@ -178,16 +126,16 @@ class EIRestartRule(RestartRule):
         evidence. One fold is the other degenerate corner (sigma = 0), where the
         read is exactly max(B - (f_k + mu), 0).
         """
-        d = self.stage_deltas(i)
+        d = self._stage_deltas(i)
         if not d:
             return 0.0
         mu = sum(d) / len(d)
         sd = math.sqrt(sum((v - mu) ** 2 for v in d) / len(d))
-        return ei_continue(sd, incumbent, f_k, mu)
+        return _ei_continue(sd, incumbent, f_k, mu)
 
-    def ei_restart(self, incumbent: float) -> float:
+    def _restart_payoff(self, incumbent: float) -> float:
         """Return the expected improvement of any path restarting (global)."""
-        return ei_restart(incumbent, self.group_mins)
+        return _ei_restart(incumbent, self.group_mins)
 
     def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
         """Return True iff path i's verdict is due and restart beats continuing.
@@ -199,10 +147,10 @@ class EIRestartRule(RestartRule):
         incumbent (B = inf): the verdict has nothing to compare against yet, and
         the engine owns B.
         """
-        if len(self.deltas.get(i, ())) < self.stage_window():
+        if len(self.deltas.get(i, ())) < self._stage_window():
             return False
         restart = math.isfinite(incumbent) and (
-            self.ei_restart(incumbent) > self.ei_continue(i, f_k, incumbent)
+            self._restart_payoff(incumbent) > self._continue_payoff(i, f_k, incumbent)
         )
         self.deltas[i] = []  # the stage's one read is taken; the next Δ opens one
         return restart
@@ -219,9 +167,60 @@ class EIRestartRule(RestartRule):
         with no path evidence at all - no cadence to bound, so the engine keeps
         its ordinary rounds, which is only reachable before the first fold.
         """
-        window = self.stage_window()
+        window = self._stage_window()
         return min((window - len(d) for d in self.deltas.values()), default=0)
 
     def restart(self, i: int) -> None:
         """Drop path i's stage after a restart (the shared payoff pool is kept)."""
         self.deltas[i] = []
+
+
+def _ei_continue(sigma_p: float, incumbent: float, f_k: float, mu_p: float) -> float:
+    """Return the expected improvement of one more step from f_k.
+
+    L_next ~ N(f_k + mu_p, sigma_p²), so EI_continue = _gaussian_ei(sigma_p, B,
+    f_k + mu_p).
+    """
+    return _gaussian_ei(sigma_p, incumbent, f_k + mu_p)
+
+
+def _ei_restart(incumbent: float, group_mins: list[float]) -> float:
+    """Return the expected improvement of one restart.
+
+    Fits N(mu_r, sigma_r²) over the probe group-min history {r_i} (mean +
+    population std, non-finite skipped): EI_restart = _gaussian_ei(sigma_r, B, mu_r).
+    M = 0 → 0.0 (no evidence); M = 1 → sigma_r = 0 → degenerate max(B - mu_r, 0).
+
+    Skipping isfinite, not just NaN, is load-bearing: one +inf sample makes mu_r
+    inf and variance inf - inf = NaN, so sigma_r = NaN and this returns NaN -
+    and `NaN > EI_continue` is False, which permanently silences every restart.
+    """
+    r = [v for v in group_mins if math.isfinite(v)]
+    if not r:
+        return 0.0
+    mu_r = sum(r) / len(r)
+    variance = sum((v - mu_r) ** 2 for v in r) / len(r)
+    return _gaussian_ei(math.sqrt(variance), incumbent, mu_r)
+
+
+def _gaussian_ei(sigma: float, incumbent: float, mu: float) -> float:
+    """Return the expected improvement over the incumbent `B` for X ~ N(mu, sigma²).
+
+    EI = sigma·(z·Φ(z) + φ(z)) with z = (B - mu)/sigma; sigma = 0 degenerates
+    exactly to max(B - mu, 0). Shared closed form: EI_continue (mu = f_k + mu_p)
+    and EI_restart (mu = mu_r) both route through here.
+    """
+    if sigma == 0.0:
+        return max(incumbent - mu, 0.0)
+    z = (incumbent - mu) / sigma
+    return sigma * (z * _normal_cdf(z) + _normal_pdf(z))
+
+
+def _normal_cdf(z: float) -> float:
+    """Return the standard normal CDF Φ(z) = (1 + erf(z/√2))/2."""
+    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+
+def _normal_pdf(z: float) -> float:
+    """Return the standard normal PDF φ(z) = exp(-z²/2)/√(2π)."""
+    return math.exp(-0.5 * z * z) / math.sqrt(2.0 * math.pi)

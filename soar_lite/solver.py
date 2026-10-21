@@ -98,7 +98,21 @@ class DiagonalPreconditioner(LocalSolver):
         the warm-up Armijo shrink AND the post-warmup alpha grid's spacing
         (ls_rounds >= 2). ``armijo_c`` is the warm-up Armijo sufficient-decrease
         slope c (dimensionless): a trial above f + c·gᵀd is rejected and shrunk.
+        A knob outside its own range raises ValueError here, once per object;
+        nothing downstream re-checks it.
         """
+        for name, value, ok, want in (
+            ("beta", beta, 0.0 < beta < 1.0, "in (0, 1)"),
+            ("theta", theta, theta >= 0.0, ">= 0"),
+            ("tau_rel", tau_rel, tau_rel > 0.0, "> 0"),
+            ("moment", moment, moment in ("abs", "rms"), '"abs" or "rms"'),
+            ("ls_rounds", ls_rounds, ls_rounds >= 1, ">= 1"),
+            ("backtrack", backtrack, 0.0 < backtrack < 1.0, "in (0, 1)"),
+            ("armijo_c", armijo_c, 0.0 < armijo_c < 1.0, "in (0, 1)"),
+        ):
+            if not ok:
+                msg = f"{name} must be {want}, got {value!r}"
+                raise ValueError(msg)
         self.beta = beta
         self.theta = theta
         self.tau_rel = tau_rel

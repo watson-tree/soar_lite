@@ -395,6 +395,35 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
     assert result.fun < 1e-12
 
 
+def test_diag_knobs_out_of_range_are_rejected() -> None:
+    """A knob out of its own range fails at construction, naming the knob.
+
+    Each of these would still run and silently produce something other than the
+    method's contract (beta = 1 never forgets, ls_rounds = 0 serves no sample),
+    so the object refuses to exist instead of degrading quietly.
+    """
+
+    def rejects(**knobs: float | str) -> str:
+        try:
+            # the knob under test is deliberately out of contract
+            DiagonalPreconditioner(**knobs)  # pyright: ignore[reportArgumentType]
+        except ValueError as e:
+            return str(e)
+        msg = f"accepted: {knobs}"
+        raise AssertionError(msg)
+
+    for bad in (
+        {"beta": 1.0},
+        {"theta": -1.0},
+        {"tau_rel": 0.0},
+        {"moment": "l2"},
+        {"ls_rounds": 0},
+        {"backtrack": 1.0},
+        {"armijo_c": 0.0},
+    ):
+        assert next(iter(bad)) in rejects(**bad), bad
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
