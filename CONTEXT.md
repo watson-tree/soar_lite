@@ -44,8 +44,8 @@ _Avoid_: paused, idle, dead
 **evaluation (eval)**:
 One point's worth of one `evaluate_batch` call: its loss (and, through the
 batch, its gradient). `nfev` counts evaluations or served batches, depending on
-billing; the engine's running counter is `n_charged`, whose unit follows the
-same billing mode.
+billing; the engine keeps that count in `_Budget.nfev`, whose unit follows the
+billing mode, next to a budget meter that always counts batches.
 _Avoid_: query, sample (when counting cost)
 
 **batch**:

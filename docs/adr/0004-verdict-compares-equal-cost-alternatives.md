@@ -24,8 +24,9 @@ The decision, in three parts:
    unless every path is stalled, so that cap only bites on a stalling run - a
    stalled round is free, and the cap is what stops a permanently stalled run
    whose rule can state no cadence. `nit` stays "rounds the main loop
-   attempted"; the billed quantity is `nfev`, whose counter is `n_charged`
-   because its unit follows the billing mode.
+   attempted"; the billed quantity is `nfev`, kept in its own counter inside
+   the engine's `_Budget` because its unit follows the billing mode, while the
+   budget meter beside it always counts batches.
 3. **The horizon lives in the engine, not the rule.** `n_probe_rounds` is a
    fact of the schedule the engine owns, so the engine feeds equal-cost samples
    and `EIRestartRule` stays knob-free: it keeps reading a plain mean and
@@ -56,8 +57,8 @@ Consequences:
 - Do not add a `horizon` knob to the rule "for experiments". A horizon that is
   not the probe's own cost reintroduces the mismatch in the other direction.
 
-Implemented with this decision: the per-path horizon and its stall flag in the
-engine, per-batch billing with the `spent` meter, the scheduler and seam tests
+Implemented with this decision: the per-path horizon as the engine's `_Horizon`
+clock, per-batch billing as its `_Budget` meter, the scheduler and seam tests
 restated in batches, and three new invariants (samples produced per completed
 horizon, the budget never exceeded under restart storms, a stall inside a
 horizon poisons that sample). `ALGORITHM.md` carries the resulting wording.
