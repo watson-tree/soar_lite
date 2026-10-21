@@ -105,13 +105,23 @@ adaptive.
 
 ## Budget, statistics, outputs
 
-- `soar-lite` / `Adam` / `NAAdam`: `max_steps=300` rounds. `L-BFGS-B`: scipy
-  default stopping, `maxiter` cap ~500 (it is a serial reference, not the same
-  cost axis).
-- Seeds `N=20`; report **mean ± std** (shaded), log-y, per-round x-axis as the
-  main chart; per-point as secondary.
-- Outputs: `experiments/results.png` + `experiments/results.json`
-  (per-round best-so-far mean/std arrays, one block per problem×method).
+- Every method gets the same number of **rounds**: `--max-steps 3000` (one round
+  = one batch; a single chain spends one point per round). Runs stop earlier on
+  their own criterion (the engine's gradient-norm test, L-BFGS-B's tolerance),
+  so 3000 is an upper bound, not a fixed cost. `L-BFGS-B` takes the same cap as
+  `maxfun`/`maxiter` and is a serial reference, not the same cost axis.
+- Two honest budgets, both read off the **same** runs, no re-runs:
+  - **rounds** figure — every method 3000 rounds. This is the wall-clock axis of
+    a batched setting, and the only axis where `n_paths=16` and a single chain
+    compare at equal cost per step; it is the main chart.
+  - **points** figure — each run truncated at 3000 objective points, the fair
+    information unit of a serial setting. A chain spends exactly one point per
+    round, so `n_paths=16` shows only its first ~187 rounds there.
+- Seeds `N=20`; report **mean ± std** (shaded), log-y, log x.
+- Outputs: `experiments/results_{group}_{rounds,points}.png` +
+  `results_{group}.json` per group, plus `results_invariance.png` and
+  `results_lr_sweep.png`. The JSON holds the best-so-far mean/std arrays per
+  problem×method for both axes, keyed by `max_steps`.
 
 ## Reproducibility contract
 

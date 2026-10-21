@@ -7,10 +7,15 @@ Two panels per method family, following the design in `DESIGN.md`:
 * multimodal (escape proposition): soar-lite n_paths=1, soar-lite n_paths=16,
   Adam, NAAdam.
 
-Cost axis is objective points served (the fair information unit); a second figure
-replots the same runs against sequential batched rounds, the wall-clock axis
-for a batched setting. Curves are mean of best-so-far over seeds, shaded +-1
-standard deviation, log y.
+Every method gets the same number of **batches** (one batch = one round of
+parallel evaluations, ``--max-steps``) - the wall-clock axis of a batched
+setting, and the only axis on which an n_paths=16 run and a single chain compare
+at equal cost per step. The second figure replots the same runs against
+objective points served, the fair information unit for a serial setting: there a
+chain serves one point per batch, so the point axis is truncated at
+``--max-steps`` points and a batched run shows only the rounds it could afford -
+no figure re-runs anything. Curves are mean of best-so-far over seeds, shaded
++-1 standard deviation, log y.
 
 Adam and NAAdam carry a per-problem learning rate, picked on a coarse 1-seed
 grid sweep (reproduce it with --lr-sweep): the best lr spans over two orders of
@@ -157,8 +162,19 @@ def resample(
         return np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
 
 
+def _up_to(trace: Trace, max_points: int) -> Trace:
+    """Return the first ``max_points`` objective points of a run, nothing else."""
+    stop = sum(1 for p in trace.points if p <= max_points)
+    return Trace(
+        points=trace.points[:stop],
+        rounds=trace.rounds[:stop],
+        best=trace.best[:stop],
+        fun=trace.fun,
+    )
+
+
 def run_panel(
-    group: str, seeds: int, max_evals: int
+    group: str, seeds: int, max_steps: int
 ) -> tuple[dict[str, dict[str, dict[str, list[float]]]], dict[str, str]]:
     """Run every problem in ``group`` across every method and seed."""
     methods = PANELS[group]
@@ -168,7 +184,7 @@ def run_panel(
         labels[prob.name] = prob.description
         curves[prob.name] = {}
         traces = {
-            label: [runner(prob, max_evals=max_evals, seed=s) for s in range(seeds)]
+            label: [runner(prob, max_steps=max_steps, seed=s) for s in range(seeds)]
             for label, runner, _ in methods
         }
         for label, _, _ in methods:
@@ -177,9 +193,20 @@ def run_panel(
             print(f"  {prob.name:26s} {label:16s} {tail}")
         for axis in ("points", "rounds"):
             col = 0 if axis == "points" else 1
+            # Equal rounds is the batched budget, equal points the serial one,
+            # and they are the same runs seen twice. Truncating the point axis
+            # at max_steps is what a chain's own run costs, so an n-path run
+            # shows exactly the rounds it could afford there.
+            shown = {
+                label: [
+                    _up_to(t, max_steps) if axis == "points" else t
+                    for t in traces[label]
+                ]
+                for label, _, _ in methods
+            }
             xmax = max(
                 float(t.as_arrays()[col].max())
-                for ts in traces.values()
+                for ts in shown.values()
                 for t in ts
                 if len(t.points) > 0
             )
@@ -187,8 +214,9 @@ def run_panel(
             # than a single chain finishes its points, and a linear grid
             # would squash the batched curve into the left edge of the axis.
             grid = np.logspace(0.0, np.log10(xmax), 120)
+            grid[-1] = xmax  # logspace rounds the last sample past its own end
             for label, _, _ in methods:
-                mean, std = resample(traces[label], grid, axis)
+                mean, std = resample(shown[label], grid, axis)
                 entry = curves[prob.name].setdefault(label, {})
                 entry[f"{axis}_grid"] = grid.tolist()
                 entry[f"{axis}_mean"] = mean.tolist()
@@ -240,7 +268,7 @@ def plot(
     print(f"wrote {out}")
 
 
-def run_lr_sweep(out: Path, seeds: int, max_evals: int) -> None:
+def run_lr_sweep(out: Path, seeds: int, max_steps: int) -> None:
     """Plot best-so-far vs Adam lr, one curve per problem (appendix panel).
 
     Shows the optimal lr drifting across problems and a wrong lr costing many
@@ -257,7 +285,7 @@ def run_lr_sweep(out: Path, seeds: int, max_evals: int) -> None:
             float(
                 np.mean(
                     [
-                        run_adam(prob, max_evals=max_evals, seed=s, lr=lr).fun
+                        run_adam(prob, max_steps=max_steps, seed=s, lr=lr).fun
                         for s in range(seeds)
                     ]
                 )
@@ -288,7 +316,7 @@ def run_lr_sweep(out: Path, seeds: int, max_evals: int) -> None:
     print(f"wrote {out}")
 
 
-def run_invariance(out_dir: Path, seeds: int, max_evals: int) -> None:
+def run_invariance(out_dir: Path, seeds: int, max_steps: int) -> None:
     """Draw panel 5: one physics in two unit systems, zero retune.
 
     soar-lite's per-coordinate secant should overlap (outcome-level), Adam's
@@ -308,7 +336,7 @@ def run_invariance(out_dir: Path, seeds: int, max_evals: int) -> None:
     fig, ax = plt.subplots(figsize=(6.4, 4.6))
     for label, color, runner in methods:
         for prob, ls, tag in ((base, "-", "base"), (scaled, "--", "x10")):
-            traces = [runner(prob, max_evals=max_evals, seed=s) for s in range(seeds)]
+            traces = [runner(prob, max_steps=max_steps, seed=s) for s in range(seeds)]
             xs = traces[0].as_arrays()[0]
             bests = np.vstack([t.as_arrays()[2] for t in traces])
             mean = np.maximum(bests.mean(axis=0), 1e-16)
@@ -368,7 +396,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--quick", action="store_true", help="2-seed smoke check")
     parser.add_argument("--seeds", type=int, default=20)
-    parser.add_argument("--max-evals", type=int, default=3000)
+    parser.add_argument(
+        "--max-steps", type=int, default=3000, help="batches per method"
+    )
     parser.add_argument("--groups", default="headline,smooth,multimodal,invariance")
     parser.add_argument(
         "--lr-sweep", action="store_true", help="emit the Adam lr sensitivity figure"
@@ -376,19 +406,21 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.lr_sweep:
-        run_lr_sweep(HERE / "results_lr_sweep.png", seeds=2, max_evals=args.max_evals)
+        run_lr_sweep(
+            HERE / "results_lr_sweep.png", seeds=2, max_steps=args.max_steps
+        )
         return
 
     groups = ["smooth"] if args.quick else args.groups.split(",")
     seeds = 2 if args.quick else args.seeds
-    max_evals = 600 if args.quick else args.max_evals
+    max_steps = 300 if args.quick else args.max_steps
 
     for group in groups:
         if group == "invariance":
-            run_invariance(HERE, seeds, max_evals)
+            run_invariance(HERE, seeds, max_steps)
             continue
-        print(f"[{group}] seeds={seeds} max_evals={max_evals}")
-        curves, labels = run_panel(group, seeds, max_evals)
+        print(f"[{group}] seeds={seeds} max_steps={max_steps}")
+        curves, labels = run_panel(group, seeds, max_steps)
         star = {p.name: p.f_star for p in problems.build(group)}
         for axis in ("points", "rounds"):
             plot(
@@ -404,7 +436,7 @@ def main() -> None:
                     "meta": {
                         "group": group,
                         "seeds": seeds,
-                        "max_evals": max_evals,
+                        "max_steps": max_steps,
                         "f_star": star,
                     },
                     "curves": curves,

@@ -57,10 +57,16 @@ def run_soar_lite(
     problem: Problem,
     *,
     n_paths: int,
-    max_evals: int,
+    max_steps: int,
     seed: int,
 ) -> Trace:
-    """Drive the n-path engine, recording best-so-far after every batch."""
+    """Drive the n-path engine, recording best-so-far after every batch.
+
+    The budget is ``max_steps`` **batches** - one round of parallel evaluations,
+    the axis a single chain pays one point per step on. The engine gate is
+    consulted before each batch, so a run serves at most that many and stops
+    early on its own convergence criterion.
+    """
     trace = Trace()
     n_points = 0
     n_rounds = 0
@@ -83,8 +89,8 @@ def run_soar_lite(
         evaluate_batch,
         bounds=problem.bounds,
         n_paths=n_paths,
-        max_steps=max_evals,
-        budget_check=lambda: n_points < max_evals,
+        max_steps=max_steps,
+        budget_check=lambda: n_rounds < max_steps,
         solver=DiagonalPreconditioner(),
         key=jax.random.PRNGKey(seed),
     )
@@ -95,27 +101,27 @@ def run_soar_lite(
 # --- Adam / NAAdam: one compiled scan per run --------------------------------
 
 
-def run_adam(problem: Problem, *, max_evals: int, seed: int, lr: float) -> Trace:
+def run_adam(problem: Problem, *, max_steps: int, seed: int, lr: float) -> Trace:
     """Plain Adam, one evaluation per step."""
-    return _single_chain(problem, max_evals=max_evals, seed=seed, lr=lr, sigma0=0.0)
+    return _single_chain(problem, max_steps=max_steps, seed=seed, lr=lr, sigma0=0.0)
 
 
 def run_naadam(
     problem: Problem,
     *,
-    max_evals: int,
+    max_steps: int,
     seed: int,
     lr: float,
     sigma0: float = 1e-2,
 ) -> Trace:
     """Adam plus decaying Gaussian noise (the brute-force escape baseline)."""
-    return _single_chain(problem, max_evals=max_evals, seed=seed, lr=lr, sigma0=sigma0)
+    return _single_chain(problem, max_steps=max_steps, seed=seed, lr=lr, sigma0=sigma0)
 
 
 def _single_chain(
     problem: Problem,
     *,
-    max_evals: int,
+    max_steps: int,
     seed: int,
     lr: float,
     sigma0: float,
@@ -143,10 +149,10 @@ def _single_chain(
         return (x, opt_state, best, noise_key), best
 
     _, bests = jax.lax.scan(
-        body, (x0, state, jnp.asarray(jnp.inf), key), jnp.arange(1, max_evals + 1)
+        body, (x0, state, jnp.asarray(jnp.inf), key), jnp.arange(1, max_steps + 1)
     )
     values = np.asarray(bests.tolist(), dtype=float)
-    grid = np.arange(1, max_evals + 1)
+    grid = np.arange(1, max_steps + 1)
     return Trace(
         points=grid.tolist(),
         rounds=grid.tolist(),
@@ -158,7 +164,7 @@ def _single_chain(
 # --- L-BFGS-B: the smooth-panel ceiling reference ----------------------------
 
 
-def run_lbfgs(problem: Problem, *, max_evals: int, seed: int) -> Trace:
+def run_lbfgs(problem: Problem, *, max_steps: int, seed: int) -> Trace:
     """Scipy L-BFGS-B with jac=True; the serial full-memory reference.
 
     Not a head-to-head baseline: it is full-memory (not per-coordinate) and
@@ -190,7 +196,7 @@ def run_lbfgs(problem: Problem, *, max_evals: int, seed: int) -> Trace:
         jac=True,
         method="L-BFGS-B",
         bounds=list(zip(lo, hi, strict=True)),
-        options={"maxfun": max_evals, "maxiter": max_evals},
+        options={"maxfun": max_steps, "maxiter": max_steps},
     )
     trace.fun = float(best) if math.isfinite(best) else float(result.fun)
     return trace
