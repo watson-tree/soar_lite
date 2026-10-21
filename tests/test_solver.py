@@ -106,8 +106,8 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     assert close(solver.propose(0, trial), jnp.zeros(3), 1e-12)
 
 
-def test_diag_l1_step_is_newton_exact_on_a_quadratic() -> None:
-    """L1 spelling |s|/|y| gives the same 1/h on the same quadratic."""
+def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
+    """"abs" spelling |s|/|y| gives the same 1/h on the same quadratic."""
     h = jnp.array([2.0, 4.0, 8.0])
     x0 = jnp.ones(3)
 
@@ -117,7 +117,7 @@ def test_diag_l1_step_is_newton_exact_on_a_quadratic() -> None:
 
     f0, g0 = quad(x0)
     p = PathPoint(x=x0, f=f0, g=g0)
-    solver = DiagonalPreconditioner(theta=0.0, l1=True)
+    solver = DiagonalPreconditioner(theta=0.0, moment="abs")
     solver.init(0, p)
     trial = _warm_up(solver, p, quad)
     assert close(solver.propose(0, trial), jnp.zeros(3), 1e-12)

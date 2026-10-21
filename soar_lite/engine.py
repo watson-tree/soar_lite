@@ -286,9 +286,11 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     # engine's.
     budget_check: Callable[[], bool] | None = None,
     n_paths: int = 16,  # number of paths advanced each round, the engine's width
+    # The two round budgets, adjacent: max_steps caps the run, max_ls caps one step.
     max_steps: int = 1000,
-    solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
     max_ls: int = 20,  # engine rounds per step before stalling a path
+    # The two plugins, adjacent: the search method and the restart decision.
+    solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
     restart_rule: RestartRule | None = None,  # None -> EIRestartRule, the default rule
     n_probe_rounds: int = 2,  # draws/start; 1=init, inf=search; 2-3 empirical, pinned 2
     # Billing mode. False (default) charges one eval per served point - the

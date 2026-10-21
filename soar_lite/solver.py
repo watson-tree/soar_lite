@@ -8,6 +8,7 @@ size and acceptance - no curvature model, no Hessian.
 """
 
 import math
+from typing import Literal
 
 import jax.numpy as jnp
 
@@ -20,14 +21,14 @@ class DiagonalPreconditioner(LocalSolver):
     Each coordinate carries its own effective inverse curvature d_i, of
     dimension [x]²/[f], estimated from the magnitude ratio of one secant
     (s = x_k - x_{k-1}, y = g_k - g_{k-1}), and the step is Δx_i = -d_i·g_i.
-    Two equivalent spellings, picked by ``l1`` (default L2):
+    Two equivalent spellings, picked by ``moment`` (default "rms"):
 
-        L1: S₁ = EMA(|s|), Y₁ = EMA(|y|), d = S₁/max(Y₁, λ)
-        L2: S₂ = EMA(s²), Y₂ = EMA(y²), d = √(S₂/max(Y₂, λ))
+        "abs": S₁ = EMA(|s|), Y₁ = EMA(|y|), d = S₁/max(Y₁, λ)
+        "rms": S₂ = EMA(s²), Y₂ = EMA(y²), d = √(S₂/max(Y₂, λ))
 
     Both are unit-invariant: scaling x by c scales d by c² and the step by c,
     while scaling f by c_f scales d by 1/c_f and leaves the step alone. The
-    floor λ = θ·|g_i| (L1) or θ·g_i² (L2), θ dimensionless, is anchored to the
+    floor λ = θ·|g_i| ("abs") or θ·g_i² ("rms"), θ dimensionless, is anchored to the
     *current* gradient, so a flat-but-not-converged coordinate (y → 0 while
     g ≠ 0) still gets a finite step; a truly converged coordinate is caught by
     the stopping test below instead. The floor joins via ``max``, not ``+``:
@@ -84,9 +85,9 @@ class DiagonalPreconditioner(LocalSolver):
         self,
         *,
         beta: float = 0.95,  # EMA decay; the window is ≈ 1/(1-β) steps
-        theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| (L1) / θ·g_i² (L2)
+        theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
         tau_rel: float = 1e-6,  # gradient-norm stopping test vs ‖g_0‖
-        l1: bool = False,  # False = L2 (mean-square ratio), True = L1 (mean ratio)
+        moment: Literal["abs", "rms"] = "rms",  # mean ratio / mean-square ratio
         ls_rounds: int = 1,  # post-warmup alpha-grid size; 1 = no line search
         backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
         armijo_c: float = 1e-4,  # warm-up Armijo sufficient-decrease slope
@@ -101,15 +102,15 @@ class DiagonalPreconditioner(LocalSolver):
         self.beta = beta
         self.theta = theta
         self.tau_rel = tau_rel
-        self.l1 = l1
+        self.moment = moment
         self.ls_rounds = ls_rounds
         self.backtrack = backtrack
         self.armijo_c = armijo_c
         self.alpha: dict[int, float] = {}  # per path: current step multiplier
         self.g0: dict[int, jnp.ndarray] = {}  # per path: the stopping test's anchor
         self.has_secant: dict[int, bool] = {}  # per path: first pair in hand?
-        self.s_ema: dict[int, jnp.ndarray] = {}  # per path: S₁ (L1) or S₂ (L2)
-        self.y_ema: dict[int, jnp.ndarray] = {}  # per path: Y₁ (L1) or Y₂ (L2)
+        self.s_ema: dict[int, jnp.ndarray] = {}  # per path: S₁ ("abs") or S₂ ("rms")
+        self.y_ema: dict[int, jnp.ndarray] = {}  # per path: Y₁ ("abs") or Y₂ ("rms")
         self.ls_round: dict[int, int] = {}  # per path: alpha samples served this step
         self.saw_finite: dict[int, bool] = {}  # per path: any finite sample this step?
 
@@ -127,12 +128,6 @@ class DiagonalPreconditioner(LocalSolver):
         """Cold-start path i after a restart: the secant history does not carry."""
         self.init(i, p)
 
-    def _reset_step(self, i: int) -> None:
-        """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
-        self.alpha[i] = 1.0
-        self.ls_round[i] = 0
-        self.saw_finite[i] = False
-
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
         """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - d⊙g."""
         if not self.has_secant[i]:
@@ -141,7 +136,7 @@ class DiagonalPreconditioner(LocalSolver):
         # with no usable secant (y_i = 0) still steps instead of 0/0. It is a
         # floor (max), not an addend: where Y ≥ λ the estimate is the faithful
         # S/Y ratio, and λ only caps d below that.
-        floor = self.theta * (jnp.abs(p.g) if self.l1 else jnp.square(p.g))
+        floor = self.theta * (jnp.abs(p.g) if self.moment == "abs" else jnp.square(p.g))
         den = jnp.maximum(self.y_ema[i], floor)
         # den_i == 0 means y_i = 0 *and* g_i = 0: no curvature information and
         # already stationary in i, so step nowhere there rather than NaN. One
@@ -149,7 +144,7 @@ class DiagonalPreconditioner(LocalSolver):
         # differentiated, so an inf/nan in the unselected lane cannot leak
         # anywhere; a derivative of this line would see it, so revisit then.
         d = jnp.where(den > 0.0, self.s_ema[i] / den, 0.0)
-        if not self.l1:
+        if self.moment == "rms":
             d = jnp.sqrt(d)
         return p.x - self.alpha[i] * (d * p.g)
 
@@ -175,6 +170,28 @@ class DiagonalPreconditioner(LocalSolver):
             self._reset_step(i)  # first post-warmup step starts at a full step
             return "accept"
         return self._step_verdict(i, trial)
+
+    def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
+        """Fold the engine's committed argmin for path i (the step that won).
+
+        Only the winner is folded, never an intermediate grid sample: an
+        intermediate secant is a step the path never took, and folding it would
+        smear the magnitude EMAs. The engine calls this with the exact point it
+        just committed on "accept", so the folded secant is the accepted step
+        and the two can never disagree. The first call after init/restart is
+        the warm-up pair and seeds the EMAs outright (weight 1); later calls
+        blend at beta - `has_secant` doubles as the first-fold marker, so it is
+        set here rather than in ``verdict``.
+        """
+        first = not self.has_secant[i]
+        self._fold(i, best.x - p.x, best.g - p.g, first=first)
+        self.has_secant[i] = True
+
+    def _reset_step(self, i: int) -> None:
+        """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
+        self.alpha[i] = 1.0
+        self.ls_round[i] = 0
+        self.saw_finite[i] = False
 
     def _step_verdict(self, i: int, trial: PathPoint) -> Verdict:
         """Judge a served post-warmup step; never fold here.
@@ -212,10 +229,10 @@ class DiagonalPreconditioner(LocalSolver):
 
         The warm-up pair seeds the EMA outright (weight 1, no β-mixing against a
         zero); later pairs blend at β. Signed quantities are reduced to
-        magnitudes first (|·| for L1, squaring for L2), which is what makes the
+        magnitudes first (|·| for "abs", squaring for "rms"), which is what makes the
         ratio positive and cancels the sign cancellation `E[s]/E[y]` suffers.
         """
-        if self.l1:
+        if self.moment == "abs":
             s_ema, y_ema = jnp.abs(s), jnp.abs(y)
         else:
             s_ema, y_ema = jnp.square(s), jnp.square(y)
@@ -224,19 +241,3 @@ class DiagonalPreconditioner(LocalSolver):
         else:
             self.s_ema[i] = self.beta * self.s_ema[i] + (1.0 - self.beta) * s_ema
             self.y_ema[i] = self.beta * self.y_ema[i] + (1.0 - self.beta) * y_ema
-
-    def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
-        """Fold the engine's committed argmin for path i (the step that won).
-
-        Only the winner is folded, never an intermediate grid sample: an
-        intermediate secant is a step the path never took, and folding it would
-        smear the magnitude EMAs. The engine calls this with the exact point it
-        just committed on "accept", so the folded secant is the accepted step
-        and the two can never disagree. The first call after init/restart is
-        the warm-up pair and seeds the EMAs outright (weight 1); later calls
-        blend at beta - `has_secant` doubles as the first-fold marker, so it is
-        set here rather than in ``verdict``.
-        """
-        first = not self.has_secant[i]
-        self._fold(i, best.x - p.x, best.g - p.g, first=first)
-        self.has_secant[i] = True
