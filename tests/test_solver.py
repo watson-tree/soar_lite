@@ -301,11 +301,11 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
 
     result = n_path_schedule(
         evaluate_batch,
-        jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
-        jax.random.PRNGKey(0),
+        bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         n_paths=1,
         max_steps=50,
         solver=DiagonalPreconditioner(theta=0.0),
+        key=jax.random.PRNGKey(0),
     )
     # θ = 0 makes the post-warm-up step exactly Newton, so g = 0 after it and
     # the next verdict gives up (the stopping test); the point is still the
@@ -385,11 +385,11 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
 
     result = n_path_schedule(
         evaluate_batch,
-        jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
-        jax.random.PRNGKey(0),
+        bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         n_paths=1,
         max_steps=50,
         solver=DiagonalPreconditioner(theta=0.0, ls_rounds=3),
+        key=jax.random.PRNGKey(0),
     )
     assert close(result.x, center, 1e-9)
     assert result.fun < 1e-12

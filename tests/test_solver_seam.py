@@ -135,14 +135,14 @@ def test_injected_solver_is_driven() -> None:
     solver = StubSolver()
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(0),
+        bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
         max_steps=1,
         n_probe_rounds=PROBE_ROUNDS,
         solver=solver,
         restart_rule=RecordingRule(),
+        key=jax.random.PRNGKey(0),
     )
     assert solver.inited == [0, 1, 2], solver.inited
     assert solver.verdicts == [0, 1, 2], solver.verdicts  # one round, then accept
@@ -157,14 +157,14 @@ def test_give_up_stalls_a_path() -> None:
     solver = StubSolver(give_up=True)
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(1),
+        bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
         max_steps=5,
         n_probe_rounds=PROBE_ROUNDS,
         solver=solver,
         restart_rule=RecordingRule(),
+        key=jax.random.PRNGKey(1),
     )
     assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
     # init probe + the single stalled round; the remaining 4 steps serve nothing
@@ -179,14 +179,14 @@ def test_injected_rule_is_driven() -> None:
     rule = RecordingRule()
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(2),
+        bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
         max_steps=1,
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),
         restart_rule=rule,
+        key=jax.random.PRNGKey(2),
     )
     assert len(rule.group_mins) == k  # cold start: the n_paths init group-mins, once
     assert rule.verdicts == [0, 1]  # restart_phase asks once per path per step
@@ -203,14 +203,14 @@ def test_rule_can_force_restarts() -> None:
     rule = AlwaysRestartRule()
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(3),
+        bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
         max_steps=2,
         n_probe_rounds=PROBE_ROUNDS,
         solver=solver,
         restart_rule=rule,
+        key=jax.random.PRNGKey(3),
     )
     # init probe + both steps' (restart event + one accepted round)
     assert res.nfev == sum(w for w, _d in shapes)
@@ -227,13 +227,13 @@ def test_no_budget_run_reports_max_steps() -> None:
     evaluate_batch, shapes = evaluator()
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(4),
+        bounds=unit_bounds(),
         n_paths=k,
         max_steps=3,
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),
         restart_rule=RecordingRule(),
+        key=jax.random.PRNGKey(4),
     )
     assert res.status == "max_steps", res
     assert res.nfev == sum(w for w, _d in shapes) == PROBE_ROUNDS * k + 3 * k
@@ -259,14 +259,14 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
     bounds = jnp.stack([jnp.full(1, lo), jnp.full(1, hi)], axis=1)
     res = n_path_schedule(
         evaluate_batch,
-        bounds,
-        jax.random.PRNGKey(5),
+        bounds=bounds,
         budget_check=None,
         n_paths=2,
         max_steps=3,
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
         restart_rule=RecordingRule(),
+        key=jax.random.PRNGKey(5),
     )
     assert served, "nothing was ever served"
     assert min(served) >= lo, min(served)
@@ -308,8 +308,7 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
 
         res = n_path_schedule(
             evaluate_batch,
-            box,
-            jax.random.PRNGKey(7),
+            bounds=box,
             sample=sample,
             budget_check=None,
             n_paths=2,
@@ -317,6 +316,7 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
             n_probe_rounds=PROBE_ROUNDS,
             solver=StubSolver(),
             restart_rule=AlwaysRestartRule(),
+            key=jax.random.PRNGKey(7),
         )
         return served, res.x, res.fun, res.nfev
 
@@ -353,14 +353,14 @@ def test_every_path_steps_exactly_once_per_round() -> None:
     rule = RecordingRule()
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(6),
+        bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
         max_steps=3,
         n_probe_rounds=PROBE_ROUNDS,
         solver=StubSolver(),
         restart_rule=rule,
+        key=jax.random.PRNGKey(6),
     )
     assert res.status == "max_steps", res
     counts: dict[int, int] = {}
@@ -384,8 +384,7 @@ def test_per_round_evals_bills_a_parallel_round_as_one() -> None:
         evaluate_batch, _shapes = evaluator()
         res = n_path_schedule(
             evaluate_batch,
-            unit_bounds(),
-            jax.random.PRNGKey(8),
+            bounds=unit_bounds(),
             budget_check=lambda: True,
             n_paths=k,
             max_steps=1,
@@ -393,6 +392,7 @@ def test_per_round_evals_bills_a_parallel_round_as_one() -> None:
             solver=StubSolver(),
             restart_rule=RecordingRule(),
             per_round_evals=per_round,
+            key=jax.random.PRNGKey(8),
         )
         return res.nfev
 

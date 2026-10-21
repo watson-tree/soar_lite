@@ -123,12 +123,12 @@ def test_batch_shape_and_per_point_counting() -> None:
     rec = Recorder(quartic)
     res = n_path_schedule(
         rec,
-        unit_bounds(),
-        jax.random.PRNGKey(0),
-        budget_check=rec.limit_check(500),
+        bounds=unit_bounds(),
         n_paths=4,
         max_steps=50,
+        budget_check=rec.limit_check(500),
         solver=HalfStep(),
+        key=jax.random.PRNGKey(0),
     )
     assert isinstance(res, NPathResult)
     assert res.nfev == rec.evals, (res.nfev, rec.evals)
@@ -154,12 +154,12 @@ def test_budget_exhaustion_stops_everything() -> None:
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
-        unit_bounds(),
-        jax.random.PRNGKey(1),
-        budget_check=rec.limit_check(30),
+        bounds=unit_bounds(),
         n_paths=8,
         max_steps=100,
+        budget_check=rec.limit_check(30),
         solver=HalfStep(),
+        key=jax.random.PRNGKey(1),
     )
     assert res.nfev == rec.evals
     assert 30 <= res.nfev < 30 + 8  # at most one batch past the limit
@@ -170,11 +170,11 @@ def test_budget_exhaustion_stops_everything() -> None:
     rec0 = Recorder(quad)
     res0 = n_path_schedule(
         rec0,
-        unit_bounds(),
-        jax.random.PRNGKey(2),
-        budget_check=rec0.limit_check(0),
+        bounds=unit_bounds(),
         n_paths=4,
+        budget_check=rec0.limit_check(0),
         solver=HalfStep(),
+        key=jax.random.PRNGKey(2),
     )
     assert res0.nfev == 0
     assert res0.nit == 0  # never got past the first gate check
@@ -193,12 +193,12 @@ def test_fun_is_true_min_over_history() -> None:
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
-        unit_bounds(),
-        jax.random.PRNGKey(3),
-        budget_check=rec.limit_check(500),
+        bounds=unit_bounds(),
         n_paths=4,
         max_steps=50,
+        budget_check=rec.limit_check(500),
         solver=HalfStep(),
+        key=jax.random.PRNGKey(3),
     )
     assert rec.all_losses
     assert res.fun == min(rec.all_losses)
@@ -245,22 +245,22 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     rec_k = Recorder(pointwise)
     res_k = n_path_schedule(
         rec_k,
-        unit_bounds(),
-        jax.random.PRNGKey(2),
-        budget_check=rec_k.limit_check(budget),
+        bounds=unit_bounds(),
         n_paths=16,
         max_steps=100,
+        budget_check=rec_k.limit_check(budget),
         solver=HalfStep(),
+        key=jax.random.PRNGKey(2),
     )
     rec_1 = Recorder(pointwise)
     res_1 = n_path_schedule(
         rec_1,
-        unit_bounds(),
-        jax.random.PRNGKey(2),
-        budget_check=rec_1.limit_check(budget),
+        bounds=unit_bounds(),
         n_paths=1,
         max_steps=100,
+        budget_check=rec_1.limit_check(budget),
         solver=HalfStep(),
+        key=jax.random.PRNGKey(2),
     )
     # the single path must be trapped in the shallow well: replicate the
     # engine's n_paths=1 init key chain (split -> probe round 1, split -> round 2)
@@ -295,12 +295,12 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     rec = Recorder(wall_quad)
     res = n_path_schedule(
         rec,
-        unit_bounds(2),
-        jax.random.PRNGKey(4),
-        budget_check=rec.limit_check(500),
+        bounds=unit_bounds(2),
         n_paths=1,  # n_paths=1 -> sigma_r=0 -> never restart, pure projected descent
         max_steps=100,
+        budget_check=rec.limit_check(500),
         solver=HalfStep(),
+        key=jax.random.PRNGKey(4),
     )
     assert res.fun < 0.4, res.fun  # must slide near (1, 0), f=0.25
 
@@ -338,12 +338,12 @@ def test_feasible_only_incumbent() -> None:
 
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(5),
-        budget_check=budget_check,
+        bounds=unit_bounds(),
         n_paths=4,
         max_steps=100,
+        budget_check=budget_check,
         solver=HalfStep(),
+        key=jax.random.PRNGKey(5),
     )
 
     feasible_losses = [L for L, ok in zip(all_losses, all_feas, strict=True) if ok]
@@ -376,12 +376,12 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
 
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(6),
-        budget_check=lambda: served[0] < 40,
+        bounds=unit_bounds(),
         n_paths=2,
         max_steps=5,
+        budget_check=lambda: served[0] < 40,
         solver=HalfStep(),
+        key=jax.random.PRNGKey(6),
     )
     assert res.fun == 0.01, res.fun
     assert bool(jnp.isfinite(res.x[0])), res.x
@@ -418,12 +418,12 @@ def run_probe_pass_with_nan_round(nan_round: int) -> None:
 
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(7),
-        budget_check=lambda: served[0] < 40,
+        bounds=unit_bounds(),
         n_paths=n_paths,
         max_steps=5,
+        budget_check=lambda: served[0] < 40,
         solver=HalfStep(),
+        key=jax.random.PRNGKey(7),
     )
     assert starts, "the engine never served a post-init step"
     assert res.status == "max_steps", (nan_round, res.status)  # no NaN stall
@@ -502,13 +502,13 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
 
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(0),
-        budget_check=lambda: served[0] < 60,
+        bounds=unit_bounds(),
         n_paths=n_paths,
         max_steps=max_steps,
-        restart_rule=ForcedWindow(2),
+        budget_check=lambda: served[0] < 60,
         solver=HalfStep(),
+        restart_rule=ForcedWindow(2),
+        key=jax.random.PRNGKey(0),
     )
     assert res.fun == 1.0, res.fun  # B is finite
     # No restarts would serve exactly 2 init batches + max_steps lockstep ones
@@ -544,13 +544,13 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
 
     res = n_path_schedule(
         evaluate_batch,
-        unit_bounds(),
-        jax.random.PRNGKey(0),
-        budget_check=lambda: served[0] < 60,
+        bounds=unit_bounds(),
         n_paths=n_paths,
         max_steps=max_steps,
-        restart_rule=ForcedWindow(10**9),
+        budget_check=lambda: served[0] < 60,
         solver=HalfStep(),
+        restart_rule=ForcedWindow(10**9),
+        key=jax.random.PRNGKey(0),
     )
     assert res.nfev == 2 * n_paths + max_steps, res.nfev  # not 2 evals/step
 
@@ -592,16 +592,16 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
 
         res = n_path_schedule(
             evaluate_batch,
-            unit_bounds(),
-            jax.random.PRNGKey(8),
-            # the step cap ends both runs
-            budget_check=lambda: evals[0] < 10**6,
+            bounds=unit_bounds(),
             n_paths=n_paths,
+            n_probe_rounds=n_probe_rounds,
             max_steps=max_steps,
             max_ls=max_ls,
-            restart_rule=ForcedWindow(window),
-            n_probe_rounds=n_probe_rounds,
+            # the step cap ends both runs
+            budget_check=lambda: evals[0] < 10**6,
             solver=HalfStep(),
+            restart_rule=ForcedWindow(window),
+            key=jax.random.PRNGKey(8),
         )
         return shapes, evals[0], res
 
@@ -646,12 +646,12 @@ def test_bounds_spellings_are_the_same_box() -> None:
         rec = Recorder(quad)
         res = n_path_schedule(
             rec,
-            bounds,
-            jax.random.PRNGKey(3),
+            bounds=bounds,
             budget_check=rec.limit_check(80),
             n_paths=4,
             max_steps=10,
             solver=HalfStep(),
+            key=jax.random.PRNGKey(3),
         )
         return rec.all_losses, res.fun
 
@@ -678,11 +678,11 @@ def test_unbounded_or_absent_box_needs_an_injected_sampler() -> None:
         try:
             n_path_schedule(
                 rec,
-                bounds,
-                jax.random.PRNGKey(0),
+                bounds=bounds,
                 n_paths=2,
                 max_steps=1,
                 solver=HalfStep(),
+                key=jax.random.PRNGKey(0),
             )
         except ValueError:
             pass
@@ -708,13 +708,13 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
     rec_none = Recorder(quad)
     res = n_path_schedule(
         rec_none,
-        None,
-        jax.random.PRNGKey(4),
+        bounds=None,
         sample=sample,
         budget_check=rec_none.limit_check(60),
         n_paths=2,
         max_steps=3,
         solver=HalfStep(),
+        key=jax.random.PRNGKey(4),
     )
     assert all(d == 3 for _m, d in rec_none.batch_shapes), rec_none.batch_shapes
     assert res.x.shape == (3,)
@@ -722,13 +722,13 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
     rec_pairs = Recorder(quad)
     n_path_schedule(
         rec_pairs,
-        [(None, None)] * 3,
-        jax.random.PRNGKey(4),
+        bounds=[(None, None)] * 3,
         sample=sample,
         budget_check=rec_pairs.limit_check(60),
         n_paths=2,
         max_steps=3,
         solver=HalfStep(),
+        key=jax.random.PRNGKey(4),
     )
     assert rec_pairs.all_losses == rec_none.all_losses
 
@@ -736,12 +736,12 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
     try:
         n_path_schedule(
             Recorder(quad),
-            unit_bounds(2),
-            jax.random.PRNGKey(4),
+            bounds=unit_bounds(2),
             sample=sample,
             n_paths=2,
             max_steps=1,
             solver=HalfStep(),
+            key=jax.random.PRNGKey(4),
         )
     except ValueError:
         pass
@@ -768,13 +768,13 @@ def test_an_injected_sampler_searches_outside_the_old_box() -> None:
 
     res = n_path_schedule(
         evaluate_batch,
-        [(None, None)],
-        jax.random.PRNGKey(5),
+        bounds=[(None, None)],
         sample=sample,
         budget_check=lambda: True,
         n_paths=4,
         max_steps=40,
         solver=HalfStep(),
+        key=jax.random.PRNGKey(5),
     )
     assert max(seen) > 1.0, seen  # a finite [0,1] box could not have gone there
     assert res.fun < 1e-6, res.fun

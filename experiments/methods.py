@@ -81,12 +81,12 @@ def run_soar_lite(
 
     result = n_path_schedule(
         evaluate_batch,
-        problem.bounds,
-        jax.random.PRNGKey(seed),
-        budget_check=lambda: n_points < max_evals,
+        bounds=problem.bounds,
         n_paths=n_paths,
         max_steps=max_evals,
+        budget_check=lambda: n_points < max_evals,
         solver=DiagonalPreconditioner(),
+        key=jax.random.PRNGKey(seed),
     )
     trace.fun = float(result.fun)
     return trace

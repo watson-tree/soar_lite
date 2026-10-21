@@ -29,67 +29,6 @@ import jax
 import jax.numpy as jnp
 
 
-class RestartRule(Protocol):
-    """The engine's restart decision module (its second plugin point).
-
-    One instance for the whole engine (like LocalSolver), so the per-path state
-    lives inside it in dicts keyed by the path index, exactly as the method
-    holds its `eta`/`reference`/`q`. The engine feeds the rule and asks for
-    verdicts; the evidence lives inside the instance and the engine never reads
-    it. The incumbent B arrives as a should_restart argument rather than as
-    stored state, so the engine stays the only writer of B and every verdict
-    reads the incumbent of its own iteration.
-
-    The engine offers exactly two evidence channels, and the signatures say
-    which is which: `observe_continue(i, delta)` is per-path (what continuing
-    bought *that* path), while `observe_restart(r)` carries **no path index**
-    because a restart payoff is a property of the sampler and the incumbent,
-    not of any one path - every path pools the same history. Those two are the
-    two alternatives the verdict compares, and they are the scalar facts the
-    engine owns; a rule needing more (point geometry, a surrogate over the
-    whole sample history) is an engine variant, not a RestartRule.
-
-    These five methods are a **lower bound** on the engine's call surface - what
-    any rule must accept to be pluggable - not a claim that two scalars are all
-    a restart decision could ever use. A wider interface would not widen what a
-    rule can see; only the engine's call sites could.
-    """
-
-    def observe_continue(self, i: int, delta: float) -> None:
-        """Fold path i's one-step value change Δf into its continuation evidence."""
-        ...
-
-    def observe_restart(self, r: float) -> None:
-        """Fold in the value r a fresh restart start achieved (restart payoff).
-
-        The engine draws each restart start as the min of one probe group
-        (`n_probe_rounds` i.i.d. points), so r is that group's min - a real
-        sample of "what a restart buys". The history is pooled across paths
-        (hence no path index); a rule that ignores payoff no-ops.
-        """
-        ...
-
-    def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
-        """Return True iff path i should restart from f_k with incumbent B."""
-        ...
-
-    def rounds_until_verdict(self) -> int:
-        """Report the rounds until any path's verdict can be due again (0 = any round).
-
-        A cadence hint, not evidence, and the engine asks it only once every
-        path has stalled: it is what separates "waiting for a verdict" from
-        "nothing can happen again". A verdict unreachable before max_steps
-        makes the remaining rounds pure spin - no eval, no state change - and
-        the engine stops there instead of burning the step budget. 0 means
-        "may be due any round" and disables that shortcut, so a rule with no
-        cadence of its own is never mistaken for a dead one.
-        """
-        ...
-
-    def restart(self, i: int) -> None:
-        """Drop path i's step-local evidence; the engine assumes nothing else."""
-        ...
-
 @dataclass(frozen=True)
 class PathPoint:
     """One path's point: coords x, value f, gradient g = ∂f/∂x."""
@@ -100,7 +39,6 @@ class PathPoint:
 
 
 Verdict: TypeAlias = Literal["accept", "retry", "give_up"]
-
 
 
 class LocalSolver(Protocol):
@@ -174,6 +112,68 @@ class LocalSolver(Protocol):
         ...
 
 
+class RestartRule(Protocol):
+    """The engine's restart decision module (its second plugin point).
+
+    One instance for the whole engine (like LocalSolver), so the per-path state
+    lives inside it in dicts keyed by the path index, exactly as the method
+    holds its `eta`/`reference`/`q`. The engine feeds the rule and asks for
+    verdicts; the evidence lives inside the instance and the engine never reads
+    it. The incumbent B arrives as a should_restart argument rather than as
+    stored state, so the engine stays the only writer of B and every verdict
+    reads the incumbent of its own iteration.
+
+    The engine offers exactly two evidence channels, and the signatures say
+    which is which: `observe_continue(i, delta)` is per-path (what continuing
+    bought *that* path), while `observe_restart(r)` carries **no path index**
+    because a restart payoff is a property of the sampler and the incumbent,
+    not of any one path - every path pools the same history. Those two are the
+    two alternatives the verdict compares, and they are the scalar facts the
+    engine owns; a rule needing more (point geometry, a surrogate over the
+    whole sample history) is an engine variant, not a RestartRule.
+
+    These five methods are a **lower bound** on the engine's call surface - what
+    any rule must accept to be pluggable - not a claim that two scalars are all
+    a restart decision could ever use. A wider interface would not widen what a
+    rule can see; only the engine's call sites could.
+    """
+
+    def observe_continue(self, i: int, delta: float) -> None:
+        """Fold path i's one-step value change Δf into its continuation evidence."""
+        ...
+
+    def observe_restart(self, r: float) -> None:
+        """Fold in the value r a fresh restart start achieved (restart payoff).
+
+        The engine draws each restart start as the min of one probe group
+        (`n_probe_rounds` i.i.d. points), so r is that group's min - a real
+        sample of "what a restart buys". The history is pooled across paths
+        (hence no path index); a rule that ignores payoff no-ops.
+        """
+        ...
+
+    def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
+        """Return True iff path i should restart from f_k with incumbent B."""
+        ...
+
+    def rounds_until_verdict(self) -> int:
+        """Report the rounds until any path's verdict can be due again (0 = any round).
+
+        A cadence hint, not evidence, and the engine asks it only once every
+        path has stalled: it is what separates "waiting for a verdict" from
+        "nothing can happen again". A verdict unreachable before max_steps
+        makes the remaining rounds pure spin - no eval, no state change - and
+        the engine stops there instead of burning the step budget. 0 means
+        "may be due any round" and disables that shortcut, so a rule with no
+        cadence of its own is never mistaken for a dead one.
+        """
+        ...
+
+    def restart(self, i: int) -> None:
+        """Drop path i's step-local evidence; the engine assumes nothing else."""
+        ...
+
+
 # --- engine: the n-path schedule ---
 
 NPathStatus: TypeAlias = Literal["budget_exhausted", "max_steps", "all_stalled"]
@@ -190,40 +190,16 @@ BatchEvaluator: TypeAlias = Callable[
 ]
 
 # The search box in scipy's spelling (which `box_bounds` normalizes): one
-# `(lb, ub)` pair per dim, a side of None or ±inf meaning unbounded, a bare
-# None meaning no box at all (then d is the sampler's). A `(d, 2)` array is the
-# same data row-wise, for the callers that already hold one.
-Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray | None
+# `(lb, ub)` pair per dim, a side of None or ±inf meaning unbounded. A `(d, 2)`
+# array is the same data row-wise, for the callers that already hold one. No box
+# at all is spelled `Bounds | None` at the call site (then d is the sampler's).
+Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
 
 # The one way the engine draws a start: (key, n) -> (n, d) points in the
 # engine's own coordinates. It is the only authority on d, which is what makes
 # an unbounded search well-posed - the engine has no x0 of its own to fall back
 # on, so `sample=None` is only defined over a finite box.
 Sampler: TypeAlias = Callable[[jnp.ndarray, int], jnp.ndarray]
-
-
-
-def box_bounds(bounds: Bounds) -> tuple[jnp.ndarray, jnp.ndarray] | None:
-    """Normalize `bounds` to (lo, hi) arrays; None (no box at all) -> None.
-
-    A `None` side becomes ∓inf, so every downstream consumer sees one spelling
-    of "unbounded". A `(d, 2)` array carries the same pairs one row each.
-    """
-    if bounds is None:
-        return None
-    if isinstance(bounds, jnp.ndarray):
-        return bounds[:, 0], bounds[:, 1]  # (d, 2) array: one pair per row
-    lo = [-math.inf if pair[0] is None else pair[0] for pair in bounds]
-    hi = [math.inf if pair[1] is None else pair[1] for pair in bounds]
-    return jnp.asarray(lo), jnp.asarray(hi)
-
-
-
-def finite_box(box: tuple[jnp.ndarray, jnp.ndarray]) -> bool:
-    """Report whether every side of every dim is finite (no-sampler precondition)."""
-    lo, hi = box
-    return bool(jnp.all(jnp.isfinite(lo)) and jnp.all(jnp.isfinite(hi)))
-
 
 
 @dataclass
@@ -253,53 +229,38 @@ class NPathResult:
     status: NPathStatus
 
 
-
-def argmin_finite(values: list[float]) -> int | None:
-    """Index of the smallest finite value, or None when none of them is finite.
-
-    `min(..., key=...)` is not usable for a value list: NaN compares False
-    against everything, so a NaN candidate ranked before the real minimum is
-    kept, silently discarding the batch's best point along with its x.
-    """
-    best: int | None = None
-    best_v = math.inf
-    for j, v in enumerate(values):
-        if math.isfinite(v) and v < best_v:
-            best, best_v = j, v
-    return best
-
-
-
 def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; closures keep shared state - a module-level split would need 10+ plumbing params)
     evaluate_batch: BatchEvaluator,
-    bounds: Bounds,  # scipy-style (lb, ub) pairs, a (d, 2) array, or None
-    key: jnp.ndarray,
     *,
+    bounds: Bounds | None = None,  # scipy-style (lb, ub) pairs, a (d, 2) array, or None
     # The prior, injected: (key, n) -> (n, d) in the engine's own coordinates,
     # and the only authority on d. None -> i.i.d. uniform over a finite
     # `bounds` (the historical path); an unbounded or absent box then has no
     # start to draw and is rejected below rather than guessed.
     sample: Sampler | None = None,
+    n_paths: int = 16,  # number of paths advanced each round, the engine's width
+    n_probe_rounds: int = 2,  # draws/start; 1=init, inf=search; 2-3 empirical, pinned 2
+    # The two round budgets, adjacent: max_steps caps the run, max_ls caps one step.
+    max_steps: int = 1000,
+    max_ls: int = 20,  # engine rounds per step before stalling a path
     # Keyword-only and defaulted, like scipy's `callback`: only the caller
     # knows where a budget lives, and None means unbounded - the run then
     # stops on max_steps alone. The gate is the shell's job, not the
     # engine's.
     budget_check: Callable[[], bool] | None = None,
-    n_paths: int = 16,  # number of paths advanced each round, the engine's width
-    # The two round budgets, adjacent: max_steps caps the run, max_ls caps one step.
-    max_steps: int = 1000,
-    max_ls: int = 20,  # engine rounds per step before stalling a path
     # The two plugins, adjacent: the search method and the restart decision.
     solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
     restart_rule: RestartRule | None = None,  # None -> EIRestartRule, the default rule
-    n_probe_rounds: int = 2,  # draws/start; 1=init, inf=search; 2-3 empirical, pinned 2
     # Billing mode. False (default) charges one eval per served point - the
     # serial-cost model (`nfev = batch size`).
     # True charges one eval per *batch* - a round of parallel evaluations, one
     # wall-clock unit when the objective is batched (jax.vmap or any parallel
     # evaluator). These are two different cost models, never the same number: a
-    # a round of n_paths paths costs n_paths points serially, 1 round in parallel.
+    # round of n_paths paths costs n_paths points serially, 1 round in parallel.
     per_round_evals: bool = False,
+    # The random source, last and optional (optax's `key` placement): None means
+    # the fixed default PRNGKey(0), so an unseeded call still runs.
+    key: jnp.ndarray | None = None,
 ) -> NPathResult:
     """Advance n_paths independent chains in x under one shared budget.
 
@@ -316,7 +277,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     nothing about any map from these coordinates to the caller's physical
     ones. With no sampler the prior is i.i.d. uniform over a finite `bounds`,
     which is then also the sole source of d; an unbounded box (or none) needs
-    `sample`, because the engine has no x0 of its own. Billing is set by
+    `sample`, because the engine has no x0 of its own. `key` seeds every draw
+    (starts, restart probes); None means the fixed default PRNGKey(0), so an
+    unseeded call still runs, deterministically. Billing is set by
     `per_round_evals`: with the default False every served point - probe,
     trial, restart probe - counts exactly one eval (nfev = batch size), the
     serial-cost model; with True each served batch
@@ -356,6 +319,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     exhaust max_ls rounds stalls (observe_continue(i, inf) counts the fold, the
     read drops the value) until an EI verdict revives it.
     """
+    # The random source: an explicit key wins, otherwise the fixed default, so
+    # an unseeded call still runs (deterministically).
+    rng: jnp.ndarray = jax.random.PRNGKey(0) if key is None else key
     box = box_bounds(bounds)
     d_bounds: int | None = None if box is None else box[0].shape[0]
     lo, hi = box if box is not None else (-math.inf, math.inf)
@@ -444,12 +410,12 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
         — (n,d) x-stack, value list, (n,d) grad-stack — or None when the
         budget gate is already False.
         """
-        nonlocal key
+        nonlocal rng
         x_rounds: list[jnp.ndarray] = []
         f_rounds: list[list[float]] = []
         g_rounds: list[jnp.ndarray] = []
         for _ in range(n_probe_rounds):
-            key, sub = jax.random.split(key)
+            rng, sub = jax.random.split(rng)
             x_cand = draw(sub, n)
             # The sampler is the only authority on d, so a mismatch with the box
             # we were handed is the "two different Nones" wiring bug, caught
@@ -664,3 +630,39 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (seams+knobs; clos
     else:
         status = "max_steps"
     return NPathResult(x=best_x, fun=best_fun, nfev=evals, nit=nit, status=status)
+
+
+def box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
+    """Normalize `bounds` to (lo, hi) arrays; None (no box at all) -> None.
+
+    A `None` side becomes ∓inf, so every downstream consumer sees one spelling
+    of "unbounded". A `(d, 2)` array carries the same pairs one row each.
+    """
+    if bounds is None:
+        return None
+    if isinstance(bounds, jnp.ndarray):
+        return bounds[:, 0], bounds[:, 1]  # (d, 2) array: one pair per row
+    lo = [-math.inf if pair[0] is None else pair[0] for pair in bounds]
+    hi = [math.inf if pair[1] is None else pair[1] for pair in bounds]
+    return jnp.asarray(lo), jnp.asarray(hi)
+
+
+def finite_box(box: tuple[jnp.ndarray, jnp.ndarray]) -> bool:
+    """Report whether every side of every dim is finite (no-sampler precondition)."""
+    lo, hi = box
+    return bool(jnp.all(jnp.isfinite(lo)) and jnp.all(jnp.isfinite(hi)))
+
+
+def argmin_finite(values: list[float]) -> int | None:
+    """Index of the smallest finite value, or None when none of them is finite.
+
+    `min(..., key=...)` is not usable for a value list: NaN compares False
+    against everything, so a NaN candidate ranked before the real minimum is
+    kept, silently discarding the batch's best point along with its x.
+    """
+    best: int | None = None
+    best_v = math.inf
+    for j, v in enumerate(values):
+        if math.isfinite(v) and v < best_v:
+            best, best_v = j, v
+    return best
