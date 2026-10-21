@@ -45,7 +45,8 @@ Five groups, one role each:
    lattice/funnel of local minima. Serves **P①**. NAAdam appears **only** here.
 5. **Invariance panel — unit-rescaling consistency.** Run on the diag control
    (or the headline in its single-basin regime): re-measure in two unit
-   systems, **zero retune**. Claim is **outcome-level, not trajectory-level**:
+   systems (here `x' = 10x`, see `INVARIANCE_SCALE` in `compare_baselines.py`),
+   **zero retune**. Claim is **outcome-level, not trajectory-level**:
    the best-so-far vs nfev curves overlap in both unit systems, while Adam's
    separate (one system needs a different `α`). Exact per-step covariance
    (`x̃=c·x ⇒ d̃=c²d, Δx̃=c·Δx`) is real but holds only for the secant-based
