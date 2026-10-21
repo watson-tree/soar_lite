@@ -403,6 +403,36 @@ def test_every_path_feeds_once_per_completed_horizon() -> None:
     assert [d for i, d in rule.deltas if i == 0] == [math.inf] * 3
 
 
+def test_a_horizon_costs_the_probe_it_is_priced_against() -> None:
+    """A sample costs n_probe_rounds rounds at every M, so budget buys samples.
+
+    The verdict prices one continue sample against one probe, and a probe is
+    n_probe_rounds rounds - so at M = n_probe_rounds, 2M rounds of budget must
+    yield exactly 2 samples per path at every M, never 2M of them. This is the
+    assertion that fails if the cadence is ever counted in absolute rounds
+    again (the pre-ADR-0004 bug: a one-round Δ against a two-round probe).
+    """
+    k = 2
+    for probe_rounds in (1, 2, 3, 4):
+        evaluate_batch, _shapes = evaluator()
+        rule = RecordingRule()
+        res = n_path_schedule(
+            evaluate_batch,
+            bounds=unit_bounds(),
+            n_paths=k,
+            max_steps=probe_rounds + 2 * probe_rounds,  # init probe + 2M rounds
+            n_probe_rounds=probe_rounds,
+            solver=StubSolver(),
+            restart_rule=rule,
+            key=jax.random.PRNGKey(5),
+        )
+        counts: dict[int, int] = {}
+        for i, _delta in rule.deltas:
+            counts[i] = counts.get(i, 0) + 1
+        assert counts == {0: 2, 1: 2}, (probe_rounds, counts)
+        assert res.status == "max_steps", (probe_rounds, res)
+
+
 def test_per_round_evals_bills_a_parallel_round_as_one() -> None:
     """The two billing modes are different cost models, never the same number.
 
