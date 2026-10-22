@@ -9,7 +9,7 @@ file is the run-book.
 One pinned environment, reproduced by `uv.lock`:
 
 ```bash
-uv sync --extra exp
+uv sync --all-groups
 ```
 
 `uv.lock` pins every transitive dependency (jax 0.10.2, optax 0.2.8,
@@ -24,7 +24,7 @@ pip install -e .
 ## Smoke check
 
 ```bash
-uv run --extra exp python -m experiments.compare_baselines --quick
+uv run --group exp python -m experiments.compare_baselines --quick
 ```
 
 Two seeds per method, ~1 min, writes the same figures as the full run. Use it
@@ -33,7 +33,7 @@ to confirm the environment before committing to the full schedule.
 ## Canonical run
 
 ```bash
-uv run --extra exp python -m experiments.compare_baselines \
+uv run --group exp python -m experiments.compare_baselines \
     --seeds 20 \
     --groups headline,smooth,multimodal,invariance \
     --max-steps 3000
@@ -49,12 +49,18 @@ panel writes its files as it finishes.
 
 ## The Adam learning-rate grid
 
-Adam/NAAdam pay a per-problem lr chosen by a 1-seed offline sweep
+Adam pays a per-problem lr chosen by a 1-seed offline sweep
 (`ADAM_LR` in `compare_baselines.py`). Reproduce the sweep figure with:
 
 ```bash
-uv run --extra exp python -m experiments.compare_baselines --lr-sweep --max-steps 3000
+uv run --group exp python -m experiments.compare_baselines --lr-sweep --max-steps 3000
 ```
+
+The C0 diamond in that figure marks the lr the panels actually use (`ADAM_LR`,
+picked on a coarse 1-seed sweep). It need not sit on the figure's 2-seed
+argmin (different seed count), and on the rotated quadratic the optimum is at
+or beyond the grid edge — still rising at `lr=2.0` — so there the diamond is
+the best *sampled* point, not an interior minimum.
 
 ## Outputs
 
@@ -65,7 +71,12 @@ All in `experiments/` (gitignored — regenerated, not source):
   serial contest, pinned in ADR-0004).
 - `results_invariance.png` — panel 5, one physics in two unit systems, zero re-tune.
 - `results_lr_sweep.png` — the Adam grid sweep.
-- `results_{group}.json` — the full mean/std curves behind each figure.
+- `results_{group}.json` — the per-seed best-so-far curves (one grid plus one
+  curve per seed) behind each figure; redraw any figure from it with
+  `--plot-only`, no re-run.
+- Every curve plots the **median** best-so-far with the **[Q1, Q3] interquartile
+  band** (not mean ± std — a skewed spread would read as symmetric and dip
+  below the log axis).
 
 ## Reproducibility contract
 

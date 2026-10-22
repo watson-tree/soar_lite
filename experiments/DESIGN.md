@@ -14,7 +14,7 @@ reporting wins — R5):
   unit-aware, no scalar learning rate) vs Adam's adaptive single-`α` step.
   Tested on scale / conditioning / unit-mixing.
 - **P① — restart.** Principled EI restart (payoff *measured* on sampled-starts
-  group-min) vs brute-force decaying-noise escape (NAAdam). Tested on
+  group-min) vs single-chain Adam. Tested on
   multimodality.
 
 Design rule (from the start): problems must be **high-dimensional, d≈50–200** —
@@ -42,7 +42,7 @@ Five groups, one role each:
    against the L-BFGS reference. Serves **P② boundary** — the case we expect to
    lose on some axis, reported anyway.
 4. **Multimodal — Ackley / Rastrigin**, d=100 (drop to 50 if cost bites). A
-   lattice/funnel of local minima. Serves **P①**. NAAdam appears **only** here.
+   lattice/funnel of local minima. Serves **P①**.
 5. **Invariance panel — unit-rescaling consistency.** Run on the diag control
    (or the headline in its single-basin regime): re-measure in two unit
    systems (here `x' = 10x`, see `INVARIANCE_SCALE` in `compare_baselines.py`),
@@ -77,26 +77,36 @@ Five groups, one role each:
 
 ## Methods × panels
 
-Four curves per panel:
+Curves differ per panel; each curve has one role:
 
 - **Panel "preconditioning"** (groups 2+3, **P②**): `soar-lite n_paths=1`, `Adam`,
   `L-BFGS-B` (ceiling *reference*, not a head-to-head baseline — full-memory +
   serial line search vs our per-coordinate + batched n_paths), plus `soar-lite n_paths=16`
   as a supplementary "what parallelism buys" curve.
 - **Panel "escape"** (group 4, **P①**): `soar-lite n_paths=16`, `soar-lite n_paths=1`,
-  `Adam`, `NAAdam`.
+  `Adam`.
 - **Invariance panel** (group 5): `soar-lite` (n_paths=1) vs `Adam`, two unit
   systems, overlaid after the coordinate transform.
 
-NAAdam definition: Adam + `σ_t = σ0/√t` decaying Gaussian noise, `σ0=1e-2`
-(tunable). A `σ0` sweep on ackley/rastrigin at d=100 shows the noise never
-escapes — larger `σ0` is flat (rastrigin) to worse (ackley) — so the honest
-escape baseline is effectively Adam; this *is* evidence for P①. NAAdam keeps
-`σ0=1e-2` untuned. Gate: NAAdam runs **only** on non-random multimodal
-objectives (R5 feedback — Adam beat NAAdam on the hidden topologies in both
-mean and variance).
+L-BFGS-B appears only on the P② panels. Its role there is the *ceiling
+reference* — how close soar-lite's diagonal secant gets to a full-memory
+second-order method on smooth, convex landscape. That role does not exist on
+the P① panel: the question there is whether EI restart beats a *first-order,
+non-restarting single chain* (Adam; soar-lite n_paths=1 is the same method
+minus restart). L-BFGS-B is second-order and restart-free — on Ackley/Rastrigin
+it would dive deterministically into the nearest local minimum and stay there
+at second-order precision, so its curve could only show "a second-order method
+also gets stuck", which discriminates nothing about restart. It is also serial
+(not the batched cost axis; see Budget) and its line search is fragile on
+Rastrigin's cos oscillation.
 
-Adam/NAAdam learning rate is **per-problem grid-tuned**: the optimal lr spans
+NAAdam (Adam + `σ_t = σ0/√t` decaying Gaussian noise) was measured and
+**dropped**: on ackley/rastrigin at d=100 the noise never separates from plain
+Adam — larger `σ0` is flat (rastrigin) to worse (ackley) — so it would only be
+a redundant, exactly-overlapping curve. The escape panel is therefore
+`n_paths=16` vs `n_paths=1` vs Adam, which is the honest contrast for P①.
+
+Adam learning rate is **per-problem grid-tuned**: the optimal lr spans
 over two orders of magnitude (diag 1e-2 → rotated 2.0), and a wrong lr costs
 ~68 orders of magnitude on diag. The grid and picks live in `ADAM_LR` /
 `--lr-sweep` in `compare_baselines.py`; soar-lite has no learning rate. Tuning
@@ -178,11 +188,14 @@ not a universal theorem about the method.
   - **points** figure — each run truncated at 3000 objective points, the fair
     information unit of a serial setting. A chain spends exactly one point per
     batch, so `n_paths=16` shows only its first ~187 batches there.
-- Seeds `N=20`; report **mean ± std** (shaded), log-y, log x.
+- Seeds `N=20`; report **median, shaded [Q1, Q3]** (interquartile band), log-y,
+  log x — mean ± std would model a skewed best-so-far spread as symmetric and
+  dip below the log axis.
 - Outputs: `experiments/results_{group}_{batches,points}.png` +
   `results_{group}.json` per group, plus `results_invariance.png` and
-  `results_lr_sweep.png`. The JSON holds the best-so-far mean/std arrays per
-  problem×method for both axes, keyed by `max_steps`.
+  `results_lr_sweep.png`. The JSON holds the per-seed best-so-far curves per
+  problem×method for both axes (grid + one curve per seed, outside-range steps
+  as NaN), keyed by `max_steps`; figures rebuild from it with `--plot-only`.
 
 ## Reproducibility contract
 
@@ -200,7 +213,7 @@ not a universal theorem about the method.
 1. Add experiment deps via a dependency group (`optax`, `matplotlib`).
 2. `experiments/problems.py` — the five groups + a thin oracle wrapper matching
    the soar-lite seam `x_batch → (loss, grad, feas)`.
-3. `experiments/methods.py` — drivers: soar-lite n_paths=1/n_paths=16, Adam, NAAdam,
+3. `experiments/methods.py` — drivers: soar-lite n_paths=1/n_paths=16, Adam,
    L-BFGS-B.
 4. `experiments/compare_baselines.py` — harness over `N=20` seeds, collects
    per-round best-so-far.

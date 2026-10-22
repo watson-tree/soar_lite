@@ -5,7 +5,7 @@ Two panels per method family, following the design in `DESIGN.md`:
 * smooth + headline (preconditioning proposition): soar-lite n_paths=1,
   soar-lite n_paths=16, Adam, L-BFGS-B (ceiling reference);
 * multimodal (escape proposition): soar-lite n_paths=1, soar-lite n_paths=16,
-  Adam, NAAdam.
+  Adam.
 
 Every method gets the same number of **batches** (one batch = one round of
 parallel evaluations, ``--max-steps``) - the wall-clock axis of a batched
@@ -14,10 +14,11 @@ at equal cost per step. The second figure replots the same runs against
 objective points served, the fair information unit for a serial setting: there a
 chain serves one point per batch, so the point axis is truncated at
 ``--max-steps`` points and a batched run shows only the batches it could afford -
-no figure re-runs anything. Curves are mean of best-so-far over seeds, shaded
-+-1 standard deviation, log y.
+no figure re-runs anything. Curves are the median best-so-far over seeds,
+shaded the [Q1, Q3] interquartile band, log y (mean +/- std would model a
+skewed spread as symmetric and dip below the axis).
 
-Adam and NAAdam carry a per-problem learning rate, picked on a coarse 1-seed
+Adam carries a per-problem learning rate, picked on a coarse 1-seed
 grid sweep (reproduce it with --lr-sweep): the best lr spans over two orders of
 magnitude across smooth problems and a wrong lr costs ~68 orders of magnitude
 on the diagonal quadratic. That tuning is budget the axis never shows -- every
@@ -32,6 +33,7 @@ Usage:
 
 import argparse
 import json
+import math
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -51,14 +53,14 @@ from experiments.methods import (
     Trace,
     run_adam,
     run_lbfgs,
-    run_naadam,
     run_soar_lite,
 )
 
 HERE = Path(__file__).parent
 Runner: TypeAlias = Callable[..., Trace]
+CurveEntry: TypeAlias = dict[str, list[float] | list[list[float | None]]]
 
-# Per-problem Adam/NAAdam learning rate, chosen on a coarse 1-seed grid sweep
+# Per-problem Adam learning rate, chosen on a coarse 1-seed grid sweep
 # (see --lr-sweep): the optimal lr spans over two orders of magnitude across the
 # smooth problems, and a wrong lr costs ~68 orders of magnitude on the diagonal
 # quadratic. Tuning is itself budget the y axis never shows -- every trial is
@@ -75,7 +77,7 @@ ADAM_LR: dict[str, float] = {
 
 
 def _adam_lr(prob: problems.Problem) -> float:
-    """Return the grid-tuned Adam/NAAdam lr for this problem (fallback 1e-2)."""
+    """Return the grid-tuned Adam lr for this problem (fallback 1e-2)."""
     return ADAM_LR.get(prob.name, 1e-2)
 
 
@@ -105,11 +107,10 @@ SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     ),
 ]
 
-# NAAdam keeps sigma0=1e-2 (its default, untuned): a sigma0 sweep on ackley and
-# rastrigin at d=100 shows the decaying noise never escapes -- larger sigma0 is
-# flat (rastrigin) to worse (ackley), so the honest escape baseline is plain
-# Adam. That the noise buys nothing is part of P1's case for soar-lite's
-# sample-measured restarts.
+# NAAdam (Adam + sigma_t = sigma0/sqrt(t) noise) was measured and dropped: the
+# decaying noise never separates from plain Adam on ackley/rastrigin, so it is
+# a redundant curve. The honest escape panel is soar-lite n_paths=16 vs
+# n_paths=1 vs Adam.
 MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
         "soar-lite n_paths=16",
@@ -126,11 +127,6 @@ MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
         lambda prob, **kw: run_adam(prob, lr=_adam_lr(prob), **kw),
         {"color": "C3", "lw": 1.5},
     ),
-    (
-        "NAAdam (grid lr)",
-        lambda prob, **kw: run_naadam(prob, lr=_adam_lr(prob), **kw),
-        {"color": "C2", "lw": 1.5, "ls": "-."},
-    ),
 ]
 
 PANELS: dict[str, list[tuple[str, Runner, dict[str, object]]]] = {
@@ -140,26 +136,43 @@ PANELS: dict[str, list[tuple[str, Runner, dict[str, object]]]] = {
 }
 
 
-def resample(
-    traces: list[Trace], grid: np.ndarray, axis: str
-) -> tuple[np.ndarray, np.ndarray]:
-    """Aggregate seeds onto ``grid``: mean and std of the best-so-far step curve."""
+def resample(traces: list[Trace], grid: np.ndarray, axis: str) -> np.ndarray:
+    """Resample every seed's best-so-far onto ``grid``.
+
+    Returns a ``(seeds, len(grid))`` array with NaN where a seed has no data
+    (before its first batch and after it stops). Callers aggregate over the
+    seed axis so each aggregation (median, quartiles) lives in one place.
+
+    ``grid`` is the shared x-point set: each seed's step curve lives on its own
+    x coordinates (different stop points, and n_paths shifts the batch axis), so
+    aligning them onto one grid is what makes a per-column aggregate over seeds
+    possible. ``ax.set_xscale("log")`` only changes how ticks are drawn — it
+    cannot align ragged per-seed x coordinates.
+    """
     stacked = []
     for trace in traces:
         points, batches, best = trace.as_arrays()
         x = points if axis == "points" else batches
-        idx = np.searchsorted(x, grid, side="right") - 1
-        idx = np.clip(idx, 0, len(best) - 1)
-        # The step curve exists only between a run's first and last cost unit:
-        # before its first batch and after it stops, there is no data.
+        idx = np.clip(np.searchsorted(x, grid, side="right") - 1, 0, len(best) - 1)
+        # The step curve exists only between a run's first and last cost unit.
         curve = np.where((grid < x[0]) | (grid > x[-1]), np.nan, best[idx])
         stacked.append(curve)
-    arr = np.vstack(stacked)
-    # An n-path run has no data before its first batch (n_paths points
-    # in), so the leading grid points are all-NaN columns by construction.
+    return np.vstack(stacked)
+
+
+def _summary(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Median and [Q1, Q3] over seeds, NaN-ignoring. Skew-safe on a log axis."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        return np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
+        med = np.nanmedian(arr, axis=0)
+        q1 = np.nanpercentile(arr, 25, axis=0)
+        q3 = np.nanpercentile(arr, 75, axis=0)
+    return med, q1, q3
+
+
+def _json_curves(arr: np.ndarray) -> list[list[float | None]]:
+    """NaN -> None for a JSON-safe per-seed matrix (None reloads as NaN)."""
+    return [[None if math.isnan(v) else float(v) for v in row] for row in arr.tolist()]
 
 
 def _up_to(trace: Trace, max_points: int) -> Trace:
@@ -175,10 +188,10 @@ def _up_to(trace: Trace, max_points: int) -> Trace:
 
 def run_panel(
     group: str, seeds: int, max_steps: int
-) -> tuple[dict[str, dict[str, dict[str, list[float]]]], dict[str, str]]:
+) -> tuple[dict[str, dict[str, CurveEntry]], dict[str, str]]:
     """Run every problem in ``group`` across every method and seed."""
     methods = PANELS[group]
-    curves: dict[str, dict[str, dict[str, list[float]]]] = {}
+    curves: dict[str, dict[str, CurveEntry]] = {}
     labels: dict[str, str] = {}
     for prob in problems.build(group):
         labels[prob.name] = prob.description
@@ -216,16 +229,15 @@ def run_panel(
             grid = np.logspace(0.0, np.log10(xmax), 120)
             grid[-1] = xmax  # logspace rounds the last sample past its own end
             for label, _, _ in methods:
-                mean, std = resample(shown[label], grid, axis)
+                arr = resample(shown[label], grid, axis)
                 entry = curves[prob.name].setdefault(label, {})
                 entry[f"{axis}_grid"] = grid.tolist()
-                entry[f"{axis}_mean"] = mean.tolist()
-                entry[f"{axis}_std"] = std.tolist()
+                entry[f"{axis}_curves"] = _json_curves(arr)
     return curves, labels
 
 
 def plot(
-    curves: dict[str, dict[str, dict[str, list[float]]]],
+    curves: dict[str, dict[str, CurveEntry]],
     labels: dict[str, str],
     group: str,
     axis: str,
@@ -240,14 +252,14 @@ def plot(
     for ax, name in zip(axes[0], names, strict=True):
         for label, _, style in methods:
             data = curves[name][label]
-            grid = np.asarray(data[f"{axis}_grid"])
-            mean = np.maximum(np.asarray(data[f"{axis}_mean"]), 1e-16)
-            std = np.asarray(data[f"{axis}_std"])
-            ax.plot(grid, mean, label=label, **style)
+            grid = np.asarray(data[f"{axis}_grid"], dtype=float)
+            arr = np.asarray(data[f"{axis}_curves"], dtype=float)  # None -> NaN
+            med, q1, q3 = _summary(arr)
+            ax.plot(grid, np.maximum(med, 1e-16), label=label, **style)
             ax.fill_between(
                 grid,
-                np.maximum(mean - std, 1e-16),
-                np.maximum(mean + std, 1e-16),
+                np.maximum(q1, 1e-16),
+                np.maximum(q3, 1e-16),
                 color=style["color"],
                 alpha=0.15,
                 lw=0,
@@ -257,7 +269,7 @@ def plot(
         ax.set_xlabel(
             "objective points served" if axis == "points" else "batches served"
         )
-        ax.set_ylabel("best-so-far (mean over seeds)")
+        ax.set_ylabel("best-so-far (median [Q1, Q3] over seeds)")
         ax.set_title(f"{name}\n{labels[name]}", fontsize=9)
         ax.legend(fontsize=7)
         ax.grid(alpha=0.25)
@@ -268,12 +280,35 @@ def plot(
     print(f"wrote {out}")
 
 
+def plot_group_from_json(group: str, out_dir: Path) -> None:
+    """Redraw one group's figures straight from its results JSON (no re-run)."""
+    path = out_dir / f"results_{group}.json"
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        msg = f"cannot read {path}: {e}"
+        raise SystemExit(msg) from e
+    labels = payload["meta"].get("labels", {})
+    for axis in ("points", "batches"):
+        plot(
+            payload["curves"],
+            labels,
+            group,
+            axis,
+            out_dir / f"results_{group}_{axis}.png",
+        )
+
+
 def run_lr_sweep(out: Path, seeds: int, max_steps: int) -> None:
     """Plot best-so-far vs Adam lr, one curve per problem (appendix panel).
 
     Shows the optimal lr drifting across problems and a wrong lr costing many
-    orders of magnitude; the point picked per problem (``ADAM_LR``) is marked
-    with a C0 diamond.
+    orders of magnitude. The C0 diamond marks the lr actually used in the
+    panels (``ADAM_LR``), picked on a coarse 1-seed sweep; it need not sit on
+    this figure's 2-seed argmin (different seed count), and on the rotated
+    quadratic the optimum is at or beyond the grid edge (still rising at
+    lr=2.0), so there the diamond is the best *sampled* point, not an interior
+    minimum.
     """
     lr_grid = [1e-4, 1e-3, 1e-2, 1e-1, 2e-1, 5e-1, 1.0, 2.0]
     probs = problems.build("all")
@@ -309,7 +344,10 @@ def run_lr_sweep(out: Path, seeds: int, max_steps: int) -> None:
         ax.set_ylabel("best-so-far (mean over seeds)")
         ax.set_title(prob.name, fontsize=9)
         ax.grid(alpha=0.25, which="both")
-    fig.suptitle("Adam lr sensitivity - C0 diamond marks the per-problem pick")
+    fig.suptitle(
+        "Adam lr sensitivity - C0 diamond is the panel pick (1-seed coarse); "
+        "the 2-seed argmin here can differ; on rot the optimum is at/beyond lr=2.0"
+    )
     fig.tight_layout()
     fig.savefig(out, dpi=150)
     plt.close(fig)
@@ -341,19 +379,23 @@ def run_invariance(out_dir: Path, seeds: int, max_steps: int) -> None:
             # points), so raw trace arrays ragged -- resample onto one
             # log-spaced grid, exactly as the other panels do.
             xmax = max(
-                float(t.as_arrays()[0].max())
-                for t in traces
-                if len(t.points) > 0
+                float(t.as_arrays()[0].max()) for t in traces if len(t.points) > 0
             )
             grid = np.logspace(0.0, np.log10(xmax), 120)
             grid[-1] = xmax
-            mean, std = resample(traces, grid, "points")
-            mean = np.maximum(mean, 1e-16)
-            ax.plot(grid, mean, color=color, ls=ls, lw=1.5, label=f"{label} [{tag}]")
+            med, q1, q3 = _summary(resample(traces, grid, "points"))
+            ax.plot(
+                grid,
+                np.maximum(med, 1e-16),
+                color=color,
+                ls=ls,
+                lw=1.5,
+                label=f"{label} [{tag}]",
+            )
             ax.fill_between(
                 grid,
-                np.maximum(mean - std, 1e-16),
-                np.maximum(mean + std, 1e-16),
+                np.maximum(q1, 1e-16),
+                np.maximum(q3, 1e-16),
                 color=color,
                 alpha=0.12,
                 lw=0,
@@ -361,7 +403,7 @@ def run_invariance(out_dir: Path, seeds: int, max_steps: int) -> None:
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("objective points served")
-    ax.set_ylabel("best-so-far (mean ± std over seeds)")
+    ax.set_ylabel("best-so-far (median [Q1, Q3] over seeds)")
     ax.set_title(
         f"unit rescaling x' = {INVARIANCE_SCALE:g}x, no retune (Adam lr={lr:g})"
     )
@@ -411,12 +453,25 @@ def main() -> None:
     parser.add_argument(
         "--lr-sweep", action="store_true", help="emit the Adam lr sensitivity figure"
     )
+    parser.add_argument(
+        "--plot-only",
+        action="store_true",
+        help="rebuild figures from results_*.json (no re-run)",
+    )
     args = parser.parse_args()
 
     if args.lr_sweep:
-        run_lr_sweep(
-            HERE / "results_lr_sweep.png", seeds=2, max_steps=args.max_steps
-        )
+        run_lr_sweep(HERE / "results_lr_sweep.png", seeds=2, max_steps=args.max_steps)
+        return
+
+    if args.plot_only:
+        for group in args.groups.split(","):
+            if group == "invariance":
+                print(
+                    "invariance panel writes no JSON; rerun --groups invariance (fast)"
+                )
+                continue
+            plot_group_from_json(group, HERE)
         return
 
     groups = ["smooth"] if args.quick else args.groups.split(",")
@@ -446,6 +501,7 @@ def main() -> None:
                         "seeds": seeds,
                         "max_steps": max_steps,
                         "f_star": star,
+                        "labels": labels,
                     },
                     "curves": curves,
                 },

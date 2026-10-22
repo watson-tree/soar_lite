@@ -1,4 +1,4 @@
-"""Method drivers: soar-lite, Adam, NAAdam, L-BFGS-B, all on one trace format.
+"""Method drivers: soar-lite, Adam, L-BFGS-B, all on one trace format.
 
 Every driver returns a :class:`Trace` - best-so-far against both cost axes:
 
@@ -10,11 +10,9 @@ Every driver returns a :class:`Trace` - best-so-far against both cost axes:
   costs one sequential unit - the parallel claim lives here, but a batch is not
   free, which is why the points axis is read off the same runs.
 
-NAAdam is Adam plus decaying Gaussian noise, ``sigma_t = sigma0/sqrt(t)``, the
-brute-force escape mechanism the restart proposition is compared against. All
-single-chain drivers start from one uniform draw over the box; soar-lite keeps
-the engine's own init (min of two probes, two points, both counted), so no
-method gets a start it did not pay for.
+All single-chain drivers start from one uniform draw over the box; soar-lite
+keeps the engine's own init (min of two probes, two points, both counted), so
+no method gets a start it did not pay for.
 """
 
 import math
@@ -29,7 +27,7 @@ from scipy.optimize import minimize
 from experiments.problems import Problem
 from soar_lite import DiagonalPreconditioner, n_path_schedule
 
-Carry = tuple[jnp.ndarray, optax.OptState, jnp.ndarray, jnp.ndarray]
+Carry = tuple[jnp.ndarray, optax.OptState, jnp.ndarray]
 
 
 @dataclass
@@ -98,58 +96,28 @@ def run_soar_lite(
     return trace
 
 
-# --- Adam / NAAdam: one compiled scan per run --------------------------------
+# --- Adam: one compiled scan per run --------------------------------
 
 
 def run_adam(problem: Problem, *, max_steps: int, seed: int, lr: float) -> Trace:
-    """Plain Adam, one evaluation per step."""
-    return _single_chain(problem, max_steps=max_steps, seed=seed, lr=lr, sigma0=0.0)
-
-
-def run_naadam(
-    problem: Problem,
-    *,
-    max_steps: int,
-    seed: int,
-    lr: float,
-    sigma0: float = 1e-2,
-) -> Trace:
-    """Adam plus decaying Gaussian noise (the brute-force escape baseline)."""
-    return _single_chain(problem, max_steps=max_steps, seed=seed, lr=lr, sigma0=sigma0)
-
-
-def _single_chain(
-    problem: Problem,
-    *,
-    max_steps: int,
-    seed: int,
-    lr: float,
-    sigma0: float,
-) -> Trace:
-    """Adam, plus noise when ``sigma0 > 0``; the whole loop runs in one scan."""
+    """Plain Adam, one evaluation per step, the whole loop in one compiled scan."""
     lo, hi = problem.bounds[:, 0], problem.bounds[:, 1]
-    key = jax.random.PRNGKey(seed)
-    key, sub = jax.random.split(key)
+    _, sub = jax.random.split(jax.random.PRNGKey(seed))
     x0 = jax.random.uniform(sub, (problem.d,), minval=lo, maxval=hi)
     opt = optax.adam(lr)
     state = opt.init(x0)
 
-    def body(carry: Carry, t: jnp.ndarray) -> tuple[Carry, jnp.ndarray]:
-        x, opt_state, best, noise_key = carry
+    def body(carry: Carry, _t: jnp.ndarray) -> tuple[Carry, jnp.ndarray]:
+        x, opt_state, best = carry
         f, g, _ = problem.evaluate_batch(x[None, :])
         updates, opt_state = opt.update(g[0], opt_state)
-        x = jnp.asarray(optax.apply_updates(x, updates))
-        x = jnp.clip(x, lo, hi)
-        if sigma0 > 0.0:
-            noise_key, nk = jax.random.split(noise_key)
-            noise = (sigma0 / jnp.sqrt(t)) * jax.random.normal(nk, x.shape)
-            x = jnp.clip(x + noise, lo, hi)
+        x = jnp.clip(jnp.asarray(optax.apply_updates(x, updates)), lo, hi)
         fval = jnp.where(jnp.isfinite(f[0]), f[0], jnp.inf)
         best = jnp.minimum(best, fval)
-        return (x, opt_state, best, noise_key), best
+        return (x, opt_state, best), best
 
     _, bests = jax.lax.scan(
-        body, (x0, state, jnp.asarray(jnp.inf), key), jnp.arange(1, max_steps + 1)
+        body, (x0, state, jnp.asarray(jnp.inf)), jnp.arange(1, max_steps + 1)
     )
     values = np.asarray(bests.tolist(), dtype=float)
     grid = np.arange(1, max_steps + 1)
