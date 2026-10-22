@@ -34,7 +34,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = ["ruff", "pyright"]
-exp = ["matplotlib", "optax"]
+exp = ["matplotlib", "optax", "scipy"]
 
 [tool.ruff]
 target-version = "py311"
