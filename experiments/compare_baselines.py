@@ -239,7 +239,7 @@ def run_invariance(out_dir: Path, seeds: int, max_steps: int) -> None:
             )
             grid = np.logspace(0.0, np.log10(xmax), 120)
             grid[-1] = xmax
-            med, q1, q3 = _summary(resample(traces, grid, "points"))
+            med, q1, q3 = _summary(_resample(traces, grid, "points"))
             ax.plot(
                 grid,
                 np.maximum(med, 1e-16),
@@ -315,7 +315,7 @@ def run_panel(
             grid = np.logspace(0.0, np.log10(xmax), 120)
             grid[-1] = xmax  # logspace rounds the last sample past its own end
             for label, _, _ in methods:
-                arr = resample(shown[label], grid, axis)
+                arr = _resample(shown[label], grid, axis)
                 entry = curves[prob.name].setdefault(label, {})
                 entry[f"{axis}_grid"] = grid.tolist()
                 entry[f"{axis}_curves"] = _json_curves(arr)
@@ -366,7 +366,7 @@ def plot(
     print(f"wrote {out}")
 
 
-def resample(traces: list[Trace], grid: np.ndarray, axis: str) -> np.ndarray:
+def _resample(traces: list[Trace], grid: np.ndarray, axis: str) -> np.ndarray:
     """Resample every seed's best-so-far onto ``grid``.
 
     Returns a ``(seeds, len(grid))`` array with NaN where a seed has no data
