@@ -337,13 +337,21 @@ def run_invariance(out_dir: Path, seeds: int, max_steps: int) -> None:
     for label, color, runner in methods:
         for prob, ls, tag in ((base, "-", "base"), (scaled, "--", "x10")):
             traces = [runner(prob, max_steps=max_steps, seed=s) for s in range(seeds)]
-            xs = traces[0].as_arrays()[0]
-            bests = np.vstack([t.as_arrays()[2] for t in traces])
-            mean = np.maximum(bests.mean(axis=0), 1e-16)
-            std = bests.std(axis=0)
-            ax.plot(xs, mean, color=color, ls=ls, lw=1.5, label=f"{label} [{tag}]")
+            # Seeds stop at different point counts (diag converges in tens of
+            # points), so raw trace arrays ragged -- resample onto one
+            # log-spaced grid, exactly as the other panels do.
+            xmax = max(
+                float(t.as_arrays()[0].max())
+                for t in traces
+                if len(t.points) > 0
+            )
+            grid = np.logspace(0.0, np.log10(xmax), 120)
+            grid[-1] = xmax
+            mean, std = resample(traces, grid, "points")
+            mean = np.maximum(mean, 1e-16)
+            ax.plot(grid, mean, color=color, ls=ls, lw=1.5, label=f"{label} [{tag}]")
             ax.fill_between(
-                xs,
+                grid,
                 np.maximum(mean - std, 1e-16),
                 np.maximum(mean + std, 1e-16),
                 color=color,
