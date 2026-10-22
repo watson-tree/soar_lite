@@ -315,7 +315,7 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
 
 
 def test_diag_line_search_walks_the_grid_and_folds_the_argmin() -> None:
-    """ls_rounds=3: retry, retry, then accept; fold blends the argmin."""
+    """n_alpha=3: retry, retry, then accept; fold blends the argmin."""
     h = jnp.array([2.0, 4.0, 8.0])
     x0 = jnp.ones(3)
 
@@ -325,12 +325,12 @@ def test_diag_line_search_walks_the_grid_and_folds_the_argmin() -> None:
 
     f0, g0 = quad(x0)
     p = PathPoint(x=x0, f=f0, g=g0)
-    solver = DiagonalPreconditioner(theta=0.0, ls_rounds=3)
+    solver = DiagonalPreconditioner(theta=0.0, n_alpha=3)
     solver.init(0, p)
     p = _warm_up(solver, p, quad)  # secant in hand; alpha re-armed to 1.0
     trials: list[PathPoint] = []
     verdicts: list[str] = []
-    for _ in range(3):  # ls_rounds=3: exactly three grid samples
+    for _ in range(3):  # n_alpha=3: exactly three grid samples
         x = solver.propose(0, p)
         f, g = quad(x)
         trial = PathPoint(x=x, f=f, g=g)
@@ -350,7 +350,7 @@ def test_diag_line_search_walks_the_grid_and_folds_the_argmin() -> None:
     b = solver.beta  # the EMA decay the fold blends at
     assert close(solver.s_ema[0], b * s_old + (1.0 - b) * jnp.square(s), 1e-12)
     assert close(solver.y_ema[0], b * y_old + (1.0 - b) * jnp.square(y), 1e-12)
-    assert solver.alpha[0] == 1.0  # the next step re-arms at a full step
+    assert solver.alpha[0] == solver.alpha0  # next step re-arms at the full step
 
 
 def test_diag_line_search_gives_up_when_no_sample_is_finite() -> None:
@@ -364,7 +364,7 @@ def test_diag_line_search_gives_up_when_no_sample_is_finite() -> None:
 
     f0, g0 = quad(x0)
     p = PathPoint(x=x0, f=f0, g=g0)
-    solver = DiagonalPreconditioner(theta=0.0, ls_rounds=3)
+    solver = DiagonalPreconditioner(theta=0.0, n_alpha=3)
     solver.init(0, p)
     p = _warm_up(solver, p, quad)
     for rnd in range(3):  # two shrinks, then the last sample finds no finite win
@@ -388,7 +388,7 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         n_paths=1,
         max_steps=50,
-        solver=DiagonalPreconditioner(theta=0.0, ls_rounds=3),
+        solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
         key=jax.random.PRNGKey(0),
     )
     assert close(result.x, center, 1e-9)
@@ -399,7 +399,8 @@ def test_diag_knobs_out_of_range_are_rejected() -> None:
     """A knob out of its own range fails at construction, naming the knob.
 
     Each of these would still run and silently produce something other than the
-    method's contract (beta = 1 never forgets, ls_rounds = 0 serves no sample),
+    method's contract (beta = 1 never forgets, n_alpha = 0 serves no
+        sample, alpha0 = 0 never steps),
     so the object refuses to exist instead of degrading quietly.
     """
 
@@ -417,7 +418,8 @@ def test_diag_knobs_out_of_range_are_rejected() -> None:
         {"theta": -1.0},
         {"tau_rel": 0.0},
         {"moment": "l2"},
-        {"ls_rounds": 0},
+        {"n_alpha": 0},
+        {"alpha0": 0.0},
         {"backtrack": 1.0},
         {"armijo_c": 0.0},
     ):

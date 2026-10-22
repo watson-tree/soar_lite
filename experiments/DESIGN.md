@@ -103,37 +103,33 @@ over two orders of magnitude (diag 1e-2 → rotated 2.0), and a wrong lr costs
 is itself budget — every trial is more objective points, and it is manual, not
 adaptive.
 
-### Step-length calibration (pending: after the verdict cost fix)
+### Step-length calibration (done: the knob is real, the win is not)
 
-`ls_rounds=1` (the default) makes the "line search" inert: one sample, accepted
-if finite, no comparison across step lengths. It becomes a real line search only
-at `ls_rounds >= 2`, where the solver walks `alpha` down by `backtrack` per retry
-(1, b, b², …) and the engine's per-step argmin commits the winner. The motive is
-the diagonal preconditioner's own error: `-d ⊙ g` is a descent direction even
-when `d` misestimates curvature, so a shorter step may pay where a full one
-overshoots — the rotated quadratic (`cond=1e6`) is where that should show, since
-there the curvature energy sits off the diagonal and the diagonal step is worst.
+The verdict, measured before any library default moved: **the full step is
+already the right length; no scalar step rescaling helps.**
 
-Sweep (scratch script first, promote to a flag only if the effect is real):
-`ls_rounds ∈ {2, 4, 8}` × `backtrack ∈ {0.5, 0.25, 0.1}` on the rotated
-quadratic, at **both** 300 and 3000 batches, `n_paths ∈ {1, 16}`, 1 seed.
+- `n_alpha` (renamed from `ls_rounds` — a count, and "rounds" wrongly
+  suggested engine rounds) is the post-warm-up `alpha`-grid size: at
+  `n_alpha >= 2` it samples `alpha0 · backtrack^j` along `-d ⊙ g` and the
+  engine's per-step argmin commits the winner. `n_alpha=1` is inert (default).
+- **Grid sweep** (300 batches, 3 seeds, rotated `cond=1e6` d=100): `n_alpha`
+  larger is strictly worse — `n_paths=1` at `backtrack=0.5`:
+  `1285 → 4220 → 7382 → 12535`. `backtrack` only matters at `n_alpha=1`
+  (`1285 → 1056` at 0.1), which is the warm-up Armijo start — a different
+  first step (path shift), not a grid effect.
+- **`alpha0` damping** (the "small step along the wrong direction might pay"
+  hypothesis, `alpha0 ∈ {0.125, 0.25, 0.5, 1.0, 2.0}`, `n_paths ∈ {1,16}`,
+  rot+diag): damping is strictly worse on the rotated case
+  (`1285 → 1976 → 3211 → 5356`) and `alpha0 > 1` is catastrophic (`8e5`);
+  on diag, `1.0` is the one-shot win (`3.5e-65` in 20 points) and any
+  damping only slows it.
 
-Two hygiene rules, because the budget unit is batches:
-
-1. Sweep `ls_rounds` at fixed `backtrack=0.5` first, then `backtrack`.
-   `backtrack` is also the warm-up Armijo shrink rate, so sweeping both at once
-   cannot tell a better alpha grid from a changed warm-up.
-2. `ls_rounds=L` makes every step cost L batches, and folds the argmin (a
-   shorter step) into the secant EMAs, so `s` and `y` both shrink. It has to
-   earn its keep per batch, and it must be re-checked on the panels soar-lite
-   already wins (`diag`, `oscillator`) before it can be anything but a
-   per-problem choice.
-
-Falsifiable prediction, written down before measuring: a shorter step should
-**win early and lose late** on the rotated quadratic — better for the first
-~10² batches, and if the flat directions are slowed it can be overtaken by 3000.
-Winning at both budgets means it is a real win; winning only early means the
-diagonal error is worth one short step and not a standing setting.
+Why, once seen: the residual error is in the **direction** `-d ⊙ g` (the
+diagonal secant ignores off-diagonal curvature), not in its length — no scalar
+`alpha` grid or damping can fix a wrong direction. `alpha0` stays as a
+validated zero-cost knob (default `1.0` = the secant's natural step) because it
+names the one hard-coded `=1` in `_reset_step`; `n_alpha` stays exposed as
+`1`-inert with this section as its "measured, do not promote" note.
 
 ## Budget, statistics, outputs
 
