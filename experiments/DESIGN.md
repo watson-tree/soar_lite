@@ -105,8 +105,9 @@ adaptive.
 
 ### Step-length calibration (done: the knob is real, the win is not)
 
-The verdict, measured before any library default moved: **the full step is
-already the right length; no scalar step rescaling helps.**
+The verdict, measured on one landscape before any library default moved: **on
+the rotated quadratic the full step is already the right length, and no scalar
+step rescaling helps.**
 
 - `n_alpha` (renamed from `ls_rounds` — a count, and "rounds" wrongly
   suggested engine rounds) is the post-warm-up `alpha`-grid size: at
@@ -126,10 +127,39 @@ already the right length; no scalar step rescaling helps.**
 
 Why, once seen: the residual error is in the **direction** `-d ⊙ g` (the
 diagonal secant ignores off-diagonal curvature), not in its length — no scalar
-`alpha` grid or damping can fix a wrong direction. `alpha0` stays as a
-validated zero-cost knob (default `1.0` = the secant's natural step) because it
-names the one hard-coded `=1` in `_reset_step`; `n_alpha` stays exposed as
-`1`-inert with this section as its "measured, do not promote" note.
+`alpha` grid or damping can fix a wrong direction. This is the diagonal
+preconditioner's standing limitation, and the rotated quadratic is where it is
+meant to lose: that loss is a **capability boundary, not a tuning failure**.
+
+Off-diagonal coupling has two sources, and the headline chain has the second:
+*rotation coupling* needs same-unit components of one vector (spatial velocity
+or acceleration components, a preferred direction mixing them) — heterogeneous
+units cannot rotate into each other, which is why the rotated quadratic is a
+pure artificial stress test; *interaction coupling* needs no unit match — the
+loss depends jointly on two parameters (a resonance tunes with mass and
+stiffness together, `omega^2 ~ k/m`, and the stiffness profile couples within
+the chain), and the oscillator's `kg`/`N/m`/`N*s/m` coordinates carry exactly
+that, stated in its own spec ("approximately right, not exact"). So the
+headline panel is *not* exempt from the direction error: whether soar-lite
+still wins there while dropping real coupling is what that panel measures, not
+something asserted up front.
+
+Scope, to avoid over-claiming: the sweeps above ran on **one landscape** (the
+rotated and diagonal quadratics). That landscape isolates the *off-diagonal,
+direction* error, to which any scalar step knob is structurally immune —
+measured for rotation coupling only; that the headline's interaction coupling
+is equally immune is an **analogy from this, not a separate measurement**. It
+is silent on a different failure — the **diagonal part of the error**, where the
+per-coordinate secant is itself a biased curvature estimate under non-quadratic
+terms or curvature that changes with position (complexity the two quadratics do
+not have). Whether `alpha0` damping or a finer `n_alpha` grid relieves *that*
+is **unmeasured**, and deliberately left open: `alpha0` names the one
+hard-coded `=1` in `_reset_step`, `n_alpha` stays as `1`-inert, both exposed so
+the relief is available if a harder landscape ever shows the symptom. The
+defaults are not a claim that the knobs are useless elsewhere — they are a
+contract on the *benchmark*: the formal runs contribute zero knobs (Adam pays a
+per-problem lr grid each time), so "no tuning" is a fact about the benchmark,
+not a universal theorem about the method.
 
 ## Budget, statistics, outputs
 
