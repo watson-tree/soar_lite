@@ -47,13 +47,13 @@ uv run python -m tests.test_solver        # the local method
 uv run python -m tests.test_restart       # the restart rule
 uv run python -m tests.test_scheduler     # the engine, driven by a stub method
 uv run python -m tests.test_solver_seam   # the injection seams
-uv run --with pytest --no-project python -m pytest -q   # or all 66 in one go
+uv run --no-sync python -m pytest -q   # or all 66 in one go
 uv run ruff check && uv run pyright
 ```
 
-The tests are assert-style self-checks with `__main__` runners, also collectable
-under pytest — no fixtures, no recorded golden numbers that would encode this
-repository's history.
+The tests are assert-style self-checks: plain `assert` in `test_*` functions,
+pytest-collectable, each module also runnable as a script — no fixtures, no
+recorded golden numbers that would encode this repository's history.
 
 ## Scope
 

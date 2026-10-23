@@ -54,7 +54,7 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
   JSON with `--plot-only`; style/color/rename changes never trigger a re-run.
 - Toolchain: `python3`, not `python`. Lint/type: `uv run --no-sync ruff check`
   and `uv run --no-sync pyright`. Tests:
-  `uv run --with pytest --no-project python -m pytest -q`. Experiments:
+  `uv run --no-sync python -m pytest -q` (`pytest` sits in `dev`). Experiments:
   `uv run --no-sync python -m experiments.compare_baselines …`; install extra
   deps with `--group dev` and `--group exp`. CI (`ci.yml`) runs the same four
   commands; publishing is `uv build` in `publish.yml`, never a manual wheel.

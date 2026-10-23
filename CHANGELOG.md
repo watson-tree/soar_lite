@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `pytest` is now a declared `dev` dependency and the canonical test runner
+  (`uv run --no-sync python -m pytest -q`); CI installs from the lockfile with
+  `--frozen`. Each test module stays runnable as a script.
+
 ## [0.1.0] - unreleased
 
 ### Added

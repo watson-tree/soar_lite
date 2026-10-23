@@ -36,7 +36,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["ruff", "pyright"]
+dev = ["ruff", "pyright", "pytest"]
 docs = ["mkdocs", "mkdocstrings[python]"]
 exp = ["matplotlib", "optax", "scipy"]
 

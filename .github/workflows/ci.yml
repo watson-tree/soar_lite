@@ -24,8 +24,7 @@ jobs:
       - run: uv sync --all-groups --frozen
       - run: uv run ruff check
       - run: uv run pyright
-      # pytest is not a declared dependency, so bring it ad hoc. --no-project
-      # skips the project sync (uv still discovers .venv, where jax lives), and
-      # `python -m pytest` puts the repo root on sys.path, so tests import the
-      # source tree without installing soar_lite.
-      - run: uv run --with pytest --no-project python -m pytest -q
+      # pytest rewrites asserts, so a failure prints the two values; `python -m
+      # pytest` also puts the repo root on sys.path, so tests import the source
+      # tree rather than an installed copy.
+      - run: uv run --no-sync python -m pytest -q
