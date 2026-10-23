@@ -18,8 +18,8 @@ no figure re-runs anything. Curves are the median best-so-far over seeds,
 shaded the [Q1, Q3] interquartile band, log y (mean +/- std would model a
 skewed spread as symmetric and dip below the axis).
 
-Adam carries a per-problem learning rate, picked on a coarse 1-seed
-grid sweep (reproduce it with --lr-sweep): the best lr spans over two orders of
+Adam carries a per-problem learning rate, grid-tuned per problem
+(reproduce the sweep with --lr-sweep): the best lr spans over two orders of
 magnitude across smooth problems and a wrong lr costs ~68 orders of magnitude
 on the diagonal quadratic. That tuning is budget the axis never shows -- every
 trial is more objective points served, and it is manual rather than adaptive.
@@ -60,19 +60,20 @@ HERE = Path(__file__).parent
 Runner: TypeAlias = Callable[..., Trace]
 CurveEntry: TypeAlias = dict[str, list[float] | list[list[float | None]]]
 
-# Per-problem Adam learning rate, chosen on a coarse 1-seed grid sweep
-# (see --lr-sweep): the optimal lr spans over two orders of magnitude across the
-# smooth problems, and a wrong lr costs ~68 orders of magnitude on the diagonal
-# quadratic. Tuning is itself budget the y axis never shows -- every trial is
-# more objective points served, and it is manual, not adaptive. soar-lite has
-# no learning rate at all. The rotated optimum only appears above lr=1 (peak
-# 2.0, ~11x better than 1.0), so it is the hardest dial to find by hand.
+# Per-problem Adam learning rate, the grid-tuned optimum (see --lr-sweep).
+# The optimal lr spans over two orders of magnitude across the smooth problems,
+# and a wrong lr costs ~68 orders of magnitude on the diagonal quadratic.
+# Tuning is itself budget the y axis never shows -- every trial is more
+# objective points served, and it is manual, not adaptive; soar-lite has no
+# learning rate at all. Two optima sit at the sweep grid's right edge (the
+# rotated quadratic and the oscillator keep improving to lr=2.0), and rastrigin
+# is flat over 1e-4..5e-1 so its argmin (0.5) is a ~5% noise-level nudge.
 ADAM_LR: dict[str, float] = {
-    "oscillator_n20_F20": 0.5,
+    "oscillator_n20_F20": 2.0,
     "diag_quad_d100_cond10000": 1e-2,
     "rot_quad_d100_cond1e+06": 2.0,
     "ackley_d100": 1e-2,
-    "rastrigin_d100": 1e-2,
+    "rastrigin_d100": 0.5,
 }
 
 
@@ -141,11 +142,10 @@ def run_lr_sweep(out: Path, seeds: int, max_steps: int) -> None:
 
     Shows the optimal lr drifting across problems and a wrong lr costing many
     orders of magnitude. The C0 diamond marks the lr actually used in the
-    panels (``ADAM_LR``), picked on a coarse 1-seed sweep; it need not sit on
-    this figure's 2-seed argmin (different seed count), and on the rotated
-    quadratic the optimum is at or beyond the grid edge (still rising at
-    lr=2.0), so there the diamond is the best *sampled* point, not an interior
-    minimum.
+    panels (``ADAM_LR``), the grid argmin of this sweep. On the rotated
+    quadratic and the oscillator the curve is still falling at the grid edge
+    (lr=2.0 is the best *sampled* point, not an interior minimum); on rastrigin
+    the floor is flat over 1e-4..1e-1, so its argmin is a noise-level nudge.
     """
     lr_grid = [1e-4, 1e-3, 1e-2, 1e-1, 2e-1, 5e-1, 1.0, 2.0]
     probs = problems.build("all")
@@ -182,8 +182,8 @@ def run_lr_sweep(out: Path, seeds: int, max_steps: int) -> None:
         ax.set_title(prob.name, fontsize=9)
         ax.grid(alpha=0.25, which="both")
     fig.suptitle(
-        "Adam lr sensitivity - C0 diamond is the panel pick (1-seed coarse); "
-        "the 2-seed argmin here can differ; on rot the optimum is at/beyond lr=2.0"
+        "Adam lr sensitivity - C0 diamond = panel pick (grid argmin); "
+        "rot & oscillator still falling at lr=2.0 (edge); rastrigin flat < 1e-1"
     )
     fig.tight_layout()
     fig.savefig(out, dpi=150)

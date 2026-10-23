@@ -49,18 +49,19 @@ panel writes its files as it finishes.
 
 ## The Adam learning-rate grid
 
-Adam pays a per-problem lr chosen by a 1-seed offline sweep
-(`ADAM_LR` in `compare_baselines.py`). Reproduce the sweep figure with:
+Adam pays a per-problem lr chosen by an offline sweep
+(`ADAM_LR` in `compare_baselines.py`), the grid argmin of the figure below.
+Reproduce the sweep figure with:
 
 ```bash
 uv run --group exp python -m experiments.compare_baselines --lr-sweep --max-steps 3000
 ```
 
-The C0 diamond in that figure marks the lr the panels actually use (`ADAM_LR`,
-picked on a coarse 1-seed sweep). It need not sit on the figure's 2-seed
-argmin (different seed count), and on the rotated quadratic the optimum is at
-or beyond the grid edge — still rising at `lr=2.0` — so there the diamond is
-the best *sampled* point, not an interior minimum.
+The C0 diamond in that figure marks the lr the panels actually use (`ADAM_LR`),
+the grid argmin. On the rotated quadratic and the oscillator the curve is still
+falling at the right edge — `lr=2.0` — so there the diamond is the best
+*sampled* point, not an interior minimum; on rastrigin the floor is flat over
+`1e-4..1e-1`, so its argmin is a ~5% noise-level nudge.
 
 ## Outputs
 
