@@ -16,11 +16,15 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v5
+        with:
+          # Pinned so a token change cannot alter rendered annotations.
+          python-version: "3.11"
       - run: uv sync --group docs --frozen
       - run: uv run --no-sync mkdocs build --strict
       - if: github.event_name != 'pull_request'
@@ -32,6 +36,7 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       pages: write
       id-token: write
