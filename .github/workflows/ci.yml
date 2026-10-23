@@ -9,11 +9,19 @@ on:
 permissions:
   contents: read
 
+# Superseded runs on the same ref are useless here: CI deploys nothing. (docs.yml
+# deliberately does the opposite -- a Pages deploy must not be cancelled.)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
+      # Report both interpreters instead of cancelling the sibling on first failure.
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
