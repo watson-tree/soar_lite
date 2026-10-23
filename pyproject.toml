@@ -28,6 +28,7 @@ dependencies = ["jax"]
 
 [project.urls]
 Homepage = "https://github.com/watson-tree/soar_lite"
+Documentation = "https://watson-tree.github.io/soar_lite"
 Repository = "https://github.com/watson-tree/soar_lite"
 
 [build-system]
@@ -36,6 +37,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = ["ruff", "pyright"]
+docs = ["mkdocs", "mkdocstrings[python]"]
 exp = ["matplotlib", "optax", "scipy"]
 
 [tool.ruff]

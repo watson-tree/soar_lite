@@ -26,7 +26,11 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
   `--quick` smoke check.
 - `.github/workflows/ci.yml`: on push/PR, Python 3.11 + 3.12, ruff → pyright →
   pytest. `.github/workflows/publish.yml`: on `v*` tags, `uv build` then trusted
-  publishing.
+  publishing. `.github/workflows/docs.yml`: builds the site strictly on every PR
+  and deploys it to GitHub Pages from `main`.
+- User docs: MkDocs + `mkdocstrings`, sources in `docs/` (see ADR-0005). The
+  internal notes (`PLAN.md`, `adr/`) sit beside them and are excluded from the
+  build. `CHANGELOG.md` starts at 0.1.0.
 - Docstrings: `n_path_schedule` carries `Args` + a runnable `Example`;
   `DiagonalPreconditioner.__init__` documents every knob.
 
@@ -39,6 +43,9 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
      `git tag v0.1.0 && git push origin v0.1.0`.
    - `soar-lite` was available on PyPI at last check; rebuild `dist/` from a
      clean tree first (the committed `dist/` predates this release work).
+2. **Docs site one-time setup**: set the repository's Pages source to
+   **GitHub Actions**; `docs.yml` then publishes
+   `https://watson-tree.github.io/soar_lite/` (linked from `[project.urls]`).
 
 ## Conventions
 
@@ -51,3 +58,5 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
   `uv run --no-sync python -m experiments.compare_baselines …`; install extra
   deps with `--group dev` and `--group exp`. CI (`ci.yml`) runs the same four
   commands; publishing is `uv build` in `publish.yml`, never a manual wheel.
+- Docs: `uv run --no-sync mkdocs build --strict`; sync the `docs` group first
+  (`uv sync --all-groups` keeps dev/exp/docs together).
