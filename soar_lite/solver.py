@@ -107,6 +107,24 @@ class DiagonalPreconditioner(LocalSolver):
         slope c (dimensionless): a trial above f + c·gᵀd is rejected and shrunk.
         A knob outside its own range raises ValueError here, once per object;
         nothing downstream re-checks it.
+
+        Args:
+            beta: EMA decay for the secant-magnitude smooth (window ≈ 1/(1-β)
+                steps), in (0, 1).
+            theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
+                ``θ·g_i²`` for "rms"), >= 0.
+            tau_rel: relative gradient-norm stopping threshold, tested against
+                ``‖g_0‖``, > 0.
+            moment: which magnitude ratio to smooth, ``"abs"`` (mean of |s|,
+                |y|) or ``"rms"`` (mean of s², y²).
+            alpha0: step length every path is armed at; the full step's
+                length, > 0.
+            n_alpha: alpha samples per post-warmup step along ``-d⊙g``; 1 means
+                no line search, >= 1.
+            backtrack: the warm-up Armijo shrink factor and the alpha-grid
+                spacing, in (0, 1).
+            armijo_c: the warm-up Armijo sufficient-decrease slope, in (0, 1).
+
         """
         for name, value, ok, want in (
             ("beta", beta, 0.0 < beta < 1.0, "in (0, 1)"),

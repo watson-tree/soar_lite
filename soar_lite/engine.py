@@ -361,6 +361,60 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     carry its contract's methods raises TypeError. The seam methods
     themselves trust the engine - they run per path per round, and the engine
     is their only caller.
+
+    Args:
+        evaluate_batch: the objective as one batched pass. Takes rows ``x`` of
+            shape ``(M, d)`` and returns ``(f: (M,), g: (M, d), feas: (M,) |
+            None)`` - value, gradient and optional feasibility mask.
+        bounds: the search box, scipy-style: one ``(lb, ub)`` pair per dim, a
+            ``(d, 2)`` array, or ``None`` for no box. ``None``/±inf = unbounded.
+        sample: the injected prior ``(key, n) -> (n, d)`` in the engine's own
+            coordinates; ``None`` draws i.i.d. uniform over a finite ``bounds``.
+        n_paths: number of paths advanced in lockstep each round.
+        n_probe_rounds: probe group size - the draws per start, and the horizon
+            one continue sample spans.
+        max_steps: the engine's own batch budget (always counted in batches).
+        max_ls: the per-step round cap after which a path stalls.
+        budget_check: an extra whole-batch gate for an external budget the
+            engine cannot see; ``None`` means none.
+        solver: the local method (``None`` binds ``DiagonalPreconditioner``).
+        restart_rule: the restart decision (``None`` binds ``EIRestartRule``).
+        per_round_evals: bill batches instead of points (parallel-cost proxy).
+        key: the PRNG seed; ``None`` uses the fixed default so unseeded runs
+            are deterministic.
+
+    Returns:
+        An ``NPathResult`` with the run's end state:
+
+        - ``x``: the argmin in the caller's coordinates
+        - ``fun``: the incumbent (min finite feasible eval; ``inf`` if none)
+        - ``nfev``: points evaluated, or batches under ``per_round_evals``
+        - ``nit``: engine rounds attempted
+        - ``status``: why the run stopped
+
+    Example:
+        Minimize ``f(x) = ‖x - 3‖²`` by handing the engine a batched objective:
+
+        >>> import jax.numpy as jnp
+        >>> from soar_lite import n_path_schedule
+
+        >>> def evaluate_batch(x):
+        ...     g = 2.0 * (x - 3.0)
+        ...     return (jnp.sum((x - 3.0) ** 2, axis=1), g, None)
+
+        >>> result = n_path_schedule(
+        ...     evaluate_batch,
+        ...     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
+        ...     n_paths=4,
+        ...     max_steps=30,
+        ... )
+
+        >>> result.x          # ≈ (3, 3)
+        Array([3., 3.], dtype=float32)
+
+        >>> result.fun        # its objective value
+        0.0
+
     """
     # The caller's own inputs are checked here, once per run - the only place
     # a human hands this engine something. Nothing below re-checks them.
@@ -637,9 +691,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         # can fire later, so points / B / nfev are untouched.
         if all(stalled):
             needed = restart_rule.samples_until_verdict()
-            stagger = min(
-                horizon.rounds_until_sample(i, step) for i in range(n_paths)
-            )
+            stagger = min(horizon.rounds_until_sample(i, step) for i in range(n_paths))
             if stagger + (needed - 1) * n_probe_rounds + 1 >= max_steps - step:
                 all_stalled = True
                 break
