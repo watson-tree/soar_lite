@@ -30,6 +30,8 @@ plugins:
       handlers:
         python:
           options:
+            # "google" names the section syntax (Args / Returns / Example); the
+            # bodies inside those sections are still rendered as Markdown.
             docstring_style: google
             show_source: false
             show_root_heading: true
