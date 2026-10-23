@@ -40,6 +40,11 @@ dev = ["ruff", "pyright", "pytest"]
 docs = ["mkdocs", "mkdocstrings[python]"]
 exp = ["matplotlib", "optax", "scipy"]
 
+[tool.pytest.ini_options]
+# Tests live in tests/; without this a future test_ file in experiments/ or
+# docs/ would be collected too.
+testpaths = ["tests"]
+
 [tool.ruff]
 target-version = "py311"
 

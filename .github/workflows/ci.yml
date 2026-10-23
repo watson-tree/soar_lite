@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -11,6 +12,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -22,8 +24,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --all-groups --frozen
-      - run: uv run ruff check
-      - run: uv run pyright
+      # Every later step runs --no-sync: the environment is fixed by the sync
+      # above, so no implicit re-sync can mutate or prune it.
+      - run: uv run --no-sync ruff check
+      - run: uv run --no-sync pyright
       # pytest rewrites asserts, so a failure prints the two values; `python -m
       # pytest` also puts the repo root on sys.path, so tests import the source
       # tree rather than an installed copy.
