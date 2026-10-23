@@ -1,5 +1,8 @@
 # soar-lite
 
+[![CI](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml/badge.svg)](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/watson-tree/soar_lite/blob/main/notebooks/quickstart.ipynb)
+
 First-order diagonal-preconditioned n-path descent with sample-based
 (expected-improvement) restarts, for minimizing objectives that are expensive
 enough to make the evaluation budget the binding constraint. Value and gradient
@@ -44,11 +47,13 @@ uv run python -m tests.test_solver        # the local method
 uv run python -m tests.test_restart       # the restart rule
 uv run python -m tests.test_scheduler     # the engine, driven by a stub method
 uv run python -m tests.test_solver_seam   # the injection seams
+uv run --with pytest --no-project python -m pytest -q   # or all 66 in one go
 uv run ruff check && uv run pyright
 ```
 
-The tests are assert-style self-checks with `__main__` runners — no pytest, no
-fixtures, no recorded golden numbers that would encode this repository's history.
+The tests are assert-style self-checks with `__main__` runners, also collectable
+under pytest — no fixtures, no recorded golden numbers that would encode this
+repository's history.
 
 ## Scope
 

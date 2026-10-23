@@ -7,27 +7,38 @@ design in `experiments/DESIGN.md`.
 
 ## Status
 
-One linear history (through `7de2378`, the Adam lr retune); working tree clean.
-The optimizer is a three-module first-order library — `soar_lite/engine.py`,
-`soar_lite/solver.py`, `soar_lite/restart.py` — with assert-style tests
-(pytest-collectable, 66 pass). Comparison experiments Phase A–D (headline,
-smooth, multimodal, invariance, Adam lr sweep) are designed in
-`experiments/DESIGN.md`, reproducible per `experiments/README.md`, and archived
-in git history. Adam's per-problem lr was retuned to the sweep grid argmin.
+One linear history; remote `origin` (`git@github.com:watson-tree/soar_lite.git`,
+public) is configured and pushed. The optimizer is a three-module first-order
+library — `soar_lite/engine.py`, `soar_lite/solver.py`, `soar_lite/restart.py`
+— with assert-style tests (pytest-collectable, 66 pass). Comparison experiments
+Phase A–D (headline, smooth, multimodal, invariance, Adam lr sweep) are designed
+in `experiments/DESIGN.md`, reproducible per `experiments/README.md`, and
+archived in git history. Adam's per-problem lr was retuned to the sweep grid
+argmin.
+
+The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
+(`uv sync --all-groups`, CPython 3.11). Release hygiene is in place:
+
+- `LICENSE`: Watson Tree, 2026.
+- `pyproject.toml`: `authors` + `[project.urls]` (Repository, Homepage); PEP 639
+  `license = "MIT"` with the old `License ::` classifier dropped.
+- `README.md`: CI badge + Colab badge; `notebooks/quickstart.ipynb` runs the
+  `--quick` smoke check.
+- `.github/workflows/ci.yml`: on push/PR, Python 3.11 + 3.12, ruff → pyright →
+  pytest. `.github/workflows/publish.yml`: on `v*` tags, `uv build` then trusted
+  publishing.
+- Docstrings: `n_path_schedule` carries `Args` + a runnable `Example`;
+  `DiagonalPreconditioner.__init__` documents every knob.
 
 ## Next
 
-1. **Folder rename** — `~/projects/light_multi_paths` → `~/projects/soar_lite`.
-   Nothing in the source references the folder name; only the venv's console
-   scripts and `activate*` shebangs do. After the move rebuild the venv:
-   `rm -rf .venv && uv sync --all-groups`.
-2. **Phase E — release hygiene** (blocked: no git remote configured yet).
-   Before the first PyPI upload:
-   - `LICENSE`: copyright holder + year.
-   - `pyproject.toml`: `authors` and a `[project.urls]` block (Repository,
-     Homepage).
-   - `README.md`: CI/status badge + a Colab-runnable link to the experiments.
-   - Build (`hatchling`) and upload to PyPI.
+1. **First PyPI upload is a tag away** (not published yet; version stays 0.1.0).
+   - One-time PyPI setup: add the project as an **OIDC trusted publisher** for
+     `github.com/watson-tree/soar_lite` → `.github/workflows/publish.yml` (no
+     token; `publish.yml` already requests `id-token: write`). Then
+     `git tag v0.1.0 && git push origin v0.1.0`.
+   - `soar-lite` was available on PyPI at last check; rebuild `dist/` from a
+     clean tree first (the committed `dist/` predates this release work).
 
 ## Conventions
 
@@ -38,4 +49,5 @@ in git history. Adam's per-problem lr was retuned to the sweep grid argmin.
   and `uv run --no-sync pyright`. Tests:
   `uv run --with pytest --no-project python -m pytest -q`. Experiments:
   `uv run --no-sync python -m experiments.compare_baselines …`; install extra
-  deps with `--group dev` and `--group exp`.
+  deps with `--group dev` and `--group exp`. CI (`ci.yml`) runs the same four
+  commands; publishing is `uv build` in `publish.yml`, never a manual wheel.

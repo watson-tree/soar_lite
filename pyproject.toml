@@ -5,8 +5,7 @@ description = "First-order diagonal-preconditioned K-path descent with sample-ba
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-# TODO(release): add `authors` and a [project.urls] block (Repository, Homepage)
-# with the real name/URL before the first PyPI upload.
+authors = [{ name = "Watson Tree", email = "watson.tree@outlook.com" }]
 keywords = [
   "optimization",
   "first-order",
@@ -19,7 +18,6 @@ keywords = [
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -27,6 +25,10 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Mathematics",
 ]
 dependencies = ["jax"]
+
+[project.urls]
+Homepage = "https://github.com/watson-tree/soar_lite"
+Repository = "https://github.com/watson-tree/soar_lite"
 
 [build-system]
 requires = ["hatchling"]
