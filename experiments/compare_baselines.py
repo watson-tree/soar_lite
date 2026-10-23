@@ -93,7 +93,7 @@ SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
         "soar-lite n_paths=16",
         lambda prob, **kw: run_soar_lite(prob, n_paths=16, **kw),
-        {"color": "C0", "lw": 1.2, "ls": "--"},
+        {"color": "C1", "lw": 1.2, "ls": "--"},
     ),
     (
         "Adam (grid lr)",
@@ -115,7 +115,7 @@ MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
         "soar-lite n_paths=16",
         lambda prob, **kw: run_soar_lite(prob, n_paths=16, **kw),
-        {"color": "C0", "lw": 2.0},
+        {"color": "C1", "lw": 2.0},
     ),
     (
         "soar-lite n_paths=1",
