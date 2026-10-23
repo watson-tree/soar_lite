@@ -21,7 +21,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v5
-      - run: uv sync --group docs
+      - run: uv sync --group docs --frozen
       - run: uv run --no-sync mkdocs build --strict
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3

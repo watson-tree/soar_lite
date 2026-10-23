@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -12,10 +16,16 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --all-groups
+      - run: uv sync --all-groups --frozen
       - run: uv run ruff check
       - run: uv run pyright
+      # pytest is not a declared dependency, so bring it ad hoc. --no-project
+      # skips the project sync (uv still discovers .venv, where jax lives), and
+      # `python -m pytest` puts the repo root on sys.path, so tests import the
+      # source tree without installing soar_lite.
       - run: uv run --with pytest --no-project python -m pytest -q
