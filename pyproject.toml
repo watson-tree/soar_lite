@@ -32,7 +32,9 @@ Documentation = "https://watson-tree.github.io/soar_lite"
 Repository = "https://github.com/watson-tree/soar_lite"
 
 [build-system]
-requires = ["hatchling"]
+# uv build resolves the backend from the network in an isolated env; uv.lock
+# does not cover it, so cap it here instead.
+requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [dependency-groups]

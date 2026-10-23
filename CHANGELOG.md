@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pytest` is now a declared `dev` dependency and the canonical test runner
   (`uv run --no-sync python -m pytest -q`); CI installs from the lockfile with
   `--frozen`. Each test module stays runnable as a script.
+- `publish.yml` runs the tests in an unprivileged job and publishes from a
+  separate job holding only `id-token: write`, bound to a `pypi` environment.
+  The build backend is capped (`hatchling>=1.27,<2`) because it is resolved from
+  the network at build time and is not covered by `uv.lock`.
 
 ## [0.1.0] - unreleased
 
