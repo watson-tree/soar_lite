@@ -25,21 +25,23 @@ state. The engine runs `n_paths` of them in lockstep.
 _Avoid_: chain, trajectory, thread, particle
 
 **n_paths**:
-The engine's width — the number of paths advanced each iteration.
+The engine's width — the number of paths the engine drives together.
 _Avoid_: population size, swarm size
 
 **iteration**:
 One pass of the engine's main loop — one `nit`. Per iteration the engine
-decides restarts, then lets every active path advance at most one step. The
-parallel wall-clock unit; an iteration may serve zero batches (a dead
-iteration where nothing moves) or several (restart probes plus up to `max_ls`
-step trials).
+decides which paths restart and then steps the rest: a path either probes or
+steps this iteration, never both. The parallel wall-clock unit; an iteration
+may serve zero batches (a dead iteration where nothing moves) or several (the
+restart probe's `n_probe_evals` batches plus the steppers' up to `max_ls`
+trials each). An iteration cut short by a refused probe or batch did not
+finish, so it is not counted in `nit`.
 _Avoid_: round (retired), epoch
 
 **step**:
 One move along a single path: propose → (trial)× → commit, or give_up. Each
-active path takes at most one step per iteration; a step consumes one or more
-trials.
+path takes at most one move per iteration — a step, or a restart's probe; a
+step consumes one or more trials.
 _Avoid_: update, move
 
 **trial**:
@@ -52,9 +54,9 @@ The best feasible point seen so far. The engine is its sole owner.
 _Avoid_: best-so-far, current optimum
 
 **stall / stalled**:
-A path that took no step this iteration — its local method signalled `give_up`
-or its trials were exhausted. Stalled is not dead: a stalled path can still be
-restarted by a later verdict.
+A path that moved nowhere this iteration — it neither restarted nor committed a
+step: its local method signalled `give_up`, or its trials were exhausted.
+Stalled is not dead: a stalled path can still be restarted by a later verdict.
 _Avoid_: paused, idle, dead
 
 ### Evaluation

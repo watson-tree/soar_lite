@@ -61,8 +61,10 @@ Known gap, still open: the equal-cost argument holds only in the steady state,
 where one iteration serves one batch. An iteration that retries a line search
 serves `max_ls` batches, so a horizon priced in `n_probe_evals` iterations buys
 fewer batches than a probe once steps start retrying, and the verdict's two
-sides drift apart again. `CONTEXT.md` records the open question under
-`horizon`; the fix is not part of this decision.
+sides drift apart again. A restarting iteration drifts it the other way: it
+serves a probe instead of a step, and how many paths restart is a runtime
+number, so no iteration clock can be priced in batches. `CONTEXT.md` records
+the open question under `horizon`; the fix is not part of this decision.
 
 Implemented with this decision: the per-path horizon as the engine's `_Horizon`
 clock, per-batch billing as its `_Budget` meter, the scheduler and seam tests

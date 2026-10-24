@@ -53,11 +53,11 @@ class LocalSolver(Protocol):
     lives inside the instance, and is opaque to the engine (the engine never
     reads it) - implementers index it by path i.
 
-    One engine step, for every non-stalled path i: propose(i, p) is called at
-    most max_ls times. p is the path's current point, unchanged for the whole
-    step (the engine commits a point only on "accept"), so p is also the
-    step's starting point. The returned raw candidate is projected into the
-    box by the engine before it is evaluated, so the actual step is
+    One engine step, for every path i that steps this iteration: propose(i, p)
+    is called at most max_ls times. p is the path's current point, unchanged
+    for the whole step (the engine commits a point only on "accept"), so p is
+    also the step's starting point. The returned raw candidate is projected
+    into the box by the engine before it is evaluated, so the actual step is
     the projected one: a method must judge the served point it is handed, not
     its own proposal. verdict(i, p, trial) is then called once per served
     candidate, with p = the step's starting point and trial = the served
@@ -467,7 +467,8 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         stops, not just the path that asked. Returns (f_vals, g_batch), or None
         when the meter refused; the meter is the sole owner of both gates.
         """
-        if not budget.charge(x_batch.shape[0]):
+        budget.charge(x_batch.shape[0])
+        if budget.refused:
             return None
         f_batch, g_batch, feas = evaluate_batch(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
@@ -541,6 +542,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     points = init_starts
     # a start with no finite evidence never steps: it waits for EI
     stalled: list[bool] = [not math.isfinite(point.f) for point in points]
+    # Paths whose probe ran this iteration. They moved by the probe, so they
+    # do not also step: an iteration restarts a path or advances it, not both.
+    just_restarted: set[int] = set()
     # The continue side's sample is priced like the probe it is compared with,
     # so the clock that hands it out lives in _Horizon, not in the loop.
     horizon = _Horizon([point.f for point in points], n_probe_evals)
@@ -570,7 +574,8 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         the method's and the rule's per-path state reset to cold start, while
         that pool is kept (same sampler, new trajectories). A path whose fresh
         group-min is non-finite arrives stalled and waits for the next EI
-        verdict.
+        verdict. The probe is this iteration's move for every restarted path,
+        finite or not, so none of them also steps.
         """
         starts = probe_select(len(idxs))
         if starts is None:
@@ -583,15 +588,16 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             restart_rule.restart(i)  # the next Δ opens this path's next stage
             stalled[i] = not math.isfinite(point.f)
             horizon.restart_at(i, point.f, it)
+        just_restarted.update(idxs)
 
-    def decide_restarts(it: int) -> None:
-        """Decide which paths to restart against B.
+    def advance_paths(it: int) -> None:
+        """Advance every path one move: restart it, or step it.
 
-        B is passed to each verdict (the engine is its only writer), so every
-        verdict reads the incumbent of its own iteration. Stalled paths' step
-        counting now lives in the main loop's tail (complementary to the
-        accepted paths'), so a stalled path's verdict cadence aligns with its
-        advancing cohort instead of leading it by one iteration.
+        The iteration's restart votes are folded in here, so a verdict reads the
+        incumbent of its own iteration (the engine is B's only writer). A path
+        that restarted moved by its probe and does not also step. A refused
+        probe latches the meter, so the step is skipped; the caller reads
+        `refused` as the run's one stop signal.
         """
         to_restart = [
             i
@@ -600,23 +606,28 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         ]
         if to_restart:
             apply_restarts(to_restart, it)
+        if not budget.refused:
+            step_paths()
 
     def step_paths() -> None:  # noqa: C901 - per-path verdict dispatch
-        """One batched engine step for every non-stalled path.
+        """One batched engine step for every path that steps this iteration.
 
         The method proposes, the engine projects and serves, the method
         judges, the engine commits. Trial passes run in lockstep over the
         still-rejecting subset, each served whole or not at all (a budget
         failure stops globally). A path's point is unchanged while it
         rejects, so the point handed to propose/verdict is also the step's
-        start point. `stalled` is the engine's only path status: on return,
-        a path is stalled exactly when it did not commit a step this iteration
-        ("accept"; gave up, or max_ls exhausted on rejects),
-        so the caller reads "accepted" as `not stalled[i]`.
+        start point. A path that just restarted is not a stepper: its probe was
+        this iteration's move. On return, a path is stalled exactly when it did
+        not move at all this iteration (no probe, no commit: gave up, or max_ls
+        exhausted on rejects).
         """
-        active = [i for i in range(n_paths) if not stalled[i]]
+        active = [
+            i for i in range(n_paths) if not stalled[i] and i not in just_restarted
+        ]
         if not active:
-            return  # everyone stalled; verdicts may revive paths next iteration
+            # Every path either waits for a verdict or already moved by its probe.
+            return
         rejecting = list(active)
         # Per-step argmin cache: "accept" commits the lowest-f finite trial
         # served this step (not the last served one), so a method can sweep a
@@ -663,36 +674,41 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             stalled[i] = True
 
     all_stalled = False
-    # Iterations attempted. Also the index of the iteration about to run, which
+    # Iterations completed. Also the index of the iteration about to run, which
     # is what every horizon call below is measured against.
     it = 0
     while True:
-        # The batch budget caps served work (the meter), and the iteration guard
-        # caps attempts at the same number, so a method never gets more batches
-        # than another. An iteration serves at least one batch unless every path
-        # is stalled, so the iteration guard only bites on a stalling run - it is
-        # what stops a permanently-stalled run whose rule can state no cadence,
-        # without spending anything.
-        if budget.at_cap() or it >= max_evals:
+        # A completed iteration can bring the batch count exactly to the cap.
+        # Checked before a new iteration starts, so the run never asks for
+        # verdicts it cannot act on; the `refused` check below covers a cap hit
+        # mid-step and the caller's gate.
+        if budget.at_cap():
             break
-        decide_restarts(it)
+        just_restarted.clear()
+        advance_paths(it)
+        # The meter is the run's one stop signal: it latches every gate (the
+        # batch cap, the caller's gate, an earlier refusal), so a refused probe
+        # or batch ends the run here. This iteration is not counted - it did not
+        # finish - which is why the increment sits at the loop tail.
         if budget.refused:
             break
         # All paths are stuck and this iteration's restart votes (asked in
-        # decide_restarts above) revived nothing. The next vote cannot be due
+        # advance_paths above) revived nothing. The next vote cannot be due
         # before the earliest path's stage fills: samples_until_verdict() more
         # samples, each priced n_probe_evals evals, the first of them no
         # sooner than that path's own next sample, plus the iteration the vote
         # is taken in. Both minima are taken separately, which can only
         # under-count the wait - the safe direction: an over-counted wait would
         # stop the engine for a vote that was still due. 0 samples means
-        # "unknown cadence", which only happens before any observe, and the
-        # arithmetic then goes negative, so the shortcut stays off (the iteration
-        # guard above is then the only bound). The wait is in iterations and so
-        # is the remaining iteration budget: a waiting iteration serves nothing
-        # here, so the batch budget is not what bounds it. Once every path is
-        # stalled no eval can fire later, so points / B / n_points / n_batches
-        # are untouched.
+        # "unknown cadence", which only happens before any observe; the
+        # arithmetic then goes negative, so the shortcut stays off - but only
+        # until the first horizon closes an iteration later, after which the
+        # wait is at least 1 and the shrinking `max_evals - it` side makes the
+        # shortcut fire before the iteration count can reach the cap. The wait
+        # is in iterations and so is the remaining iteration budget: a waiting
+        # iteration serves nothing here, so the batch budget is not what bounds
+        # it. Once every path is stalled no eval can fire later, so points / B /
+        # n_points / n_batches are untouched.
         if all(stalled):
             needed = restart_rule.samples_until_verdict()
             stagger = min(
@@ -701,22 +717,13 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             if stagger + (needed - 1) * n_probe_evals + 1 >= max_evals - it:
                 all_stalled = True
                 break
-        step_paths()
         for i, delta in horizon.samples(it, [p.f for p in points], stalled):
             restart_rule.observe_continue(i, delta)
-        # Counted before the refusal check: an iteration whose step was cut
-        # short by a refused batch still happened, so it is still attempted.
-        it += 1
-        if budget.refused:
-            break
+        it += 1  # counted after the refused check: only finished iterations
 
-    if budget.refused:
-        # Only the meter refuses, and it names the gate that did.
-        status: NPathStatus = budget.stop_status()
-    elif all_stalled:
-        status = "all_stalled"
-    else:
-        status = "max_evals"
+    # Only the meter or a fully stalled flock can end the loop; the meter names
+    # the gate that refused, and max_evals is exact in batches so it wins.
+    status: NPathStatus = "all_stalled" if all_stalled else budget.stop_status()
     return NPathResult(
         x=incumbent.x,
         fun=incumbent.fun,
@@ -768,8 +775,8 @@ class _Budget:
     before the seam call, so a refused batch serves nothing, and a refusal is
     sticky: every path stops, not just the one that asked.
 
-    Two counters, two units, never mixed: `spent`/`n_batches` are the batch
-    meter (always batches); `n_points` is the points actually served, the
+    Two counters, two units, never mixed: `n_batches` is the batch meter
+    (always batches); `n_points` is the points actually served, the
     serial-cost number. Both are always reported, so there is no billing mode.
 
     `budget_check` is the caller's extra gate for a budget this engine cannot
@@ -783,29 +790,31 @@ class _Budget:
         budget_check: Callable[[], bool] | None,
     ) -> None:
         self.max_evals = max_evals
-        self.spent = 0
         self.n_points = 0
         self.n_batches = 0
         self.refused = False
         self._gate = budget_check
 
-    def charge(self, batch_size: int) -> bool:
-        """Reserve one batch of `batch_size`; False once any gate says stop."""
+    def charge(self, batch_size: int) -> None:
+        """Reserve one batch of `batch_size`, or latch the refusal.
+
+        A command, not a query: a refusal is recorded in `refused` (sticky), so
+        a caller charges and then reads `refused` instead of branching on a
+        return value.
+        """
         if (
             self.refused
-            or self.spent >= self.max_evals
+            or self.n_batches >= self.max_evals
             or (self._gate is not None and not self._gate())
         ):
             self.refused = True
-            return False
-        self.spent += 1
+            return
         self.n_batches += 1
         self.n_points += batch_size
-        return True
 
     def at_cap(self) -> bool:
         """Report whether the batch budget is used up."""
-        return self.spent >= self.max_evals
+        return self.n_batches >= self.max_evals
 
     def stop_status(self) -> NPathStatus:
         """Name the gate that refused: max_evals is exact in batches, so it wins."""
@@ -832,7 +841,9 @@ class _Horizon:
 
     A stalled path still closes its horizon on time (the inf is evidence, at the
     cost of the iterations it was measured in), so its cadence stays aligned
-    with its advancing cohort rather than leading it by an iteration.
+    with its advancing cohort rather than leading it by an iteration. A
+    restarted path's first horizon holds one step fewer than the span, because
+    its probe was that iteration's move.
     """
 
     def __init__(self, f: list[float], n_probe_evals: int) -> None:

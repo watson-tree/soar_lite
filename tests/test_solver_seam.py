@@ -198,7 +198,7 @@ def test_injected_rule_is_driven() -> None:
 
 
 def test_rule_can_force_restarts() -> None:
-    """A rule that always says restart makes the engine re-probe every step."""
+    """A rule that always says restart re-probes every iteration, never steps."""
     k = 2
     evaluate_batch, shapes = evaluator()
     solver = StubSolver()
@@ -208,19 +208,21 @@ def test_rule_can_force_restarts() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        # each iteration buys a restart probe (PROBE_EVALS batches) plus its step
-        max_evals=PROBE_EVALS + 2 * (PROBE_EVALS + 1),
+        # Each iteration buys a restart probe (PROBE_EVALS batches). A
+        # restarted path is skipped by that iteration's step, so a rule that
+        # restarts everything every iteration buys no step at all.
+        max_evals=PROBE_EVALS + 2 * PROBE_EVALS,
         n_probe_evals=PROBE_EVALS,
         solver=solver,
         restart_rule=rule,
         key=jax.random.PRNGKey(3),
     )
-    # init probe + both steps' (restart event + one accepted trial)
+    # init probe + two restart events, and nothing else
     assert res.n_points == sum(w for w, _d in shapes)
-    assert res.n_points == PROBE_EVALS * k + 2 * (PROBE_EVALS * k + k)
-    assert rule.restarts == [0, 1] * 2  # every path restarted, every step
+    assert res.n_points == PROBE_EVALS * k + 2 * (PROBE_EVALS * k)
+    assert rule.restarts == [0, 1] * 2  # every path restarted, every iteration
     assert len(rule.group_mins) == k + 2 * k  # n_paths init + payoff per restart
-    assert solver.verdicts == [0, 1] * 2
+    assert solver.verdicts == []  # restarted, not stepped
     assert res.status == "max_evals"
 
 
