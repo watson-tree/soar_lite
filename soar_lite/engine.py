@@ -457,19 +457,18 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     budget = _Budget(max_evals, budget_check)
     incumbent = _Incumbent(d_bounds)
 
-    def eval_x(
-        x_batch: jnp.ndarray,
-    ) -> tuple[list[float], jnp.ndarray] | None:
-        """Charge one batch, serve it, fold it into B.
+    def eval_x(x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
+        """Serve one batch, or raise `_BudgetExhausted` if it is unaffordable.
 
-        The charge comes first, so a refused batch serves nothing - no partial
-        prefix of a batch is ever evaluated. A refusal is global: the whole run
-        stops, not just the path that asked. Returns (f_vals, g_batch), or None
-        when the meter refused; the meter is the sole owner of both gates.
+        The gate is asked before the charge, so a batch is served whole or not
+        at all - no partial prefix of a batch is ever evaluated - and the
+        counters only ever hold batches that were served. The refusal is a
+        signal, not a state: it unwinds straight to the run's one catch, so no
+        intermediate frame has to check it. Returns (f_vals, g_batch).
         """
+        if not budget.accept():
+            raise _BudgetExhausted
         budget.charge(x_batch.shape[0])
-        if budget.refused:
-            return None
         f_batch, g_batch, feas = evaluate_batch(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
@@ -477,7 +476,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         incumbent.observe(f_vals, x_batch, feas)
         return f_vals, g_batch
 
-    def probe_select(n: int) -> list[PathPoint] | None:
+    def probe_select(n: int) -> list[PathPoint]:
         """Draw n_probe_evals batches of n points, return n group-min starts.
 
         Each eval is one (n,d) batch sized exactly n (value-only
@@ -490,7 +489,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         At n_probe_evals = 2 (default) a group is a pair ("min of
         2 random points"); the 2-3 range is empirical (1 -> plain
         init, inf -> random search), pinned at 2 by design. Returns the n
-        starts, or None when the meter refused a probe eval.
+        starts; raises `_BudgetExhausted` if a probe batch is unaffordable.
         """
         nonlocal rng
         evals: list[list[PathPoint]] = []
@@ -505,10 +504,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
                     f"the sampler drew d={x_cand.shape[1]} but bounds has d={d_bounds}"
                 )
                 raise ValueError(msg)
-            out = eval_x(x_cand)
-            if out is None:  # the meter refused; nothing more can be served
-                return None
-            f_vals, g_batch = out
+            f_vals, g_batch = eval_x(x_cand)
             evals.append(
                 [PathPoint(x_cand[j], f_vals[j], g_batch[j]) for j in range(n)]
             )
@@ -524,8 +520,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             starts.append(evals[0 if best is None else best][j])
         return starts
 
-    init_starts = probe_select(n_paths)
-    if init_starts is None:
+    try:
+        init_starts = probe_select(n_paths)
+    except _BudgetExhausted:
         # Nothing was served, so there is no x to report: the budget refused
         # even the init probe (max_evals < n_probe_evals, or the caller's gate).
         return NPathResult(
@@ -578,8 +575,6 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         finite or not, so none of them also steps.
         """
         starts = probe_select(len(idxs))
-        if starts is None:
-            return  # the meter refused; nothing to restart from
         for point in starts:  # the event's group-mins extend the shared pool
             restart_rule.observe_restart(point.f)
         for i, point in zip(idxs, starts, strict=True):
@@ -596,8 +591,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         The iteration's restart votes are folded in here, so a verdict reads the
         incumbent of its own iteration (the engine is B's only writer). A path
         that restarted moved by its probe and does not also step. A refused
-        probe latches the meter, so the step is skipped; the caller reads
-        `refused` as the run's one stop signal.
+        probe raises `_BudgetExhausted` out of here before the step runs.
         """
         to_restart = [
             i
@@ -606,10 +600,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         ]
         if to_restart:
             apply_restarts(to_restart, it)
-        if not budget.refused:
-            step_paths()
+        step_paths()
 
-    def step_paths() -> None:  # noqa: C901 - per-path verdict dispatch
+    def step_paths() -> None:
         """One batched engine step for every path that steps this iteration.
 
         The method proposes, the engine projects and serves, the method
@@ -639,7 +632,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         # max_ls stays engine-side as a failsafe: a solver that returned
         # "retry" forever would hang the engine without this cap.
         for _ in range(max_ls):
-            if not rejecting or budget.refused:
+            if not rejecting:
                 break
             # The method proposes raw candidates; the engine clips them into
             # `bounds`, so the caller's map never sees a point outside the
@@ -647,10 +640,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             # verdict() is handed the served point.
             raw = jnp.stack([solver.propose(i, points[i]) for i in rejecting])
             x_trial = jnp.clip(raw, lo, hi)
-            out = eval_x(x_trial)
-            if out is None:
-                break
-            f_trial, g_trial = out
+            f_trial, g_trial = eval_x(x_trial)
             still_rejecting: list[int] = []
             for pos, i in enumerate(rejecting):
                 point = points[i]
@@ -678,19 +668,19 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     # is what every horizon call below is measured against.
     it = 0
     while True:
-        # A completed iteration can bring the batch count exactly to the cap.
-        # Checked before a new iteration starts, so the run never asks for
-        # verdicts it cannot act on; the `refused` check below covers a cap hit
-        # mid-step and the caller's gate.
-        if budget.at_cap():
+        # A completed iteration can bring the batch count to the cap or close
+        # the caller's gate. Checked before a new iteration starts, so the run
+        # never asks for verdicts it cannot act on. This is the one stop that is
+        # a plain query - it decides whether to start an iteration at all; a
+        # refusal mid-iteration arrives as _BudgetExhausted below instead.
+        if not budget.accept():
             break
         just_restarted.clear()
-        advance_paths(it)
-        # The meter is the run's one stop signal: it latches every gate (the
-        # batch cap, the caller's gate, an earlier refusal), so a refused probe
-        # or batch ends the run here. This iteration is not counted - it did not
-        # finish - which is why the increment sits at the loop tail.
-        if budget.refused:
+        try:
+            advance_paths(it)
+        except _BudgetExhausted:
+            # The iteration asked for a batch it could not afford and was cut
+            # short: it did not finish, so it is not folded and not counted.
             break
         # All paths are stuck and this iteration's restart votes (asked in
         # advance_paths above) revived nothing. The next vote cannot be due
@@ -719,10 +709,10 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
                 break
         for i, delta in horizon.samples(it, [p.f for p in points], stalled):
             restart_rule.observe_continue(i, delta)
-        it += 1  # counted after the refused check: only finished iterations
+        it += 1  # counted after the stop check: only finished iterations
 
     # Only the meter or a fully stalled flock can end the loop; the meter names
-    # the gate that refused, and max_evals is exact in batches so it wins.
+    # the gate that stopped it, and max_evals is exact in batches so it wins.
     status: NPathStatus = "all_stalled" if all_stalled else budget.stop_status()
     return NPathResult(
         x=incumbent.x,
@@ -766,22 +756,34 @@ class _Incumbent:
             self.x = x_batch[j]
 
 
+class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
+    """A batch was requested past one of the meter's two gates.
+
+    Raised only inside `n_path_schedule`, at the one request site (`eval_x`),
+    and caught by the loop or the init-probe guard. It carries nothing: the
+    run's status is derived from the counters, and an unserved batch is never
+    charged, so they name the gate correctly.
+    """
+
+
 class _Budget:
     """The run's batch meter: one unit per served batch, exactly.
 
     A batch is the points one eval serves - the wall-clock unit a batched
     objective bills - so a probe (n_probe_evals batches) costs n_probe_evals
-    of max_evals and a rejected trial batch costs one. The charge happens
-    before the seam call, so a refused batch serves nothing, and a refusal is
-    sticky: every path stops, not just the one that asked.
+    of max_evals and a rejected trial batch costs one. Whether a batch may be
+    served is a query (`accept`), asked before `charge`; a refused batch is
+    never charged, so the counters cannot overshoot. The refusal itself is a
+    signal (`_BudgetExhausted`), not a flag stored here.
 
     Two counters, two units, never mixed: `n_batches` is the batch meter
     (always batches); `n_points` is the points actually served, the
     serial-cost number. Both are always reported, so there is no billing mode.
 
     `budget_check` is the caller's extra gate for a budget this engine cannot
-    see (points, wall-clock, dollars). It is consulted once per batch, so it can
-    over-run by less than one batch and never more; None means there is none.
+    see (points, wall-clock, dollars), read as a query like `accept`. None
+    means there is none. A budget that only tightens (a counter, a clock)
+    needs no latching: the run ends on the first batch it refuses.
     """
 
     def __init__(
@@ -792,33 +794,28 @@ class _Budget:
         self.max_evals = max_evals
         self.n_points = 0
         self.n_batches = 0
-        self.refused = False
         self._gate = budget_check
 
     def charge(self, batch_size: int) -> None:
-        """Reserve one batch of `batch_size`, or latch the refusal.
-
-        A command, not a query: a refusal is recorded in `refused` (sticky), so
-        a caller charges and then reads `refused` instead of branching on a
-        return value.
-        """
-        if (
-            self.refused
-            or self.n_batches >= self.max_evals
-            or (self._gate is not None and not self._gate())
-        ):
-            self.refused = True
-            return
+        """Record one served batch. The caller has already accepted it."""
         self.n_batches += 1
         self.n_points += batch_size
 
-    def at_cap(self) -> bool:
-        """Report whether the batch budget is used up."""
+    def full(self) -> bool:
+        """Whether the batch budget is used up."""
         return self.n_batches >= self.max_evals
 
+    def gated(self) -> bool:
+        """Whether the caller's extra gate has closed."""
+        return self._gate is not None and not self._gate()
+
+    def accept(self) -> bool:
+        """Whether the next batch may be served (the run's one stop query)."""
+        return not self.full() and not self.gated()
+
     def stop_status(self) -> NPathStatus:
-        """Name the gate that refused: max_evals is exact in batches, so it wins."""
-        return "max_evals" if self.at_cap() else "budget_exhausted"
+        """Name the gate that stopped the run: max_evals is exact in batches."""
+        return "max_evals" if self.full() else "budget_exhausted"
 
 
 class _Horizon:

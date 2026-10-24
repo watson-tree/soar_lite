@@ -101,8 +101,9 @@ class Recorder:
     def limit_check(self, limit: int) -> Callable[[], bool]:
         """Return a batch-level budget_check() False once `limit` evals served.
 
-        The core consults it once per batch, it reads the evals already served,
-        and the terminal batch therefore over-runs by less than one batch width.
+        The core consults it before each batch (and once at the head of each
+        iteration), it reads the evals already served, and the terminal batch
+        therefore over-runs by less than one batch width.
         """
 
         def check() -> bool:
