@@ -15,13 +15,14 @@ here, never the other way around at module level:
 Dependency direction: plugins depend on engine types; the engine binds its two
 defaults lazily inside `n_path_schedule` (keeps the module graph acyclic and
 `__init__` importable in any order). The engine is first-order (value-and-
-gradient), coordinate-free, and owns the paths, the box, the shared budget,
+gradient), coordinate-free, and owns the paths, the box, the shared horizon,
 the clip-to-bounds and the EI restart cadence; the local solver owns only
 direction/step size/acceptance and the restart rule only the continue-vs-
 restart decision.
 """
 
 import math
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias, runtime_checkable
@@ -47,7 +48,7 @@ class LocalSolver(Protocol):
     """The search method the n-path engine drives (the engine's plugin point).
 
     The engine owns the schedule: row composition, projection, the shared
-    budget, the n-path state machine (restart/step/stall), the incumbent B,
+    horizon, the n-path state machine (restart/step/stall), the incumbent B,
     and the per-step trial cap max_ls. The method owns the search: the
     direction, the step size, and the acceptance test. All state is per path,
     lives inside the instance, and is opaque to the engine (the engine never
@@ -186,15 +187,13 @@ class RestartRule(Protocol):
     def samples_until_verdict(self) -> int:
         """Report how many more samples until a verdict can be due (0 = unknown).
 
-        A cadence hint, not evidence, and the engine asks it only once every
-        path has stalled: it is what separates "waiting for a verdict" from
-        "nothing can happen again". It counts *samples*, not iterations: with
-        one sample per iteration the engine can compare it against the remaining
-        budget directly. A verdict unreachable before
-        `max_evals` makes the remaining iterations pure spin - no eval, no state
-        change - and the engine stops there instead of burning the budget. 0
-        means "unknown cadence" and disables that shortcut, so a rule with no
-        cadence of its own is never mistaken for a dead one.
+        TODO(to be cut): the engine no longer calls this. It lost its only
+        caller when the all-stalled shortcut went away - the iteration horizon
+        bounds a stalled flock now, not a cadence query. Kept until a caller
+        needs it; delete it (and `EIRestartRule`'s copy) once confirmed unused.
+
+        A cadence hint, not evidence: samples, not iterations, though with one
+        sample per iteration the two coincide. 0 means "unknown cadence".
         """
         ...
 
@@ -210,10 +209,11 @@ class RestartRule(Protocol):
 
 # --- engine: the n-path schedule ---
 
-NPathStatus: TypeAlias = Literal["budget_exhausted", "max_evals", "all_stalled"]
-# "all_stalled" is a third stop, distinct from the two budget ones: every path
-# had stopped and no restart verdict could be reached before max_evals, so the
-# engine ended the run there rather than spinning iterations that serve no eval.
+NPathStatus: TypeAlias = Literal["budget_exhausted", "max_iters", "time_limit"]
+# Three names for the three gates that can end a run, in the order they are
+# checked: the iteration horizon, the wall-clock deadline, and the caller's
+# extra batch gate. A stalled flock has no fourth stop - it keeps folding inf
+# samples until the horizon or the deadline ends the run.
 
 # The one way the engine sees the objective: x rows (M,d) inside `bounds` in,
 # (f (M,), grads_x (M,d), feas (M,)|None) out. Value and gradient come back
@@ -249,13 +249,17 @@ class NPathResult:
 
     Field names follow `scipy.optimize.OptimizeResult` where the concepts
     correspond: `x` is the argmin in the coordinates the engine was handed
-    (the caller's coords), `fun` is its objective value, and `nit` counts
+    (the caller's coords), `fun` is its objective value, and `n_iters` counts
     completed engine iterations: the initialization probe is iteration 0, and
     one iteration may serve several batches (restart probes plus up to the
-    per-step trial cap), so `nit` is not a batch count. Work is
-    reported on two axes instead of scipy's single `nfev`: `n_points` is the
-    points served (the serial-cost number) and `n_batches` the evals served
+    per-step trial cap), so `n_iters` is not a batch count. It is spelled
+    `n_iters` rather than scipy's `nit` to sit beside the two work counts.
+    Work is reported on two axes instead of scipy's single `nfev`: `n_points` is the
+    g points served (the serial-cost number) and `n_batches` the g batches served
     (the parallel wall-clock number); they are different numbers and never mix.
+    Only fused value+gradient passes are charged, so a probe's f-only draws
+    appear in neither: the axis that dominates is exact, the cheap half is
+    reported nowhere.
 
     Two deliberate differences from `OptimizeResult`: `success`/`message` are
     absent because the engine has no convergence criterion at all, and `fun` is
@@ -269,7 +273,7 @@ class NPathResult:
     fun: float  # min over feasible finite recorded evals; inf if none yet
     n_points: int  # points served (the serial-cost count)
     n_batches: int  # batches (evals) served (the parallel wall-clock count)
-    nit: int  # completed iterations (the init probe is 0; not trials)
+    n_iters: int  # completed iterations (the init probe is 0; not trials)
     status: NPathStatus
 
 
@@ -287,18 +291,23 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     sample: Sampler | None = None,
     n_paths: int = 16,  # number of paths advanced each iteration, the engine's width
     n_probe_evals: int = 1,  # draws per start; >1 needs evaluate_f
-    # The two batch budgets, adjacent: max_evals caps the run, max_ls caps one
-    # step. A batch is the points one eval serves - the wall-clock unit a
-    # batched objective actually bills - so a probe (n_probe_evals batches, plus
-    # one for its winners when f-only) costs that many units of max_evals, init
-    # included. max_evals also caps the run's iterations at the same number: the
-    # second bound, below.
-    max_evals: int = 1000,
+    # The run's horizon, counted in iterations: the engine completes at most
+    # max_iters iterations. An iteration is one move per path (a restart probe
+    # or a step), not one eval, so this is a reproducible stop, not a cost or
+    # wall-clock proxy - one iteration may serve from zero batches (a stalled
+    # one) up to a full probe plus max_ls trial batches. None leaves the
+    # horizon to `time_limit`.
+    max_iters: int | None = None,
+    # A wall-clock deadline in seconds, for the caller who budgets time rather
+    # than iterations. None means none. A run needs a horizon: at least one of
+    # max_iters / time_limit must be given.
+    time_limit: float | None = None,
     max_ls: int = 20,  # trials one step may serve before stalling a path
     # Keyword-only and defaulted, like scipy's `callback`: an extra gate for a
-    # budget the engine cannot see (points, wall-clock, dollars), consulted once
-    # per batch. None means "no extra gate" - the run then stops on max_evals
-    # alone. The engine's own batch budget lives in max_evals, not here.
+    # budget the engine cannot see (points, dollars, an external clock),
+    # consulted once per batch. None means "no extra gate". It is additional,
+    # never a horizon: a gate that only a served batch advances cannot stop a
+    # stalled flock, so a horizon is still required.
     budget_check: Callable[[], bool] | None = None,
     # The two plugins, adjacent: the search method and the restart decision.
     solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
@@ -307,7 +316,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     # the fixed default PRNGKey(0), so an unseeded call still runs.
     key: jnp.ndarray | None = None,
 ) -> NPathResult:
-    """Advance n_paths independent chains in x under one shared budget.
+    """Advance n_paths independent chains in x under one shared horizon.
 
     The engine owns the schedule: it composes and clips the rows into
     `bounds`, serves one batched evaluate_batch call per eval, keeps the
@@ -328,16 +337,20 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     never mixed: `n_points` counts every served point (probe, trial, restart
     probe - one each), the serial-cost number; `n_batches` counts served
     batches (evals), the parallel wall-clock number where one n-path batch is
-    one unit. max_evals is the engine's own budget and it is always counted in
-    batches: every served batch is charged one, a probe costs n_probe_evals of
-    them, and the run stops when they are gone (status "max_evals"). It also
-    caps the run's iterations at the same number - a second bound that only
-    bites on a stalling run, below. budget_check() is the
-    caller's additional batch-level predicate consulted once per
-    batch (whole batch or None), for a budget the engine cannot see; a False
-    verdict stops all paths globally (status "budget_exhausted"), and None
-    means no extra gate; that external budget may over-run by <M points (the
-    gate flips only between batches), while max_evals is exact in batches.
+    one unit. They are reports, not caps. The run's own stop is the horizon: at
+    most `max_iters` iterations (status "max_iters"), or, if `time_limit` is
+    given, the wall-clock deadline (status "time_limit"); at least one of the
+    two must be passed. Iterations are the unit on purpose - an iteration is one
+    move per path, so the same number reproduces on any machine and does not
+    change when the probe depth or the f-only seam changes the per-iteration
+    batch count. It is not a cost bound: one iteration serves from zero batches
+    (a fully stalled one) up to a full probe plus `max_ls` trial batches, so
+    migrating a batch budget to `max_iters` can multiply the work done by that
+    per-iteration spread. budget_check() is the caller's additional batch-level
+    predicate consulted once per batch (whole batch or None), for a budget the
+    engine cannot see; a False verdict stops all paths globally (status
+    "budget_exhausted"), and None means no extra gate; that external budget may
+    over-run by <M points (the gate flips only between batches).
     fun is the true min over every feasible
     recorded eval with a finite value - every served point when the seam
     reports no aux;
@@ -375,9 +388,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     So a stage of M samples costs M evals, but the batch count is not the cost
     that dominates: a probe computes g n_probe_evals times while a step computes
     it once, and g is the dearer half. So n_probe_evals > 1 requires evaluate_f;
-    with it both sides compute g exactly once (the probe paying one extra batch
-    for its winners' gradients), leaving only the cheap f-count to differ. That
-    is why the default is 1.
+    with it both sides compute g exactly once (the probe's f-only draws are not
+    charged; only its winners' fused pass is), leaving only the cheap f-count to
+    differ. That is why the default is 1.
 
     The caller's inputs are validated here, once per run: knob ranges and the
     box's own shape/ordering raise ValueError, and a seam object that does not
@@ -396,8 +409,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             all - the probe takes a gradient with each draw, which is why a
             depth above 1 is refused; supplying it lets a multi-draw probe
             compute ``g`` once, at its winners, instead of once per draw. The
-            winners are served twice (f-only, then fused), so ``n_points``
-            counts them twice while ``n_batches`` stays one per batch.
+            winners are served twice (f-only, then fused), but only the fused
+            pass is charged: an f-only draw is not a budget event, so
+            ``n_points`` counts each winner once.
         bounds: the search box, scipy-style: one ``(lb, ub)`` pair per dim, a
             ``(d, 2)`` array, or ``None`` for no box. ``None``/±inf = unbounded.
         sample: the injected prior ``(key, n) -> (n, d)`` in the engine's own
@@ -408,11 +422,13 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             probe would compute ``g`` once per draw against a step's single
             ``g``, and that gradient count - not the batch count - is the
             expensive half of the asymmetry the verdict prices.
-        max_evals: the engine's own batch budget (always counted in batches);
-            also caps the run's iterations.
+        max_iters: the run's horizon in iterations (``None`` leaves it to
+            ``time_limit``); a run needs at least one of the two.
+        time_limit: a wall-clock deadline in seconds (``None`` means none).
         max_ls: the per-step trial cap after which a path stalls.
-        budget_check: an extra whole-batch gate for an external budget the
-            engine cannot see; ``None`` means none.
+        budget_check: an extra gate asked before every g batch, for an external
+            budget the engine cannot see; additional, not a horizon, and never
+            consulted inside a probe's f-only draws (``None`` means none).
         solver: the local method (``None`` binds ``DiagonalPreconditioner``).
         restart_rule: the restart decision (``None`` binds ``EIRestartRule``).
         key: the PRNG seed; ``None`` uses the fixed default so unseeded runs
@@ -423,9 +439,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
 
         - ``x``: the argmin in the caller's coordinates
         - ``fun``: the incumbent (min finite feasible eval; ``inf`` if none)
-        - ``n_points``: points served (the serial-cost count)
-        - ``n_batches``: batches (evals) served (the parallel wall-clock count)
-        - ``nit``: completed iterations (the init probe is iteration 0)
+        - ``n_points``: g points served (the serial-cost count)
+        - ``n_batches``: g batches served (the parallel wall-clock count)
+        - ``n_iters``: completed iterations (the init probe is iteration 0)
         - ``status``: why the run stopped
 
     Example:
@@ -442,7 +458,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             ...     evaluate_batch,
             ...     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
             ...     n_paths=4,
-            ...     max_evals=30,
+            ...     max_iters=30,
             ... )
 
             >>> result.x          # ≈ (3, 3)
@@ -458,11 +474,23 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         ("n_paths", n_paths, 1),
         ("n_probe_evals", n_probe_evals, 1),
         ("max_ls", max_ls, 1),
-        ("max_evals", max_evals, 0),
     ):
         if value < low:
             msg = f"{name} must be >= {low}, got {value}"
             raise ValueError(msg)
+    if max_iters is not None and max_iters < 0:
+        msg = f"max_iters must be >= 0, got {max_iters}"
+        raise ValueError(msg)
+    if time_limit is not None and time_limit <= 0:
+        msg = f"time_limit must be > 0, got {time_limit}"
+        raise ValueError(msg)
+    if max_iters is None and time_limit is None:
+        msg = (
+            "a run needs a horizon: pass max_iters (iterations) or "
+            "time_limit (seconds); budget_check alone cannot stop a stalled "
+            "flock, since a stalled iteration serves no batch"
+        )
+        raise ValueError(msg)
     _check_bounds(bounds)
     if evaluate_f is None and n_probe_evals != 1:
         # The verdict's expensive side is the gradient count, not the batch
@@ -502,7 +530,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         draw: Sampler = default_sample
     else:
         draw = sample
-    budget = _Budget(max_evals, budget_check)
+    budget = _Budget(max_iters, time_limit, budget_check)
     incumbent = _Incumbent(d_bounds)
     # The sampler's d is a property of the callable, not of the draw, so a box
     # mismatch is a wiring bug validated once - on the first draw - rather than
@@ -510,13 +538,15 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     d_checked = False
 
     def _evaluate_batch(x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
-        """Serve one batch, or raise `_BudgetExhausted` if it is unaffordable.
+        """Serve one g batch, or raise `_BudgetExhausted` if it is unaffordable.
 
         The gate is asked before the charge, so a batch is served whole or not
         at all - no partial prefix of a batch is ever evaluated - and the
-        counters only ever hold batches that were served. The refusal is a
-        signal, not a state: it unwinds straight to the run's one catch, so no
-        intermediate frame has to check it. Returns (f_vals, g_batch).
+        counters only ever hold g batches that were served. This is the run's
+        only charged site: a probe's extra draws are f-only and cheaper, and
+        are not budget events. The refusal is a signal, not a state: it unwinds
+        straight to the run's one catch, so no intermediate frame has to check
+        it. Returns (f_vals, g_batch).
         """
         if not budget.accept():
             raise _BudgetExhausted
@@ -529,16 +559,17 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         return f_vals, g_batch
 
     def _evaluate_f(x_batch: jnp.ndarray) -> list[float]:
-        """Serve one f-only batch: `_evaluate_batch`'s gate and bookkeeping.
+        """Serve one f-only batch: no gate asked, no charge, same bookkeeping.
 
-        The same gate and per-path bookkeeping, but no gradient. Only
-        `probe_select`'s f-only branch calls this, which is why the
-        `evaluate_f` assertion is here for the checker rather than as a check.
+        A probe's extra draws are the f half alone, which is the cheap half, so
+        they are not budget events: the gate is not asked and the counters do
+        not move. Its winners' fused pass still is one, and a probe is entered
+        only after the loop head accepted the iteration, so the gate's blind
+        spot stays under one probe. Only `probe_select`'s f-only branch calls
+        this, which is why the `evaluate_f` assertion is here for the checker
+        rather than as a check.
         """
         assert evaluate_f is not None  # the f-only branch's own precondition
-        if not budget.accept():
-            raise _BudgetExhausted
-        budget.charge(x_batch.shape[0])
         f_batch, feas = evaluate_f(x_batch)
         f_vals = f_batch.tolist()
         incumbent.observe(f_vals, x_batch, feas)
@@ -741,18 +772,12 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         for i in rejecting:  # max_ls exhausted: stall; an EI verdict may revive
             stalled[i] = True
 
-    all_stalled = False
-    # Iterations completed. Also the index of the iteration about to run, which
-    # is what the all-stalled shortcut below is measured against. Iteration 0 is
-    # the initialization probe: the first pass sees no probe evidence, so every
-    # rule's verdict is "restart" and the flock is seeded through the same
-    # apply_restarts path a later restart uses.
-    it = 0
+    # Iteration 0 is the initialization probe: the first pass sees no probe
+    # evidence, so every rule's verdict is "restart" and the flock is seeded
+    # through the same apply_restarts path a later restart uses.
     while True:
-        # A completed iteration can bring the batch count to the cap or close
-        # the caller's gate. Checked before a new iteration starts, so the run
-        # never asks for verdicts it cannot act on. This is the one stop that is
-        # a plain query - it decides whether to start an iteration at all; a
+        # The horizon and the caller's gate are plain queries, asked before a new
+        # iteration starts so the run never begins one it cannot finish. A
         # refusal mid-iteration arrives as _BudgetExhausted below instead.
         if not budget.accept():
             break
@@ -763,21 +788,11 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             # The iteration asked for a batch it could not afford and was cut
             # short: it did not finish, so it is not folded and not counted.
             break
-        # All paths are stuck and this iteration's restart votes revived
-        # nothing. With one sample per iteration, the wait until the next vote
-        # is just the rule's own cadence: if that many iterations cannot fit in
-        # the remaining budget, no vote can fire and the flock is stuck for
-        # good. 0 means "unknown cadence" (a rule with no path evidence at all);
-        # the right side is then >= 1, so the shortcut stays off. Once every path
-        # is stalled no eval can fire later, so points / B / n_points / n_batches
-        # are untouched.
-        if all(stalled) and restart_rule.samples_until_verdict() >= max_evals - it:
-            all_stalled = True
-            # The iteration ran to its end (its step is what stalled the last live
-            # path), so it counts: only an iteration cut short by a refusal is
-            # left out of nit.
-            it += 1
-            break
+        # Every path folds one sample per iteration, stalled or not: a stalled
+        # path has no step to report, so its sample is inf ("no evidence"), and
+        # its own clock keeps advancing in step with its live cohort. A fully
+        # stalled flock therefore keeps folding inf until the horizon or the
+        # deadline ends the run - it is bounded by those, never by this loop.
         for i in range(n_paths):
             if i in just_restarted:
                 # The probe was this iteration's move, not a step: its first Δ
@@ -787,18 +802,15 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             delta = math.inf if stalled[i] else points[i].f - prev_f[i]
             restart_rule.observe_continue(i, delta)
             prev_f[i] = points[i].f
-        it += 1  # counted after the stop check: only finished iterations
+        budget.tick()  # counted after the body: only finished iterations
 
-    # Only the meter or a fully stalled flock can end the loop; the meter names
-    # the gate that stopped it, and max_evals is exact in batches so it wins.
-    status: NPathStatus = "all_stalled" if all_stalled else budget.stop_status()
     return NPathResult(
         x=incumbent.x,
         fun=incumbent.fun,
         n_points=budget.n_points,
         n_batches=budget.n_batches,
-        nit=it,
-        status=status,
+        n_iters=budget.n_iters,
+        status=budget.stop_status(),
     )
 
 
@@ -835,53 +847,65 @@ class _Incumbent:
 
 
 class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
-    """A batch was requested past one of the meter's two gates.
+    """A batch was requested past a closed gate.
 
-    Raised only inside `n_path_schedule`, at the two request sites
-    (`_evaluate_batch` and `_evaluate_f`), and caught by the loop. It carries
-    nothing: the run's status is derived from the counters, and an unserved
+    Raised only inside `n_path_schedule`, at the run's one charged site
+    (`_evaluate_batch`), and caught by the loop. It carries
+    nothing: the run's status is derived from the same queries, and an unserved
     batch is never charged, so they name the gate correctly.
     """
 
 
 class _Budget:
-    """The run's batch meter: one unit per served batch, exactly.
+    """The run's stop meter and work report.
 
-    A batch is the points one eval serves - the wall-clock unit a batched
-    objective bills - so a probe (n_probe_evals batches) costs n_probe_evals
-    of max_evals and a rejected trial batch costs one. Whether a batch may be
-    served is a query (`accept`), asked before `charge`; a refused batch is
-    never charged, so the counters cannot overshoot. The refusal itself is a
-    signal (`_BudgetExhausted`), not a flag stored here.
+    Three queries decide whether work may go on: the iteration horizon
+    (`max_iters`), the wall-clock deadline (`time_limit`), and the caller's
+    extra batch gate (`budget_check`). The first two are the run's own promises
+    that it ends - at least one is required at entry - and they are the only
+    things that bound a stalled flock, which serves no batch at all.
+    `budget_check` is additional: a gate that only a served batch advances
+    cannot stop a flock that serves nothing.
 
-    Two counters, two units, never mixed: `n_batches` is the batch meter
-    (always batches); `n_points` is the points actually served, the
-    serial-cost number. Both are always reported, so there is no billing mode.
-
-    `budget_check` is the caller's extra gate for a budget this engine cannot
-    see (points, wall-clock, dollars), read as a query like `accept`. None
-    means there is none. A budget that only tightens (a counter, a clock)
-    needs no latching: the run ends on the first batch it refuses.
+    `n_batches` and `n_points` are pure reports, not caps: the g batches served
+    (one per fused value+gradient pass, the parallel wall-clock number) and the
+    points they covered (the serial-cost number). A probe still costs its fused
+    batch and a rejected trial still costs its batch, so the report stays the
+    honest bill on the axis that dominates; a probe's f-only draws are cheaper
+    work and are charged nowhere. The refusal is a signal (`_BudgetExhausted`),
+    never a flag stored here, and a gate that only tightens (a counter, a clock)
+    needs no latching: the run ends on the first thing it refuses.
     """
 
     def __init__(
         self,
-        max_evals: int,
+        max_iters: int | None,
+        time_limit: float | None,
         budget_check: Callable[[], bool] | None,
     ) -> None:
-        self.max_evals = max_evals
+        self.max_iters = max_iters
+        self.deadline = None if time_limit is None else time.monotonic() + time_limit
         self.n_points = 0
         self.n_batches = 0
+        self.n_iters = 0
         self._gate = budget_check
 
     def charge(self, batch_size: int) -> None:
-        """Record one served batch. The caller has already accepted it."""
+        """Record one served g batch - the run's only charged site."""
         self.n_batches += 1
         self.n_points += batch_size
 
+    def tick(self) -> None:
+        """Record one completed iteration. The caller ticks only finished ones."""
+        self.n_iters += 1
+
     def full(self) -> bool:
-        """Whether the batch budget is used up."""
-        return self.n_batches >= self.max_evals
+        """Whether the iteration horizon is reached."""
+        return self.max_iters is not None and self.n_iters >= self.max_iters
+
+    def expired(self) -> bool:
+        """Whether the wall-clock deadline has passed."""
+        return self.deadline is not None and time.monotonic() >= self.deadline
 
     def gated(self) -> bool:
         """Whether the caller's extra gate has closed."""
@@ -889,11 +913,13 @@ class _Budget:
 
     def accept(self) -> bool:
         """Whether the next batch may be served (the run's one stop query)."""
-        return not self.full() and not self.gated()
+        return not self.full() and not self.expired() and not self.gated()
 
     def stop_status(self) -> NPathStatus:
-        """Name the gate that stopped the run: max_evals is exact in batches."""
-        return "max_evals" if self.full() else "budget_exhausted"
+        """Name the gate that ended the run; the horizon outranks the clock."""
+        if self.full():
+            return "max_iters"
+        return "time_limit" if self.expired() else "budget_exhausted"
 
 
 def _check_seam(obj: object | None, proto: type, what: str) -> None:

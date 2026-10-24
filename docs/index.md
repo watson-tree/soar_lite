@@ -9,7 +9,7 @@ surrogate.
 Three pieces, no dependencies beyond JAX and the standard library:
 
 - **`n_path_schedule`** — the engine: runs `n_paths` paths in lockstep, one
-  batched evaluation per iteration, and owns the box, the shared budget, the restart
+  batched evaluation per iteration, and owns the box, the shared horizon, the restart
   verdicts and the stall state machine.
 - **`DiagonalPreconditioner`** — the default local method: a per-coordinate
   diagonal secant step `-d ⊙ g`, EMA-smoothed, with a gradient-norm floor and an
@@ -41,7 +41,7 @@ result = n_path_schedule(
     evaluate_batch,
     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
     n_paths=4,
-    max_evals=30,
+    max_iters=30,
 )
 print(result.x, result.fun)  # [3. 3.] 0.0
 ```

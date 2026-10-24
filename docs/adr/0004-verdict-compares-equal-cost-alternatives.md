@@ -1,8 +1,10 @@
 # The restart verdict compares equal-cost alternatives, and every probe is billed
 
-**Status: amended.** Part 1 (the `n_probe_evals`-iteration horizon) is
+**Status: amended, twice.** Part 1 (the `n_probe_evals`-iteration horizon) is
 superseded: the horizon clock `_Horizon` was removed and one continue sample is
-now one step. See "Amendment" at the end. Parts 2 and 3 stand.
+now one step. Part 2's batch budget is superseded: the engine stops on
+`max_iters`/`time_limit`, and batches are reported, not budgeted. Part 3 stands.
+See "Amendment" at the end of each.
 
 `EI_restart` is fitted on probe group-mins, and one probe costs `n_probe_evals`
 served batches (one batch each). `EI_continue` was fitted on one-step Δ samples,
@@ -89,12 +91,57 @@ A probe computes `g` `n_probe_evals` times; one step computes it once (default
 `n_alpha = 1`). With `g` ≈ 2–5× `f`, that is the asymmetry worth closing, and it
 closed with an opt-in f-only evaluator seam: a probe draws `n_probe_evals`
 value-only batches and then serves one fused batch at the per-column winners, so
-it computes `g` once too. Part 2's billing stays exact in that shape - a probe
-costs `n_probe_evals + 1` batches, one more than the un-seamed probe, and all of
-them are charged. Without the seam the engine refuses `n_probe_evals > 1` with a
-`ValueError`, so no configuration compares a `n_probe_evals`-gradient probe
+it computes `g` once too. Without the seam the engine refuses `n_probe_evals > 1`
+with a `ValueError`, so no configuration compares a `n_probe_evals`-gradient probe
 against a one-gradient step; the default is `n_probe_evals = 1`. The gate is a
 conservative proxy: exact symmetry is `n_probe_evals == n_alpha`, and `n_alpha`
 lives in the solver, which the engine sees as a member that exists, not as a
 value. What is left is the f-count - cheap, and bounded by `max_ls` on the step
 side.
+
+## Amendment: the stop is an iteration horizon, and batches are only reported
+
+Part 2's meter is retired with it: `max_evals` no longer exists. The engine stops
+on a deterministic horizon, `max_iters` (iteration 0 is the init probe), or on an
+optional wall-clock `time_limit`; at least one of the two must be given.
+
+Reporting follows the axis that dominates: only the fused value+gradient pass is
+charged, so `n_batches`/`n_points` count `g` batches and `g` points. A probe's
+f-only draws are billed nowhere and are not gated - they are the cheap half, and
+counting them would mix two different costs into one number, which is what made
+the old `n_batches` unfit as a comparison unit once the f-only seam existed. The
+default shape (no `evaluate_f`, `n_probe_evals = 1`) has no f-only batch at all,
+so there the two definitions coincide. The price of dropping them: the gate's
+and the deadline's blind spot inside a multi-draw probe is under one probe.
+
+Why the meter had to go rather than be fixed: a batch budget can only be exact
+in an iteration that serves one batch, and this ADR's own "known gap" records
+that a retrying step serves `max_ls` and a restarting one serves a probe, so the
+number of batches an iteration costs is the method's business, at runtime. An
+engine that bills batches therefore cannot say how many iterations a caller has
+bought, and a run that stalls outright asks for no batch at all - the meter
+under-counts exactly where the loop is spinning. The horizon is the quantity the
+engine actually owns: one completed iteration per unit, whatever it served.
+
+What survives from Part 2: the probes are still charged somewhere, only now the
+thing charged is an iteration, and the init probe is iteration 0 rather than an
+unbilled prelude. The field this paragraph calls `nit` is `n_iters` now: it sits
+beside `n_points`/`n_batches`, and the scipy spelling stops at `x`/`fun`.
+`budget_check` keeps Part 2's role unchanged - a batch-level
+gate for a budget the engine cannot see - and gains one: it is the escape hatch
+for any stop condition the engine has no knob for. It cannot replace the
+horizon, because a fully stalled flock never asks for a batch, so a
+`budget_check` alone would never fire.
+
+Consequences:
+
+- `status` becomes `max_iters`, `time_limit` or `budget_exhausted`. There is no
+  `all_stalled` stop any more: a stalled flock idles to the horizon instead of
+  ending early, which is the price of a stop that does not read the rule's
+  cadence.
+- The migration is not a rename. `max_evals = N` bounded batches; `max_iters = N`
+  bounds iterations, each of which may serve up to one probe plus `max_ls` trial
+  batches. Moving a run from one to the other without re-tuning is a silent
+  budget increase of up to ~`n_probe_evals + 1 + max_ls` times.
+- `samples_until_verdict()` loses its only engine caller, since the shortcut that
+  read it is gone; it stays on the protocol for now, marked to be cut.

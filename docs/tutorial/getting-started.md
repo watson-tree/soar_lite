@@ -38,10 +38,11 @@ def evaluate_batch(x):
 ## 2. Run it
 
 `evaluate_batch` is the only positional argument. Everything else is a keyword,
-and two of them are conditionally required: the engine draws its starts from a
+and three of them are conditionally required: the engine draws its starts from a
 uniform prior over a finite `bounds`, so an unbounded or absent box needs your
-own `sample=`, and a probe deeper than one draw needs an `evaluate_f=`. Both are
-refused by `ValueError` rather than guessed.
+own `sample=`; a probe deeper than one draw needs an `evaluate_f=`; and a run
+needs a horizon, `max_iters` or `time_limit`. Each is refused by `ValueError`
+rather than guessed.
 
 ```python
 from soar_lite import n_path_schedule
@@ -50,16 +51,20 @@ result = n_path_schedule(
     evaluate_batch,
     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
     n_paths=4,
-    max_evals=30,
+    max_iters=30,
 )
 print(result.x, result.fun, result.status)
-# [3. 3.] 0.0 all_stalled
+# [3. 3.] 0.0 max_iters
 ```
 
-`all_stalled` is not a failure: every path reached its own per-coordinate
-stopping test and no restart verdict was reachable before `max_evals` ran out,
-so the engine ended the run instead of spinning iterations that serve no
-evaluation.
+The status says only why the loop stopped, never that it converged: it is
+`max_iters` here because the run reached the horizon you gave it. The paths
+themselves had finished earlier - each one had already reached its own
+per-coordinate stopping test and was waiting for a restart verdict that never
+came due - so the last iterations served nothing and the run idled to the
+horizon. That is the trade a deterministic stop makes: the iteration count is
+yours, the work inside it is not. `n_batches` and `n_points` report what was
+actually billed (value+gradient passes).
 
 ## 3. Read the result
 
@@ -70,13 +75,13 @@ correspond:
 | --- | --- |
 | `x` | argmin, in the coordinates you handed the engine |
 | `fun` | its value: the incumbent over feasible finite points, `inf` if none |
-| `n_points` | points served - the serial-cost count |
-| `n_batches` | batches served, one per `evaluate_batch` call - the parallel-cost count |
-| `nit` | engine iterations completed (iteration 0 is the initialization probe); one iteration may serve several batches |
-| `status` | `max_evals`, `budget_exhausted` or `all_stalled` |
+| `n_points` | points billed - the serial-cost count |
+| `n_batches` | batches billed, one per `evaluate_batch` call - the parallel-cost count |
+| `n_iters` | engine iterations completed (iteration 0 is the initialization probe); one iteration may serve several batches |
+| `status` | `max_iters`, `time_limit` or `budget_exhausted` |
 
 There is no `success` or `message`: the engine has no convergence criterion of
-its own. Stopping is always a budget or a stall.
+its own. Stopping is always a horizon or an extra gate.
 
 ## 4. Turn the knobs you actually need
 
@@ -84,7 +89,8 @@ its own. Stopping is always a budget or a stall.
 | --- | --- |
 | `bounds` | the search box, scipy-style `(lb, ub)` pairs per dim; `None`/`±inf` is unbounded |
 | `n_paths` | engine width: paths advanced in lockstep each iteration (default 16) |
-| `max_evals` | the engine's budget, counted in served batches (default 1000) |
+| `max_iters` | the horizon, counted in iterations (iteration 0 is the init probe); at least one of `max_iters`/`time_limit` must be given |
+| `time_limit` | a wall-clock horizon in seconds, for when an iteration's cost is too uneven to budget in iterations |
 | `max_ls` | trials one step may serve before the path stalls (default 20) |
 | `n_probe_evals` | probe depth: draws per start (default 1); above 1 requires `evaluate_f` |
 | `sample` | your own prior `(key, n) -> (n, d)`; required when the box is unbounded |
@@ -102,11 +108,15 @@ Three gotchas worth knowing up front:
   one gradient, at its winners.
 - **`n_paths = 1` is the single-path baseline.** Same code, no restart
   competition.
-- **The budget counts batches, not points.** It can only be exact in the unit
-  it is charged in: one `evaluate_batch` call costs one of `max_evals`, whatever
-  the batch holds. The point count is reported, not budgeted - read `n_points`.
-  `budget_check` is consulted once per batch too, so an external budget derived
-  from points can over-run by less than one batch, never more.
+- **The horizon counts iterations, not work.** What one iteration costs is the
+  method's business: it serves from zero batches (a fully stalled flock) up to a
+  probe plus `max_ls` trial batches. So `max_iters` is a deterministic stop, not
+  a cost estimate - read `n_batches` and `n_points` for what the run actually
+  did, and pass `time_limit` if wall-clock is what you care about. `budget_check`
+  is an extra gate consulted before every billed batch, so an external budget
+  derived from batches or points can over-run by less than one batch, never more
+  (inside a multi-draw probe the blind spot is one probe: its f-only draws are
+  cheap and are neither gated nor counted).
 
 ## 5. What a batch and a point cost
 
@@ -149,7 +159,7 @@ To replace one outright, implement its protocol and pass the instance:
 
 - **`LocalSolver`** — the search method: `restart`, `propose`, `verdict`,
   `fold`. You own direction, step size and acceptance; the engine owns
-  projection, the budget and the per-step argmin. `restart` is the only
+  projection, the horizon and the per-step argmin. `restart` is the only
   cold-start call, so it runs at initialization and after every restart.
 - **`RestartRule`** — the continue-versus-restart decision: `observe_continue`,
   `observe_restart`, `should_restart`, `samples_until_verdict`, `restart`.

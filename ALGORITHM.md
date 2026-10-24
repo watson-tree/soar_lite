@@ -198,7 +198,7 @@ observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本�
 判决两侧买的东西并不相等：一次探测花 `n_probe_evals` 个批、算 `n_probe_evals` 次梯度，而一步只算
 一次梯度（默认 `n_alpha=1`）。真正吃重的是**梯度次数**（g 约为 f 的 2–5 倍），所以 `n_probe_evals > 1`
 必须接 f-only 求值器 `evaluate_f`：探测先服务 `n_probe_evals` 个只有值的批，再对每列的赢家补一个
-value+grad 批，两侧就都只算一次梯度（代价是探测多一个批）。不接就直接抛 `ValueError`——引擎看得见
+value+grad 批，两侧就都只算一次梯度。不接就直接抛 `ValueError`——引擎看得见
 `solver` 有 `n_alpha` 这个成员，看不见它的值，只能把「没接 seam ⇒ 单抽探测」当作保守代理；默认值
 因此是 1。剩下的只是便宜的 f 计数差（完整推导见 `docs/PLAN.md`）。
 
@@ -215,29 +215,38 @@ value+grad 批，两侧就都只算一次梯度（代价是探测多一个批）
 `step_paths`，但每个 stalled 的迭代仍然喂一个 inf 的 `Δf`（让它的判决节奏与同批前进的路径对齐，
 而不是领先一个样本），直到某次 EI 判决把它唤醒。
 
-### 3.5 预算计在批边界（引擎自己记账）
+### 3.5 停车是三闸门，记账只报告
 
-`max_evals` 是引擎自己的预算，单位是**批**：服务一批就记一笔，所以一次探测（`n_probe_evals` 批，
-初始化探测也算）自己就吃掉 `n_probe_evals`——接 f-only 求值器时是 `n_probe_evals + 1`（多出的是
-赢家那一批）；探测不是免费的（ADR-0004）。记账在批之前问：要么整批
-服务、要么整批不做，不做部分前缀。`_Budget` 的两个计数器是它全部的状态：`charge` 只记账，`accept`
-是唯一的停车查询（批封顶或调用方的闸关闭），拒绝不存成状态——否则它就和自己的证据脱钩了。同一个
-数字也是循环头的停车条件：一次完成的迭代可能刚好把批数花到 `max_evals`（或把闸关上），所以在开
-新一轮之前先查一次，不再为用不掉的预算问判决；循环头这一处问的是「要不要开这轮」，属于决策，
-不是传信号。迭代中途被拒（批封顶或 `budget_check`）则在请求点抛 `_BudgetExhausted` 并结束，该迭代
-不计入 `nit`：中间层（`probe_select`、`apply_restarts`、`step_paths`）因此不必再检查返回值、也
-不必上下传任何标志。停滞的迭代不服务任何东西，也就不记账。
+`max_iters` 是引擎自己的地平线，单位是**迭代**：一次完成的迭代记一笔（迭代 0 就是初始化探测）。
+它是确定性的停车界，不是成本代理——一次迭代服务多少批是方法的自由，从零批（全停滞的一轮）到一次
+探测加 `max_ls` 个试用批。`time_limit` 是同一件事的墙钟版本，给那些「一次迭代多贵说不准」的调用方。
+两者至少要给一个，否则入口抛 `ValueError`：只有 `budget_check` 停不住空转的羊群（停滞的迭代不服务
+任何批，也就永远不会被批级闸拦住）。
 
-`budget_check` 只留给引擎看不见的预算（点数、墙钟、钱）。它同样在批边界翻转，所以那类外部预算可能
-超跑不到一个批大小；`max_evals` 本身在批上是精确的，一个方法不会比另一个多拿一批。
+`_Budget` 因此合了两个职责：停车计量（`max_iters`、`deadline`、调用方的闸）与工作量报告
+（`n_batches`、`n_points`）。**只有 value+grad 的融合批（g 批）计入账单**：探测的 `n_probe_evals` 个
+只有值的批便宜，既不记账也不问闸，所以 `n_batches`/`n_points` 正好落在承重轴（梯度次数）上。
+`charge` 只记账，`tick` 只在迭代体完成后记一次迭代；`accept` 是唯一的
+停车查询（地平线到了、墙钟到了，或调用方的闸关闭），拒绝不存成状态——否则它就和自己的证据脱钩了。
+同一个数字也是循环头的停车条件：一次完成的迭代可能刚好把地平线走到（或把闸关上），所以在开新一轮
+之前先查一次，不再为用不掉的预算问判决；循环头这一处问的是「要不要开这轮」，属于决策，不是传
+信号。迭代中途被拒则在请求点抛 `_BudgetExhausted` 并结束，该迭代不计入 `n_iters`：中间层
+（`probe_select`、`apply_restarts`、`step_paths`）因此不必再检查返回值、也不必上下传任何标志。
+`status` 按 `max_iters` → `time_limit` → `budget_exhausted` 的顺序报第一个成立的闸。
 
-### 3.6 全停早退
+`budget_check` 只留给引擎看不见的预算（点数、墙钟、钱、外部早停策略）。它同样在批边界翻转，所以那类
+外部预算可能超跑不到一个批大小。它只在 g 批前被问：多抽探测的 f-only 段不查，因此那一段的停车
+（含墙钟）粒度是「不到一个探测」。这是一个有意接受的代价，靠「f 便宜、g 约为 f 的 2–5 倍」的前提
+兜底；f 本身贵的调用方就不该开多抽探测。`n_batches`/`n_points` 只报不预算：引擎无法在一个不可分
+的批内部设卡。
 
-所有路径都 stalled、且下一张判决票按 `samples_until_verdict()` 折算成迭代数（一次迭代一个样本，所以
-样本数就是迭代数）也落在剩余迭代数（`max_evals` 减去已完成迭代数）之外时，引擎直接结束
-（`all_stalled`），不再空转——没有 eval 会再发生，`x`/`f`/`n_points` 不会再变。首次样本落账前
-`needed` 为 0，`0 >= 剩余数` 为假，捷径暂不生效；但之后 `needed >= 1` 且剩余数单调减小，
-必定在 `it` 触到 `max_evals` 之前触发，所以循环不需要额外的「迭代数上界」。
+### 3.6 全停不早退，空转到地平线
+
+所有路径都 stalled 时，这一轮不服务任何批，但每条路径仍然喂一个 inf 的 `Δf`（3.4），判决节奏与
+live 路径同批前进；引擎就这么空转到 `max_iters`/`time_limit` 停（`status` 报 `max_iters` 或
+`time_limit`），或者等某次 EI 判决把羊群唤醒。这是有意接受的代价：停车条件只依赖调用方给的数字，
+不依赖 `restart_rule` 的节奏，所以任何第三方规则都不会让循环永不结束。
+空转的账在 `n_batches` 上是零，在 `n_iters` 上是满额——这就是为什么 `max_iters` 不是成本数字。
 
 ## 4. 适用界
 
@@ -254,15 +263,20 @@ value+grad 批，两侧就都只算一次梯度（代价是探测多一个批）
 
 | 字段 | 数什么 | 回答的问题 | 用途 |
 | --- | --- | --- | --- |
-| `n_points` | 被服务的**点**（一批 n_paths 点计 n_paths） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
-| `n_batches` | 被服务的**批**（一批 n_paths 点计 1），一次求值一次 | 并行效率：一次调用买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
+| `n_points` | 被计费的**点**（一批 n_paths 点计 n_paths） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
+| `n_batches` | 被计费的**批**（一批 n_paths 点计 1） | 并行效率：一次调用买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
+
+两个字段只数 **value+grad 融合批（g 批）**——“被计费”就是这个意思。探测的多抽 f-only 批是便宜的
+那一半，既不进这两个数也不问闸（3.5）。所以默认配置（不接 `evaluate_f`、`n_probe_evals=1`）下
+`n_batches` 恰好等于服务批数；一旦开了多抽探测，它就变成“g 批数”——而后者才是承重轴上的真账。
 
 两个都要报：串行轴下，n_paths 条路径的收益会被 n_paths 除，多路径的账面上限被压低；并行轴下一次求值
 就是一次并行调用的成本，「多样本 + 自适应重启」的收益才如实显形。两者都不等于墙钟（换底层语言能把
 固定开销压掉，但改变不了「一次求值要服务几个点」这个结构量）。
 
-预算只记在批上（3.5），所以 `max_evals` 与 `n_batches` 同轴；`n_points` 只报不预算——引擎无法在一个
-不可分的批内部设卡。**不许混写**：同一张表、同一张图只能用一条轴，且必须标注。把 `n_batches` 的数字
+停车记在迭代上（3.5），两个成本字段只报不预算：`n_batches` 与 `max_iters` 不同轴，所以「跑满
+地平线用了多少批」必须读 `n_batches`，不能拿 `max_iters` 当成本数字去比。
+**不许混写**：同一张表、同一张图只能用一条轴，且必须标注。把 `n_batches` 的数字
 当成 `n_points` 的数字去比较，等于把 n_paths 倍的预算差抹平。
 
 ## 6. 可换的实现选择 vs 不许破的不变式
@@ -310,7 +324,9 @@ value+grad 批，两侧就都只算一次梯度（代价是探测多一个批）
 
 - 接缝真的被驱动（而不是走默认）：`test_injected_solver_is_driven`、`test_injected_rule_is_driven`。
 - f-only 求值器接缝：`test_f_only_probe_computes_one_gradient_per_probe`（`n_probe_evals` 个只有值的批
-  + 一个赢家批，赢家仍是逐列 group-min）、`test_multi_draw_probe_is_refused_without_the_f_only_seam`
+  + 一个赢家批，赢家仍是逐列 group-min；只有赢家批计费）、`test_multi_draw_probe_is_refused_without_the_f_only_seam`
+  （不接 seam 时多抽必拒）、`test_the_gate_counts_g_batches_not_f_only_draws`（闸只数 g 批，f-only 抽
+  照样发生却不进账）
   （不接就拒）。
 - 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
   `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
@@ -326,15 +342,16 @@ value+grad 批，两侧就都只算一次梯度（代价是探测多一个批）
   `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_payoff_pool`。
 - `n_paths = 1` 退化（`σ_r = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
   `test_no_incumbent_never_restarts_but_does_not_stall_the_clock` 覆盖 B 缺失；**没有端到端 n_paths=1 断言**
-  ——搬走前可补一条（n_paths=1 跑满 max_evals，断言 `restarts == []`）。
+  ——搬走前可补一条（n_paths=1 跑满地平线，断言 `restarts == []`）。
 - EI 闭式：`test_normal_functions_match_known_values`、`test_ei_continue_exact_degenerate_at_sigma_zero`、
   `test_ei_continue_matches_gaussian_ei_literal`、`test_ei_restart_matches_gaussian_fit_literal`、
   `test_ei_restart_fits_a_population_std`、`test_ei_restart_gaussian_tail_below_all_observations`、
   `test_ei_restart_empty_single_and_nonfinite_skipped`。
 - **两条成本轴**：`test_reports_points_and_batches_separately`（`n_batches` 与 `n_paths` 无关，
   `n_points` 等于 `n_batches × n_paths`）。
-- 预算计在批边界：`test_budget_exhaustion_stops_everything`、`test_no_budget_run_reports_max_evals`、
-  `test_budget_is_never_exceeded_under_restart_storm`（探测记账：重启风暴也超不过 `max_evals` 批）、
+- 停车在闸门上：`test_budget_exhaustion_stops_everything`、
+  `test_a_run_without_an_extra_gate_reports_max_iters`、
+  `test_batch_gate_is_asked_before_every_batch`（批级闸：重启风暴也超不过闸给的批数）、
   `test_every_path_feeds_once_per_iteration`（每迭代恰好一个样本，停顿的那个喂 inf）。
 - 盒是数据：`test_box_is_data_not_a_unit_cube_assumption`、`test_bounds_spellings_are_the_same_box`、
   `test_unbounded_or_absent_box_needs_an_injected_sampler`、

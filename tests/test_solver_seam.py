@@ -5,8 +5,8 @@ The seam's contract is only proven by injection: a stub `LocalSolver` and a stub
 defaults, and a foreign box (`bounds` as data) plus the caller's own x->θ map
 composed into `evaluate_batch` must be honoured too. These also pin the two
 documented zero-caller hooks — a method
-returning `"give_up"` and an unbounded run (`budget_check=None` ->
-`status == "max_evals"`, the only stop left).
+returning `"give_up"` and a run with no extra gate (`budget_check=None` ->
+`status == "max_iters"`, the horizon alone).
 
 Run with:
 
@@ -61,6 +61,11 @@ def f_only(
         return f_vals, feas
 
     return evaluate_f
+
+
+def batches_below(shapes: list[tuple[int, int]], limit: int) -> Callable[[], bool]:
+    """Return a batch gate that closes once `limit` batches have been served."""
+    return lambda: len(shapes) < limit
 
 
 class StubSolver:
@@ -146,7 +151,7 @@ def test_injected_solver_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_evals=PROBE_EVALS + 1,  # the init probe is billed too
+        max_iters=PROBE_EVALS + 1,  # iteration 0 is the init probe
         n_probe_evals=PROBE_EVALS,
         solver=solver,
         restart_rule=RecordingRule(),
@@ -155,7 +160,7 @@ def test_injected_solver_is_driven() -> None:
     assert solver.inited == [0, 1, 2], solver.inited
     assert solver.verdicts == [0, 1, 2], solver.verdicts  # one trial, then accept
     assert res.n_points == sum(w for w, _d in shapes) == PROBE_EVALS * k + k
-    assert res.status == "max_evals"
+    assert res.status == "max_iters"
 
 
 def test_give_up_stalls_a_path() -> None:
@@ -168,7 +173,7 @@ def test_give_up_stalls_a_path() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_evals=PROBE_EVALS + 1,  # the init probe is billed too
+        max_iters=PROBE_EVALS + 1,  # iteration 0 is the init probe
         n_probe_evals=PROBE_EVALS,
         solver=solver,
         restart_rule=RecordingRule(),
@@ -177,7 +182,7 @@ def test_give_up_stalls_a_path() -> None:
     assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
     # init probe + the single stalled iteration; the rest serve nothing
     assert res.n_points == sum(w for w, _d in shapes) == PROBE_EVALS * k + k
-    assert res.status == "max_evals"
+    assert res.status == "max_iters"
 
 
 def test_injected_rule_is_driven() -> None:
@@ -190,20 +195,20 @@ def test_injected_rule_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_evals=PROBE_EVALS + PROBE_EVALS,  # init probe + two iterations
+        max_iters=PROBE_EVALS + PROBE_EVALS,  # init probe + one step
         n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),
         restart_rule=rule,
         key=jax.random.PRNGKey(2),
     )
-    n_iterations = PROBE_EVALS  # max_evals minus the init probe's batches
+    n_iterations = PROBE_EVALS  # max_iters minus the init probe's iteration
     assert len(rule.group_mins) == k  # cold start: the n_paths init group-mins, once
     # Iteration 0 is the initialization probe, so the cold-start ask restarts
     # every path before any step; the one iteration the budget still buys steps.
     assert rule.verdicts == [0, 1] * (n_iterations + 1), rule.verdicts
     assert rule.restarts == [0, 1], rule.restarts  # the cold start is one too
     assert [i for i, _delta in rule.deltas] == [0, 1] * n_iterations  # Δf per step
-    assert res.status == "max_evals"
+    assert res.status == "max_iters"
 
 
 def test_rule_can_force_restarts() -> None:
@@ -217,10 +222,10 @@ def test_rule_can_force_restarts() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        # Each iteration buys a restart probe (PROBE_EVALS batches). A
-        # restarted path is skipped by that iteration's step, so a rule that
-        # restarts everything every iteration buys no step at all.
-        max_evals=PROBE_EVALS + 2 * PROBE_EVALS,
+        # Each iteration restarts every path, so each one buys a probe
+        # (PROBE_EVALS batches) and no step: a restarted path is skipped by that
+        # iteration's step.
+        max_iters=3,  # the init probe plus two restart iterations
         n_probe_evals=PROBE_EVALS,
         solver=solver,
         restart_rule=rule,
@@ -234,52 +239,79 @@ def test_rule_can_force_restarts() -> None:
     assert rule.restarts == [0, 1] * 3  # every iteration, cold start first
     assert len(rule.group_mins) == 3 * k  # init + two restart events
     assert solver.verdicts == []  # restarted, not stepped
-    assert res.status == "max_evals"
+    assert res.status == "max_iters"
 
 
-def test_budget_is_never_exceeded_under_restart_storm() -> None:
-    """Probes are billed, so a restart storm cannot buy evals outside the budget.
+def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
+    """Probes are billed, so a restart storm cannot serve past the gate.
 
     The expensive event in the engine is the restart probe, and the deepest
     accounting bug this engine had was that the probes were never charged: a
-    rule that restarts every iteration would then have served far more than
-    `max_evals` batches. The budget is odd here so the last batch cannot be
-    bought whole, which is where an unbilled probe would show up.
+    rule that restarts every iteration would then have served far more batches
+    than the caller allowed. What is charged now is the fused value+gradient
+    pass - the half that dominates - and a probe's extra f-only draws are
+    cheaper work that is neither billed nor gated. A storm is still bounded,
+    because every probe pays exactly one charged batch.
     """
-    k = 3
-    for max_evals in (1, PROBE_EVALS, 2 * PROBE_EVALS + 1, 7):
-        evaluate_batch, shapes = evaluator()
+    k, probe_evals = 3, 2  # a probe serves 2 f-only draws, then 1 fused batch
+
+    def run(limit: int) -> tuple[int, int, int, str]:
+        """Serve under one gate limit; return (billed, drawn, n_points, status)."""
+        billed = 0  # g batches: the only billed calls
+        drawn = 0  # f-only draws: served, never billed
+
+        def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+            nonlocal billed
+            billed += 1
+            f_vals, grads = jax.vmap(pointwise)(x)
+            return f_vals, grads, None
+
+        def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+            nonlocal drawn
+            drawn += 1
+            f_vals, _grads = jax.vmap(pointwise)(x)
+            return f_vals, None
+
         res = n_path_schedule(
             evaluate_batch,
+            evaluate_f=evaluate_f,
             bounds=unit_bounds(),
+            budget_check=lambda: billed < limit,
             n_paths=k,
-            max_evals=max_evals,
-            n_probe_evals=PROBE_EVALS,
+            max_iters=10,  # not the binding stop: the gate closes first
+            n_probe_evals=probe_evals,
             solver=StubSolver(),
             restart_rule=AlwaysRestartRule(),
             key=jax.random.PRNGKey(7),
         )
-        # served batches * points per batch, and never one batch more than asked
-        assert res.n_points == sum(w for w, _d in shapes) <= max_evals * k
-        assert len(shapes) <= max_evals, (max_evals, shapes)
-        assert res.status == "max_evals", res
+        return billed, drawn, res.n_points, res.status
+
+    for limit in (1, 2, 4, 7):
+        billed, drawn, n_points, status = run(limit)
+        # The gate closes on the billed count alone: never one g batch past it.
+        assert billed == limit, (limit, billed)
+        assert n_points == limit * k  # every billed batch covers all k paths
+        assert status == "budget_exhausted", (limit, status)
+        # The draws did happen - one batch per probe - and stayed out of both
+        # counters: only the fused pass is billed.
+        assert drawn == limit * probe_evals, (limit, drawn)
 
 
-def test_no_budget_run_reports_max_evals() -> None:
-    """No gate passed at all (the keyword defaults to None): max_evals only."""
+def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
+    """No gate passed at all (the keyword defaults to None): the horizon only."""
     k = 2
     evaluate_batch, shapes = evaluator()
     res = n_path_schedule(
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=k,
-        max_evals=PROBE_EVALS + 3,  # the init probe plus three trial batches
+        max_iters=PROBE_EVALS + 3,  # the init probe plus three steps
         n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),
         restart_rule=RecordingRule(),
         key=jax.random.PRNGKey(4),
     )
-    assert res.status == "max_evals", res
+    assert res.status == "max_iters", res
     assert res.n_points == sum(w for w, _d in shapes) == PROBE_EVALS * k + 3 * k
 
 
@@ -306,7 +338,7 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
         bounds=bounds,
         budget_check=None,
         n_paths=2,
-        max_evals=3,
+        max_iters=3,
         n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
         restart_rule=RecordingRule(),
@@ -318,7 +350,7 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
     # the clip really fired (the raw trial was 3.0) and the best point sits on it
     assert abs(max(served) - hi) < 1e-12, max(served)
     assert abs(float(res.x[0]) - hi) < 1e-12, res.x
-    assert res.status == "max_evals", res
+    assert res.status == "max_iters", res
 
 
 def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
@@ -356,7 +388,7 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
             sample=sample,
             budget_check=None,
             n_paths=2,
-            max_evals=3,
+            max_iters=3,
             n_probe_evals=PROBE_EVALS,
             solver=StubSolver(),
             restart_rule=AlwaysRestartRule(),
@@ -401,13 +433,13 @@ def test_every_path_feeds_once_per_iteration() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_evals=PROBE_EVALS + 3,  # init probe + three iterations
+        max_iters=PROBE_EVALS + 3,  # init probe + three iterations
         n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),
         restart_rule=rule,
         key=jax.random.PRNGKey(6),
     )
-    assert res.status == "max_evals", res
+    assert res.status == "max_iters", res
     counts: dict[int, int] = {}
     for i, _delta in rule.deltas:
         counts[i] = counts.get(i, 0) + 1
@@ -437,7 +469,7 @@ def test_a_probes_iteration_is_not_read_back_as_a_zero_step() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_evals=PROBE_EVALS + 1,  # init probe + one step
+        max_iters=PROBE_EVALS + 1,  # init probe + one step
         n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),
         restart_rule=rule,
@@ -466,13 +498,12 @@ def test_one_sample_per_iteration_at_every_probe_size() -> None:
         evaluate_batch, _shapes = evaluator()
         rule = RecordingRule()
         evaluate_f = None if probe_evals == 1 else f_only(evaluate_batch)
-        probe_batches = probe_evals + (0 if evaluate_f is None else 1)
         res = n_path_schedule(
             evaluate_batch,
             evaluate_f=evaluate_f,
             bounds=unit_bounds(),
             n_paths=k,
-            max_evals=probe_batches + 2,  # init probe + two iterations
+            max_iters=3,  # init probe + two steps
             n_probe_evals=probe_evals,
             solver=StubSolver(),
             restart_rule=rule,
@@ -482,7 +513,7 @@ def test_one_sample_per_iteration_at_every_probe_size() -> None:
         for i, _delta in rule.deltas:
             counts[i] = counts.get(i, 0) + 1
         assert counts == {0: 2, 1: 2}, (probe_evals, counts)
-        assert res.status == "max_evals", (probe_evals, res)
+        assert res.status == "max_iters", (probe_evals, res)
 
 
 def test_reports_points_and_batches_separately() -> None:
@@ -501,7 +532,7 @@ def test_reports_points_and_batches_separately() -> None:
             bounds=unit_bounds(),
             budget_check=lambda: True,
             n_paths=k,
-            max_evals=PROBE_EVALS + 1,  # init probe + one accepted trial
+            max_iters=PROBE_EVALS + 1,  # init probe + one accepted trial
             n_probe_evals=PROBE_EVALS,
             solver=StubSolver(),
             restart_rule=RecordingRule(),
@@ -534,7 +565,7 @@ def test_multi_draw_probe_is_refused_without_the_f_only_seam() -> None:
             bounds=unit_bounds(),
             n_paths=2,
             n_probe_evals=2,
-            max_evals=8,
+            max_iters=8,
             solver=StubSolver(),
             key=jax.random.PRNGKey(0),
         )
@@ -548,9 +579,10 @@ def test_f_only_probe_computes_one_gradient_per_probe() -> None:
     """An f-only probe: n_probe_evals f-only draws, then one fused batch.
 
     That single fused batch is what makes n_probe_evals > 1 cost-matched with a
-    one-gradient step, at the price of one extra batch for the winners'
-    gradients. The group-min still picks per column across the draws, so the
-    batch re-serves the same winners rather than making a new choice.
+    one-gradient step: every draw costs an f, the winners then pay the one
+    gradient between them. Only that fused batch is billed. The group-min still
+    picks per column across the draws, so the batch re-serves the same winners
+    rather than making a new choice.
     """
     k, probe_evals = 2, 3
     f_calls: list[jnp.ndarray] = []
@@ -572,7 +604,7 @@ def test_f_only_probe_computes_one_gradient_per_probe() -> None:
         bounds=unit_bounds(),
         n_paths=k,
         n_probe_evals=probe_evals,
-        max_evals=probe_evals + 1,  # the probe alone
+        max_iters=1,  # the probe alone is one iteration
         solver=StubSolver(),
         key=jax.random.PRNGKey(1),
     )
@@ -585,8 +617,10 @@ def test_f_only_probe_computes_one_gradient_per_probe() -> None:
     best = jnp.argmin(f_vals, axis=0)
     for j in range(k):
         assert jnp.allclose(fused_calls[0][j], f_calls[int(best[j])][j]), j
-    assert res.n_batches == probe_evals + 1, res
-    assert res.status == "max_evals", res
+    # Only the fused pass is billed: the f-only draws are not budget events.
+    assert res.n_batches == 1, res
+    assert res.n_points == k, res
+    assert res.status == "max_iters", res
 
 
 if __name__ == "__main__":

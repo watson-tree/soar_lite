@@ -104,6 +104,8 @@ restart is back in phase instantly (no out-of-phase clock). Replace with:
   `if restart_rule.samples_until_verdict() >= max_evals - it: all_stalled =
   True; break` (one sample = 1 iteration; the `+1` vote term merges into
   `needed`; `needed=0` still disables the shortcut as today).
+  (This shortcut has since been removed together with the batch budget - see
+  *Budget: an iteration horizon* below.)
 
 Ripple (swept): `engine.py` (module doc, `n_path_schedule` doc, loop
 comments); `restart.py` (`observe_continue` / `samples_until_verdict` / class
@@ -111,7 +113,7 @@ docstrings — the "priced n_probe_evals evals" wording is gone);
 `tests/test_solver_seam.py` (the horizon-count runs restated as one sample per
 iteration, `test_one_sample_per_iteration_at_every_probe_size`, and
 `test_every_path_feeds_once_per_iteration`); `tests/test_scheduler.py`
-(stalled-flock test: `nit` is now 1, not 2); `ALGORITHM.md`, `CONTEXT.md` (the
+(stalled-flock test: `n_iters` is now 1, not 2); `ALGORITHM.md`, `CONTEXT.md` (the
 `horizon` glossary entry is gone), `docs/adr/0004-*` (amended, part 1
 superseded), `docs/tutorial/getting-started.md`.
 
@@ -121,7 +123,8 @@ listed doc are swept; 68 tests green, ruff and pyright clean. The default
 `evaluate_f` seam and its gate follow in the next commit. Shape the seam took:
 `n_path_schedule(..., evaluate_f=...)` is keyword-only and optional, a probe
 serves `n_probe_evals` value-only draws then one fused batch at the per-column
-winners (so a probe costs `n_probe_evals + 1` batches and one `g`), the draws
+winners (so a probe serves `n_probe_evals` uncharged f-only draws plus one
+billed fused batch, and one `g`), the draws
 stay exactly `n` wide rather than widening to `n_probe_evals × n`, and
 `evaluate_f is None and n_probe_evals != 1` raises `ValueError` at entry.
 
@@ -139,11 +142,48 @@ block) was redundant - `apply_restarts` already probes, extends the payoff pool
 and re-seeds the method. The loop's iteration 0 is now the initialization
 probe, unlocked by one rule contract: `should_restart` returns `True` while the
 payoff pool is empty. `LocalSolver.init` is gone (`restart` is the only
-cold-start call). Two consequences worth keeping: `nit` counts iteration 0, so
+cold-start call). Two consequences worth keeping: `n_iters` counts iteration 0, so
 the two stops that both used to report `0` are now distinct (a refused probe is
 `0`, a refused first step is `1`); and the cold start opens each path's stage,
 so `samples_until_verdict()` reports a real window instead of `0` before the
 first fold.
+
+### Budget: an iteration horizon (landed)
+
+`max_evals` billed served batches, which made the engine's own stop a cost
+meter. Two things broke it: a step can serve up to `max_ls` batches and a
+restart serves a probe, so an iteration's batch count is runtime state the
+caller cannot predict; and a stalled iteration serves nothing, so the meter
+under-counts exactly where the loop spins - which is why an all-stalled
+shortcut had to exist at all. Replaced by:
+
+- `max_iters`: a deterministic horizon, iteration 0 = the init probe. Not a cost
+  proxy - one iteration serves from zero batches (a fully stalled flock) up to a
+  probe plus `max_ls` trial batches.
+- `time_limit`: the same stop in wall-clock seconds, checked between iterations
+  and never inside one.
+- At least one of the two, else `ValueError`. `budget_check` stays an extra
+  per-batch gate and the escape hatch for any other stop condition; it cannot
+  replace the horizon, because a stalled iteration asks for no batch.
+- `n_batches`/`n_points` are reports, not caps, and they count the only billed
+  unit: the fused value+gradient pass. A probe's f-only draws are cheaper work
+  and appear in neither (nor are they gated), so the counts stay on the axis
+  that dominates; the default shape has no f-only draw at all. `status` is
+  `max_iters`, `time_limit` or `budget_exhausted`.
+- The all-stalled shortcut, the `all_stalled` status and the loop's `it` counter
+  are gone: a stalled flock idles to the horizon, folding one `inf` sample per
+  path per iteration. `samples_until_verdict()` loses its only engine caller and
+  is marked to be cut.
+
+Migration is not a rename: an iteration can burn about `1 + (n_probe_evals + 1)
++ max_ls` times the batches of a one-batch iteration, so `max_evals=N` →
+`max_iters=N` silently raises the work budget. Re-tune from `n_batches`.
+
+Still open, deferred until the finite-value refactor: a flock that stalls as a
+whole waits out its verdict cadence (the cheap fix is to restart every path once
+the flock stalls). The case that really needs it is a dead pool - a first probe
+that comes back all-non-finite, where `EI_restart = 0` and no verdict revives
+the paths.
 
 ## Next
 

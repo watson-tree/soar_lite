@@ -303,7 +303,7 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
         evaluate_batch,
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         n_paths=1,
-        max_evals=50,
+        max_iters=50,
         solver=DiagonalPreconditioner(theta=0.0),
         key=jax.random.PRNGKey(0),
     )
@@ -387,7 +387,7 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
         evaluate_batch,
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         n_paths=1,
-        max_evals=50,
+        max_iters=50,
         solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
         key=jax.random.PRNGKey(0),
     )

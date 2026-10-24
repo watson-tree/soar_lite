@@ -9,13 +9,14 @@ restarting beats that of continuing.
 
 Verbs count, nouns name: **eval** is the verb (one `evaluate_batch` call),
 **batch** is the noun (the points that call serves), and the two always
-correspond one to one. Counts take the verb (`max_evals`, `n_probe_evals`);
-names take the nouns (`batch`, `point`, `path`).
+correspond one to one. Counts take the unit they count — `n_probe_evals` counts
+evals, `max_iters` counts iterations — and names take the nouns (`batch`,
+`point`, `path`).
 
-Public knob history (pre-0.1.0 renames): `max_steps` → `max_evals`,
-`n_probe_rounds` → `n_probe_evals`, `per_round_evals` removed (both counts are
-now always reported), `nfev` → `n_points` + `n_batches`. The old names let
-"round"/"step"/"eval" each do double duty; they are dead in new code.
+Public knob history (pre-0.1.0 renames): `max_steps` → `max_evals` →
+`max_iters`, `n_probe_rounds` → `n_probe_evals`, `per_round_evals` removed (both
+counts are now always reported), `nfev` → `n_points` + `n_batches`. The old
+names let "round"/"step"/"eval" each do double duty; they are dead in new code.
 
 ### Engine
 
@@ -29,17 +30,17 @@ The engine's width — the number of paths the engine drives together.
 _Avoid_: population size, swarm size
 
 **iteration**:
-One pass of the engine's main loop — one `nit`. Per iteration the engine
+One pass of the engine's main loop, counted in `n_iters`. Per iteration the engine
 decides which paths restart and then steps the rest: a path either probes or
 steps this iteration, never both. The parallel wall-clock unit; an iteration
 may serve zero batches (a dead iteration where nothing moves) or several (the
 restart probe's `n_probe_evals` batches plus the steppers' up to `max_ls`
 trials each). Iteration 0 is the initialization probe: the rule's cold-start
 verdict says restart for every path, so starting the flock is the same
-operation as any later restart. `nit` counts finished iterations only — one
+operation as any later restart. `n_iters` counts finished iterations only — one
 cut short by a refused probe or batch is not counted, so a refused probe
-reports `nit = 0` and a refused first step `nit = 1`.
-_Avoid_: round (retired), epoch
+reports `n_iters = 0` and a refused first step `n_iters = 1`.
+_Avoid_: round (retired), epoch, iterations (as a name for the count)
 
 **step**:
 One move along a single path: propose → (trial)× → commit, or give_up. Each
@@ -65,9 +66,10 @@ _Avoid_: paused, idle, dead
 ### Evaluation
 
 **eval** (verb, counted):
-One `evaluate_batch` call — one serve. The unit of the engine's budget
-(`max_evals`) and of a probe's cost (`n_probe_evals`). One eval serves one
-batch.
+One `evaluate_batch` call — one serve. The unit of a probe's cost
+(`n_probe_evals`) and of a `budget_check` gate that counts batches. The engine's
+own stop does not count these: it counts iterations (`max_iters`). One eval
+serves one batch.
 _Avoid_: query, sample (when counting cost)
 
 **batch** (noun):
@@ -76,13 +78,15 @@ eval from the next candidates of the active paths.
 _Avoid_: group (that is the probe column, below), lot, chunk
 
 **point** (noun):
-One candidate — one row of a batch. `n_points` counts these.
+One candidate — one row of a batch. `n_points` counts the billed ones.
 _Avoid_: query, sample, evaluation (retired)
 
 **n_points / n_batches**:
-The two reported work counts: points served, and batches (evals) served. They
-are different numbers on different axes and must never share a chart. The
-result reports both, replacing scipy's single `nfev`.
+The two reported work counts: g points and g batches (fused value+gradient
+passes) billed. They are different numbers on different axes and must never
+share a chart. Only fused passes are billed: a probe's f-only draws are the
+cheap half and appear in neither count. The result reports both, replacing
+scipy's single `nfev`.
 _Avoid_: nfev (retired)
 
 **objective** (目标 f):
@@ -168,20 +172,27 @@ _Avoid_: accept, commit (as the name of this handoff)
 
 ### Cost model
 
-**budget (`max_evals`)**:
-The engine's own allowance, counted in batches (evals): every served batch
-costs one, so the init probe and each restart event cost `n_probe_evals` of it
-— `n_probe_evals + 1` with an f-only evaluator. A stalled iteration serves
-nothing and costs nothing. `max_evals` also
-caps the run's iterations at the same number — a second bound that only bites
-on a stalling run.
-_Avoid_: iterations, function-call budget (that is `n_points`, a different axis)
+**horizon (`max_iters`)**:
+The engine's own stop, counted in iterations: every completed iteration costs
+one, and iteration 0 is the init probe. A deterministic bound, not a cost
+proxy — one iteration serves anywhere from no batch (a fully stalled flock) to a
+probe plus `max_ls` trial batches, so `n_batches`/`n_points` report what a run
+actually billed. At least one of `max_iters`/`time_limit` must be given: a
+`budget_check` alone stops nothing, because a stalled iteration asks for no
+batch.
+_Avoid_: budget (in evals), cost estimate, time limit
+
+**deadline (`time_limit`)**:
+The same stop in seconds, for callers whose per-iteration cost is too uneven to
+count iterations. Checked between iterations, never inside one, so a run can
+over-run it by one iteration.
+_Avoid_: budget, timeout (that is a per-call concern)
 
 **budget gate** (`budget_check`):
 The batch-level predicate consulted once per batch — serve the whole batch or
 nothing, never a partial prefix. It exists for a budget the engine cannot see
-(points, wall-clock, dollars); the engine's own batch budget is `max_evals`.
-Such an external gate can over-run by less than one batch.
+(points, wall-clock, dollars). Such an external gate can over-run by less than
+one batch. It is an extra gate, never a horizon.
 _Avoid_: stopping budget
 
 **box**:

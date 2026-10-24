@@ -119,12 +119,11 @@ class EIRestartRule(RestartRule):
         """Report how many more samples until the earliest path's stage fills up.
 
         `window - folds` per path: exact while the pool stands still and an
-        underestimate once it grows, since `window` only lengthens. That
-        direction is the safe one - the engine stops when this says a vote is out
-        of reach, and an overestimated cadence there would be a stop for a vote
-        that was still due. Samples, not iterations, but with one sample per
-        iteration the two now coincide, so the engine compares this directly
-        against the remaining iteration budget. A path that has just restarted
+        underestimate once it grows, since `window` only lengthens. Samples, not
+        iterations, but with one sample per iteration the two coincide, so this
+        can be read against the iterations a run has left. The engine itself no
+        longer reads it: its stop is the horizon, and a stalled flock idles
+        there instead of being ended early. A path that has just restarted
         counts from 0, i.e. as a full window: the iteration after its probe
         delivers the first sample. A rule whose path stages are all empty reports
         their full window too, so 0 means "this rule keeps no cadence" rather
