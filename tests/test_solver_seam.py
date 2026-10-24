@@ -77,13 +77,9 @@ class StubSolver:
         self.verdicts: list[int] = []
         self.folds: list[int] = []
 
-    def init(self, i: int, p: PathPoint) -> None:  # noqa: ARG002
-        """Record the cold start of path i."""
+    def restart(self, i: int, p: PathPoint) -> None:  # noqa: ARG002
+        """Record path i's cold start (the engine's only seed call)."""
         self.inited.append(i)
-
-    def restart(self, i: int, p: PathPoint) -> None:
-        """Record path i's restart (a cold start again, like init)."""
-        self.init(i, p)
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:  # noqa: ARG002
         """Return a halved steepest-descent step from p."""
@@ -100,7 +96,7 @@ class StubSolver:
 
 
 class RecordingRule:
-    """Records the engine's rule-side calls and never restarts."""
+    """Records the engine's rule-side calls; restarts only the cold start."""
 
     def __init__(self) -> None:
         """Start with empty evidence, no restarts and no verdicts."""
@@ -118,9 +114,9 @@ class RecordingRule:
         self.group_mins.append(r)
 
     def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:  # noqa: ARG002
-        """Record the verdict call for path i and never restart."""
+        """Record the verdict call; restart only while the pool is empty."""
         self.verdicts.append(i)
-        return False
+        return not self.group_mins  # the engine's initialization probe
 
     def samples_until_verdict(self) -> int:
         """Report an unknown cadence: the engine keeps its ordinary iterations."""
@@ -202,11 +198,11 @@ def test_injected_rule_is_driven() -> None:
     )
     n_iterations = PROBE_EVALS  # max_evals minus the init probe's batches
     assert len(rule.group_mins) == k  # cold start: the n_paths init group-mins, once
-    # One sample per iteration, so this run feeds each path once per iteration -
-    # the continue side's sample is one step, not a probe.
-    assert rule.verdicts == [0, 1] * n_iterations  # asked once per path per iteration
+    # Iteration 0 is the initialization probe, so the cold-start ask restarts
+    # every path before any step; the one iteration the budget still buys steps.
+    assert rule.verdicts == [0, 1] * (n_iterations + 1), rule.verdicts
+    assert rule.restarts == [0, 1], rule.restarts  # the cold start is one too
     assert [i for i, _delta in rule.deltas] == [0, 1] * n_iterations  # Δf per step
-    assert rule.restarts == []
     assert res.status == "max_evals"
 
 
@@ -233,8 +229,10 @@ def test_rule_can_force_restarts() -> None:
     # init probe + two restart events, and nothing else
     assert res.n_points == sum(w for w, _d in shapes)
     assert res.n_points == PROBE_EVALS * k + 2 * (PROBE_EVALS * k)
-    assert rule.restarts == [0, 1] * 2  # every path restarted, every iteration
-    assert len(rule.group_mins) == k + 2 * k  # n_paths init + payoff per restart
+    # The cold start is a restart event too: every path restarts on
+    # iteration 0 and on each of the two iterations after it.
+    assert rule.restarts == [0, 1] * 3  # every iteration, cold start first
+    assert len(rule.group_mins) == 3 * k  # init + two restart events
     assert solver.verdicts == []  # restarted, not stepped
     assert res.status == "max_evals"
 
@@ -415,6 +413,42 @@ def test_every_path_feeds_once_per_iteration() -> None:
         counts[i] = counts.get(i, 0) + 1
     assert counts == {0: 3, 1: 3}, counts
     assert [d for i, d in rule.deltas if i == 0] == [math.inf] * 3
+
+
+def test_a_probes_iteration_is_not_read_back_as_a_zero_step() -> None:
+    """A path that probed folds nothing that iteration: no Δ = 0 is reported.
+
+    The probe's f becomes the Δ anchor and the probe's iteration is skipped, so
+    the first `observe_continue` for a path carries the step that follows its
+    probe. Reading the probe back as `f - f = 0` would hand the rule a fake
+    "nothing changed" sample on every restart and on the initialization itself.
+    """
+    k = 2
+    rule = RecordingRule()
+
+    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        # A ramp: distinct points have distinct f values, so a reported Δ of 0
+        # can only come from comparing a point with itself.
+        f_vals = 10.0 * x[:, 0]
+        return f_vals, jnp.full_like(x, 10.0), None
+
+    res = n_path_schedule(
+        evaluate_batch,
+        bounds=unit_bounds(),
+        budget_check=lambda: True,
+        n_paths=k,
+        max_evals=PROBE_EVALS + 1,  # init probe + one step
+        n_probe_evals=PROBE_EVALS,
+        solver=StubSolver(),
+        restart_rule=rule,
+        key=jax.random.PRNGKey(9),
+    )
+    # StubSolver steps x -> x - 0.5·g = x - 5, which the box clips to 0, so every
+    # step is a strict decrease and the probe's own f never reappears as a zero.
+    deltas = [d for _i, d in rule.deltas]
+    assert len(deltas) == k, rule.deltas  # one step each, after its probe
+    assert all(d < 0.0 for d in deltas), deltas
+    assert res.n_batches == PROBE_EVALS + 1, res
 
 
 def test_one_sample_per_iteration_at_every_probe_size() -> None:

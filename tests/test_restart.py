@@ -189,6 +189,24 @@ def test_nonfinite_delta_counts_towards_the_window_but_is_not_read() -> None:
     assert policy._continue_payoff(0, 0.0, 0.0) == 0.0
 
 
+def test_an_empty_pool_is_the_cold_start_and_a_dead_pool_is_not() -> None:
+    """An empty payoff pool seeds the flock; a pool of dead starts must not.
+
+    The engine asks every path on its first iteration, before any probe has
+    run, and that ask is what triggers the initialization probe - so a rule must
+    answer True while it holds no restart evidence at all. `group_mins` is the
+    test, not `pool_size`: a pool that exists but is entirely non-finite means
+    the probe ran and every start was dead, which should stall the flock and
+    wait for a later vote rather than re-probe every iteration.
+    """
+    policy = EIRestartRule()
+    assert policy.should_restart(0, math.inf, math.inf) is True  # no probe yet
+    for _ in range(WINDOW):
+        policy.observe_restart(math.inf)  # the probe ran; every start was dead
+    assert policy.pool_size == 0  # nothing usable, but the pool is not empty
+    assert policy.should_restart(0, math.inf, math.inf) is False
+
+
 def test_verdict_is_due_once_per_window_and_closes_the_stage() -> None:
     """The gate opens a verdict and the verdict takes it: due once per window.
 

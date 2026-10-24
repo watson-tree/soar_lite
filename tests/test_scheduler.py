@@ -58,12 +58,8 @@ class HalfStep:
     went quiet. What the real method does is `test_solver.py`'s subject.
     """
 
-    def init(self, i: int, p: PathPoint) -> None:  # noqa: ARG002
-        """Take no per-path state: the step depends only on the current point."""
-        return
-
     def restart(self, i: int, p: PathPoint) -> None:  # noqa: ARG002
-        """Re-seed: nothing to reset, so this is `init` again."""
+        """Take no per-path state: the step depends only on the current point."""
         return
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:  # noqa: ARG002
@@ -185,6 +181,22 @@ def test_budget_exhaustion_stops_everything() -> None:
     assert res0.n_points == 0
     assert res0.nit == 0  # never got past the first gate check
     assert res0.status == "budget_exhausted"
+
+    # Budget for the init probe only: iteration 0 completes, so the flock is
+    # seeded and nit is 1 - a refused first step is distinguishable from a
+    # refused probe (nit = 0 above).
+    rec1 = Recorder(quad)
+    res1 = n_path_schedule(
+        rec1,
+        bounds=unit_bounds(),
+        n_paths=4,
+        max_evals=1,
+        solver=HalfStep(),
+        key=jax.random.PRNGKey(3),
+    )
+    assert res1.n_points == 4  # the probe served every path
+    assert res1.nit == 1
+    assert res1.status == "max_evals"
 
 
 def test_fun_is_true_min_over_history() -> None:
@@ -586,7 +598,8 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     tests of _ei_restart/EI_continue cannot cover. The huge-period arm also pins
     the engine's stop for it: every path stalled and the next verdict lies
     ~10**9 iterations out, past max_evals, so the run must end there (status
-    "all_stalled", one attempted iteration) rather than spin out the eval budget.
+    "all_stalled", the init probe plus the stalling iteration) rather than spin
+    out the eval budget.
     """
     n_paths, max_ls, n_probe_evals = 4, 3, 1
     # Batches: the init probe, the single rejecting iteration (max_ls trials),
@@ -630,8 +643,8 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     pre = n_probe_evals + max_ls
     assert len(shapes_off) == pre, shapes_off
     assert evals_off == (n_probe_evals + max_ls) * n_paths
-    # Iteration 5 is the verdict iteration - no eval, then a restart probe of every
-    # path. The tail is left as an inequality on purpose - what the revived
+    # The verdict iteration serves no eval, then a restart probe of every path.
+    # The tail is left as an inequality on purpose - what the revived
     # paths do after the probe (accept, or reject again on the same flat field
     # until the step cap) is the injected method's business.
     assert len(shapes_on) - pre >= n_probe_evals, shapes_on
@@ -642,11 +655,10 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     assert res_on.status == "max_evals", res_on  # a due verdict keeps it alive
     assert res_off.status == "all_stalled", res_off  # not "budget_exhausted"
     # The unreachable verdict ends the run at the stall instead of spinning the
-    # remaining iterations: the productive iteration folds the stall's own
-    # sample, and only then can the rule state a cadence for the shortcut to
-    # read. So exactly one iteration completes, and the next one serves nothing
-    # before the shortcut ends the run.
-    assert res_off.nit == 1, res_off
+    # remaining iterations: the iteration that stalls the last live path also
+    # asks for a verdict, reads the rule's cadence as too far out to wait for,
+    # and stops the run. Two iterations complete - the init probe and that one.
+    assert res_off.nit == 2, res_off
     assert len(shapes_on) == max_evals, shapes_on  # the revived run spends it all
 
 

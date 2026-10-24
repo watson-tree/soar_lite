@@ -97,7 +97,16 @@ class EIRestartRule(RestartRule):
         unchanged every iteration. A full stage also closes while there is no
         incumbent (B = inf): the verdict has nothing to compare against yet, and
         the engine owns B.
+
+        Cold start is the one verdict that is not the EI comparison: with an
+        empty payoff pool there is no restart evidence at all, so this returns
+        True and the engine's first iteration probes every path. A pool that is
+        non-empty but entirely non-finite is *not* cold start - the probe ran and
+        every start was dead, so an empty `group_mins`, not `pool_size == 0`, is
+        the test.
         """
+        if not self.group_mins:  # no probe has run: draw the initialization one
+            return True
         if len(self.deltas.get(i, ())) < self._stage_window():
             return False
         restart = math.isfinite(incumbent) and (
@@ -117,9 +126,9 @@ class EIRestartRule(RestartRule):
         iteration the two now coincide, so the engine compares this directly
         against the remaining iteration budget. A path that has just restarted
         counts from 0, i.e. as a full window: the iteration after its probe
-        delivers the first sample. 0 with no path evidence at all -
-        no cadence to bound, so the engine keeps its ordinary iterations, which is
-        only reachable before the first fold.
+        delivers the first sample. A rule whose path stages are all empty reports
+        their full window too, so 0 means "this rule keeps no cadence" rather
+        than a particular moment in the run.
         """
         window = self._stage_window()
         return min((window - len(d) for d in self.deltas.values()), default=0)

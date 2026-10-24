@@ -72,7 +72,7 @@ correspond:
 | `fun` | its value: the incumbent over feasible finite points, `inf` if none |
 | `n_points` | points served - the serial-cost count |
 | `n_batches` | batches served, one per `evaluate_batch` call - the parallel-cost count |
-| `nit` | engine iterations attempted; one iteration may serve several batches |
+| `nit` | engine iterations completed (iteration 0 is the initialization probe); one iteration may serve several batches |
 | `status` | `max_evals`, `budget_exhausted` or `all_stalled` |
 
 There is no `success` or `message`: the engine has no convergence criterion of
@@ -147,9 +147,10 @@ result = n_path_schedule(
 
 To replace one outright, implement its protocol and pass the instance:
 
-- **`LocalSolver`** — the search method: `init`, `restart`, `propose`,
-  `verdict`, `fold`. You own direction, step size and acceptance; the engine
-  owns projection, the budget and the per-step argmin.
+- **`LocalSolver`** — the search method: `restart`, `propose`, `verdict`,
+  `fold`. You own direction, step size and acceptance; the engine owns
+  projection, the budget and the per-step argmin. `restart` is the only
+  cold-start call, so it runs at initialization and after every restart.
 - **`RestartRule`** — the continue-versus-restart decision: `observe_continue`,
   `observe_restart`, `should_restart`, `samples_until_verdict`, `restart`.
 

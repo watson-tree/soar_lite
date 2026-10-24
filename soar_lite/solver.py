@@ -155,8 +155,12 @@ class DiagonalPreconditioner(LocalSolver):
         self.alpha_sample: dict[int, int] = {}  # per path: samples served this step
         self.saw_finite: dict[int, bool] = {}  # per path: any finite sample this step?
 
-    def init(self, i: int, p: PathPoint) -> None:
-        """Seed path i: warm-up armed at alpha0, g0 kept, no estimate yet."""
+    def restart(self, i: int, p: PathPoint) -> None:
+        """Seed path i at p: warm-up armed at alpha0, g0 kept, no estimate yet.
+
+        The engine's only cold start, so this runs at initialization and after
+        every restart - the secant history never carries across one.
+        """
         # alpha0 is a scalar multiplier; see the class docstring for what it
         # does not fix (the direction -g carries the coordinate scale)
         self.g0[i] = p.g
@@ -164,10 +168,6 @@ class DiagonalPreconditioner(LocalSolver):
         self.s_ema[i] = jnp.zeros_like(p.g)
         self.y_ema[i] = jnp.zeros_like(p.g)
         self._reset_step(i)
-
-    def restart(self, i: int, p: PathPoint) -> None:
-        """Cold-start path i after a restart: the secant history does not carry."""
-        self.init(i, p)
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
         """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - d⊙g."""

@@ -35,7 +35,7 @@ def test_diag_warmup_is_a_monotone_backtracked_gradient_step() -> None:
     """Init arms alpha = 1 along -g; a trial above the Armijo bound shrinks it."""
     solver = DiagonalPreconditioner()
     p = PathPoint(x=jnp.zeros(3), f=2.0, g=jnp.array([3.0, 0.0, 4.0]))
-    solver.init(0, p)
+    solver.restart(0, p)
     assert not solver.has_secant[0]
     assert solver.alpha[0] == 1.0
     assert close(solver.propose(0, p), p.x + 1.0 * (-p.g), 1e-12)
@@ -58,7 +58,7 @@ def test_diag_warmup_retries_a_nonfinite_trial() -> None:
     for bad in (math.nan, math.inf, -math.inf):
         solver = DiagonalPreconditioner()
         p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
-        solver.init(0, p)
+        solver.restart(0, p)
         trial = PathPoint(x=p.x - p.g, f=bad, g=p.g)
         assert solver.verdict(0, p, trial) == "retry"
         assert not solver.has_secant[0]
@@ -93,7 +93,7 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     f0, g0 = quad(x0)
     p = PathPoint(x=x0, f=f0, g=g0)
     solver = DiagonalPreconditioner(theta=0.0)
-    solver.init(0, p)
+    solver.restart(0, p)
     # alpha = 1 overshoots by a factor 25 (f = 215), so the loop walks alpha down
     # to the first step that satisfies Armijo - the served step is the secant's.
     trial = _warm_up(solver, p, quad)
@@ -118,7 +118,7 @@ def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
     f0, g0 = quad(x0)
     p = PathPoint(x=x0, f=f0, g=g0)
     solver = DiagonalPreconditioner(theta=0.0, moment="abs")
-    solver.init(0, p)
+    solver.restart(0, p)
     trial = _warm_up(solver, p, quad)
     assert close(solver.propose(0, trial), jnp.zeros(3), 1e-12)
 
@@ -142,7 +142,7 @@ def test_diag_step_scales_with_the_coordinate_unit() -> None:
         p = PathPoint(x=jnp.zeros(2), f=0.0, g=g / c)
         best = PathPoint(x=c * s, f=-1.0, g=g / c + y / c)
         solver = DiagonalPreconditioner(theta=0.0)
-        solver.init(0, p)
+        solver.restart(0, p)
         solver.fold(0, p, best)
         return solver.propose(0, best) - best.x
 
@@ -155,7 +155,7 @@ def test_diag_gradient_floor_carries_a_flat_secant() -> None:
     g = jnp.array([2.0, -1.0])
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=g)
     solver = DiagonalPreconditioner(theta=1e-4)
-    solver.init(0, p)
+    solver.restart(0, p)
     x1 = p.x - g  # alpha = 1, accepted: f = 0.5 <= 1 - 1e-4·5
     trial = PathPoint(x=x1, f=0.5, g=g)  # g unchanged ⇒ y = 0
     assert solver.verdict(0, p, trial) == "accept"
@@ -172,10 +172,10 @@ def test_diag_armijo_c_is_a_knob() -> None:
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=g)
     trial = PathPoint(x=p.x - g, f=0.9, g=g)  # gtd = -‖g‖² = -1
     default = DiagonalPreconditioner()
-    default.init(0, p)
+    default.restart(0, p)
     assert default.verdict(0, p, trial) == "accept"  # 0.9 ≤ 1 - 1e-4
     tight = DiagonalPreconditioner(armijo_c=0.5)
-    tight.init(0, p)
+    tight.restart(0, p)
     assert tight.verdict(0, p, trial) == "retry"  # 0.9 > 1 - 0.5
 
 
@@ -190,7 +190,7 @@ def test_diag_floor_is_a_floor_not_an_addend() -> None:
     solver = DiagonalPreconditioner(theta=theta)
     g0 = jnp.array([1.0, 0.5])
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=g0)
-    solver.init(0, p)
+    solver.restart(0, p)
     # g1 = g0/(1+√θ) puts the warm-up secant y = g0-g1 = √θ·g1 exactly on the
     # crossover Y = θ·g1² = λ (elementwise, in the mean-square spelling).
     g1 = g0 / (1.0 + math.sqrt(theta))
@@ -212,7 +212,7 @@ def test_diag_decay_blends_later_secants() -> None:
     solver = DiagonalPreconditioner(beta=0.5, theta=0.0)
     g0 = jnp.array([1.0, 2.0])
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=g0)
-    solver.init(0, p)
+    solver.restart(0, p)
     x1 = p.x - g0  # alpha = 1, accepted: f = 0.9 <= 1 - 1e-4·5
     g1 = jnp.array([0.5, 1.0])
     first = PathPoint(x=x1, f=0.9, g=g1)
@@ -233,7 +233,7 @@ def test_diag_gives_up_only_when_the_gradient_norm_converged() -> None:
     """‖g‖ ≤ τ_rel·‖g_0‖ gives up; one loud coordinate keeps the norm up."""
     solver = DiagonalPreconditioner(tau_rel=1e-3)
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 2.0]))
-    solver.init(0, p)
+    solver.restart(0, p)
     # The start never trips the test: ‖g0‖ <= τ‖g0‖ is false for τ < 1.
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
     assert solver.verdict(0, p, first) == "accept"  # warm-up
@@ -250,7 +250,7 @@ def test_diag_gives_up_on_a_nonfinite_trial() -> None:
     for bad in (math.nan, math.inf, -math.inf):
         solver = DiagonalPreconditioner()
         p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
-        solver.init(0, p)
+        solver.restart(0, p)
         warm = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 0.5]))
         assert solver.verdict(0, p, warm) == "accept"
         solver.fold(0, p, warm)
@@ -262,7 +262,7 @@ def test_diag_gives_up_on_a_nonfinite_gradient() -> None:
     """A finite f with an inf gradient component must not reach the EMA."""
     solver = DiagonalPreconditioner()
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
-    solver.init(0, p)
+    solver.restart(0, p)
     warm = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 0.5]))
     assert solver.verdict(0, p, warm) == "accept"
     solver.fold(0, p, warm)
@@ -276,7 +276,7 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     """A restart drops the secant history, the warm flag and the old anchor."""
     solver = DiagonalPreconditioner()
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 2.0]))
-    solver.init(0, p)
+    solver.restart(0, p)
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
     assert solver.verdict(0, p, first) == "accept"
     solver.fold(0, p, first)
@@ -326,7 +326,7 @@ def test_diag_line_search_walks_the_grid_and_folds_the_argmin() -> None:
     f0, g0 = quad(x0)
     p = PathPoint(x=x0, f=f0, g=g0)
     solver = DiagonalPreconditioner(theta=0.0, n_alpha=3)
-    solver.init(0, p)
+    solver.restart(0, p)
     p = _warm_up(solver, p, quad)  # secant in hand; alpha re-armed to 1.0
     trials: list[PathPoint] = []
     verdicts: list[str] = []
@@ -365,7 +365,7 @@ def test_diag_line_search_gives_up_when_no_sample_is_finite() -> None:
     f0, g0 = quad(x0)
     p = PathPoint(x=x0, f=f0, g=g0)
     solver = DiagonalPreconditioner(theta=0.0, n_alpha=3)
-    solver.init(0, p)
+    solver.restart(0, p)
     p = _warm_up(solver, p, quad)
     for rnd in range(3):  # two shrinks, then the last sample finds no finite win
         x = solver.propose(0, p)

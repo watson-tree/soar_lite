@@ -267,7 +267,7 @@ value+grad 批，两侧就都只算一次梯度（代价是探测多一个批）
 
 ## 6. 可换的实现选择 vs 不许破的不变式
 
-参考实现把接缝切成四块：局部方法（`init/restart/propose/verdict/fold`）、路径点与 verdict 类型、
+参考实现把接缝切成四块：局部方法（`restart/propose/verdict/fold`）、路径点与 verdict 类型、
 批量目标 callable、重启规则；另外允许注入起点抽样器。**这些签名全是实现选择**，新项目可以：
 
 - 把局部方法写成纯函数 + 显式状态（不需要协议类）；

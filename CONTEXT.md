@@ -34,8 +34,11 @@ decides which paths restart and then steps the rest: a path either probes or
 steps this iteration, never both. The parallel wall-clock unit; an iteration
 may serve zero batches (a dead iteration where nothing moves) or several (the
 restart probe's `n_probe_evals` batches plus the steppers' up to `max_ls`
-trials each). An iteration cut short by a refused probe or batch did not
-finish, so it is not counted in `nit`.
+trials each). Iteration 0 is the initialization probe: the rule's cold-start
+verdict says restart for every path, so starting the flock is the same
+operation as any later restart. `nit` counts finished iterations only — one
+cut short by a refused probe or batch is not counted, so a refused probe
+reports `nit = 0` and a refused first step `nit = 1`.
 _Avoid_: round (retired), epoch
 
 **step**:

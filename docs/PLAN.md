@@ -133,6 +133,18 @@ and the only residual is the cheap f-count `n_alpha != n_probe_evals`, plus a
 genuine Wolfe/curvature solver that reads the trial's own g (bounded by
 `max_ls`). Don't claim the verdict is exactly unbiased in those residual cases.
 
+**Init folded into restart (landed):** the dedicated initialization path (a
+probe before the loop, then a cold-start `solver.init` / `observe_restart`
+block) was redundant - `apply_restarts` already probes, extends the payoff pool
+and re-seeds the method. The loop's iteration 0 is now the initialization
+probe, unlocked by one rule contract: `should_restart` returns `True` while the
+payoff pool is empty. `LocalSolver.init` is gone (`restart` is the only
+cold-start call). Two consequences worth keeping: `nit` counts iteration 0, so
+the two stops that both used to report `0` are now distinct (a refused probe is
+`0`, a refused first step is `1`); and the cold start opens each path's stage,
+so `samples_until_verdict()` reports a real window instead of `0` before the
+first fold.
+
 ## Next
 
 1. **First PyPI upload is a tag away** (not published yet; version stays 0.1.0).

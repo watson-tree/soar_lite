@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Initialization and restart are one operation: the engine's first iteration is
+  the initialization probe, driven by the rule's cold-start verdict
+  (`should_restart` must return `True` while the payoff pool is empty, so an
+  empty `group_mins` - not `pool_size == 0` - is the test). `LocalSolver.init`
+  is gone - `restart` is the single cold-start call - and `nit` counts the probe
+  as iteration 0, so a run that only seeds the flock reports `nit = 1` instead
+  of `0`, and a refused probe (`0`) is no longer confused with a refused first
+  step (`1`).
 - The continue side's sample is now one iteration's step, not one
   `n_probe_evals`-iteration horizon: the `_Horizon` clock was removed, and a
   restarted path skips sampling for the iteration its probe served.

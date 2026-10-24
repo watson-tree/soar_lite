@@ -47,7 +47,7 @@ class LocalSolver(Protocol):
     """The search method the n-path engine drives (the engine's plugin point).
 
     The engine owns the schedule: row composition, projection, the shared
-    budget, the n-path state machine (init/restart/stall), the incumbent B,
+    budget, the n-path state machine (restart/step/stall), the incumbent B,
     and the per-step trial cap max_ls. The method owns the search: the
     direction, the step size, and the acceptance test. All state is per path,
     lives inside the instance, and is opaque to the engine (the engine never
@@ -80,12 +80,13 @@ class LocalSolver(Protocol):
     (that it carries this contract) at the entry, and nothing here re-checks.
     """
 
-    def init(self, i: int, p: PathPoint) -> None:
-        """Seed path i's state from its start point (cold start)."""
-        ...
-
     def restart(self, i: int, p: PathPoint) -> None:
-        """Re-seed path i's state from its fresh start point after a restart."""
+        """Seed path i's state from a fresh start point (its one cold start).
+
+        Called at initialization and again after every restart: the engine has
+        one way to place a path on a point, so a method need not tell "first"
+        from "again" - both drop its per-path state to the cold one.
+        """
         ...
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
@@ -111,8 +112,8 @@ class LocalSolver(Protocol):
 
         The engine's only call site is the "accept" commit, with best = the
         per-step argmin it committed, so the folded secant is always the
-        accepted step and can never disagree with it. The first call after
-        init/restart seeds state outright; later calls blend.
+        accepted step and can never disagree with it. The first call after a
+        restart seeds state outright; later calls blend.
         """
         ...
 
@@ -144,10 +145,11 @@ class RestartRule(Protocol):
     rule can see; only the engine's call sites could.
 
     These methods are called by the engine on its own schedule - `should_restart`
-    once per path per iteration, `observe_continue` once per path per iteration -
-    so they trust their arguments: `n_path_schedule` validates the
-    object once (that it carries this contract) at the entry, and nothing here
-    re-checks.
+    once per path per iteration, `observe_continue` once per path per iteration,
+    and `observe_restart`/`restart` once per probe event (the initialization
+    probe included) - so they trust their arguments: `n_path_schedule`
+    validates the object once (that it carries this contract) at the entry, and
+    nothing here re-checks.
     """
 
     def observe_continue(self, i: int, delta: float) -> None:
@@ -170,7 +172,15 @@ class RestartRule(Protocol):
         ...
 
     def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
-        """Return True iff path i should restart from f_k with incumbent B."""
+        """Return True iff path i should restart from f_k with incumbent B.
+
+        The engine asks this for every path on its first iteration, before any
+        probe has run, and that ask is how the flock is seeded: a rule must
+        return True while it holds no restart evidence at all (an empty payoff
+        pool), which is what triggers the initialization probe. An empty pool
+        is the true cold start; a pool that exists but is entirely non-finite
+        is evidence of a dead start and must not be re-probed.
+        """
         ...
 
     def samples_until_verdict(self) -> int:
@@ -189,7 +199,12 @@ class RestartRule(Protocol):
         ...
 
     def restart(self, i: int) -> None:
-        """Drop path i's step-local evidence; the engine assumes nothing else."""
+        """Drop path i's step-local evidence; the engine assumes nothing else.
+
+        Called for every path at initialization (right after its probe), and
+        for each path a restart re-probes, so a rule's per-path stage opens
+        clean on the first iteration too.
+        """
         ...
 
 
@@ -235,8 +250,9 @@ class NPathResult:
     Field names follow `scipy.optimize.OptimizeResult` where the concepts
     correspond: `x` is the argmin in the coordinates the engine was handed
     (the caller's coords), `fun` is its objective value, and `nit` counts
-    engine iterations: one iteration may serve several batches (restart probes
-    plus up to the per-step trial cap), so `nit` is not a batch count. Work is
+    completed engine iterations: the initialization probe is iteration 0, and
+    one iteration may serve several batches (restart probes plus up to the
+    per-step trial cap), so `nit` is not a batch count. Work is
     reported on two axes instead of scipy's single `nfev`: `n_points` is the
     points served (the serial-cost number) and `n_batches` the evals served
     (the parallel wall-clock number); they are different numbers and never mix.
@@ -253,7 +269,7 @@ class NPathResult:
     fun: float  # min over feasible finite recorded evals; inf if none yet
     n_points: int  # points served (the serial-cost count)
     n_batches: int  # batches (evals) served (the parallel wall-clock count)
-    nit: int  # engine iterations attempted (not trials)
+    nit: int  # completed iterations (the init probe is 0; not trials)
     status: NPathStatus
 
 
@@ -338,12 +354,11 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     so the n column-wise groups across evals
     are already random groups, and each group's min becomes one start - n
     starts whose values are honest samples of the "min of n_probe_evals random
-    points" distribution (at the default n_probe_evals = 2 a group is a pair;
-    the 2-3 range is empirical - 1 -> plain init, inf -> random
-    search - pinned at 2 by design), identical for init and restart
-    regardless of how many paths restart
-    (by design). Probe-batch grads are
-    reused for the selected starts: starts cost zero extra evals. The rule's
+    points" distribution (at the default n_probe_evals = 1 a group is a single
+    draw and that point is the start; more draws buy a fuller min-of-k and need
+    the f-only seam), identical for init and restart regardless of how many
+    paths restart (by design). Probe-batch grads are reused for the selected
+    starts: starts cost zero extra evals. The rule's
     one shared payoff pool is cold-started with the n_paths init group-mins
     (sigma_r > 0 for n_paths >= 2); n_paths=1 yields a single sample -> sigma_r = 0 ->
     degenerate EI_restart = 0 -> the single path never restarts. Every restart
@@ -410,7 +425,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         - ``fun``: the incumbent (min finite feasible eval; ``inf`` if none)
         - ``n_points``: points served (the serial-cost count)
         - ``n_batches``: batches (evals) served (the parallel wall-clock count)
-        - ``nit``: engine iterations attempted
+        - ``nit``: completed iterations (the init probe is iteration 0)
         - ``status``: why the run stopped
 
     Example:
@@ -597,31 +612,21 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         f_win, g_win = _evaluate_batch(winners)
         return [PathPoint(winners[i], f_win[i], g_win[i]) for i in range(n)]
 
-    try:
-        init_starts = probe_select(n_paths)
-    except _BudgetExhausted:
-        # Nothing was served, so there is no x to report: the budget refused
-        # even the init probe (max_evals < n_probe_evals, or the caller's gate).
-        return NPathResult(
-            x=incumbent.x,
-            fun=incumbent.fun,
-            n_points=budget.n_points,
-            n_batches=budget.n_batches,
-            nit=0,
-            status=budget.stop_status(),
-        )
     # A path's point is one object, not three parallel lists: it is what every
     # seam call takes, and a step commits one path at a time (so a list, whose
-    # item assignment is the commit, beats a stacked array).
-    points = init_starts
-    # a start with no finite evidence never steps: it waits for EI
-    stalled: list[bool] = [not math.isfinite(point.f) for point in points]
+    # item assignment is the commit, beats a stacked array). The placeholders
+    # are replaced by the initialization probe on iteration 0, before any path
+    # can step, so their empty coords and inf f are never served.
+    points = [PathPoint(jnp.zeros(0), math.inf, jnp.zeros(0)) for _ in range(n_paths)]
+    # Nothing has arrived yet, and a path that has not arrived is not stalled:
+    # iteration 0 probes every path before the step filter reads this.
+    stalled: list[bool] = [False] * n_paths
     # Paths whose probe ran this iteration. They moved by the probe, so they
     # do not also step: an iteration restarts a path or advances it, not both.
     just_restarted: set[int] = set()
     # The continue side's sample is one step, so the Δ it reports is
     # points[i].f - prev_f[i]; a restart resets the anchor to the probe's f.
-    prev_f: list[float] = [point.f for point in points]
+    prev_f: list[float] = [math.inf] * n_paths
     # The seam check: presence, not signatures. The seam's own members run per
     # path per iteration and stay unvalidated.
     _check_seam(solver, LocalSolver, "solver")
@@ -636,10 +641,6 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         from soar_lite.restart import EIRestartRule  # noqa: PLC0415
 
         restart_rule = EIRestartRule()
-    for i, point in enumerate(points):
-        solver.init(i, point)
-    for point in points:  # cold-start evidence: init group-mins, into the one pool
-        restart_rule.observe_restart(point.f)
 
     def apply_restarts(idxs: list[int]) -> None:
         """Restart the given paths from one fresh probe-select event.
@@ -742,7 +743,10 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
 
     all_stalled = False
     # Iterations completed. Also the index of the iteration about to run, which
-    # is what the all-stalled shortcut below is measured against.
+    # is what the all-stalled shortcut below is measured against. Iteration 0 is
+    # the initialization probe: the first pass sees no probe evidence, so every
+    # rule's verdict is "restart" and the flock is seeded through the same
+    # apply_restarts path a later restart uses.
     it = 0
     while True:
         # A completed iteration can bring the batch count to the cap or close
@@ -763,12 +767,16 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         # nothing. With one sample per iteration, the wait until the next vote
         # is just the rule's own cadence: if that many iterations cannot fit in
         # the remaining budget, no vote can fire and the flock is stuck for
-        # good. 0 means "unknown cadence" (before any observe); the right side
-        # is then >= 1, so the shortcut stays off. Once every path is stalled no
-        # eval can fire later, so points / B / n_points / n_batches are
-        # untouched.
+        # good. 0 means "unknown cadence" (a rule with no path evidence at all);
+        # the right side is then >= 1, so the shortcut stays off. Once every path
+        # is stalled no eval can fire later, so points / B / n_points / n_batches
+        # are untouched.
         if all(stalled) and restart_rule.samples_until_verdict() >= max_evals - it:
             all_stalled = True
+            # The iteration ran to its end (its step is what stalled the last live
+            # path), so it counts: only an iteration cut short by a refusal is
+            # left out of nit.
+            it += 1
             break
         for i in range(n_paths):
             if i in just_restarted:
@@ -830,10 +838,9 @@ class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
     """A batch was requested past one of the meter's two gates.
 
     Raised only inside `n_path_schedule`, at the two request sites
-    (`_evaluate_batch` and `_evaluate_f`), and caught by the loop or the
-    init-probe guard. It carries nothing: the
-    run's status is derived from the counters, and an unserved batch is never
-    charged, so they name the gate correctly.
+    (`_evaluate_batch` and `_evaluate_f`), and caught by the loop. It carries
+    nothing: the run's status is derived from the counters, and an unserved
+    batch is never charged, so they name the gate correctly.
     """
 
 
