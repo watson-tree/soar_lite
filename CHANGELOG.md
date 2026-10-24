@@ -7,14 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `evaluate_f`: an optional value-only evaluator seam, the f-only sibling of
+  `evaluate_batch` (`(f, feas?)` out, no gradient). Supplying it lets a
+  multi-draw probe compute one gradient for all its draws - `n_probe_evals`
+  value-only batches, then one fused batch at the per-column winners - which is
+  what makes a probe deeper than one draw cost-matched with a step. Without it
+  the engine refuses `n_probe_evals > 1` with a `ValueError`.
+
 ### Changed
 
 - The continue side's sample is now one iteration's step, not one
   `n_probe_evals`-iteration horizon: the `_Horizon` clock was removed, and a
   restarted path skips sampling for the iteration its probe served.
   `n_probe_evals` therefore defaults to `1`; a larger probe is only
-  cost-matched with the continue side once an f-only evaluator exists, which is
-  not landed yet.
+  cost-matched with the continue side through `evaluate_f` (see Added), and is
+  refused without it.
 - `pytest` is now a declared `dev` dependency and the canonical test runner
   (`uv run --no-sync python -m pytest -q`); CI installs from the lockfile with
   `--frozen`. Each test module stays runnable as a script.
@@ -34,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secant step, EMA-smoothed, with a gradient-norm floor and an Armijo-guarded
   step grid.
 - `EIRestartRule`: the default restart rule. Compares expected improvement of
-  continuing a path against restarting it, from the path's own loss changes and
+  continuing a path against restarting it, from the path's own f changes and
   a pool of restart payoffs.
 - `LocalSolver` and `RestartRule`: the two plugin protocols, so the method or
   the restart decision can be replaced without touching the engine.

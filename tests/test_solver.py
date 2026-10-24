@@ -107,7 +107,7 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
 
 
 def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
-    """"abs" spelling |s|/|y| gives the same 1/h on the same quadratic."""
+    """The abs spelling |s|/|y| gives the same 1/h on the same quadratic."""
     h = jnp.array([2.0, 4.0, 8.0])
     x0 = jnp.ones(3)
 
@@ -259,7 +259,7 @@ def test_diag_gives_up_on_a_nonfinite_trial() -> None:
 
 
 def test_diag_gives_up_on_a_nonfinite_gradient() -> None:
-    """A finite loss with an inf gradient component must not reach the EMA."""
+    """A finite f with an inf gradient component must not reach the EMA."""
     solver = DiagonalPreconditioner()
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.init(0, p)

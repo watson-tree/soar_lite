@@ -15,6 +15,7 @@ meant to.
 from soar_lite.engine import (
     BatchEvaluator,
     Bounds,
+    EvaluateF,
     LocalSolver,
     NPathResult,
     NPathStatus,
@@ -32,6 +33,7 @@ __all__ = [
     "Bounds",
     "DiagonalPreconditioner",
     "EIRestartRule",
+    "EvaluateF",
     "LocalSolver",
     "NPathResult",
     "NPathStatus",

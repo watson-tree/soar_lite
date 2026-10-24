@@ -67,8 +67,8 @@ serves `max_ls` batches, so a horizon priced in `n_probe_evals` iterations buys
 fewer batches than a probe once steps start retrying, and the verdict's two
 sides drift apart again. A restarting iteration drifts it the other way: it
 serves a probe instead of a step, and how many paths restart is a runtime
-number, so no iteration clock can be priced in batches. `CONTEXT.md` records
-the open question under `horizon`; the fix is not part of this decision.
+number, so no iteration clock can be priced in batches. `docs/PLAN.md` tracks
+the residual asymmetry; the fix is not part of this decision.
 
 Implemented with this decision: the per-path horizon as the engine's `_Horizon`
 clock, per-batch billing as its `_Budget` meter, the scheduler and seam tests
@@ -86,9 +86,15 @@ reads samples, not evals).
 
 The reason is that the dominant cost is the gradient count, not the eval count.
 A probe computes `g` `n_probe_evals` times; one step computes it once (default
-`n_alpha = 1`). With `g` ≈ 2–5× `f`, that is the asymmetry worth closing. The
-intended close is an opt-in f-only evaluator seam (`evaluate_f`) that lets both
-sides compute `g` exactly once, plus a gate that refuses `n_probe_evals > 1`
-when that seam is absent; until both land the default is `n_probe_evals = 1`, so
-the un-seamed default does not favor restarts. The residual f-count asymmetry
-is cheap and bounded.
+`n_alpha = 1`). With `g` ≈ 2–5× `f`, that is the asymmetry worth closing, and it
+closed with an opt-in f-only evaluator seam: a probe draws `n_probe_evals`
+value-only batches and then serves one fused batch at the per-column winners, so
+it computes `g` once too. Part 2's billing stays exact in that shape - a probe
+costs `n_probe_evals + 1` batches, one more than the un-seamed probe, and all of
+them are charged. Without the seam the engine refuses `n_probe_evals > 1` with a
+`ValueError`, so no configuration compares a `n_probe_evals`-gradient probe
+against a one-gradient step; the default is `n_probe_evals = 1`. The gate is a
+conservative proxy: exact symmetry is `n_probe_evals == n_alpha`, and `n_alpha`
+lives in the solver, which the engine sees as a member that exists, not as a
+value. What is left is the f-count - cheap, and bounded by `max_ls` on the step
+side.

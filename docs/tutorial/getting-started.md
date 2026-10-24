@@ -6,13 +6,13 @@ result fields mean, and where the two swap points are.
 ## 1. Write the batched objective
 
 The engine sees the objective through exactly one function: a batch of points
-in, losses and gradients out together. One fused `jax.value_and_grad` pass gives
+in, f values and gradients out together. One fused `jax.value_and_grad` pass gives
 you both.
 
 | Position | Shape | Meaning |
 | --- | --- | --- |
 | input `x` | `(M, d)` | `M` points, `d` coordinates, already inside the box |
-| output 1 | `(M,)` | losses |
+| output 1 | `(M,)` | f values |
 | output 2 | `(M, d)` | gradients `∂f/∂x` |
 | output 3 | `(M,)` or `None` | feasibility mask; `None` means all feasible |
 
@@ -20,7 +20,7 @@ Constraints reach the engine by two independent routes:
 
 - **The box.** `bounds` clips every candidate into the box *before* it is
   served, so the objective never sees a point outside it.
-- **The mask.** A point masked `False` is still served - its loss and gradient
+- **The mask.** A point masked `False` is still served - its f value and gradient
   come back normally and are used - but it never becomes the incumbent. So
   `result.fun` is a minimum over feasible points only, and is `inf` if nothing
   feasible was ever served.
@@ -30,17 +30,18 @@ import jax.numpy as jnp
 
 
 def evaluate_batch(x):
-    loss = jnp.sum((x - 3.0) ** 2, axis=1)
+    f_vals = jnp.sum((x - 3.0) ** 2, axis=1)
     grad = 2.0 * (x - 3.0)
-    return loss, grad, None
+    return f_vals, grad, None
 ```
 
 ## 2. Run it
 
 `evaluate_batch` is the only positional argument. Everything else is a keyword,
-and just one of them is conditionally required: the engine draws its starts from
-a uniform prior over a finite `bounds`, so an unbounded or absent box needs your
-own `sample=`. With neither, the call raises `ValueError`.
+and two of them are conditionally required: the engine draws its starts from a
+uniform prior over a finite `bounds`, so an unbounded or absent box needs your
+own `sample=`, and a probe deeper than one draw needs an `evaluate_f=`. Both are
+refused by `ValueError` rather than guessed.
 
 ```python
 from soar_lite import n_path_schedule
@@ -85,7 +86,7 @@ its own. Stopping is always a budget or a stall.
 | `n_paths` | engine width: paths advanced in lockstep each iteration (default 16) |
 | `max_evals` | the engine's budget, counted in served batches (default 1000) |
 | `max_ls` | trials one step may serve before the path stalls (default 20) |
-| `n_probe_evals` | probe depth: draws per start (default 1) |
+| `n_probe_evals` | probe depth: draws per start (default 1); above 1 requires `evaluate_f` |
 | `sample` | your own prior `(key, n) -> (n, d)`; required when the box is unbounded |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |
@@ -95,6 +96,10 @@ Three gotchas worth knowing up front:
 - **Unbounded boxes need a sampler.** With `bounds=None` or infinite sides there
   is no uniform prior to draw starts from, so pass `sample=`; the engine rejects
   the run rather than guessing.
+- **A probe depth above one needs `evaluate_f`.** Each extra draw would compute
+  its own gradient against a step's single one, so the engine refuses the depth
+  unless you also supply the value-only `evaluate_f`; with it the probe computes
+  one gradient, at its winners.
 - **`n_paths = 1` is the single-path baseline.** Same code, no restart
   competition.
 - **The budget counts batches, not points.** It can only be exact in the unit
@@ -112,7 +117,8 @@ on whether your objective is really parallel:
   barely grows as the batch widens, up to the device's parallel limit. Set
   `n_paths` to that limit and measure progress in `n_batches`: it is very nearly
   your wall-clock. Wider paths are then almost free, so raising `n_paths` (and
-  `n_probe_evals` with it) shrinks the spread of the incumbent and buys a larger
+  `n_probe_evals` with it, which needs `evaluate_f`) shrinks the spread of the
+  incumbent and buys a larger
   improvement for the same number of batches.
 - **On a CPU.** Batches run mostly serially, so the sampling work per point is
   what costs, and `n_points` is the honest number: raising `n_paths` or

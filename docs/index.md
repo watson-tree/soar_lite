@@ -16,7 +16,7 @@ Three pieces, no dependencies beyond JAX and the standard library:
   Armijo-guarded step grid. No matrix, no linear solve, no scalar learning rate.
 - **`EIRestartRule`** — the default restart rule: compares the expected
   improvement of continuing a path against the expected improvement of
-  restarting it, both read off the path's own recent loss changes and a pool of
+  restarting it, both read off the path's own recent f changes and a pool of
   restart payoffs.
 
 ## Install
@@ -33,7 +33,7 @@ from soar_lite import n_path_schedule
 
 
 def evaluate_batch(x):
-    """(M, d) points in; (M,) losses, (M, d) gradients, (M,)|None mask out."""
+    """(M, d) points in; (M,) f values, (M, d) gradients, (M,)|None mask out."""
     return jnp.sum((x - 3.0) ** 2, axis=1), 2.0 * (x - 3.0), None
 
 

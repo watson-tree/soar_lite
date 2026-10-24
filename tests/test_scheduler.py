@@ -2,7 +2,7 @@
 
 Seam (拍板): the engine consumes callables plus the box it searches
 
-    evaluate_batch(x (M,d)) -> (losses (M,), grads_x (M,d), feas (M,)|None)
+    evaluate_batch(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
     budget_check() -> bool
     bounds -> scipy-style (lb, ub) pairs | (d, 2) array | None (no box)
     sample(key, n) -> (n, d) engine starts; the sole authority on d
@@ -80,12 +80,12 @@ class HalfStep:
 
 
 class Recorder:
-    """Wraps a pointwise (loss, grad) fn as the batched seam; records everything."""
+    """Wraps a pointwise (f, grad) fn as the batched seam; records everything."""
 
     def __init__(self, pointwise: Pointwise) -> None:
-        """Map a single point θ (d,) to (loss, grad_θ (d,))."""
+        """Map a single point θ (d,) to (f, grad_θ (d,))."""
         self.pointwise = pointwise
-        self.all_losses: list[float] = []  # every loss ever returned, per point
+        self.all_f_vals: list[float] = []  # every f value ever returned, per point
         self.batch_shapes: list[tuple[int, int]] = []  # shape of each seam call
         self.evals = 0
 
@@ -93,10 +93,10 @@ class Recorder:
         """Assert the (M,d) batch shape, record it, and vmap the pointwise fn."""
         assert theta.ndim == 2, f"evaluate_batch expects (M,d) batch, got {theta.shape}"
         self.batch_shapes.append((int(theta.shape[0]), int(theta.shape[1])))
-        losses, grads = jax.vmap(self.pointwise)(theta)
-        self.all_losses.extend(float(v) for v in losses)
+        f_vals, grads = jax.vmap(self.pointwise)(theta)
+        self.all_f_vals.extend(float(v) for v in f_vals)
         self.evals += int(theta.shape[0])
-        return losses, grads, None
+        return f_vals, grads, None
 
     def limit_check(self, limit: int) -> Callable[[], bool]:
         """Return a batch-level budget_check() False once `limit` evals served.
@@ -188,7 +188,7 @@ def test_budget_exhaustion_stops_everything() -> None:
 
 
 def test_fun_is_true_min_over_history() -> None:
-    """Pin that fun is the min over every finite loss the seam returned.
+    """Pin that fun is the min over every finite f the seam returned.
 
     Not the final point, not a compressed history.
     """
@@ -206,8 +206,8 @@ def test_fun_is_true_min_over_history() -> None:
         solver=HalfStep(),
         key=jax.random.PRNGKey(3),
     )
-    assert rec.all_losses
-    assert res.fun == min(rec.all_losses)
+    assert rec.all_f_vals
+    assert res.fun == min(rec.all_f_vals)
     # 0.7 is the true minimizer; the engine should land essentially on it
     assert res.fun < 1e-8
 
@@ -314,8 +314,8 @@ def test_projected_descent_reaches_wall_optimum() -> None:
 def test_feasible_only_incumbent() -> None:
     """B (incumbent) is the min over *feasible* points, not the raw min.
 
-    loss = (θ-0.2)^2 has its global min at θ=0.2, which the feas mask marks
-    infeasible (θ <= 0.5); the best feasible design is θ=0.5+ (loss 0.09). The
+    f = (θ-0.2)^2 has its global min at θ=0.2, which the feas mask marks
+    infeasible (θ <= 0.5); the best feasible design is θ=0.5+ (f 0.09). The
     engine must report the feasible min even though the raw min over all evals
     sits lower (in the infeasible basin).
     """
@@ -324,7 +324,7 @@ def test_feasible_only_incumbent() -> None:
     def pointwise(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return (theta[0] - 0.2) ** 2.0, 2.0 * (theta - 0.2)
 
-    all_losses: list[float] = []
+    all_f_vals: list[float] = []
     all_feas: list[bool] = []
     evals = 0
 
@@ -332,12 +332,12 @@ def test_feasible_only_incumbent() -> None:
         theta: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         nonlocal evals
-        losses, grads = jax.vmap(pointwise)(theta)
+        f_vals, grads = jax.vmap(pointwise)(theta)
         feas = theta[:, 0] > thr
-        all_losses.extend(float(v) for v in losses)
+        all_f_vals.extend(float(v) for v in f_vals)
         all_feas.extend(bool(v) for v in feas)
         evals += int(theta.shape[0])
-        return losses, grads, feas
+        return f_vals, grads, feas
 
     def budget_check() -> bool:
         return evals < 600
@@ -352,12 +352,12 @@ def test_feasible_only_incumbent() -> None:
         key=jax.random.PRNGKey(5),
     )
 
-    feasible_losses = [L for L, ok in zip(all_losses, all_feas, strict=True) if ok]
-    assert feasible_losses, "no feasible point ever served"
+    feasible_f_vals = [L for L, ok in zip(all_f_vals, all_feas, strict=True) if ok]
+    assert feasible_f_vals, "no feasible point ever served"
     # the raw min sits in the infeasible basin, below every feasible point
-    assert min(all_losses) < min(feasible_losses)
+    assert min(all_f_vals) < min(feasible_f_vals)
     # B must be exactly the best feasible point, never the raw min
-    assert res.fun == min(feasible_losses)
+    assert res.fun == min(feasible_f_vals)
     assert res.x[0] > thr  # the reported best lies on the feasible side
 
 
@@ -365,9 +365,9 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
     """A NaN probe ranked first must not swallow the batch's real best point.
 
     The init probe serves [NaN, 0.01] (both feasible), so the engine must
-    report best_loss == 0.01. `min(candidates, key=losses_list.__getitem__)`
+    report best_f == 0.01. `min(candidates, key=f_vals_list.__getitem__)`
     kept the NaN (NaN < x is False): the batch's real minimum — and its x —
-    was discarded and best_loss stayed inf.
+    was discarded and best_f stayed inf.
     """
     served = [0]
 
@@ -377,8 +377,8 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
         served[0] += int(theta.shape[0])
         row0 = jnp.arange(theta.shape[0]) == 0
         nan = jnp.asarray(jnp.nan, dtype=theta.dtype)
-        losses = jnp.where(row0, nan, jnp.asarray(0.01, dtype=theta.dtype))
-        return losses, jnp.zeros_like(theta), jnp.ones(theta.shape[0], dtype=bool)
+        f_vals = jnp.where(row0, nan, jnp.asarray(0.01, dtype=theta.dtype))
+        return f_vals, jnp.zeros_like(theta), jnp.ones(theta.shape[0], dtype=bool)
 
     res = n_path_schedule(
         evaluate_batch,
@@ -393,69 +393,60 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
     assert bool(jnp.isfinite(res.x[0])), res.x
 
 
-def run_probe_pass_with_nan_eval(nan_eval: int) -> None:
-    """One n_paths=2 init pass serving NaN for the whole probe eval `nan_eval`."""
+def run_probe_pass_with_nan_draw(nan_draw: int) -> None:
+    """One n_paths=2 init pass serving NaN for the whole f-only draw `nan_draw`."""
     n_paths = 2
-    calls = [0]
-    served = [0]
-    batches: list[jnp.ndarray] = []
-    starts: list[jnp.ndarray] = []
+    draws: list[jnp.ndarray] = []
+    winners: list[jnp.ndarray] = []
+
+    def evaluate_f(theta: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        draws.append(theta)
+        # The finite draw only has to be finite and distinguishable; it is made
+        # clearly worse than the real objective below so the winners' re-served
+        # value reads as an improvement rather than a worsening.
+        value = jnp.nan if len(draws) == nan_draw else 1.0e3
+        return jnp.full((theta.shape[0],), value, dtype=theta.dtype), None
 
     def evaluate_batch(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        calls[0] += 1
-        served[0] += int(theta.shape[0])
-        if calls[0] <= 2:  # the two init probe evals
-            batches.append(theta)
-        if calls[0] <= 2:  # probe evals: one flat, one NaN (a whole eval of it)
-            # The finite probe eval only has to be finite and distinguishable;
-            # it is made clearly worse than the real objective below so the
-            # first post-probe trial reads as an improvement (a probe value near
-            # the real one would make it look like a worsening and be rejected).
-            value = jnp.nan if calls[0] == nan_eval else 1.0e3
-            losses = jnp.full((theta.shape[0],), value, dtype=theta.dtype)
-            grads = jnp.zeros_like(theta)
-        else:  # past the probe: sloped, or every path rejects and burns the budget
-            d = theta - 0.7
-            losses = jnp.sum(d**4 + d**2, axis=1)
-            grads = 4.0 * d**3 + 2.0 * d
-        if calls[0] == 3:  # first post-init step: it must serve the starts
-            starts.append(theta)
-        return losses, grads, None
+        winners.append(theta)
+        d = theta - 0.7
+        return jnp.sum(d**4 + d**2, axis=1), 4.0 * d**3 + 2.0 * d, None
 
     res = n_path_schedule(
         evaluate_batch,
+        evaluate_f=evaluate_f,
         bounds=unit_bounds(),
         n_paths=n_paths,
         # group-min needs two draws to skip between; this test pins the skip,
         # not the default, so it states the probe size it assumes.
         n_probe_evals=2,
-        max_evals=5,
-        budget_check=lambda: served[0] < 40,
+        max_evals=6,  # two f-only draws, their winners' batch, then steps
         solver=HalfStep(),
         key=jax.random.PRNGKey(7),
     )
-    assert starts, "the engine never served a post-init step"
-    assert res.status == "max_evals", (nan_eval, res.status)  # no NaN stall
-    finite_eval = batches[0] if nan_eval == 2 else batches[1]
+    assert winners, "the engine never served the probe's winners"
+    assert res.status == "max_evals", (nan_draw, res.status)  # no NaN stall
+    finite_draw = draws[1] if nan_draw == 1 else draws[0]
     for j in range(n_paths):
-        assert any(jnp.allclose(starts[0][j], pt) for pt in finite_eval), (
-            f"nan_eval={nan_eval}: start {j} is not the finite eval's point"
+        assert jnp.allclose(winners[0][j], finite_draw[j]), (
+            f"nan_draw={nan_draw}: start {j} is not the finite draw's point"
         )
 
 
 def test_probe_group_min_skips_nan() -> None:
-    """A NaN probe eval must not win the group-min: starts stay finite.
+    """A NaN probe draw must not win the group-min: starts stay finite.
 
-    One whole probe eval serves NaN for every point while the other serves
-    0.01, so every start must be its point from the finite eval (asserted by
-    membership in the recorded finite probe batch - no re-derivation of the
-    engine's PRNG chain). Picking the NaN eval's x would set that path's ZH
-    reference to NaN: Armijo can never accept against NaN, so the path would
-    stall for the rest of the run. Running the NaN eval first and last also
-    kills an "always take the last eval" mis-implementation.
+    One whole f-only draw serves NaN for every point while the other serves
+    1.0e3, so every start must be its point from the finite draw - asserted per
+    column against the recorded draws, since each path takes the group-min of
+    its own column (no re-derivation of the engine's PRNG chain). Picking the
+    NaN draw's x would set that path's ZH reference to NaN: Armijo can never
+    accept against NaN, so the path would stall for the rest of the run. Running
+    the NaN draw first and last also kills an "always take the last draw"
+    mis-implementation.
     """
-    run_probe_pass_with_nan_eval(1)
-    run_probe_pass_with_nan_eval(2)
+    run_probe_pass_with_nan_draw(1)
+    run_probe_pass_with_nan_draw(2)
     # helper contract: skip non-finite, None when nothing is finite
     assert _argmin_finite([2.0, 1.0]) == 1
     assert _argmin_finite([math.nan, 0.01, math.inf]) == 1
@@ -499,7 +490,7 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
     # can burn max_ls trials; the budget only has to carry init plus the
     # iterations the verdicts need to come due.
     max_evals = 60
-    init_losses = jnp.array([jnp.inf, 1.0, 3.0])  # row 0 = column 0 = dead
+    init_f_vals = jnp.array([jnp.inf, 1.0, 3.0])  # row 0 = column 0 = dead
 
     def seam_run(window: int) -> tuple[NPathResult, ForcedWindow]:
         calls = [0]
@@ -509,10 +500,10 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
         ) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             calls[0] += 1
             if calls[0] <= 2:  # init probe evals: shared cold-start evidence
-                losses = init_losses
+                f_vals = init_f_vals
             else:  # everything afterwards is finite and flat (Δ = 0, sigma_p = 0)
-                losses = jnp.full((theta.shape[0],), 1.0, dtype=theta.dtype)
-            return losses, jnp.zeros_like(theta), None
+                f_vals = jnp.full((theta.shape[0],), 1.0, dtype=theta.dtype)
+            return f_vals, jnp.zeros_like(theta), None
 
         rule = ForcedWindow(window)
         res = n_path_schedule(
@@ -543,9 +534,9 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
     iterations - the live path only.
     """
     n_paths = 2
-    # the budget is in batches and the init probe is billed, so it is the two
-    # init batches plus the three trial batches this test counts
-    n_probe_evals = 2
+    # the budget is in batches and the init probe is billed, so it is the init
+    # batch plus the three trial batches this test counts
+    n_probe_evals = 1
     n_iterations = 3
     max_evals = n_probe_evals + n_iterations
     served = [0]
@@ -558,11 +549,11 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
         # times per step instead of committing one, and the per-step accounting
         # this test pins would measure the line search, not the stall.
         d = theta - 0.7
-        losses = jnp.sum(d**4 + d**2, axis=1)
+        f_vals = jnp.sum(d**4 + d**2, axis=1)
         grads = 4.0 * d**3 + 2.0 * d
-        if calls[0] <= 2:  # the two init probe evals: column 0 gets no evidence
-            losses = losses.at[0].set(jnp.inf)
-        return losses, grads, None
+        if calls[0] <= n_probe_evals:  # the init probe: column 0 gets no evidence
+            f_vals = f_vals.at[0].set(jnp.inf)
+        return f_vals, grads, None
 
     res = n_path_schedule(
         evaluate_batch,
@@ -582,7 +573,7 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
 def test_stalled_paths_wait_for_ei_then_restart() -> None:
     """max_ls exhaustion stalls a path; only a due EI verdict revives it.
 
-    Init probes return loss = x[0] (a real spread, so sigma_r > 0 and B stays
+    Init probes return f = x[0] (a real spread, so sigma_r > 0 and B stays
     small); every later evaluation returns the same bad constant with a zero
     gradient, so ZH backtracking rejects max_ls times and the paths stall. With
     window = 2 (the shortest stage that has a spread at all) and one sample per
@@ -597,7 +588,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     ~10**9 iterations out, past max_evals, so the run must end there (status
     "all_stalled", one attempted iteration) rather than spin out the eval budget.
     """
-    n_paths, max_ls, n_probe_evals = 4, 3, 2
+    n_paths, max_ls, n_probe_evals = 4, 3, 1
     # Batches: the init probe, the single rejecting iteration (max_ls trials),
     # the restart probe, and one more rejecting iteration of the revived flock.
     max_evals = 2 * (n_probe_evals + max_ls)
@@ -663,7 +654,7 @@ def test_bounds_spellings_are_the_same_box() -> None:
     """scipy-style pairs and the historical (d, 2) array run byte-identically.
 
     One key stream, one draw sequence: if the two spellings normalized
-    differently, the probes would land elsewhere and every recorded loss would
+    differently, the probes would land elsewhere and every recorded f would
     differ. This is also what pins the new entry to the historical engine
     (the (d, 2) array is what the caller passed then).
     """
@@ -684,11 +675,11 @@ def test_bounds_spellings_are_the_same_box() -> None:
             solver=HalfStep(),
             key=jax.random.PRNGKey(3),
         )
-        return rec.all_losses, res.fun
+        return rec.all_f_vals, res.fun
 
-    losses_arr, fun_arr = run(unit_bounds(2))
-    losses_pairs, fun_pairs = run([(0.0, 1.0)] * 2)
-    assert losses_pairs == losses_arr
+    f_vals_arr, fun_arr = run(unit_bounds(2))
+    f_vals_pairs, fun_pairs = run([(0.0, 1.0)] * 2)
+    assert f_vals_pairs == f_vals_arr
     assert fun_pairs == fun_arr
 
 
@@ -761,7 +752,7 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
         solver=HalfStep(),
         key=jax.random.PRNGKey(4),
     )
-    assert rec_pairs.all_losses == rec_none.all_losses
+    assert rec_pairs.all_f_vals == rec_none.all_f_vals
 
     # a box and a sampler that disagree on d is the wiring bug this catches
     try:

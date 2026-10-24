@@ -83,16 +83,22 @@ result reports both, replacing scipy's single `nfev`.
 _Avoid_: nfev (retired)
 
 **objective** (目标 f):
-The scalar function being minimized; its per-point values are the losses the
+The scalar function being minimized; its per-point values are the f values the
 engine records. Distinct from the *cost model* (`n_points`/`n_batches`), which
 counts work.
-_Avoid_: cost, fitness
+_Avoid_: loss, cost, fitness
 
 **evaluate_batch** (批量求值函数):
 The caller's per-batch callable (type `BatchEvaluator`): points in,
-`(loss, gradient, feas?)` out. The seam to the objective's values and
+`(f, gradient, feas?)` out. The seam to the objective's values and
 gradients; the engine is blind to it otherwise.
 _Avoid_: oracle, evaluator, black box
+
+**evaluate_f** (可选的值求值器, type `EvaluateF`):
+The optional value-only sibling: points in, `(f, feas?)` out, no gradient.
+It exists so a multi-draw probe can pay for `g` once, at its winners, instead
+of once per draw. Without it the engine refuses a probe deeper than one draw.
+_Avoid_: value oracle, cheap evaluator
 
 **feasibility mask**:
 The optional per-point boolean saying which served points may count toward the
@@ -132,8 +138,9 @@ _Avoid_: converge, stop, terminate
 **probe**:
 Drawing fresh starts: `n_probe_evals` batches of candidate points, per-column
 minimum → one start each. The same draw is one restart-payoff sample, and it
-costs `n_probe_evals` of the budget. Initialization and restart use the same
-probe.
+costs `n_probe_evals` of the budget — plus one batch for the winners'
+gradients when an f-only evaluator is supplied. Initialization and restart use
+the same probe.
 _Avoid_: selection event, random init, sampling
 
 **payoff pool**:
@@ -146,7 +153,8 @@ The per-path comparison of continuing's expected improvement against
 restarting's; `EI_restart > EI_continue` restarts the path. One sample each —
 one step for continuing, one probe for restarting — so the verdict is a decision
 about what to buy. The two sides are cost-matched in gradient count only when
-an f-only evaluator is supplied; without one, `n_probe_evals` stays at 1.
+an f-only evaluator is supplied; without one the engine refuses
+`n_probe_evals > 1`, so the un-seamed default stays at 1.
 _Avoid_: restart check, reset decision
 
 **fold**:
@@ -159,8 +167,9 @@ _Avoid_: accept, commit (as the name of this handoff)
 
 **budget (`max_evals`)**:
 The engine's own allowance, counted in batches (evals): every served batch
-costs one, so the init probe and each restart event cost `n_probe_evals` of
-it. A stalled iteration serves nothing and costs nothing. `max_evals` also
+costs one, so the init probe and each restart event cost `n_probe_evals` of it
+— `n_probe_evals + 1` with an f-only evaluator. A stalled iteration serves
+nothing and costs nothing. `max_evals` also
 caps the run's iterations at the same number — a second bound that only bites
 on a stalling run.
 _Avoid_: iterations, function-call budget (that is `n_points`, a different axis)

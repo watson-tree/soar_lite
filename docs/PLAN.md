@@ -36,7 +36,7 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
 - Docstrings: `n_path_schedule` carries `Args` + a runnable `Example`;
   `DiagonalPreconditioner.__init__` documents every knob.
 
-## Restart-cost symmetry — f-only (design in flight); horizon=1 (landed)
+## Restart-cost symmetry — f-only (landed, uncommitted); horizon=1 (landed)
 
 Not an ADR yet; the durable record of a decision + its in-progress refactor.
 The verdict's evidence (`observe_continue` Δ, `observe_restart` payoff, the
@@ -44,13 +44,13 @@ incumbent) is f-only; `g` is needed only to propose the step direction (the
 start's `g`, free) and to fold the committed point's secant. Gradient-sweeping
 the losing points is pure waste. Two coupled moves:
 
-- **f-only evaluation (opt-in, not landed yet).** A keyword-only
-  `evaluate_f: EvaluateF | None = None` seam, `EvaluateF = Callable[[(M,d)],
-  ((M,), (M,))]` → `(losses, mask)`. The mask is required, not a nicety: probe
-  group-min and step-selection must still tell "finite but infeasible" from
-  viable, and f alone cannot. `None` derives from `evaluate_batch`
-  (`f=out[0]`, `mask=out[2]`): zero API change, just no savings.
-  `evaluate_batch` stays the one positional argument (sealed).
+- **f-only evaluation (opt-in, landed).** A keyword-only
+  `evaluate_f: EvaluateF | None = None` seam: points in, `(f, feas?)` out. The
+  mask is required, not a nicety: probe group-min and step-selection must still
+  tell "finite but infeasible" from viable, and f alone cannot. `None` means no
+  f-only path at all - the probe takes a gradient with each draw - which is why
+  a depth above one is refused (next bullet). `evaluate_batch` stays the one
+  positional argument (sealed).
 - **Multi-draw probes are f-only-only (gate + default).** The engine cannot see
   the solver's `n_alpha` (the seam checks presence, not members), so it cannot
   enforce the true symmetry `n_alpha == n_probe_evals`; its conservative proxy
@@ -64,9 +64,7 @@ the losing points is pure waste. Two coupled moves:
   Consequences: under that default a restart payoff is a single fresh draw, not
   a min-of-n group-min — the "pinned 2 (empirical)" advice in the docstring
   moves to "2 iff you also pass `evaluate_f`", and the Phase A–D numbers were
-  measured at 2. Ordering: flip the default 2→1 in the `_Horizon`-deletion
-  commit (so the tree never ships an asymmetric default); add the `evaluate_f`
-  param and this guard in the later f-only commit. With `evaluate_f`,
+  measured at 2. With `evaluate_f`,
   `n_alpha != n_probe_evals` is the cheap, bounded (f-only) asymmetry that is
   accepted, not banned.
 - **Iteration clock stays; a work clock never lands.** A cost-denominated
@@ -117,11 +115,15 @@ iteration, `test_one_sample_per_iteration_at_every_probe_size`, and
 `horizon` glossary entry is gone), `docs/adr/0004-*` (amended, part 1
 superseded), `docs/tutorial/getting-started.md`.
 
-**Landed in the working tree (uncommitted):** engine, restart, tests, and the
-four doc files are swept; 66 tests green, ruff and pyright clean. The default
-`n_probe_evals` was flipped 2 → 1 in the same change. Next action: land the
-`evaluate_f` seam plus the `evaluate_f is None and n_probe_evals != 1`
-`ValueError` gate.
+**Landed in the working tree (uncommitted):** engine, restart, tests, and every
+listed doc are swept; 68 tests green, ruff and pyright clean. The default
+`n_probe_evals` was flipped 2 → 1 in the `_Horizon` deletion (`0ffe135`); the
+`evaluate_f` seam and its gate follow in the next commit. Shape the seam took:
+`n_path_schedule(..., evaluate_f=...)` is keyword-only and optional, a probe
+serves `n_probe_evals` value-only draws then one fused batch at the per-column
+winners (so a probe costs `n_probe_evals + 1` batches and one `g`), the draws
+stay exactly `n` wide rather than widening to `n_probe_evals × n`, and
+`evaluate_f is None and n_probe_evals != 1` raises `ValueError` at entry.
 
 Caveat to record, not erase: after horizon→1 the verdict compares one probe
 against one step, and the load-bearing cost is g-count — without `evaluate_f`
@@ -148,10 +150,10 @@ genuine Wolfe/curvature solver that reads the trial's own g (bounded by
    **GitHub Actions**; `docs.yml` then publishes
    `https://watson-tree.github.io/soar_lite/` (linked from `[project.urls]`).
 3. **f-only evaluator plus the probe gate** (`## Restart-cost symmetry`
-   above): the keyword-only `evaluate_f` seam and the
-   `evaluate_f is None and n_probe_evals != 1` `ValueError`. Once both land,
-   re-run the multi-path escape experiment to decide whether the default
-   probe depth should return to 2.
+   above): both landed in the working tree, uncommitted. Once committed,
+   re-run the multi-path escape experiment to decide whether the default probe
+   depth should return to 2 — and measure whether an f-only draw's kernel-launch
+   saving survives the extra winner batch on a GPU.
 
 ## Conventions
 

@@ -18,7 +18,7 @@ Three pieces, three modules (`soar_lite/engine.py`, `soar_lite/solver.py`,
   matrix, no linear solve, no scalar learning rate, unit-invariant.
 - **`EIRestartRule`** — sample-based restarts. Compares the expected improvement of
   continuing a path against the expected improvement of restarting it, both read
-  off the path's own recent loss changes and a pool of restart payoffs shared by
+  off the path's own recent f changes and a pool of restart payoffs shared by
   every path. No surrogate model is fitted.
 - **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep, one batched
   evaluation per iteration, and owns the box, the shared budget, the restart verdicts
@@ -58,7 +58,7 @@ recorded golden numbers that would encode this repository's history.
 ## Scope
 
 This package is the optimizer only. The evaluation budget it consumes is the
-caller's business: `evaluate_batch` takes a batch of points and returns losses,
+caller's business: `evaluate_batch` takes a batch of points and returns f values,
 gradients and an optional feasibility mask, so the same engine drives a scalar
 objective, a batched one, or a penalized transform of a constrained problem. The
 envelope (working-space reparameterization, the penalty schedule, submission and

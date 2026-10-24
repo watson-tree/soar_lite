@@ -247,7 +247,7 @@ class DiagonalPreconditioner(LocalSolver):
         finite = math.isfinite(trial.f) and bool(jnp.all(jnp.isfinite(trial.g)))
         # Nothing non-finite may reach _fold: one inf folded into Y leaves
         # den = inf forever, and that coordinate never steps again. The
-        # gradient is checked too - a finite loss with an inf component would
+        # gradient is checked too - a finite f with an inf component would
         # poison the EMA just the same. A non-finite sample drops out of the
         # candidate set: the sweep keeps shrinking alpha (a real line search
         # probes past a NaN), so n_alpha > 1 survives a bad early sample; at

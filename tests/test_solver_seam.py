@@ -23,7 +23,7 @@ from soar_lite.engine import PathPoint, Verdict, n_path_schedule
 
 jax.config.update("jax_enable_x64", val=True)
 
-PROBE_EVALS = 2
+PROBE_EVALS = 1  # the shipping probe depth: sizes above 1 need the f-only seam
 
 
 def unit_bounds(d: int = 1) -> jnp.ndarray:
@@ -45,10 +45,22 @@ def evaluator() -> tuple[
 
     def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         shapes.append((int(x.shape[0]), int(x.shape[1])))
-        losses, grads = jax.vmap(pointwise)(x)
-        return losses, grads, None
+        f_vals, grads = jax.vmap(pointwise)(x)
+        return f_vals, grads, None
 
     return evaluate_batch, shapes
+
+
+def f_only(
+    evaluate_batch: Callable[[jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None]],
+) -> Callable[[jnp.ndarray], tuple[jnp.ndarray, None]]:
+    """Derive the f-only sibling, so a test needs one objective, not two."""
+
+    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        f_vals, _grads, feas = evaluate_batch(x)
+        return f_vals, feas
+
+    return evaluate_f
 
 
 class StubSolver:
@@ -98,7 +110,7 @@ class RecordingRule:
         self.verdicts: list[int] = []
 
     def observe_continue(self, i: int, delta: float) -> None:
-        """Record one loss change delta for path i."""
+        """Record one f change delta for path i."""
         self.deltas.append((i, delta))
 
     def observe_restart(self, r: float) -> None:
@@ -337,8 +349,8 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
 
         def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             served.append(x)
-            losses, grads = jax.vmap(pointwise)(x)
-            return losses, grads, None
+            f_vals, grads = jax.vmap(pointwise)(x)
+            return f_vals, grads, None
 
         res = n_path_schedule(
             evaluate_batch,
@@ -380,10 +392,10 @@ def test_every_path_feeds_once_per_iteration() -> None:
 
     def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         calls[0] += 1
-        losses = jnp.full((x.shape[0],), 1.0, dtype=x.dtype)
+        f_vals = jnp.full((x.shape[0],), 1.0, dtype=x.dtype)
         if calls[0] <= PROBE_EVALS:  # init probe evals: column 0 has no evidence
-            losses = losses.at[0].set(jnp.inf)
-        return losses, jnp.zeros_like(x), None
+            f_vals = f_vals.at[0].set(jnp.inf)
+        return f_vals, jnp.zeros_like(x), None
 
     rule = RecordingRule()
     res = n_path_schedule(
@@ -412,17 +424,21 @@ def test_one_sample_per_iteration_at_every_probe_size() -> None:
     n_probe_evals: after the init probe, M iterations of budget buy exactly M
     samples per path. This is what changed when the horizon clock went away - a
     sample used to span n_probe_evals iterations, so the same budget bought
-    fewer of them.
+    fewer of them. Sizes above 1 take the f-only seam, whose single extra batch
+    for the winners is all the probe's depth costs in the batch count.
     """
     k = 2
     for probe_evals in (1, 2, 3, 4):
         evaluate_batch, _shapes = evaluator()
         rule = RecordingRule()
+        evaluate_f = None if probe_evals == 1 else f_only(evaluate_batch)
+        probe_batches = probe_evals + (0 if evaluate_f is None else 1)
         res = n_path_schedule(
             evaluate_batch,
+            evaluate_f=evaluate_f,
             bounds=unit_bounds(),
             n_paths=k,
-            max_evals=probe_evals + 2,  # init probe + two iterations
+            max_evals=probe_batches + 2,  # init probe + two iterations
             n_probe_evals=probe_evals,
             solver=StubSolver(),
             restart_rule=rule,
@@ -459,13 +475,84 @@ def test_reports_points_and_batches_separately() -> None:
         )
         return res.n_points, res.n_batches
 
-    # one probe of PROBE_EVALS(=2) batches, then one accepted trial batch
-    batches = PROBE_EVALS + 1  # = 3, independent of n_paths
+    # one probe of PROBE_EVALS(=1) batch, then one accepted trial batch
+    batches = PROBE_EVALS + 1  # = 2, independent of n_paths
     points_3, batches_3 = run(3)
     points_1, batches_1 = run(1)
     assert batches_3 == batches_1 == batches
-    assert points_3 == batches * 3  # 9 points
-    assert points_1 == batches  # 3 points
+    assert points_3 == batches * 3  # 6 points
+    assert points_1 == batches  # 2 points
+
+
+def test_multi_draw_probe_is_refused_without_the_f_only_seam() -> None:
+    """n_probe_evals > 1 needs evaluate_f: it would price g once per draw.
+
+    The probe's cost asymmetry is in gradient counts, not batch counts - a step
+    computes g once while an un-seamed multi-draw probe computes it once per
+    draw - so the engine refuses the combination instead of silently overselling
+    the probe side.
+    """
+    evaluate_batch, _shapes = evaluator()
+    refused: str | None = None
+    try:
+        n_path_schedule(
+            evaluate_batch,
+            bounds=unit_bounds(),
+            n_paths=2,
+            n_probe_evals=2,
+            max_evals=8,
+            solver=StubSolver(),
+            key=jax.random.PRNGKey(0),
+        )
+    except ValueError as e:
+        refused = str(e)
+    assert refused is not None, "n_probe_evals=2 was accepted without evaluate_f"
+    assert "evaluate_f" in refused, refused
+
+
+def test_f_only_probe_computes_one_gradient_per_probe() -> None:
+    """An f-only probe: n_probe_evals f-only draws, then one fused batch.
+
+    That single fused batch is what makes n_probe_evals > 1 cost-matched with a
+    one-gradient step, at the price of one extra batch for the winners'
+    gradients. The group-min still picks per column across the draws, so the
+    batch re-serves the same winners rather than making a new choice.
+    """
+    k, probe_evals = 2, 3
+    f_calls: list[jnp.ndarray] = []
+    fused_calls: list[jnp.ndarray] = []
+
+    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        fused_calls.append(x)
+        f_vals, grads = jax.vmap(pointwise)(x)
+        return f_vals, grads, None
+
+    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        f_calls.append(x)
+        f_vals, _grads = jax.vmap(pointwise)(x)
+        return f_vals, None
+
+    res = n_path_schedule(
+        evaluate_batch,
+        evaluate_f=evaluate_f,
+        bounds=unit_bounds(),
+        n_paths=k,
+        n_probe_evals=probe_evals,
+        max_evals=probe_evals + 1,  # the probe alone
+        solver=StubSolver(),
+        key=jax.random.PRNGKey(1),
+    )
+    assert len(f_calls) == probe_evals, f_calls
+    assert len(fused_calls) == 1, fused_calls
+    assert all(call.shape == (k, 1) for call in f_calls), f_calls
+    # Column j's winner is the best of the draws' column j, so the fused batch
+    # re-serves exactly those picks.
+    f_vals = jnp.stack([jnp.sum((call - 0.25) ** 2, axis=-1) for call in f_calls])
+    best = jnp.argmin(f_vals, axis=0)
+    for j in range(k):
+        assert jnp.allclose(fused_calls[0][j], f_calls[int(best[j])][j]), j
+    assert res.n_batches == probe_evals + 1, res
+    assert res.status == "max_evals", res
 
 
 if __name__ == "__main__":

@@ -197,8 +197,10 @@ observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本�
 
 判决两侧买的东西并不相等：一次探测花 `n_probe_evals` 个批、算 `n_probe_evals` 次梯度，而一步只算
 一次梯度（默认 `n_alpha=1`）。真正吃重的是**梯度次数**（g 约为 f 的 2–5 倍），所以 `n_probe_evals > 1`
-在不接 f-only 求值器时就偏向探测这一侧；默认值因此是 1，接上 f-only 后两侧各只算一次梯度，剩下的只是
-便宜的 f 计数差（完整推导见 `docs/PLAN.md`）。
+必须接 f-only 求值器 `evaluate_f`：探测先服务 `n_probe_evals` 个只有值的批，再对每列的赢家补一个
+value+grad 批，两侧就都只算一次梯度（代价是探测多一个批）。不接就直接抛 `ValueError`——引擎看得见
+`solver` 有 `n_alpha` 这个成员，看不见它的值，只能把「没接 seam ⇒ 单抽探测」当作保守代理；默认值
+因此是 1。剩下的只是便宜的 f 计数差（完整推导见 `docs/PLAN.md`）。
 
 ### 3.3 单一 argmin 所有者与 `fold`
 
@@ -216,7 +218,8 @@ observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本�
 ### 3.5 预算计在批边界（引擎自己记账）
 
 `max_evals` 是引擎自己的预算，单位是**批**：服务一批就记一笔，所以一次探测（`n_probe_evals` 批，
-初始化探测也算）自己就吃掉 `n_probe_evals`——探测不是免费的（ADR-0004）。记账在批之前问：要么整批
+初始化探测也算）自己就吃掉 `n_probe_evals`——接 f-only 求值器时是 `n_probe_evals + 1`（多出的是
+赢家那一批）；探测不是免费的（ADR-0004）。记账在批之前问：要么整批
 服务、要么整批不做，不做部分前缀。`_Budget` 的两个计数器是它全部的状态：`charge` 只记账，`accept`
 是唯一的停车查询（批封顶或调用方的闸关闭），拒绝不存成状态——否则它就和自己的证据脱钩了。同一个
 数字也是循环头的停车条件：一次完成的迭代可能刚好把批数花到 `max_evals`（或把闸关上），所以在开
@@ -306,6 +309,9 @@ observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本�
 #### 引擎（跟着 n_paths 路径框架走，`test_solver_seam.py` / `test_scheduler.py` / `test_restart.py`）
 
 - 接缝真的被驱动（而不是走默认）：`test_injected_solver_is_driven`、`test_injected_rule_is_driven`。
+- f-only 求值器接缝：`test_f_only_probe_computes_one_gradient_per_probe`（`n_probe_evals` 个只有值的批
+  + 一个赢家批，赢家仍是逐列 group-min）、`test_multi_draw_probe_is_refused_without_the_f_only_seam`
+  （不接就拒）。
 - 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
   `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
 - `stalled` 语义：`test_give_up_stalls_a_path`、`test_stalled_paths_wait_for_ei_then_restart`、
