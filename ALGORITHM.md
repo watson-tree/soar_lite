@@ -74,7 +74,7 @@ den = Y + λ            ← 被否掉的加法拼法
 ### 1.4 暖机步：唯一需要护栏的那一步
 
 第一步没有 secant 对，`d` 无从估计，只能沿 `−g₀` 做一次**单调 Armijo 回溯**线搜索：初值 `α0`（默认 1，即全步阻尼旋钮），
-每轮 `α ← α·backtrack`，充分下降判据用斜率 `armijo_c`。走出第一步，拿到首个 `(s, y)`，此后
+每次回溯 `α ← α·backtrack`，充分下降判据用斜率 `armijo_c`。走出第一步，拿到首个 `(s, y)`，此后
 `n_alpha = 1`（默认）无条件接受整步，超调交给下一条 secant 自校正。
 
 #### 为什么只有暖机需要护栏，而稳态不需要
@@ -169,27 +169,29 @@ EI_restart  = σ_r·[z·Φ(z) + φ(z)],  z = (B − μ_r)/σ_r     任一路径�
 
 ### 3.1 选择事件不盲降
 
-初始化与重启都走同一个事件：抽 `n_probe_rounds` 轮、每轮 `n` 个点（`n = n_paths` 或本次重启的路径数），
+初始化与重启都走同一个事件：抽 `n_probe_evals` 次求值、每次 `n` 个点（`n = n_paths` 或本次重启的路径数），
 **按列**取最小值，得到 `n` 个起点；这些点的梯度直接复用（起点零额外 eval）。
 
-为什么按列取最小：每一列跨轮就是从同一抽样器里抽出的一个随机组，组最小值既是「`n_probe_rounds`
+为什么按列取最小：每一列跨求值就是从同一抽样器里抽出的一个随机组，组最小值既是「`n_probe_evals`
 个随机点里最好的那个」（比盲降好），它的值又同时是 payoff pool 的一个**真实样本**——一次选择事件
-买到的改进。所以「选起点」与「收集证据」是同一个动作，不额外花预算。`n_probe_rounds = 1` 退化为
+买到的改进。所以「选起点」与「收集证据」是同一个动作，不额外花预算。`n_probe_evals = 1` 退化为
 朴素初始化，`∞` 退化为随机搜索；默认 2。
 
-### 3.2 每轮三步
+### 3.2 每次迭代三步
 
 ```text
 restart_phase()   对每条路径问一次判决（只在它的 stage 填满时真的问），重启那些胜出的
 step_paths()      propose → clip 进 box → 批量 serve → 逐路径 verdict → commit
-observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_rounds 轮，与一次探测等成本）
+observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_evals 次迭代，与一次探测等成本）
 ```
 
-`observe_continue` 的样本跨一个 **horizon = `n_probe_rounds` 轮**，不是一轮：一次探测的成本就是
-`n_probe_rounds` 轮，继续侧必须买同样多的东西，否则判决是在拿「两轮探索的收益」比「一步的收益」，
+`observe_continue` 的样本跨一个 **horizon = `n_probe_evals` 次迭代**，不是一次迭代：一次探测买的是
+`n_probe_evals` 个批，继续侧必须买同样多的东西，否则判决是在拿「两次求值的收益」比「一步的收益」，
 系统性偏向重启（ADR-0004）。horizon 非重叠、每条路径各自计时（重启开一个新的 horizon），期间
-任意一轮 stalled 就喂 `inf`——宁可丢一个样本，也不让横跨停顿的 Δ 冒充进步。于是 stage 里的 `M` 个
-样本 = `M · n_probe_rounds` 轮，与池子里那 `M` 次探测花的轮数一致；判决的两侧是等价的购买。
+任意一次迭代 stalled 就喂 `inf`——宁可丢一个样本，也不让横跨停顿的 Δ 冒充进步。于是 stage 里的 `M` 个
+样本 = `M · n_probe_evals` 次迭代，与池子里那 `M` 次探测花的批数一致；判决的两侧在稳态是等价的购买。
+**已知缺口**：只有「一次迭代正好服务一批」时，按迭代计的跨度和按批计的花费才真的等价；一次 step 里
+有重试就服务多批，跨度仍按迭代数走，判决的成本对齐随之偏掉（`CONTEXT.md` 的 horizon 词条记着，修法待定）。
 
 ### 3.3 单一 argmin 所有者与 `fold`
 
@@ -199,25 +201,25 @@ observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_rounds 轮�
 
 ### 3.4 `stalled` 是唯一的路径状态
 
-一条路径在某一轮「没提交步」就叫 stalled——可能是自己的收敛判据 `give_up`，也可能是重试次数
+一条路径在某一次迭代「没提交步」就叫 stalled——可能是自己的收敛判据 `give_up`，也可能是重试次数
 `max_ls` 耗尽。stalled 路径不进 `step_paths`，但每个完成的 horizon 仍然喂一个 inf 的 `Δf`（让它的
 判决节奏与同批前进的路径对齐，而不是领先一个样本），直到某次 EI 判决把它唤醒。
 
 ### 3.5 预算计在批边界（引擎自己记账）
 
-`max_steps` 是引擎自己的预算，单位是**批**：服务一批就记一笔，所以一次探测（`n_probe_rounds` 批，
-初始化探测也算）自己就吃掉 `n_probe_rounds`——探测不是免费的（ADR-0004）。记账在批之前问：要么整批
-服务、要么整批不做，不做部分前缀。同一个数字还封顶轮数：一轮除非全程停滞，否则至少服务一批，所以
-这个轮数上界只在停滞时生效，用来结束「规则报不出节奏」的长期空转；停滞轮不服务任何东西，也就不记账。
+`max_evals` 是引擎自己的预算，单位是**批**：服务一批就记一笔，所以一次探测（`n_probe_evals` 批，
+初始化探测也算）自己就吃掉 `n_probe_evals`——探测不是免费的（ADR-0004）。记账在批之前问：要么整批
+服务、要么整批不做，不做部分前缀。同一个数字还封顶迭代数：一次迭代除非全程停滞，否则至少服务一批，
+所以这个上界只在停滞时生效，用来结束「规则报不出节奏」的长期空转；停滞的迭代不服务任何东西，也就不记账。
 
 `budget_check` 只留给引擎看不见的预算（点数、墙钟、钱）。它同样在批边界翻转，所以那类外部预算可能
-超跑不到一个批大小；`max_steps` 本身在批上是精确的，一个方法不会比另一个多拿一批。
+超跑不到一个批大小；`max_evals` 本身在批上是精确的，一个方法不会比另一个多拿一批。
 
 ### 3.6 全停早退
 
-所有路径都 stalled、且下一张判决票按 `samples_until_verdict()` 折算成轮数（样本数 × horizon，加上
-最近一条路径收满样本还要等几轮）也落在剩余轮数（`max_steps` 减去已尝试轮数）之外时，引擎直接结束
-（`all_stalled`），不再空转——没有 eval 会再发生，`x`/`f`/`nfev` 不会再变。
+所有路径都 stalled、且下一张判决票按 `samples_until_verdict()` 折算成迭代数（样本数 × horizon，加上
+最近一条路径收满样本还要等几次迭代）也落在剩余迭代数（`max_evals` 减去已尝试迭代数）之外时，引擎直接结束
+（`all_stalled`），不再空转——没有 eval 会再发生，`x`/`f`/`n_points` 不会再变。
 
 ## 4. 适用界
 
@@ -225,24 +227,25 @@ observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_rounds 轮�
   保证与 Adam/RMSProp 同级，不追牛顿/拟牛顿。
 - 逐坐标估计忽略耦合项 `Σ_{j≠i} Hᵢⱼ sⱼ`，后者落在 `|yᵢ|` 内使 `d` 成为 `1/Hᵢᵢ` 的有偏估计
   （耦合越强偏差越大，倾向系统性欠步：更稳但更慢）。这是拿「安全」换「潜在快」。
-- 重启频率与 `n_probe_rounds`、`β`、`θ`、`τ_rel` 相关；文档只给结构，不给某类问题的推荐值——
+- 重启频率与 `n_probe_evals`、`β`、`θ`、`τ_rel` 相关；文档只给结构，不给某类问题的推荐值——
   那些值由目标决定。
 
-## 5. 两种计费语义（成本模型，不是评分）
+## 5. 两条成本轴（成本模型，不是评分）
 
-同一套算法可以挂在两种成本模型上，它们回答不同的问题，**永远不是同一个数**：
+一次求值服务一批 `(M, d)` 的点，所以同一次运行有两个代价数，它们回答不同的问题，**永远不相等**：
 
-| 口径 | `nfev` 数什么 | 回答的问题 | 用途 |
+| 字段 | 数什么 | 回答的问题 | 用途 |
 | --- | --- | --- | --- |
-| per-point（默认） | 被服务的**点**（一批 n_paths 点计 n_paths） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
-| per-round | 被服务的**批**（一批 n_paths 点计 1） | 并行效率：一轮墙钟买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
+| `n_points` | 被服务的**点**（一批 n_paths 点计 n_paths） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
+| `n_batches` | 被服务的**批**（一批 n_paths 点计 1），一次求值一次 | 并行效率：一次调用买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
 
-为什么两个都要保留：串行口径下，n_paths 条路径的收益会被 n_paths 除，多路径的账面上限被压低；并行口径下，
-n_paths 条路径的一轮就是一次并行调用的成本，「多样本 + 自适应重启」的收益才如实显形。两者都不等于墙钟
-（换底层语言能把固定开销压掉，但改变不了「一轮要服务几个点」这个结构量）。
+两个都要报：串行轴下，n_paths 条路径的收益会被 n_paths 除，多路径的账面上限被压低；并行轴下一次求值
+就是一次并行调用的成本，「多样本 + 自适应重启」的收益才如实显形。两者都不等于墙钟（换底层语言能把
+固定开销压掉，但改变不了「一次求值要服务几个点」这个结构量）。
 
-**不许混写**：同一张表、同一张图只能用一种口径，且必须标注。把 per-round 的数字当成 per-point
-的数字去比较，等于把 n_paths 倍的预算差抹平。
+预算只记在批上（3.5），所以 `max_evals` 与 `n_batches` 同轴；`n_points` 只报不预算——引擎无法在一个
+不可分的批内部设卡。**不许混写**：同一张表、同一张图只能用一条轴，且必须标注。把 `n_batches` 的数字
+当成 `n_points` 的数字去比较，等于把 n_paths 倍的预算差抹平。
 
 ## 6. 可换的实现选择 vs 不许破的不变式
 
@@ -288,7 +291,7 @@ n_paths 条路径的一轮就是一次并行调用的成本，「多样本 + 自
 #### 引擎（跟着 n_paths 路径框架走，`test_solver_seam.py` / `test_scheduler.py` / `test_restart.py`）
 
 - 接缝真的被驱动（而不是走默认）：`test_injected_solver_is_driven`、`test_injected_rule_is_driven`。
-- 选择事件不盲降 + 批形状：`test_batch_shape_and_per_point_counting`、
+- 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
   `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
 - `stalled` 语义：`test_give_up_stalls_a_path`、`test_stalled_paths_wait_for_ei_then_restart`、
   `test_nonfinite_start_waits_for_ei_instead_of_stepping`。
@@ -302,15 +305,15 @@ n_paths 条路径的一轮就是一次并行调用的成本，「多样本 + 自
   `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_payoff_pool`。
 - `n_paths = 1` 退化（`σ_r = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
   `test_no_incumbent_never_restarts_but_does_not_stall_the_clock` 覆盖 B 缺失；**没有端到端 n_paths=1 断言**
-  ——搬走前可补一条（n_paths=1 跑满 max_steps，断言 `restarts == []`）。
+  ——搬走前可补一条（n_paths=1 跑满 max_evals，断言 `restarts == []`）。
 - EI 闭式：`test_normal_functions_match_known_values`、`test_ei_continue_exact_degenerate_at_sigma_zero`、
   `test_ei_continue_matches_gaussian_ei_literal`、`test_ei_restart_matches_gaussian_fit_literal`、
   `test_ei_restart_fits_a_population_std`、`test_ei_restart_gaussian_tail_below_all_observations`、
   `test_ei_restart_empty_single_and_nonfinite_skipped`。
-- **两种计费**：`test_per_round_evals_bills_a_parallel_round_as_one`（per-round 的 `nfev` 与 `n_paths`
-  无关；`n_paths=3` 的 per-round 等于 `n_paths=1` 的 per-point）。
-- 预算计在批边界：`test_budget_exhaustion_stops_everything`、`test_no_budget_run_reports_max_steps`、
-  `test_budget_is_never_exceeded_under_restart_storm`（探测记账：重启风暴也超不过 `max_steps` 批）、
+- **两条成本轴**：`test_reports_points_and_batches_separately`（`n_batches` 与 `n_paths` 无关，
+  `n_points` 等于 `n_batches × n_paths`）。
+- 预算计在批边界：`test_budget_exhaustion_stops_everything`、`test_no_budget_run_reports_max_evals`、
+  `test_budget_is_never_exceeded_under_restart_storm`（探测记账：重启风暴也超不过 `max_evals` 批）、
   `test_every_path_feeds_once_per_completed_horizon`（每个完成 horizon 恰好一个样本，停顿的那个喂 inf）。
 - 盒是数据：`test_box_is_data_not_a_unit_cube_assumption`、`test_bounds_spellings_are_the_same_box`、
   `test_unbounded_or_absent_box_needs_an_injected_sampler`、

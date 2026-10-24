@@ -78,7 +78,7 @@ def _warm_up(
         if solver.verdict(0, p, trial) == "accept":
             solver.fold(0, p, trial)
             return trial
-    raise AssertionError  # max_ls rounds without an accepted warm-up step
+    raise AssertionError  # max_ls trials without an accepted warm-up step
 
 
 def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
@@ -303,7 +303,7 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
         evaluate_batch,
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         n_paths=1,
-        max_steps=50,
+        max_evals=50,
         solver=DiagonalPreconditioner(theta=0.0),
         key=jax.random.PRNGKey(0),
     )
@@ -387,7 +387,7 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
         evaluate_batch,
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         n_paths=1,
-        max_steps=50,
+        max_evals=50,
         solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
         key=jax.random.PRNGKey(0),
     )

@@ -21,11 +21,11 @@ Three pieces, three modules (`soar_lite/engine.py`, `soar_lite/solver.py`,
   off the path's own recent loss changes and a pool of restart payoffs shared by
   every path. No surrogate model is fitted.
 - **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep, one batched
-  evaluation per round, and owns the box, the shared budget, the restart verdicts
+  evaluation per iteration, and owns the box, the shared budget, the restart verdicts
   and the stall state machine. `n_paths = 1` is the single-path baseline.
 
 `ALGORITHM.md` is the derivation: what each piece does, why the floor is a floor
-and not an addend, the two billing notions, what may be redesigned freely, the
+and not an addend, the two cost axes, what may be redesigned freely, the
 seven invariants that must survive a redesign, and what this library does and does
 not take from SOAR.
 

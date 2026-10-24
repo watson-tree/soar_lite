@@ -35,7 +35,7 @@ class EIRestartRule(RestartRule):
     support. That bias never shows up as an error, only as a worse incumbent, so
     the rule **derives** the two counts instead of exposing a knob: the
     continue side is read over `_stage_window()` = the pool's size M, which is the
-    most samples a verdict can have in as many rounds as the restart side
+    most samples a verdict can have in as many iterations as the restart side
     already has, and a caller cannot ask for a window its own pool cannot back.
 
     Equal weights are the only form that uses a whole stage: a windowed estimate
@@ -46,7 +46,7 @@ class EIRestartRule(RestartRule):
     stage is as long as the pool is large - short. Nothing is lost over a longer
     horizon either: a restart drops the path's stage (the next Δ opens a new one
     against the pool as it stands), and the verdict is asked again every
-    `_stage_window()` rounds, so the loop re-reads the path as regularly as it
+    `_stage_window()` iterations, so the loop re-reads the path as regularly as it
     collects evidence.
 
     `group_mins` is **one pool for every path**, not a copy per path: a restart
@@ -69,7 +69,7 @@ class EIRestartRule(RestartRule):
         """Append path i's one-step value change Δ to its current stage.
 
         A non-finite Δ is stored, not dropped: a stalled path folds one every
-        round and its verdict has to stay due on the same clock as its moving
+        horizon and its verdict has to stay due on the same clock as its moving
         cohort (the engine reports the stall through the value, not by skipping
         the call), so the guard belongs at the read, where one +inf sample would
         otherwise make the mean and spread NaN - and `NaN > EI_continue` is
@@ -94,7 +94,7 @@ class EIRestartRule(RestartRule):
         Self-gated: due once the path has folded a full window of Δ since its
         last verdict, and the stage closes here whichever way the verdict goes -
         the gate is what opens a verdict, so a stage left open would be re-asked
-        unchanged every round. A full stage also closes while there is no
+        unchanged every iteration. A full stage also closes while there is no
         incumbent (B = inf): the verdict has nothing to compare against yet, and
         the engine owns B.
         """
@@ -113,12 +113,12 @@ class EIRestartRule(RestartRule):
         underestimate once it grows, since `window` only lengthens. That
         direction is the safe one - the engine stops when this says a vote is out
         of reach, and an overestimated cadence there would be a stop for a vote
-        that was still due. Samples, not rounds: the engine prices one at its
-        own horizon (`n_probe_rounds` rounds), which is the same cost as one
+        that was still due. Samples, not iterations: the engine prices one at its
+        own horizon (`n_probe_evals` evals), which is the same cost as one
         probe and therefore the same cost as a payoff sample. A path that has
         just restarted counts from 0, i.e. as a full window: it folds its first
         sample once its new horizon completes. 0 with no path evidence at all -
-        no cadence to bound, so the engine keeps its ordinary rounds, which is
+        no cadence to bound, so the engine keeps its ordinary iterations, which is
         only reachable before the first fold.
         """
         window = self._stage_window()

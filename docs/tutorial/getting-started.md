@@ -16,10 +16,14 @@ you both.
 | output 2 | `(M, d)` | gradients `∂f/∂x` |
 | output 3 | `(M,)` or `None` | feasibility mask; `None` means all feasible |
 
-The mask is the only way to express a constraint. Points masked `False` still
-move along the objective, but they never become the incumbent, so `result.fun`
-is a minimum over feasible points only and is `inf` if nothing feasible was ever
-served.
+Constraints reach the engine by two independent routes:
+
+- **The box.** `bounds` clips every candidate into the box *before* it is
+  served, so the objective never sees a point outside it.
+- **The mask.** A point masked `False` is still served - its loss and gradient
+  come back normally and are used - but it never becomes the incumbent. So
+  `result.fun` is a minimum over feasible points only, and is `inf` if nothing
+  feasible was ever served.
 
 ```python
 import jax.numpy as jnp
@@ -33,8 +37,10 @@ def evaluate_batch(x):
 
 ## 2. Run it
 
-The one required argument is the evaluator. Everything else is a knob with a
-default.
+`evaluate_batch` is the only positional argument. Everything else is a keyword,
+and just one of them is conditionally required: the engine draws its starts from
+a uniform prior over a finite `bounds`, so an unbounded or absent box needs your
+own `sample=`. With neither, the call raises `ValueError`.
 
 ```python
 from soar_lite import n_path_schedule
@@ -43,15 +49,16 @@ result = n_path_schedule(
     evaluate_batch,
     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
     n_paths=4,
-    max_steps=30,
+    max_evals=30,
 )
 print(result.x, result.fun, result.status)
 # [3. 3.] 0.0 all_stalled
 ```
 
 `all_stalled` is not a failure: every path reached its own per-coordinate
-stopping test and no restart verdict was reachable before `max_steps`, so the
-engine ended the run instead of spending rounds on no evaluation.
+stopping test and no restart verdict was reachable before `max_evals` ran out,
+so the engine ended the run instead of spinning iterations that serve no
+evaluation.
 
 ## 3. Read the result
 
@@ -62,9 +69,10 @@ correspond:
 | --- | --- |
 | `x` | argmin, in the coordinates you handed the engine |
 | `fun` | its value: the incumbent over feasible finite points, `inf` if none |
-| `nfev` | points evaluated, or batches under `per_round_evals` |
-| `nit` | engine rounds; one round may hold several linesearch rounds |
-| `status` | `max_steps`, `budget_exhausted` or `all_stalled` |
+| `n_points` | points served - the serial-cost count |
+| `n_batches` | batches served, one per `evaluate_batch` call - the parallel-cost count |
+| `nit` | engine iterations attempted; one iteration may serve several batches |
+| `status` | `max_evals`, `budget_exhausted` or `all_stalled` |
 
 There is no `success` or `message`: the engine has no convergence criterion of
 its own. Stopping is always a budget or a stall.
@@ -74,11 +82,12 @@ its own. Stopping is always a budget or a stall.
 | Knob | What it buys |
 | --- | --- |
 | `bounds` | the search box, scipy-style `(lb, ub)` pairs per dim; `None`/`±inf` is unbounded |
-| `n_paths` | engine width: paths advanced in lockstep each round (default 16) |
-| `max_steps` | the engine's batch budget, counted in rounds |
-| `max_ls` | per-step round cap after which a path stalls |
+| `n_paths` | engine width: paths advanced in lockstep each iteration (default 16) |
+| `max_evals` | the engine's budget, counted in served batches (default 1000) |
+| `max_ls` | trials one step may serve before the path stalls (default 20) |
+| `n_probe_evals` | probe depth: draws per start, and the horizon a continue sample spans (default 2) |
 | `sample` | your own prior `(key, n) -> (n, d)`; required when the box is unbounded |
-| `per_round_evals` | bill batches instead of points, a parallel-cost proxy |
+| `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |
 
 Three gotchas worth knowing up front:
@@ -88,10 +97,33 @@ Three gotchas worth knowing up front:
   the run rather than guessing.
 - **`n_paths = 1` is the single-path baseline.** Same code, no restart
   competition.
-- **The budget is rounds, not evaluations.** With one batched call per round,
-  `max_steps` bounds the number of calls you make.
+- **The budget counts batches, not points.** It can only be exact in the unit
+  it is charged in: one `evaluate_batch` call costs one of `max_evals`, whatever
+  the batch holds. The point count is reported, not budgeted - read `n_points`.
+  `budget_check` is consulted once per batch too, so an external budget derived
+  from points can over-run by less than one batch, never more.
 
-## 5. Swap a piece
+## 5. What a batch and a point cost
+
+The two result fields answer different questions, and which one matters depends
+on whether your objective is really parallel:
+
+- **On a GPU.** A batch's wall-clock is dominated by kernel launches, so it
+  barely grows as the batch widens, up to the device's parallel limit. Set
+  `n_paths` to that limit and measure progress in `n_batches`: it is very nearly
+  your wall-clock. Wider paths are then almost free, so raising `n_paths` (and
+  `n_probe_evals` with it) shrinks the spread of the incumbent and buys a larger
+  improvement for the same number of batches.
+- **On a CPU.** Batches run mostly serially, so the sampling work per point is
+  what costs, and `n_points` is the honest number: raising `n_paths` or
+  `n_probe_evals` improves the incumbent per point far less than it improves it
+  per batch.
+
+One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
+**point** is one row of data (serial cost, CPU) - and a batch is a
+`(M, d)` array whose rows are those points.
+
+## 6. Swap a piece
 
 The engine owns the schedule; the method and the restart decision are plugins.
 Both defaults are bound lazily, so you replace either one by name:
@@ -118,8 +150,8 @@ To replace one outright, implement its protocol and pass the instance:
 Both protocols are documented in the [API Reference](../reference/api.md), which
 is the contract to code against.
 
-## 6. Next
+## 7. Next
 
 `ALGORITHM.md` in the repository is the derivation: why the floor is a floor and
-not an addend, the two billing notions, what may be redesigned freely, and the
+not an addend, the two cost axes, what may be redesigned freely, and the
 invariants that must survive a redesign.

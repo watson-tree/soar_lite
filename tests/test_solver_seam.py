@@ -6,7 +6,7 @@ defaults, and a foreign box (`bounds` as data) plus the caller's own x->θ map
 composed into `evaluate_batch` must be honoured too. These also pin the two
 documented zero-caller hooks — a method
 returning `"give_up"` and an unbounded run (`budget_check=None` ->
-`status == "max_steps"`, the only stop left).
+`status == "max_evals"`, the only stop left).
 
 Run with:
 
@@ -23,7 +23,7 @@ from soar_lite.engine import PathPoint, Verdict, n_path_schedule
 
 jax.config.update("jax_enable_x64", val=True)
 
-PROBE_ROUNDS = 2
+PROBE_EVALS = 2
 
 
 def unit_bounds(d: int = 1) -> jnp.ndarray:
@@ -52,7 +52,7 @@ def evaluator() -> tuple[
 
 
 class StubSolver:
-    """Accepts every trial in one round, or gives up on its first verdict.
+    """Accepts every trial on its first verdict, or gives up instead.
 
     Records the calls the engine makes, so the test can prove the engine drove
     the injected method rather than its default `BBZhangHager`.
@@ -78,7 +78,7 @@ class StubSolver:
         return p.x - 0.5 * p.g
 
     def verdict(self, i: int, p: PathPoint, trial: PathPoint) -> Verdict:  # noqa: ARG002
-        """Record the verdict: accept, or give up on the first round."""
+        """Record the verdict: accept, or give up on the first trial."""
         self.verdicts.append(i)
         return "give_up" if self.give_up else "accept"
 
@@ -111,7 +111,7 @@ class RecordingRule:
         return False
 
     def samples_until_verdict(self) -> int:
-        """Report an unknown cadence: the engine keeps its round-by-round rounds."""
+        """Report an unknown cadence: the engine keeps its ordinary iterations."""
         return 0
 
     def restart(self, i: int) -> None:
@@ -138,16 +138,16 @@ def test_injected_solver_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_steps=PROBE_ROUNDS + 1,  # the init probe is billed too
-        n_probe_rounds=PROBE_ROUNDS,
+        max_evals=PROBE_EVALS + 1,  # the init probe is billed too
+        n_probe_evals=PROBE_EVALS,
         solver=solver,
         restart_rule=RecordingRule(),
         key=jax.random.PRNGKey(0),
     )
     assert solver.inited == [0, 1, 2], solver.inited
-    assert solver.verdicts == [0, 1, 2], solver.verdicts  # one round, then accept
-    assert res.nfev == sum(w for w, _d in shapes) == PROBE_ROUNDS * k + k
-    assert res.status == "max_steps"
+    assert solver.verdicts == [0, 1, 2], solver.verdicts  # one trial, then accept
+    assert res.n_points == sum(w for w, _d in shapes) == PROBE_EVALS * k + k
+    assert res.status == "max_evals"
 
 
 def test_give_up_stalls_a_path() -> None:
@@ -160,16 +160,16 @@ def test_give_up_stalls_a_path() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_steps=PROBE_ROUNDS + 1,  # the init probe is billed too
-        n_probe_rounds=PROBE_ROUNDS,
+        max_evals=PROBE_EVALS + 1,  # the init probe is billed too
+        n_probe_evals=PROBE_EVALS,
         solver=solver,
         restart_rule=RecordingRule(),
         key=jax.random.PRNGKey(1),
     )
     assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
-    # init probe + the single stalled round; the remaining 4 steps serve nothing
-    assert res.nfev == sum(w for w, _d in shapes) == PROBE_ROUNDS * k + k
-    assert res.status == "max_steps"
+    # init probe + the single stalled iteration; the rest serve nothing
+    assert res.n_points == sum(w for w, _d in shapes) == PROBE_EVALS * k + k
+    assert res.status == "max_evals"
 
 
 def test_injected_rule_is_driven() -> None:
@@ -182,19 +182,19 @@ def test_injected_rule_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_steps=PROBE_ROUNDS + PROBE_ROUNDS,  # init probe + one horizon
-        n_probe_rounds=PROBE_ROUNDS,
+        max_evals=PROBE_EVALS + PROBE_EVALS,  # init probe + one horizon
+        n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),
         restart_rule=rule,
         key=jax.random.PRNGKey(2),
     )
     assert len(rule.group_mins) == k  # cold start: the n_paths init group-mins, once
-    # One horizon is n_probe_rounds rounds, so this run has one feed per path -
+    # One horizon is n_probe_evals iterations, so this run feeds each path once -
     # the continue side's sample is priced like a probe, not like a step.
-    assert rule.verdicts == [0, 1] * PROBE_ROUNDS  # asked once per path per round
+    assert rule.verdicts == [0, 1] * PROBE_EVALS  # asked once per path per iteration
     assert [i for i, _delta in rule.deltas] == [0, 1]  # Δf over one horizon each
     assert rule.restarts == []
-    assert res.status == "max_steps"
+    assert res.status == "max_evals"
 
 
 def test_rule_can_force_restarts() -> None:
@@ -208,20 +208,20 @@ def test_rule_can_force_restarts() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        # each round buys a restart probe (PROBE_ROUNDS batches) plus its step
-        max_steps=PROBE_ROUNDS + 2 * (PROBE_ROUNDS + 1),
-        n_probe_rounds=PROBE_ROUNDS,
+        # each iteration buys a restart probe (PROBE_EVALS batches) plus its step
+        max_evals=PROBE_EVALS + 2 * (PROBE_EVALS + 1),
+        n_probe_evals=PROBE_EVALS,
         solver=solver,
         restart_rule=rule,
         key=jax.random.PRNGKey(3),
     )
-    # init probe + both steps' (restart event + one accepted round)
-    assert res.nfev == sum(w for w, _d in shapes)
-    assert res.nfev == PROBE_ROUNDS * k + 2 * (PROBE_ROUNDS * k + k)
+    # init probe + both steps' (restart event + one accepted trial)
+    assert res.n_points == sum(w for w, _d in shapes)
+    assert res.n_points == PROBE_EVALS * k + 2 * (PROBE_EVALS * k + k)
     assert rule.restarts == [0, 1] * 2  # every path restarted, every step
     assert len(rule.group_mins) == k + 2 * k  # n_paths init + payoff per restart
     assert solver.verdicts == [0, 1] * 2
-    assert res.status == "max_steps"
+    assert res.status == "max_evals"
 
 
 def test_budget_is_never_exceeded_under_restart_storm() -> None:
@@ -229,45 +229,45 @@ def test_budget_is_never_exceeded_under_restart_storm() -> None:
 
     The expensive event in the engine is the restart probe, and the deepest
     accounting bug this engine had was that the probes were never charged: a
-    rule that restarts every round would then have served far more than
-    `max_steps` batches. The budget is odd here so the last round cannot be
+    rule that restarts every iteration would then have served far more than
+    `max_evals` batches. The budget is odd here so the last batch cannot be
     bought whole, which is where an unbilled probe would show up.
     """
     k = 3
-    for max_steps in (1, PROBE_ROUNDS, 2 * PROBE_ROUNDS + 1, 7):
+    for max_evals in (1, PROBE_EVALS, 2 * PROBE_EVALS + 1, 7):
         evaluate_batch, shapes = evaluator()
         res = n_path_schedule(
             evaluate_batch,
             bounds=unit_bounds(),
             n_paths=k,
-            max_steps=max_steps,
-            n_probe_rounds=PROBE_ROUNDS,
+            max_evals=max_evals,
+            n_probe_evals=PROBE_EVALS,
             solver=StubSolver(),
             restart_rule=AlwaysRestartRule(),
             key=jax.random.PRNGKey(7),
         )
         # served batches * points per batch, and never one batch more than asked
-        assert res.nfev == sum(w for w, _d in shapes) <= max_steps * k
-        assert len(shapes) <= max_steps, (max_steps, shapes)
-        assert res.status == "max_steps", res
+        assert res.n_points == sum(w for w, _d in shapes) <= max_evals * k
+        assert len(shapes) <= max_evals, (max_evals, shapes)
+        assert res.status == "max_evals", res
 
 
-def test_no_budget_run_reports_max_steps() -> None:
-    """No gate passed at all (the keyword defaults to None): max_steps only."""
+def test_no_budget_run_reports_max_evals() -> None:
+    """No gate passed at all (the keyword defaults to None): max_evals only."""
     k = 2
     evaluate_batch, shapes = evaluator()
     res = n_path_schedule(
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=k,
-        max_steps=PROBE_ROUNDS + 3,  # the init probe plus three round-batches
-        n_probe_rounds=PROBE_ROUNDS,
+        max_evals=PROBE_EVALS + 3,  # the init probe plus three trial batches
+        n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),
         restart_rule=RecordingRule(),
         key=jax.random.PRNGKey(4),
     )
-    assert res.status == "max_steps", res
-    assert res.nfev == sum(w for w, _d in shapes) == PROBE_ROUNDS * k + 3 * k
+    assert res.status == "max_evals", res
+    assert res.n_points == sum(w for w, _d in shapes) == PROBE_EVALS * k + 3 * k
 
 
 def test_box_is_data_not_a_unit_cube_assumption() -> None:
@@ -293,8 +293,8 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
         bounds=bounds,
         budget_check=None,
         n_paths=2,
-        max_steps=3,
-        n_probe_rounds=PROBE_ROUNDS,
+        max_evals=3,
+        n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
         restart_rule=RecordingRule(),
         key=jax.random.PRNGKey(5),
@@ -305,7 +305,7 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
     # the clip really fired (the raw trial was 3.0) and the best point sits on it
     assert abs(max(served) - hi) < 1e-12, max(served)
     assert abs(float(res.x[0]) - hi) < 1e-12, res.x
-    assert res.status == "max_steps", res
+    assert res.status == "max_evals", res
 
 
 def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
@@ -343,35 +343,35 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
             sample=sample,
             budget_check=None,
             n_paths=2,
-            max_steps=3,
-            n_probe_rounds=PROBE_ROUNDS,
+            max_evals=3,
+            n_probe_evals=PROBE_EVALS,
             solver=StubSolver(),
             restart_rule=AlwaysRestartRule(),
             key=jax.random.PRNGKey(7),
         )
-        return served, res.x, res.fun, res.nfev
+        return served, res.x, res.fun, res.n_points
 
-    default_served, default_x, default_fun, default_nfev = run(None)
-    ours_served, ours_x, ours_fun, ours_nfev = run(draw)
+    default_served, default_x, default_fun, default_points = run(None)
+    ours_served, ours_x, ours_fun, ours_points = run(draw)
     assert default_served, "nothing was ever served"
     assert len(default_served) == len(ours_served)
     for a, b in zip(default_served, ours_served, strict=True):
         assert jnp.array_equal(a, b), (a, b)
     assert jnp.array_equal(default_x, ours_x), (default_x, ours_x)
     assert default_fun == ours_fun, (default_fun, ours_fun)
-    assert default_nfev == ours_nfev, (default_nfev, ours_nfev)
+    assert default_points == ours_points, (default_points, ours_points)
 
 
 def test_every_path_feeds_once_per_completed_horizon() -> None:
     """Pin that every path feeds observe_continue once per completed horizon.
 
-    Column 0 is non-finite in both init probe rounds, so path 0 arrives
+    Column 0 is non-finite in both init probe evals, so path 0 arrives
     stalled and never steps; the engine must still feed it one
     `observe_continue(0, inf)` per horizon, so its sample count advances in
     lockstep with its advancing cohort instead of leading it by one verdict
-    (the off-by-one a top-of-round stall count would cause). One horizon is
-    n_probe_rounds rounds - the continue side's sample is priced like a probe -
-    so three horizons take 3 * n_probe_rounds rounds.
+    (the off-by-one a top-of-iteration stall count would cause). One horizon is
+    n_probe_evals iterations - the continue side's sample is priced like a
+    probe - so three horizons take 3 * n_probe_evals iterations.
     """
     k = 2
     calls = [0]
@@ -379,7 +379,7 @@ def test_every_path_feeds_once_per_completed_horizon() -> None:
     def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         calls[0] += 1
         losses = jnp.full((x.shape[0],), 1.0, dtype=x.dtype)
-        if calls[0] <= PROBE_ROUNDS:  # init probe rounds: column 0 has no evidence
+        if calls[0] <= PROBE_EVALS:  # init probe evals: column 0 has no evidence
             losses = losses.at[0].set(jnp.inf)
         return losses, jnp.zeros_like(x), None
 
@@ -389,13 +389,13 @@ def test_every_path_feeds_once_per_completed_horizon() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_steps=PROBE_ROUNDS + 3 * PROBE_ROUNDS,  # init probe + three horizons
-        n_probe_rounds=PROBE_ROUNDS,
+        max_evals=PROBE_EVALS + 3 * PROBE_EVALS,  # init probe + three horizons
+        n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),
         restart_rule=rule,
         key=jax.random.PRNGKey(6),
     )
-    assert res.status == "max_steps", res
+    assert res.status == "max_evals", res
     counts: dict[int, int] = {}
     for i, _delta in rule.deltas:
         counts[i] = counts.get(i, 0) + 1
@@ -404,24 +404,24 @@ def test_every_path_feeds_once_per_completed_horizon() -> None:
 
 
 def test_a_horizon_costs_the_probe_it_is_priced_against() -> None:
-    """A sample costs n_probe_rounds rounds at every M, so budget buys samples.
+    """A sample costs n_probe_evals iterations at every M, so budget buys samples.
 
     The verdict prices one continue sample against one probe, and a probe is
-    n_probe_rounds rounds - so at M = n_probe_rounds, 2M rounds of budget must
+    n_probe_evals iterations - so at M = n_probe_evals, 2M iterations of budget must
     yield exactly 2 samples per path at every M, never 2M of them. This is the
-    assertion that fails if the cadence is ever counted in absolute rounds
-    again (the pre-ADR-0004 bug: a one-round Δ against a two-round probe).
+    assertion that fails if the cadence is ever counted in absolute iterations
+    again (the old bug: a one-iteration Δ against a probe costing n_probe_evals).
     """
     k = 2
-    for probe_rounds in (1, 2, 3, 4):
+    for probe_evals in (1, 2, 3, 4):
         evaluate_batch, _shapes = evaluator()
         rule = RecordingRule()
         res = n_path_schedule(
             evaluate_batch,
             bounds=unit_bounds(),
             n_paths=k,
-            max_steps=probe_rounds + 2 * probe_rounds,  # init probe + 2M rounds
-            n_probe_rounds=probe_rounds,
+            max_evals=probe_evals + 2 * probe_evals,  # init probe + 2M iterations
+            n_probe_evals=probe_evals,
             solver=StubSolver(),
             restart_rule=rule,
             key=jax.random.PRNGKey(5),
@@ -429,44 +429,41 @@ def test_a_horizon_costs_the_probe_it_is_priced_against() -> None:
         counts: dict[int, int] = {}
         for i, _delta in rule.deltas:
             counts[i] = counts.get(i, 0) + 1
-        assert counts == {0: 2, 1: 2}, (probe_rounds, counts)
-        assert res.status == "max_steps", (probe_rounds, res)
+        assert counts == {0: 2, 1: 2}, (probe_evals, counts)
+        assert res.status == "max_evals", (probe_evals, res)
 
 
-def test_per_round_evals_bills_a_parallel_round_as_one() -> None:
-    """The two billing modes are different cost models, never the same number.
+def test_reports_points_and_batches_separately() -> None:
+    """n_points and n_batches are two units, and both are always reported.
 
-    Default per-point: a n-path round serves n_paths points, so it bills n_paths. Under
-    `per_round_evals` the same round is one parallel batch and bills 1 - which
-    is exactly why n_paths parallel paths can cost what one serial path costs. This
-    pins that equivalence: n_paths=3 per-round and n_paths=1 per-point report the same
-    nfev, while n_paths=3 per-point reports n_paths times that.
+    A batch is the points one eval serves, so a run of k paths that serves the
+    same batches reports k times the points of a k=1 run, and the same batch
+    count. There is no billing mode to switch: the serial cost is `n_points`,
+    the parallel wall-clock cost is `n_batches`.
     """
 
-    def run(*, per_round: bool, k: int) -> int:
+    def run(k: int) -> tuple[int, int]:
         evaluate_batch, _shapes = evaluator()
         res = n_path_schedule(
             evaluate_batch,
             bounds=unit_bounds(),
             budget_check=lambda: True,
             n_paths=k,
-            max_steps=PROBE_ROUNDS + 1,  # init probe + one accepted round
-            n_probe_rounds=PROBE_ROUNDS,
+            max_evals=PROBE_EVALS + 1,  # init probe + one accepted trial
+            n_probe_evals=PROBE_EVALS,
             solver=StubSolver(),
             restart_rule=RecordingRule(),
-            per_round_evals=per_round,
             key=jax.random.PRNGKey(8),
         )
-        return res.nfev
+        return res.n_points, res.n_batches
 
-    # one probe round is PROBE_ROUNDS(=2) batches, then one accepted step round
-    rounds = PROBE_ROUNDS + 1  # = 3 batches, independent of n_paths
-    assert run(per_round=False, k=3) == PROBE_ROUNDS * 3 + 3  # 9 points
-    assert run(per_round=True, k=3) == rounds  # 3 batches
-    assert run(per_round=False, k=1) == rounds  # 3 points
-    assert run(per_round=True, k=1) == rounds  # 3 batches
-    # the point of the parallel proxy: 3 paths cost one path's rounds
-    assert run(per_round=True, k=3) == run(per_round=False, k=1)
+    # one probe of PROBE_EVALS(=2) batches, then one accepted trial batch
+    batches = PROBE_EVALS + 1  # = 3, independent of n_paths
+    points_3, batches_3 = run(3)
+    points_1, batches_1 = run(1)
+    assert batches_3 == batches_1 == batches
+    assert points_3 == batches * 3  # 9 points
+    assert points_1 == batches  # 3 points
 
 
 if __name__ == "__main__":

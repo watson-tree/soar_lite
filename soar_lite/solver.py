@@ -192,7 +192,7 @@ class DiagonalPreconditioner(LocalSolver):
     def verdict(self, i: int, p: PathPoint, trial: PathPoint) -> Verdict:
         """Give up at a stationary point; otherwise accept (the warm-up may retry)."""
         # Checked on the *current* point, so a path that has just landed on a
-        # stationary one gives up on the next round (costing that one trial's
+        # stationary one gives up on the next iteration (costing that one trial's
         # eval, which the engine's incumbent still counts) rather than stepping
         # off it. g0 is the anchor: the same test at the start is ‖g0‖ ≤ τ‖g0‖,
         # true only for a zero-gradient start.
@@ -252,7 +252,7 @@ class DiagonalPreconditioner(LocalSolver):
         # candidate set: the sweep keeps shrinking alpha (a real line search
         # probes past a NaN), so n_alpha > 1 survives a bad early sample; at
         # n_alpha = 1 there is no next sample and a retry would re-propose
-        # the identical point for max_ls rounds, so the path gives up instead
+        # the identical point for max_ls trials, so the path gives up instead
         # and a rule may revive it.
         if finite:
             self.saw_finite[i] = True

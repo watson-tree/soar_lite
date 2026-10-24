@@ -7,8 +7,8 @@ Two panels per method family, following the design in `DESIGN.md`:
 * multimodal (escape proposition): soar-lite n_paths=1, soar-lite n_paths=16,
   Adam.
 
-Every method gets the same number of **batches** (one batch = one round of
-parallel evaluations, ``--max-steps``) - the wall-clock axis of a batched
+Every method gets the same number of **batches** (one batch = one eval of
+parallel points, ``--max-steps``) - the wall-clock axis of a batched
 setting, and the only axis on which an n_paths=16 run and a single chain compare
 at equal cost per step. The second figure replots the same runs against
 objective points served, the fair information unit for a serial setting: there a

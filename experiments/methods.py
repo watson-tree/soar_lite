@@ -60,7 +60,7 @@ def run_soar_lite(
 ) -> Trace:
     """Drive the n-path engine, recording best-so-far after every batch.
 
-    The budget is ``max_steps`` **batches** - one round of parallel evaluations,
+    The budget is ``max_steps`` **batches** - one eval of parallel evaluations,
     the axis a single chain pays one point per step on. The engine charges a
     batch against that budget before it serves it, so the ceiling is exact: a
     probe or a rejected trial batch costs one each, and the run stops early on
@@ -88,7 +88,7 @@ def run_soar_lite(
         evaluate_batch,
         bounds=problem.bounds,
         n_paths=n_paths,
-        max_steps=max_steps,
+        max_evals=max_steps,
         solver=DiagonalPreconditioner(),
         key=jax.random.PRNGKey(seed),
     )

@@ -111,7 +111,7 @@ class Recorder:
         return check
 
 
-def test_batch_shape_and_per_point_counting() -> None:
+def test_batch_shape_and_point_counting() -> None:
     """evaluate_batch receives (n_paths,d) batches; each point counts exactly 1 eval.
 
     reported evals == points the seam actually served.
@@ -121,7 +121,7 @@ def test_batch_shape_and_per_point_counting() -> None:
         # A quartic, not a quadratic: one half-step of steepest descent lands a
         # 1-D quadratic exactly on its minimiser, where the gradient is zero and
         # every further trial is rejected - the run would stall long before the
-        # round budget is spent, and this test is about the budget accounting.
+        # eval budget is spent, and this test is about the budget accounting.
         d = theta - 0.7
         return jnp.sum(d**4 + d**2), 4.0 * d**3 + 2.0 * d
 
@@ -130,20 +130,20 @@ def test_batch_shape_and_per_point_counting() -> None:
         rec,
         bounds=unit_bounds(),
         n_paths=4,
-        max_steps=50,
+        max_evals=50,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
         key=jax.random.PRNGKey(0),
     )
     assert isinstance(res, NPathResult)
-    assert res.nfev == rec.evals, (res.nfev, rec.evals)
-    assert res.nfev <= 500
-    # nit counts engine rounds, not the linesearch rounds inside them (one round
-    # may serve up to max_ls points per path), so it is bounded by the step cap
+    assert res.n_points == rec.evals, (res.n_points, rec.evals)
+    assert res.n_points <= 500
+    # nit counts engine iterations, not the trials inside them (one iteration
+    # may serve up to max_ls trials per path), so it is bounded by the step cap
     # and stays far below the eval count - but it is not the cap itself: a run
     # that ends on all_stalled stops counting short of it.
     assert 0 < res.nit <= 50
-    assert res.nfev >= res.nit * 4  # a round serves at least the n_paths paths
+    assert res.n_points >= res.nit * 4  # a batch serves at least the n_paths points
     # batched concurrency: at least one call served >1 point at once
     assert any(m > 1 for (m, _d) in rec.batch_shapes), rec.batch_shapes
     # all batches carry the same width d
@@ -161,13 +161,13 @@ def test_budget_exhaustion_stops_everything() -> None:
         rec,
         bounds=unit_bounds(),
         n_paths=8,
-        max_steps=100,
+        max_evals=100,
         budget_check=rec.limit_check(30),
         solver=HalfStep(),
         key=jax.random.PRNGKey(1),
     )
-    assert res.nfev == rec.evals
-    assert 30 <= res.nfev < 30 + 8  # at most one batch past the limit
+    assert res.n_points == rec.evals
+    assert 30 <= res.n_points < 30 + 8  # at most one batch past the limit
     assert 0 < res.nit < 100  # the gate stopped it, not the step cap
     assert res.status == "budget_exhausted"
 
@@ -181,7 +181,7 @@ def test_budget_exhaustion_stops_everything() -> None:
         solver=HalfStep(),
         key=jax.random.PRNGKey(2),
     )
-    assert res0.nfev == 0
+    assert res0.n_points == 0
     assert res0.nit == 0  # never got past the first gate check
     assert res0.status == "budget_exhausted"
 
@@ -200,7 +200,7 @@ def test_fun_is_true_min_over_history() -> None:
         rec,
         bounds=unit_bounds(),
         n_paths=4,
-        max_steps=50,
+        max_evals=50,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
         key=jax.random.PRNGKey(3),
@@ -252,7 +252,7 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
         rec_k,
         bounds=unit_bounds(),
         n_paths=16,
-        max_steps=100,
+        max_evals=100,
         budget_check=rec_k.limit_check(budget),
         solver=HalfStep(),
         key=jax.random.PRNGKey(2),
@@ -262,13 +262,13 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
         rec_1,
         bounds=unit_bounds(),
         n_paths=1,
-        max_steps=100,
+        max_evals=100,
         budget_check=rec_1.limit_check(budget),
         solver=HalfStep(),
         key=jax.random.PRNGKey(2),
     )
     # the single path must be trapped in the shallow well: replicate the
-    # engine's n_paths=1 init key chain (split -> probe round 1, split -> round 2)
+    # engine's n_paths=1 init key chain (split -> probe eval 1, split -> eval 2)
     # and verify the pair-min start lands in the shallow basin (x > 0.505)
     k = jax.random.PRNGKey(2)
     k, k1 = jax.random.split(k)
@@ -302,7 +302,7 @@ def test_projected_descent_reaches_wall_optimum() -> None:
         rec,
         bounds=unit_bounds(2),
         n_paths=1,  # n_paths=1 -> sigma_r=0 -> never restart, pure projected descent
-        max_steps=100,
+        max_evals=100,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
         key=jax.random.PRNGKey(4),
@@ -345,7 +345,7 @@ def test_feasible_only_incumbent() -> None:
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=4,
-        max_steps=100,
+        max_evals=100,
         budget_check=budget_check,
         solver=HalfStep(),
         key=jax.random.PRNGKey(5),
@@ -383,7 +383,7 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=2,
-        max_steps=5,
+        max_evals=5,
         budget_check=lambda: served[0] < 40,
         solver=HalfStep(),
         key=jax.random.PRNGKey(6),
@@ -392,8 +392,8 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
     assert bool(jnp.isfinite(res.x[0])), res.x
 
 
-def run_probe_pass_with_nan_round(nan_round: int) -> None:
-    """One n_paths=2 init pass serving NaN for the whole probe round `nan_round`."""
+def run_probe_pass_with_nan_eval(nan_eval: int) -> None:
+    """One n_paths=2 init pass serving NaN for the whole probe eval `nan_eval`."""
     n_paths = 2
     calls = [0]
     served = [0]
@@ -403,14 +403,14 @@ def run_probe_pass_with_nan_round(nan_round: int) -> None:
     def evaluate_batch(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         calls[0] += 1
         served[0] += int(theta.shape[0])
-        if calls[0] <= 2:  # the two init probe rounds
+        if calls[0] <= 2:  # the two init probe evals
             batches.append(theta)
-        if calls[0] <= 2:  # probe rounds: one flat, one NaN (a whole round of it)
-            # The finite probe round only has to be finite and distinguishable;
+        if calls[0] <= 2:  # probe evals: one flat, one NaN (a whole eval of it)
+            # The finite probe eval only has to be finite and distinguishable;
             # it is made clearly worse than the real objective below so the
             # first post-probe trial reads as an improvement (a probe value near
             # the real one would make it look like a worsening and be rejected).
-            value = jnp.nan if calls[0] == nan_round else 1.0e3
+            value = jnp.nan if calls[0] == nan_eval else 1.0e3
             losses = jnp.full((theta.shape[0],), value, dtype=theta.dtype)
             grads = jnp.zeros_like(theta)
         else:  # past the probe: sloped, or every path rejects and burns the budget
@@ -425,33 +425,33 @@ def run_probe_pass_with_nan_round(nan_round: int) -> None:
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=n_paths,
-        max_steps=5,
+        max_evals=5,
         budget_check=lambda: served[0] < 40,
         solver=HalfStep(),
         key=jax.random.PRNGKey(7),
     )
     assert starts, "the engine never served a post-init step"
-    assert res.status == "max_steps", (nan_round, res.status)  # no NaN stall
-    finite_round = batches[0] if nan_round == 2 else batches[1]
+    assert res.status == "max_evals", (nan_eval, res.status)  # no NaN stall
+    finite_eval = batches[0] if nan_eval == 2 else batches[1]
     for j in range(n_paths):
-        assert any(jnp.allclose(starts[0][j], pt) for pt in finite_round), (
-            f"nan_round={nan_round}: start {j} is not the finite round's point"
+        assert any(jnp.allclose(starts[0][j], pt) for pt in finite_eval), (
+            f"nan_eval={nan_eval}: start {j} is not the finite eval's point"
         )
 
 
 def test_probe_group_min_skips_nan() -> None:
-    """A NaN probe round must not win the group-min: starts stay finite.
+    """A NaN probe eval must not win the group-min: starts stay finite.
 
-    One whole probe round serves NaN for every point while the other serves
-    0.01, so every start must be its point from the finite round (asserted by
+    One whole probe eval serves NaN for every point while the other serves
+    0.01, so every start must be its point from the finite eval (asserted by
     membership in the recorded finite probe batch - no re-derivation of the
-    engine's PRNG chain). Picking the NaN round's x would set that path's ZH
+    engine's PRNG chain). Picking the NaN eval's x would set that path's ZH
     reference to NaN: Armijo can never accept against NaN, so the path would
-    stall for the rest of the run. Running the NaN round first and last also
-    kills an "always take the last round" mis-implementation.
+    stall for the rest of the run. Running the NaN eval first and last also
+    kills an "always take the last eval" mis-implementation.
     """
-    run_probe_pass_with_nan_round(1)
-    run_probe_pass_with_nan_round(2)
+    run_probe_pass_with_nan_eval(1)
+    run_probe_pass_with_nan_eval(2)
     # helper contract: skip non-finite, None when nothing is finite
     assert _argmin_finite([2.0, 1.0]) == 1
     assert _argmin_finite([math.nan, 0.01, math.inf]) == 1
@@ -469,7 +469,7 @@ class ForcedWindow(EIRestartRule):
     """
 
     def __init__(self, window: int) -> None:
-        """Pin every path's stage to `window` rounds."""
+        """Pin every path's stage to `window` samples."""
         super().__init__()
         self._window = window
 
@@ -481,7 +481,7 @@ class ForcedWindow(EIRestartRule):
 def test_probe_inf_group_min_does_not_silence_restarts() -> None:
     """An all-+inf probe group must not disable every restart in the flock.
 
-    Column 0 is +inf in both init probe rounds (a group with no finite
+    Column 0 is +inf in both init probe evals (a group with no finite
     member), so the shared init group-min list carries an inf sample. Fitting
     it naively gives mu_r = inf, sigma_r = NaN and EI_restart = NaN, and
     `NaN > EI_continue` is False forever - no path would ever restart again
@@ -491,10 +491,10 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
     the window pushed out of reach does not.
     """
     n_paths = 3
-    # The flat field makes every step a rejecting line search, so one round can
-    # burn max_ls batches; the budget only has to carry init plus the rounds the
-    # verdicts need to come due.
-    max_steps = 60
+    # The flat field makes every step a rejecting line search, so one iteration
+    # can burn max_ls trials; the budget only has to carry init plus the
+    # iterations the verdicts need to come due.
+    max_evals = 60
     init_losses = jnp.array([jnp.inf, 1.0, 3.0])  # row 0 = column 0 = dead
 
     def seam_run(window: int) -> tuple[NPathResult, ForcedWindow]:
@@ -504,7 +504,7 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
             theta: jnp.ndarray,
         ) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             calls[0] += 1
-            if calls[0] <= 2:  # init probe rounds: shared cold-start evidence
+            if calls[0] <= 2:  # init probe evals: shared cold-start evidence
                 losses = init_losses
             else:  # everything afterwards is finite and flat (Δ = 0, sigma_p = 0)
                 losses = jnp.full((theta.shape[0],), 1.0, dtype=theta.dtype)
@@ -515,7 +515,7 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
             evaluate_batch,
             bounds=unit_bounds(),
             n_paths=n_paths,
-            max_steps=max_steps,
+            max_evals=max_evals,
             solver=HalfStep(),
             restart_rule=rule,
             key=jax.random.PRNGKey(0),
@@ -536,14 +536,14 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
     It has no finite reference to descend from, so it must not burn budget
     while waiting for an EI verdict: with verdicts effectively off (huge
     window) exactly one eval per step is served after the two init
-    rounds - the live path only.
+    iterations - the live path only.
     """
     n_paths = 2
     # the budget is in batches and the init probe is billed, so it is the two
-    # init batches plus the three round-batches this test counts
-    n_probe_rounds = 2
-    n_rounds = 3
-    max_steps = n_probe_rounds + n_rounds
+    # init batches plus the three trial batches this test counts
+    n_probe_evals = 2
+    n_iterations = 3
+    max_evals = n_probe_evals + n_iterations
     served = [0]
     calls = [0]
 
@@ -556,7 +556,7 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
         d = theta - 0.7
         losses = jnp.sum(d**4 + d**2, axis=1)
         grads = 4.0 * d**3 + 2.0 * d
-        if calls[0] <= 2:  # the two init probe rounds: column 0 gets no evidence
+        if calls[0] <= 2:  # the two init probe evals: column 0 gets no evidence
             losses = losses.at[0].set(jnp.inf)
         return losses, grads, None
 
@@ -564,14 +564,15 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=n_paths,
-        n_probe_rounds=n_probe_rounds,
-        max_steps=max_steps,
+        n_probe_evals=n_probe_evals,
+        max_evals=max_evals,
         budget_check=lambda: served[0] < 60,
         solver=HalfStep(),
         restart_rule=ForcedWindow(10**9),
         key=jax.random.PRNGKey(0),
     )
-    assert res.nfev == n_probe_rounds * n_paths + n_rounds, res.nfev  # not 2 evals/step
+    # one point per live path per iteration, not two evals per step
+    assert res.n_points == n_probe_evals * n_paths + n_iterations, res.n_points
 
 
 def test_stalled_paths_wait_for_ei_then_restart() -> None:
@@ -581,21 +582,21 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     small); every later evaluation returns the same bad constant with a zero
     gradient, so ZH backtracking rejects max_ls times and the paths stall. With
     window = 2 (the shortest stage that has a spread at all) and a sample per
-    horizon of n_probe_rounds = 2 rounds, the stalled flock's second sample
-    lands at round 4 and its verdict is due at round 5, with EI_continue = 0
+    horizon of n_probe_evals = 2 iterations, the stalled flock's second sample
+    lands at iteration 4 and its verdict is due at iteration 5, with EI_continue = 0
     (f_k >= B) and EI_restart > 0, so the flock is revived by a restart probe;
     with verdicts off (huge window) the very same run serves nothing after the
     stall. The two traces differ by exactly the restart
     events - this is the engine-level wiring (stall -> EI -> restart) the unit
     tests of _ei_restart/EI_continue cannot cover. The huge-period arm also pins
     the engine's stop for it: every path stalled and the next verdict lies
-    ~10**9 rounds out, past max_steps, so the run must end there (status
-    "all_stalled", one attempted round) rather than spin out the step budget.
+    ~10**9 iterations out, past max_evals, so the run must end there (status
+    "all_stalled", one attempted iteration) rather than spin out the eval budget.
     """
-    n_paths, max_ls, n_probe_rounds = 4, 3, 2
-    # Batches: the init probe, the single rejecting round (max_ls batches), the
-    # restart probe, and one more rejecting round of the revived flock.
-    max_steps = 2 * (n_probe_rounds + max_ls)
+    n_paths, max_ls, n_probe_evals = 4, 3, 2
+    # Batches: the init probe, the single rejecting iteration (max_ls trials),
+    # the restart probe, and one more rejecting iteration of the revived flock.
+    max_evals = 2 * (n_probe_evals + max_ls)
     bad = 10.0
 
     def seam_run(window: int) -> tuple[list[tuple[int, int]], int, NPathResult]:
@@ -605,7 +606,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
         def evaluate_batch(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             shapes.append((int(theta.shape[0]), int(theta.shape[1])))
             evals[0] += int(theta.shape[0])
-            if len(shapes) <= n_probe_rounds:  # init probe rounds: real objective
+            if len(shapes) <= n_probe_evals:  # init probe evals: real objective
                 return theta[:, 0], jnp.ones_like(theta), None
             return (
                 jnp.full((theta.shape[0],), bad, dtype=theta.dtype),
@@ -617,8 +618,8 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
             evaluate_batch,
             bounds=unit_bounds(),
             n_paths=n_paths,
-            n_probe_rounds=n_probe_rounds,
-            max_steps=max_steps,
+            n_probe_evals=n_probe_evals,
+            max_evals=max_evals,
             max_ls=max_ls,
             # the step cap ends both runs
             budget_check=lambda: evals[0] < 10**6,
@@ -631,27 +632,27 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     shapes_off, evals_off, res_off = seam_run(10**9)  # verdicts never due
     shapes_on, evals_on, res_on = seam_run(2)  # verdict once two samples land
     # without verdicts: init + max_ls rejecting trials per path, then nothing
-    pre = n_probe_rounds + max_ls
+    pre = n_probe_evals + max_ls
     assert len(shapes_off) == pre, shapes_off
-    assert evals_off == (n_probe_rounds + max_ls) * n_paths
-    # Round 5 is the verdict round - no eval, then a restart probe of every
+    assert evals_off == (n_probe_evals + max_ls) * n_paths
+    # Iteration 5 is the verdict iteration - no eval, then a restart probe of every
     # path. The tail is left as an inequality on purpose - what the revived
     # paths do after the probe (accept, or reject again on the same flat field
     # until the step cap) is the injected method's business.
-    assert len(shapes_on) - pre >= n_probe_rounds, shapes_on
+    assert len(shapes_on) - pre >= n_probe_evals, shapes_on
     assert res_off.status == "all_stalled"  # nothing can revive the flock
-    assert res_on.status == "max_steps"  # revived, then capped
+    assert res_on.status == "max_evals"  # revived, then capped
     assert all(m == n_paths for m, _d in shapes_on), shapes_on  # no shrinking batches
     assert evals_on == len(shapes_on) * n_paths > evals_off
-    assert res_on.status == "max_steps", res_on  # a due verdict keeps it alive
+    assert res_on.status == "max_evals", res_on  # a due verdict keeps it alive
     assert res_off.status == "all_stalled", res_off  # not "budget_exhausted"
     # The unreachable verdict ends the run at the stall instead of spinning the
-    # remaining rounds: one productive round, plus the round that folds the
-    # stall's own sample - a rule cannot state a cadence before its first
-    # sample, so round 2 must come before the shortcut has anything to read.
-    # Neither round serves an eval.
+    # remaining iterations: one productive iteration, plus the iteration that
+    # folds the stall's own sample - a rule cannot state a cadence before its
+    # first sample, so iteration 2 must come before the shortcut has anything to
+    # read. Neither iteration serves an eval.
     assert res_off.nit == 2, res_off
-    assert len(shapes_on) == max_steps, shapes_on  # the revived run spends it all
+    assert len(shapes_on) == max_evals, shapes_on  # the revived run spends it all
 
 
 def test_bounds_spellings_are_the_same_box() -> None:
@@ -675,7 +676,7 @@ def test_bounds_spellings_are_the_same_box() -> None:
             bounds=bounds,
             budget_check=rec.limit_check(80),
             n_paths=4,
-            max_steps=10,
+            max_evals=10,
             solver=HalfStep(),
             key=jax.random.PRNGKey(3),
         )
@@ -706,7 +707,7 @@ def test_unbounded_or_absent_box_needs_an_injected_sampler() -> None:
                 rec,
                 bounds=bounds,
                 n_paths=2,
-                max_steps=1,
+                max_evals=1,
                 solver=HalfStep(),
                 key=jax.random.PRNGKey(0),
             )
@@ -738,7 +739,7 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
         sample=sample,
         budget_check=rec_none.limit_check(60),
         n_paths=2,
-        max_steps=3,
+        max_evals=3,
         solver=HalfStep(),
         key=jax.random.PRNGKey(4),
     )
@@ -752,7 +753,7 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
         sample=sample,
         budget_check=rec_pairs.limit_check(60),
         n_paths=2,
-        max_steps=3,
+        max_evals=3,
         solver=HalfStep(),
         key=jax.random.PRNGKey(4),
     )
@@ -765,7 +766,7 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
             bounds=unit_bounds(2),
             sample=sample,
             n_paths=2,
-            max_steps=1,
+            max_evals=1,
             solver=HalfStep(),
             key=jax.random.PRNGKey(4),
         )
@@ -798,7 +799,7 @@ def test_an_injected_sampler_searches_outside_the_old_box() -> None:
         sample=sample,
         budget_check=lambda: True,
         n_paths=4,
-        max_steps=40,
+        max_evals=40,
         solver=HalfStep(),
         key=jax.random.PRNGKey(5),
     )
@@ -810,7 +811,7 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
     """A bad budget knob fails once, at the entry, naming the knob.
 
     None of these shapes can run: zero paths advance nothing, and a negative
-    step cap means no round at all. The caller should see the knob, not an
+    step cap means no iteration at all. The caller should see the knob, not an
     empty result later.
     """
 
@@ -832,9 +833,9 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
 
     for bad in (
         {"n_paths": 0},
-        {"n_probe_rounds": 0},
+        {"n_probe_evals": 0},
         {"max_ls": 0},
-        {"max_steps": -1},
+        {"max_evals": -1},
     ):
         assert next(iter(bad)) in rejects(**bad), bad
 

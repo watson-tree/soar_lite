@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `n_path_schedule`: the n-path engine. Runs `n_paths` paths in lockstep, one
-  batched evaluation per round, and owns the box, the shared budget, the restart
+  batched evaluation per iteration, and owns the box, the shared budget, the restart
   verdicts and the stall state machine.
 - `DiagonalPreconditioner`: the default local method. Per-coordinate diagonal
   secant step, EMA-smoothed, with a gradient-norm floor and an Armijo-guarded
