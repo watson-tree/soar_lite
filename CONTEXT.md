@@ -136,15 +136,6 @@ costs `n_probe_evals` of the budget. Initialization and restart use the same
 probe.
 _Avoid_: selection event, random init, sampling
 
-**horizon**:
-One continue-side sample's span: a path's value change over `n_probe_evals`
-consecutive iterations, non-overlapping, poisoned to `inf` if any iteration
-inside it stalled. Matched to one probe's cost, so both sides of a verdict buy
-the same amount of work. _Known gap_: the match is exact only in steady state
-(one eval per iteration); a retrying iteration serves more evals than one
-probe buys, so the two sides can buy unequal work. Fix pending.
-_Avoid_: window (that counts how many samples a stage holds), stride
-
 **payoff pool**:
 The shared multiset of restart payoffs (each probe's group minimum), measured
 rather than modelled. One pool serves every path.
@@ -152,10 +143,10 @@ _Avoid_: restart history, bandit arms
 
 **restart verdict**:
 The per-path comparison of continuing's expected improvement against
-restarting's; `EI_restart > EI_continue` restarts the path. Both sides are
-fitted on equal-cost samples — one horizon for continuing, one probe for
-restarting — so the verdict is a decision about what to buy, not a bias toward
-either side.
+restarting's; `EI_restart > EI_continue` restarts the path. One sample each —
+one step for continuing, one probe for restarting — so the verdict is a decision
+about what to buy. The two sides are cost-matched in gradient count only when
+an f-only evaluator is supplied; without one, `n_probe_evals` stays at 1.
 _Avoid_: restart check, reset decision
 
 **fold**:

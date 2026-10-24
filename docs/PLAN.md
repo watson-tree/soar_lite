@@ -36,6 +36,101 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
 - Docstrings: `n_path_schedule` carries `Args` + a runnable `Example`;
   `DiagonalPreconditioner.__init__` documents every knob.
 
+## Restart-cost symmetry — f-only (design in flight); horizon=1 (landed)
+
+Not an ADR yet; the durable record of a decision + its in-progress refactor.
+The verdict's evidence (`observe_continue` Δ, `observe_restart` payoff, the
+incumbent) is f-only; `g` is needed only to propose the step direction (the
+start's `g`, free) and to fold the committed point's secant. Gradient-sweeping
+the losing points is pure waste. Two coupled moves:
+
+- **f-only evaluation (opt-in, not landed yet).** A keyword-only
+  `evaluate_f: EvaluateF | None = None` seam, `EvaluateF = Callable[[(M,d)],
+  ((M,), (M,))]` → `(losses, mask)`. The mask is required, not a nicety: probe
+  group-min and step-selection must still tell "finite but infeasible" from
+  viable, and f alone cannot. `None` derives from `evaluate_batch`
+  (`f=out[0]`, `mask=out[2]`): zero API change, just no savings.
+  `evaluate_batch` stays the one positional argument (sealed).
+- **Multi-draw probes are f-only-only (gate + default).** The engine cannot see
+  the solver's `n_alpha` (the seam checks presence, not members), so it cannot
+  enforce the true symmetry `n_alpha == n_probe_evals`; its conservative proxy
+  is the **g-count**: without `evaluate_f`, a probe computes `g` `n_probe_evals`
+  times while one continue step computes `g` once (default `n_alpha=1`), so the
+  expensive term diverges `n_probe_evals:1` — the f-count barely matters (g ≈
+  2–5× f). With `evaluate_f`, both sides compute `g` exactly once (the rest is
+  f-only), collapsing that asymmetry and leaving only the cheap f-count to
+  match. So `evaluate_f is None and n_probe_evals != 1`
+  raises `ValueError` at entry, and the default becomes `n_probe_evals = 1`.
+  Consequences: under that default a restart payoff is a single fresh draw, not
+  a min-of-n group-min — the "pinned 2 (empirical)" advice in the docstring
+  moves to "2 iff you also pass `evaluate_f`", and the Phase A–D numbers were
+  measured at 2. Ordering: flip the default 2→1 in the `_Horizon`-deletion
+  commit (so the tree never ships an asymmetric default); add the `evaluate_f`
+  param and this guard in the later f-only commit. With `evaluate_f`,
+  `n_alpha != n_probe_evals` is the cheap, bounded (f-only) asymmetry that is
+  accepted, not banned.
+- **Iteration clock stays; a work clock never lands.** A cost-denominated
+  horizon would denominate in runtime state (how many paths restarted or
+  stalled), which is not JIT-static — a restarted flock's size differs from
+  `n_paths` and forces re-traces (dfbench evidence). Iteration count is the one
+  static-countable quantity, so the horizon stays an iteration clock.
+
+**horizon=1 is the symmetric point, not a rollback.** Reverse-mode `g` ≈ 2–5×
+`f`, an algorithmic constant on CPU and GPU alike (the "batch wall-clock"
+argument is about *widening*, not *f vs f+g*: the backward pass over the batch
+is real work on GPU too). Under f-only, one argmin step = `n_alpha` f-only +
+1 g, one probe = `n_probe_evals` f-only + 1 g; equal iff
+`n_alpha == n_probe_evals`, and then one continue sample (one step, horizon=1)
+costs exactly one probe. Default `n_alpha=1` keeps a documented, bounded
+asymmetry (continue = one gradient point vs probe = min-of-n). A genuine Armijo
+line search is also f-only-compatible (its test reads the *start*'s g + the
+trial's f); only Wolfe/curvature conditions read the trial's own g and go
+asymmetric — bound by `max_ls`, document, don't redesign. Do **not** force
+`n_alpha = n_probe_evals`: they are independent knobs (line-search resolution
+vs exploration breadth).
+
+### `_Horizon` deletion (landed, uncommitted)
+
+With horizon collapsed to 1, `_Horizon`'s `_span`/`_done_at`/`_poisoned`/
+`iterations_until_sample` all vanish: every path closes every iteration, and a
+restart is back in phase instantly (no out-of-phase clock). Replace with:
+
+- loop-local `prev_f: list[float] = [point.f for point in points]`;
+- in `apply_restarts`: `prev_f[i] = point.f` (instead of `horizon.restart_at`);
+- the fold, skipping just-restarted paths (their probe was this iteration's
+  move, not a step, so their first fold is the next iteration's one-step Δ):
+  `for i in range(n_paths): if i in just_restarted: continue; delta = inf if
+  stalled[i] else points[i].f - prev_f[i]; observe_continue(i, delta);
+  prev_f[i] = points[i].f`
+- the all-stalled shortcut collapses to
+  `if restart_rule.samples_until_verdict() >= max_evals - it: all_stalled =
+  True; break` (one sample = 1 iteration; the `+1` vote term merges into
+  `needed`; `needed=0` still disables the shortcut as today).
+
+Ripple (swept): `engine.py` (module doc, `n_path_schedule` doc, loop
+comments); `restart.py` (`observe_continue` / `samples_until_verdict` / class
+docstrings — the "priced n_probe_evals evals" wording is gone);
+`tests/test_solver_seam.py` (the horizon-count runs restated as one sample per
+iteration, `test_one_sample_per_iteration_at_every_probe_size`, and
+`test_every_path_feeds_once_per_iteration`); `tests/test_scheduler.py`
+(stalled-flock test: `nit` is now 1, not 2); `ALGORITHM.md`, `CONTEXT.md` (the
+`horizon` glossary entry is gone), `docs/adr/0004-*` (amended, part 1
+superseded), `docs/tutorial/getting-started.md`.
+
+**Landed in the working tree (uncommitted):** engine, restart, tests, and the
+four doc files are swept; 66 tests green, ruff and pyright clean. The default
+`n_probe_evals` was flipped 2 → 1 in the same change. Next action: land the
+`evaluate_f` seam plus the `evaluate_f is None and n_probe_evals != 1`
+`ValueError` gate.
+
+Caveat to record, not erase: after horizon→1 the verdict compares one probe
+against one step, and the load-bearing cost is g-count — without `evaluate_f`
+the non-f-only world is g-symmetric only at `n_probe_evals = n_alpha` (default
+1 = 1, which the gate enforces); with `evaluate_f` both sides compute g once
+and the only residual is the cheap f-count `n_alpha != n_probe_evals`, plus a
+genuine Wolfe/curvature solver that reads the trial's own g (bounded by
+`max_ls`). Don't claim the verdict is exactly unbiased in those residual cases.
+
 ## Next
 
 1. **First PyPI upload is a tag away** (not published yet; version stays 0.1.0).
@@ -52,6 +147,11 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
 2. **Docs site one-time setup**: set the repository's Pages source to
    **GitHub Actions**; `docs.yml` then publishes
    `https://watson-tree.github.io/soar_lite/` (linked from `[project.urls]`).
+3. **f-only evaluator plus the probe gate** (`## Restart-cost symmetry`
+   above): the keyword-only `evaluate_f` seam and the
+   `evaluate_f is None and n_probe_evals != 1` `ValueError`. Once both land,
+   re-run the multi-path escape experiment to decide whether the default
+   probe depth should return to 2.
 
 ## Conventions
 

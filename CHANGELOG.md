@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The continue side's sample is now one iteration's step, not one
+  `n_probe_evals`-iteration horizon: the `_Horizon` clock was removed, and a
+  restarted path skips sampling for the iteration its probe served.
+  `n_probe_evals` therefore defaults to `1`; a larger probe is only
+  cost-matched with the continue side once an f-only evaluator exists, which is
+  not landed yet.
 - `pytest` is now a declared `dev` dependency and the canonical test runner
   (`uv run --no-sync python -m pytest -q`); CI installs from the lockfile with
   `--frozen`. Each test module stays runnable as a script.

@@ -3,7 +3,7 @@
 This module is the seam (拍板) of soar_lite: it owns the two plugin contracts
 (`LocalSolver` and `RestartRule`), the data the plugins exchange (`PathPoint`,
 `Verdict`), and the shared plumbing (`NPathResult`, the box/prior seams, the
-`_argmin_finite` helper, the two state holders `_Budget` and `_Horizon`, and the
+`_argmin_finite` helper, the state holder `_Budget`, and the
 `n_path_schedule` loop). Concretes import *from*
 here, never the other way around at module level:
 
@@ -144,20 +144,18 @@ class RestartRule(Protocol):
     rule can see; only the engine's call sites could.
 
     These methods are called by the engine on its own schedule - `should_restart`
-    once per path per iteration, `observe_continue` once per path per completed
-    horizon - so they trust their arguments: `n_path_schedule` validates the
+    once per path per iteration, `observe_continue` once per path per iteration -
+    so they trust their arguments: `n_path_schedule` validates the
     object once (that it carries this contract) at the entry, and nothing here
     re-checks.
     """
 
     def observe_continue(self, i: int, delta: float) -> None:
-        """Fold path i's value change over one horizon into its continuation evidence.
+        """Fold path i's one-step value change into its continuation evidence.
 
-        The horizon is the engine's: `n_probe_evals` evals, which is one
-        probe's cost, so a sample on this side and an `observe_restart` sample
-        buy the same amount of work. A stall anywhere inside the horizon arrives
-        as `inf` (the rule stores it and drops it at the read), never as a Δ that
-        spans the stall.
+        The sample is the engine's: one iteration's step, so this side is
+        priced in the step it just took. A stall arrives as `inf` (the rule
+        stores it and drops it at the read), never as a Δ that spans the stall.
         """
         ...
 
@@ -180,9 +178,9 @@ class RestartRule(Protocol):
 
         A cadence hint, not evidence, and the engine asks it only once every
         path has stalled: it is what separates "waiting for a verdict" from
-        "nothing can happen again". It counts *samples*, not evals, because
-        the horizon - and so what one sample costs in evals - is the engine's
-        `n_probe_evals`; the engine prices it. A verdict unreachable before
+        "nothing can happen again". It counts *samples*, not iterations: with
+        one sample per iteration the engine can compare it against the remaining
+        budget directly. A verdict unreachable before
         `max_evals` makes the remaining iterations pure spin - no eval, no state
         change - and the engine stops there instead of burning the budget. 0
         means "unknown cadence" and disables that shortcut, so a rule with no
@@ -253,8 +251,8 @@ class NPathResult:
 
 
 def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
-    # orchestration: knobs + seams + per-iteration dispatch, with the two pieces of
-    # shared state that could move out already moved - _Budget and _Horizon)
+    # orchestration: knobs + seams + per-iteration dispatch, with the shared
+    # state that could move out already moved - _Budget)
     evaluate_batch: BatchEvaluator,
     *,
     bounds: Bounds | None = None,  # scipy-style (lb, ub) pairs, a (d, 2) array, or None
@@ -264,7 +262,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     # start to draw and is rejected below rather than guessed.
     sample: Sampler | None = None,
     n_paths: int = 16,  # number of paths advanced each iteration, the engine's width
-    n_probe_evals: int = 2,  # draws/start; 1=init, inf=search; 2-3 empirical, pinned 2
+    n_probe_evals: int = 1,  # draws per start; >1 is only cost-matched with f-only
     # The two batch budgets, adjacent: max_evals caps the run, max_ls caps one
     # step. A batch is the points one eval serves - the wall-clock unit a
     # batched objective actually bills - so a probe (n_probe_evals batches)
@@ -344,15 +342,17 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     payoff is a property of the sampler, not of one path). A path whose trials
     exhaust max_ls stalls until an EI verdict revives it.
 
-    The verdict compares equal-cost alternatives: a probe spends
-    n_probe_evals, so the continue side's evidence is one Δf per
-    completed horizon of n_probe_evals iterations, non-overlapping, each path
-    on its own clock (a restart opens a new horizon). A stall anywhere inside
-    the horizon feeds inf - the read drops the value - rather than a Δ that
-    spans the stall. One sample is therefore worth one probe, and a stage of M
-    samples costs M * n_probe_evals evals. This equal-cost match holds only in
-    steady state (one eval per iteration): a retrying iteration serves more
-    evals than a probe buys, so the two sides can buy unequal work.
+    The verdict compares a probe against one continue sample. A probe spends
+    n_probe_evals evals, while the continue side's evidence is one Δf per
+    iteration - the step it just took - non-overlapping, each path on its own
+    clock (a restart opens a new stage, and the first iteration after a restart
+    is skipped so the probe is not read back as a step's Δ). A stalled iteration
+    feeds inf - the read drops the value - rather than a Δ that spans the stall.
+    So a stage of M samples costs M evals, but the batch count is not the cost
+    that dominates: a probe computes g n_probe_evals times while a step computes
+    it once, so n_probe_evals > 1 overprices the probe side until an f-only
+    evaluator lets both sides compute g exactly once. That is why the default
+    is 1.
 
     The caller's inputs are validated here, once per run: knob ranges and the
     box's own shape/ordering raise ValueError, and a seam object that does not
@@ -369,9 +369,10 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         sample: the injected prior ``(key, n) -> (n, d)`` in the engine's own
             coordinates; ``None`` draws i.i.d. uniform over a finite ``bounds``.
         n_paths: number of paths advanced in lockstep each iteration.
-        n_probe_evals: probe group size - the draws per start (evals), and the
-            horizon one continue sample spans (iterations, equal-cost in steady
-            state).
+        n_probe_evals: probe group size - the draws per start. ``1`` (the
+            default) is one draw. Values above 1 overprice the probe side (it
+            computes ``g`` once per draw) until an f-only evaluator lets both
+            sides compute it once, so raise it only together with that seam.
         max_evals: the engine's own batch budget (always counted in batches);
             also caps the run's iterations.
         max_ls: the per-step trial cap after which a path stalls.
@@ -542,9 +543,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     # Paths whose probe ran this iteration. They moved by the probe, so they
     # do not also step: an iteration restarts a path or advances it, not both.
     just_restarted: set[int] = set()
-    # The continue side's sample is priced like the probe it is compared with,
-    # so the clock that hands it out lives in _Horizon, not in the loop.
-    horizon = _Horizon([point.f for point in points], n_probe_evals)
+    # The continue side's sample is one step, so the Δ it reports is
+    # points[i].f - prev_f[i]; a restart resets the anchor to the probe's f.
+    prev_f: list[float] = [point.f for point in points]
     # The seam check: presence, not signatures. The seam's own members run per
     # path per iteration and stay unvalidated.
     _check_seam(solver, LocalSolver, "solver")
@@ -564,7 +565,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     for point in points:  # cold-start evidence: init group-mins, into the one pool
         restart_rule.observe_restart(point.f)
 
-    def apply_restarts(idxs: list[int], it: int) -> None:
+    def apply_restarts(idxs: list[int]) -> None:
         """Restart the given paths from one fresh probe-select event.
 
         The event's group-min list extends the rule's one shared payoff pool;
@@ -582,10 +583,10 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             solver.restart(i, point)
             restart_rule.restart(i)  # the next Δ opens this path's next stage
             stalled[i] = not math.isfinite(point.f)
-            horizon.restart_at(i, point.f, it)
+            prev_f[i] = point.f
         just_restarted.update(idxs)
 
-    def advance_paths(it: int) -> None:
+    def advance_paths() -> None:
         """Advance every path one move: restart it, or step it.
 
         The iteration's restart votes are folded in here, so a verdict reads the
@@ -599,7 +600,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             if restart_rule.should_restart(i, points[i].f, incumbent.fun)
         ]
         if to_restart:
-            apply_restarts(to_restart, it)
+            apply_restarts(to_restart)
         step_paths()
 
     def step_paths() -> None:
@@ -665,7 +666,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
 
     all_stalled = False
     # Iterations completed. Also the index of the iteration about to run, which
-    # is what every horizon call below is measured against.
+    # is what the all-stalled shortcut below is measured against.
     it = 0
     while True:
         # A completed iteration can bring the batch count to the cap or close
@@ -677,38 +678,31 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             break
         just_restarted.clear()
         try:
-            advance_paths(it)
+            advance_paths()
         except _BudgetExhausted:
             # The iteration asked for a batch it could not afford and was cut
             # short: it did not finish, so it is not folded and not counted.
             break
-        # All paths are stuck and this iteration's restart votes (asked in
-        # advance_paths above) revived nothing. The next vote cannot be due
-        # before the earliest path's stage fills: samples_until_verdict() more
-        # samples, each priced n_probe_evals evals, the first of them no
-        # sooner than that path's own next sample, plus the iteration the vote
-        # is taken in. Both minima are taken separately, which can only
-        # under-count the wait - the safe direction: an over-counted wait would
-        # stop the engine for a vote that was still due. 0 samples means
-        # "unknown cadence", which only happens before any observe; the
-        # arithmetic then goes negative, so the shortcut stays off - but only
-        # until the first horizon closes an iteration later, after which the
-        # wait is at least 1 and the shrinking `max_evals - it` side makes the
-        # shortcut fire before the iteration count can reach the cap. The wait
-        # is in iterations and so is the remaining iteration budget: a waiting
-        # iteration serves nothing here, so the batch budget is not what bounds
-        # it. Once every path is stalled no eval can fire later, so points / B /
-        # n_points / n_batches are untouched.
-        if all(stalled):
-            needed = restart_rule.samples_until_verdict()
-            stagger = min(
-                horizon.iterations_until_sample(i, it) for i in range(n_paths)
-            )
-            if stagger + (needed - 1) * n_probe_evals + 1 >= max_evals - it:
-                all_stalled = True
-                break
-        for i, delta in horizon.samples(it, [p.f for p in points], stalled):
+        # All paths are stuck and this iteration's restart votes revived
+        # nothing. With one sample per iteration, the wait until the next vote
+        # is just the rule's own cadence: if that many iterations cannot fit in
+        # the remaining budget, no vote can fire and the flock is stuck for
+        # good. 0 means "unknown cadence" (before any observe); the right side
+        # is then >= 1, so the shortcut stays off. Once every path is stalled no
+        # eval can fire later, so points / B / n_points / n_batches are
+        # untouched.
+        if all(stalled) and restart_rule.samples_until_verdict() >= max_evals - it:
+            all_stalled = True
+            break
+        for i in range(n_paths):
+            if i in just_restarted:
+                # The probe was this iteration's move, not a step: its first Δ
+                # belongs to the next iteration, so leave the anchor at the
+                # probe's f rather than reading the probe back as a zero-step.
+                continue
+            delta = math.inf if stalled[i] else points[i].f - prev_f[i]
             restart_rule.observe_continue(i, delta)
+            prev_f[i] = points[i].f
         it += 1  # counted after the stop check: only finished iterations
 
     # Only the meter or a fully stalled flock can end the loop; the meter names
@@ -816,66 +810,6 @@ class _Budget:
     def stop_status(self) -> NPathStatus:
         """Name the gate that stopped the run: max_evals is exact in batches."""
         return "max_evals" if self.full() else "budget_exhausted"
-
-
-class _Horizon:
-    """The continue side's sample clock: one Δf per completed horizon.
-
-    A continue sample is the alternative the verdict prices against a probe, so
-    it must span what a probe costs (`n_probe_evals`). The span is counted in
-    iterations, so the match is exact only in steady state (one eval per
-    iteration); a retrying iteration serves more evals than a probe buys. Each
-    path runs its own clock and horizons never overlap, so a sample spans
-    exactly that many iterations - right after a restart too.
-
-    Two events poison a sample to inf instead of shortening it, because a Δ that
-    hides either would read as progress:
-
-    * a restart - the old anchor's Δ would span the jump to a fresh start, which
-      is a probe's payoff, not a step's, so the restart resets the anchor and
-      opens a new horizon;
-    * a stall anywhere inside the horizon.
-
-    A stalled path still closes its horizon on time (the inf is evidence, at the
-    cost of the iterations it was measured in), so its cadence stays aligned
-    with its advancing cohort rather than leading it by an iteration. A
-    restarted path's first horizon holds one step fewer than the span, because
-    its probe was that iteration's move.
-    """
-
-    def __init__(self, f: list[float], n_probe_evals: int) -> None:
-        self._anchor = list(f)
-        self._poisoned = [False] * len(f)
-        # The span is in iterations; it equals a probe's cost in evals only in
-        # steady state (one eval per iteration). See the class docstring.
-        self._span = n_probe_evals
-        self._done_at = [n_probe_evals] * len(f)  # 1-based iteration it completes
-
-    def samples(
-        self, it: int, f: list[float], stalled: list[bool]
-    ) -> list[tuple[int, float]]:
-        """Close each horizon ending with iteration `it`: return (path, Δf) pairs."""
-        closed: list[tuple[int, float]] = []
-        for i in range(len(f)):
-            if stalled[i]:
-                self._poisoned[i] = True
-            if it + 1 >= self._done_at[i]:
-                delta = math.inf if self._poisoned[i] else f[i] - self._anchor[i]
-                closed.append((i, delta))
-                self._anchor[i] = f[i]
-                self._poisoned[i] = False
-                self._done_at[i] += self._span
-        return closed
-
-    def restart_at(self, i: int, f_i: float, it: int) -> None:
-        """Open path i's next horizon at this iteration, after its restart."""
-        self._anchor[i] = f_i
-        self._poisoned[i] = False
-        self._done_at[i] = it + self._span
-
-    def iterations_until_sample(self, i: int, it: int) -> int:
-        """Return iterations until path i's open horizon completes (0 = this one)."""
-        return self._done_at[i] - (it + 1)
 
 
 def _check_seam(obj: object | None, proto: type, what: str) -> None:

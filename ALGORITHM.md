@@ -182,7 +182,7 @@ EI_restart  = σ_r·[z·Φ(z) + φ(z)],  z = (B − μ_r)/σ_r     任一路径�
 ```text
 advance_paths(it) 对每条路径一次移动：先问判决（只在它的 stage 填满时真的问）并重启胜出的，
                   未重启且未 stalled 的路径再 propose → clip 进 box → 批量 serve → 逐路径 verdict → commit
-observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_evals 次迭代，与一次探测等成本）
+observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本）
 ```
 
 判决与步进合成一个函数是刻意的：一次迭代只推进「一步」，判决读的是本轮自己的 B；被拒的探测
@@ -190,13 +190,15 @@ observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_evals 次迭
 
 重启的路径本轮只做探测、不进 `step_paths`：一条路径一次迭代要么探测要么步进，不会两头都花预算。
 
-`observe_continue` 的样本跨一个 **horizon = `n_probe_evals` 次迭代**，不是一次迭代：一次探测买的是
-`n_probe_evals` 个批，继续侧必须买同样多的东西，否则判决是在拿「两次求值的收益」比「一步的收益」，
-系统性偏向重启（ADR-0004）。horizon 非重叠、每条路径各自计时（重启开一个新的 horizon），期间
-任意一次迭代 stalled 就喂 `inf`——宁可丢一个样本，也不让横跨停顿的 Δ 冒充进步。于是 stage 里的 `M` 个
-样本 = `M · n_probe_evals` 次迭代，与池子里那 `M` 次探测花的批数一致；判决的两侧在稳态是等价的购买。
-**已知缺口**：只有「一次迭代正好服务一批」时，按迭代计的跨度和按批计的花费才真的等价；一次 step 里
-有重试就服务多批，跨度仍按迭代数走，判决的成本对齐随之偏掉（`CONTEXT.md` 的 horizon 词条记着，修法待定）。
+`observe_continue` 的样本就是**一次迭代的一步**：每条路径各自计时、互不重叠。重启的路径本轮只探测、
+不步进，它这一次迭代不喂样本（重启把锚点重置到探测点的 f，第一个 Δ 留给下一步），所以既不会把探测
+的收益记成一步，也不会把探测读成零步。任意一次迭代 stalled 就喂 `inf`——宁可丢一个样本，也不让横跨
+停顿的 Δ 冒充进步。
+
+判决两侧买的东西并不相等：一次探测花 `n_probe_evals` 个批、算 `n_probe_evals` 次梯度，而一步只算
+一次梯度（默认 `n_alpha=1`）。真正吃重的是**梯度次数**（g 约为 f 的 2–5 倍），所以 `n_probe_evals > 1`
+在不接 f-only 求值器时就偏向探测这一侧；默认值因此是 1，接上 f-only 后两侧各只算一次梯度，剩下的只是
+便宜的 f 计数差（完整推导见 `docs/PLAN.md`）。
 
 ### 3.3 单一 argmin 所有者与 `fold`
 
@@ -208,7 +210,7 @@ observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_evals 次迭
 
 一条路径在某一次迭代「没有任何移动」（既没重启、也没提交步）就叫 stalled——可能是自己的收敛
 判据 `give_up`，也可能是重试次数 `max_ls` 耗尽。stalled 路径和本轮刚重启的路径都不进
-`step_paths`，但每个完成的 horizon 仍然喂一个 inf 的 `Δf`（让它的判决节奏与同批前进的路径对齐，
+`step_paths`，但每个 stalled 的迭代仍然喂一个 inf 的 `Δf`（让它的判决节奏与同批前进的路径对齐，
 而不是领先一个样本），直到某次 EI 判决把它唤醒。
 
 ### 3.5 预算计在批边界（引擎自己记账）
@@ -228,10 +230,10 @@ observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_evals 次迭
 
 ### 3.6 全停早退
 
-所有路径都 stalled、且下一张判决票按 `samples_until_verdict()` 折算成迭代数（样本数 × horizon，加上
-最近一条路径收满样本还要等几次迭代）也落在剩余迭代数（`max_evals` 减去已完成迭代数）之外时，引擎直接结束
-（`all_stalled`），不再空转——没有 eval 会再发生，`x`/`f`/`n_points` 不会再变。首次 horizon 收满前
-`needed` 为 0、算式为负，捷径暂不生效；但那只有一两次迭代，之后 `needed >= 1` 且剩余数单调减小，
+所有路径都 stalled、且下一张判决票按 `samples_until_verdict()` 折算成迭代数（一次迭代一个样本，所以
+样本数就是迭代数）也落在剩余迭代数（`max_evals` 减去已完成迭代数）之外时，引擎直接结束
+（`all_stalled`），不再空转——没有 eval 会再发生，`x`/`f`/`n_points` 不会再变。首次样本落账前
+`needed` 为 0，`0 >= 剩余数` 为假，捷径暂不生效；但之后 `needed >= 1` 且剩余数单调减小，
 必定在 `it` 触到 `max_evals` 之前触发，所以循环不需要额外的「迭代数上界」。
 
 ## 4. 适用界
@@ -327,7 +329,7 @@ observe_continue  每完成一个 horizon 喂一次 Δf（= n_probe_evals 次迭
   `n_points` 等于 `n_batches × n_paths`）。
 - 预算计在批边界：`test_budget_exhaustion_stops_everything`、`test_no_budget_run_reports_max_evals`、
   `test_budget_is_never_exceeded_under_restart_storm`（探测记账：重启风暴也超不过 `max_evals` 批）、
-  `test_every_path_feeds_once_per_completed_horizon`（每个完成 horizon 恰好一个样本，停顿的那个喂 inf）。
+  `test_every_path_feeds_once_per_iteration`（每迭代恰好一个样本，停顿的那个喂 inf）。
 - 盒是数据：`test_box_is_data_not_a_unit_cube_assumption`、`test_bounds_spellings_are_the_same_box`、
   `test_unbounded_or_absent_box_needs_an_injected_sampler`、
   `test_the_sampler_is_the_only_authority_on_d`、`test_an_injected_sampler_searches_outside_the_old_box`。

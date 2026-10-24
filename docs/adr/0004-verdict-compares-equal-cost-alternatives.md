@@ -1,5 +1,9 @@
 # The restart verdict compares equal-cost alternatives, and every probe is billed
 
+**Status: amended.** Part 1 (the `n_probe_evals`-iteration horizon) is
+superseded: the horizon clock `_Horizon` was removed and one continue sample is
+now one step. See "Amendment" at the end. Parts 2 and 3 stand.
+
 `EI_restart` is fitted on probe group-mins, and one probe costs `n_probe_evals`
 served batches (one batch each). `EI_continue` was fitted on one-step Δ samples,
 and one step costs one batch. The verdict was therefore comparing a purchase of
@@ -71,3 +75,20 @@ clock, per-batch billing as its `_Budget` meter, the scheduler and seam tests
 restated in batches, and three new invariants (samples produced per completed
 horizon, the budget never exceeded under restart storms, a stall inside a
 horizon poisons that sample). `ALGORITHM.md` carries the resulting wording.
+
+## Amendment: the horizon clock is gone
+
+Part 1 is superseded. `_Horizon` was removed: a continue sample is now one
+iteration's step, and a restarted path skips sampling for the iteration its
+probe served, so the probe is neither read back as a step's Δ nor as a
+zero-step. Parts 2 and 3 stand (billing in batches; the rule stays knob-free and
+reads samples, not evals).
+
+The reason is that the dominant cost is the gradient count, not the eval count.
+A probe computes `g` `n_probe_evals` times; one step computes it once (default
+`n_alpha = 1`). With `g` ≈ 2–5× `f`, that is the asymmetry worth closing. The
+intended close is an opt-in f-only evaluator seam (`evaluate_f`) that lets both
+sides compute `g` exactly once, plus a gate that refuses `n_probe_evals > 1`
+when that seam is absent; until both land the default is `n_probe_evals = 1`, so
+the un-seamed default does not favor restarts. The residual f-count asymmetry
+is cheap and bounded.

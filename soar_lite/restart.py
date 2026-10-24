@@ -44,7 +44,7 @@ class EIRestartRule(RestartRule):
     so on a stage that ends in a verdict discounting can only throw evidence
     away. Recency would only pay if the drift within one stage were large, and a
     stage is as long as the pool is large - short. Nothing is lost over a longer
-    horizon either: a restart drops the path's stage (the next Δ opens a new one
+    stage either: a restart drops the path's stage (the next Δ opens a new one
     against the pool as it stands), and the verdict is asked again every
     `_stage_window()` iterations, so the loop re-reads the path as regularly as it
     collects evidence.
@@ -69,7 +69,7 @@ class EIRestartRule(RestartRule):
         """Append path i's one-step value change Δ to its current stage.
 
         A non-finite Δ is stored, not dropped: a stalled path folds one every
-        horizon and its verdict has to stay due on the same clock as its moving
+        iteration and its verdict has to stay due on the same clock as its moving
         cohort (the engine reports the stall through the value, not by skipping
         the call), so the guard belongs at the read, where one +inf sample would
         otherwise make the mean and spread NaN - and `NaN > EI_continue` is
@@ -113,11 +113,11 @@ class EIRestartRule(RestartRule):
         underestimate once it grows, since `window` only lengthens. That
         direction is the safe one - the engine stops when this says a vote is out
         of reach, and an overestimated cadence there would be a stop for a vote
-        that was still due. Samples, not iterations: the engine prices one at its
-        own horizon (`n_probe_evals` evals), which is the same cost as one
-        probe and therefore the same cost as a payoff sample. A path that has
-        just restarted counts from 0, i.e. as a full window: it folds its first
-        sample once its new horizon completes. 0 with no path evidence at all -
+        that was still due. Samples, not iterations, but with one sample per
+        iteration the two now coincide, so the engine compares this directly
+        against the remaining iteration budget. A path that has just restarted
+        counts from 0, i.e. as a full window: the iteration after its probe
+        delivers the first sample. 0 with no path evidence at all -
         no cadence to bound, so the engine keeps its ordinary iterations, which is
         only reachable before the first fold.
         """

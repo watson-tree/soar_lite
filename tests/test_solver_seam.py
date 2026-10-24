@@ -182,17 +182,18 @@ def test_injected_rule_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_evals=PROBE_EVALS + PROBE_EVALS,  # init probe + one horizon
+        max_evals=PROBE_EVALS + PROBE_EVALS,  # init probe + two iterations
         n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),
         restart_rule=rule,
         key=jax.random.PRNGKey(2),
     )
+    n_iterations = PROBE_EVALS  # max_evals minus the init probe's batches
     assert len(rule.group_mins) == k  # cold start: the n_paths init group-mins, once
-    # One horizon is n_probe_evals iterations, so this run feeds each path once -
-    # the continue side's sample is priced like a probe, not like a step.
-    assert rule.verdicts == [0, 1] * PROBE_EVALS  # asked once per path per iteration
-    assert [i for i, _delta in rule.deltas] == [0, 1]  # Δf over one horizon each
+    # One sample per iteration, so this run feeds each path once per iteration -
+    # the continue side's sample is one step, not a probe.
+    assert rule.verdicts == [0, 1] * n_iterations  # asked once per path per iteration
+    assert [i for i, _delta in rule.deltas] == [0, 1] * n_iterations  # Δf per step
     assert rule.restarts == []
     assert res.status == "max_evals"
 
@@ -364,16 +365,15 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
     assert default_points == ours_points, (default_points, ours_points)
 
 
-def test_every_path_feeds_once_per_completed_horizon() -> None:
-    """Pin that every path feeds observe_continue once per completed horizon.
+def test_every_path_feeds_once_per_iteration() -> None:
+    """Pin that every path feeds observe_continue once per iteration.
 
     Column 0 is non-finite in both init probe evals, so path 0 arrives
     stalled and never steps; the engine must still feed it one
-    `observe_continue(0, inf)` per horizon, so its sample count advances in
+    `observe_continue(0, inf)` per iteration, so its sample count advances in
     lockstep with its advancing cohort instead of leading it by one verdict
-    (the off-by-one a top-of-iteration stall count would cause). One horizon is
-    n_probe_evals iterations - the continue side's sample is priced like a
-    probe - so three horizons take 3 * n_probe_evals iterations.
+    (the off-by-one a top-of-iteration stall count would cause). A continue
+    sample is one step, so three iterations take three iterations.
     """
     k = 2
     calls = [0]
@@ -391,7 +391,7 @@ def test_every_path_feeds_once_per_completed_horizon() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_evals=PROBE_EVALS + 3 * PROBE_EVALS,  # init probe + three horizons
+        max_evals=PROBE_EVALS + 3,  # init probe + three iterations
         n_probe_evals=PROBE_EVALS,
         solver=StubSolver(),
         restart_rule=rule,
@@ -405,14 +405,14 @@ def test_every_path_feeds_once_per_completed_horizon() -> None:
     assert [d for i, d in rule.deltas if i == 0] == [math.inf] * 3
 
 
-def test_a_horizon_costs_the_probe_it_is_priced_against() -> None:
-    """A sample costs n_probe_evals iterations at every M, so budget buys samples.
+def test_one_sample_per_iteration_at_every_probe_size() -> None:
+    """Each iteration folds one sample per path, at every probe size.
 
-    The verdict prices one continue sample against one probe, and a probe is
-    n_probe_evals iterations - so at M = n_probe_evals, 2M iterations of budget must
-    yield exactly 2 samples per path at every M, never 2M of them. This is the
-    assertion that fails if the cadence is ever counted in absolute iterations
-    again (the old bug: a one-iteration Δ against a probe costing n_probe_evals).
+    The continue side's sample is one step, so it does not depend on
+    n_probe_evals: after the init probe, M iterations of budget buy exactly M
+    samples per path. This is what changed when the horizon clock went away - a
+    sample used to span n_probe_evals iterations, so the same budget bought
+    fewer of them.
     """
     k = 2
     for probe_evals in (1, 2, 3, 4):
@@ -422,7 +422,7 @@ def test_a_horizon_costs_the_probe_it_is_priced_against() -> None:
             evaluate_batch,
             bounds=unit_bounds(),
             n_paths=k,
-            max_evals=probe_evals + 2 * probe_evals,  # init probe + 2M iterations
+            max_evals=probe_evals + 2,  # init probe + two iterations
             n_probe_evals=probe_evals,
             solver=StubSolver(),
             restart_rule=rule,

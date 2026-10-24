@@ -85,7 +85,7 @@ its own. Stopping is always a budget or a stall.
 | `n_paths` | engine width: paths advanced in lockstep each iteration (default 16) |
 | `max_evals` | the engine's budget, counted in served batches (default 1000) |
 | `max_ls` | trials one step may serve before the path stalls (default 20) |
-| `n_probe_evals` | probe depth: draws per start, and the horizon a continue sample spans (default 2) |
+| `n_probe_evals` | probe depth: draws per start (default 1) |
 | `sample` | your own prior `(key, n) -> (n, d)`; required when the box is unbounded |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |

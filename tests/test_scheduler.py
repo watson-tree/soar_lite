@@ -426,6 +426,9 @@ def run_probe_pass_with_nan_eval(nan_eval: int) -> None:
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=n_paths,
+        # group-min needs two draws to skip between; this test pins the skip,
+        # not the default, so it states the probe size it assumes.
+        n_probe_evals=2,
         max_evals=5,
         budget_check=lambda: served[0] < 40,
         solver=HalfStep(),
@@ -582,9 +585,9 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     Init probes return loss = x[0] (a real spread, so sigma_r > 0 and B stays
     small); every later evaluation returns the same bad constant with a zero
     gradient, so ZH backtracking rejects max_ls times and the paths stall. With
-    window = 2 (the shortest stage that has a spread at all) and a sample per
-    horizon of n_probe_evals = 2 iterations, the stalled flock's second sample
-    lands at iteration 4 and its verdict is due at iteration 5, with EI_continue = 0
+    window = 2 (the shortest stage that has a spread at all) and one sample per
+    iteration, the stalled flock's second sample lands at iteration 2 and its
+    verdict is due at iteration 3, with EI_continue = 0
     (f_k >= B) and EI_restart > 0, so the flock is revived by a restart probe;
     with verdicts off (huge window) the very same run serves nothing after the
     stall. The two traces differ by exactly the restart
@@ -648,11 +651,11 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     assert res_on.status == "max_evals", res_on  # a due verdict keeps it alive
     assert res_off.status == "all_stalled", res_off  # not "budget_exhausted"
     # The unreachable verdict ends the run at the stall instead of spinning the
-    # remaining iterations: one productive iteration, plus the iteration that
-    # folds the stall's own sample - a rule cannot state a cadence before its
-    # first sample, so iteration 2 must come before the shortcut has anything to
-    # read. Neither iteration serves an eval.
-    assert res_off.nit == 2, res_off
+    # remaining iterations: the productive iteration folds the stall's own
+    # sample, and only then can the rule state a cadence for the shortcut to
+    # read. So exactly one iteration completes, and the next one serves nothing
+    # before the shortcut ends the run.
+    assert res_off.nit == 1, res_off
     assert len(shapes_on) == max_evals, shapes_on  # the revived run spends it all
 
 
