@@ -480,6 +480,21 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         bounds=bounds,
         evaluate_f=evaluate_f,
     )
+    # The seam check: presence, not signatures, and the two defaults, bound
+    # lazily - solver and restart import the engine's types, so importing them
+    # at module scope would form a cycle. Kept with the knob checks above and
+    # apart from the build below: none of it needs a sample or a box.
+    _check_seam(solver, LocalSolver, "solver")
+    _check_seam(restart_rule, RestartRule, "restart_rule")
+    if solver is None:
+        from soar_lite.solver import DiagonalPreconditioner  # noqa: PLC0415
+
+        solver = DiagonalPreconditioner()
+    if restart_rule is None:
+        from soar_lite.restart import EIRestartRule  # noqa: PLC0415
+
+        restart_rule = EIRestartRule()
+
     box = _box_bounds(bounds)
     d_bounds: int | None = None if box is None else box[0].shape[0]
     clip = box if box is not None else (-math.inf, math.inf)
@@ -516,27 +531,14 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     evaluator = _Evaluator(
         evaluate_batch,
         evaluate_f,
+        sampler=sampler,
         budget=budget,
         incumbent=incumbent,
         n_probe_evals=n_probe_evals,
-        sampler=sampler,
     )
-    paths = _Paths(n_paths)
-
-    # The seam check: presence, not signatures. The seam's own members run per
-    # path per iteration and stay unvalidated.
-    _check_seam(solver, LocalSolver, "solver")
-    _check_seam(restart_rule, RestartRule, "restart_rule")
-    # Defaults are bound lazily, not at module import: solver and restart
-    # import the engine's types, so importing them here would form a cycle.
-    if solver is None:
-        from soar_lite.solver import DiagonalPreconditioner  # noqa: PLC0415
-
-        solver = DiagonalPreconditioner()
-    if restart_rule is None:
-        from soar_lite.restart import EIRestartRule  # noqa: PLC0415
-
-        restart_rule = EIRestartRule()
+    # Last, because it takes the resolved seams and their collaborators: the
+    # state machine drives them rather than receiving them per call.
+    paths = _Paths(n_paths, evaluator, solver, restart_rule)
 
     # Iteration 0 is the initialization probe: the first pass sees no probe
     # evidence, so every rule's verdict is "restart" and the flock is seeded
@@ -547,16 +549,14 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         # refusal mid-iteration arrives as _BudgetExhausted below instead.
         if not budget.accept():
             break
-        to_restart = paths.restart_votes(restart_rule, incumbent.fun)
+        to_restart = paths.restart_votes(incumbent.fun)
         try:
             # An iteration restarts a path or advances it, not both: a path that
             # restarted moved by its probe and does not also step, and both halves
             # fold their own observation in place. A refused probe raises
             # `_BudgetExhausted` before the step runs.
-            paths.restart(to_restart, evaluator, solver, restart_rule)
-            paths.step(
-                paths.continuers(to_restart), evaluator, solver, clip, restart_rule
-            )
+            paths.restart(to_restart)
+            paths.step(paths.continuers(to_restart), clip)
         except _BudgetExhausted:
             # The iteration asked for a batch it could not afford and was cut
             # short: it did not finish, so it is not folded and not counted.
@@ -729,17 +729,19 @@ class _Evaluator:
         evaluate_batch: BatchEvaluator,
         evaluate_f: EvaluateF | None,
         *,
+        # Keyword-only, in the order the caller builds them: the sampler first,
+        # then the two objects it feeds, then the probe dial that is not one.
+        sampler: _Sampler,
         budget: _Budget,
         incumbent: _Incumbent,
         n_probe_evals: int,
-        sampler: _Sampler,
     ) -> None:
         self._evaluate_batch = evaluate_batch
         self._evaluate_f = evaluate_f
+        self._sampler = sampler
         self._budget = budget
         self._incumbent = incumbent
         self._n_probe_evals = n_probe_evals
-        self._sampler = sampler
 
     def batch(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
         """Serve one g batch, or raise `_BudgetExhausted` if it is unaffordable.
@@ -860,8 +862,20 @@ class _Paths:
       would poison that coordinate's magnitude EMAs for the rest of the run.
     """
 
-    def __init__(self, n_paths: int) -> None:
+    def __init__(
+        self,
+        n_paths: int,
+        evaluator: _Evaluator,
+        solver: LocalSolver,
+        restart_rule: RestartRule,
+    ) -> None:
         self.n_paths = n_paths
+        # The three collaborators this state machine drives. Held rather than
+        # handed in per call: every method below uses at least one of them, and
+        # a step would otherwise thread them only to pass them straight back.
+        self.evaluator = evaluator
+        self.solver = solver
+        self.restart_rule = restart_rule
         # A path's point is one object, not three parallel lists: it is what
         # every seam call takes, and a step commits one path at a time (so a
         # list, whose item assignment is the commit, beats a stacked array). The
@@ -878,21 +892,15 @@ class _Paths:
         # points[i].f - prev_f[i]; a restart resets the anchor to the probe's f.
         self.prev_f: list[float] = [math.inf] * n_paths
 
-    def restart_votes(self, restart_rule: RestartRule, incumbent: float) -> list[int]:
+    def restart_votes(self, incumbent: float) -> list[int]:
         """Paths whose restart rule fires against the current incumbent."""
         return [
             i
             for i in range(self.n_paths)
-            if restart_rule.should_restart(i, self.points[i].f, incumbent)
+            if self.restart_rule.should_restart(i, self.points[i].f, incumbent)
         ]
 
-    def restart(
-        self,
-        idxs: list[int],
-        evaluator: _Evaluator,
-        solver: LocalSolver,
-        restart_rule: RestartRule,
-    ) -> None:
+    def restart(self, idxs: list[int]) -> None:
         """Restart the given paths from one fresh probe-select event.
 
         The event's group-min list extends the rule's one shared payoff pool;
@@ -905,13 +913,13 @@ class _Paths:
         if not idxs:
             # No path restarted this iteration: nothing to probe or reset.
             return
-        starts = evaluator.probe_select(len(idxs))
+        starts = self.evaluator.probe_select(len(idxs))
         for point in starts:  # the event's group-mins extend the shared pool
-            restart_rule.observe_restart(point.f)
+            self.restart_rule.observe_restart(point.f)
         for i, point in zip(idxs, starts, strict=True):
             self.points[i] = point
-            solver.restart(i, point)
-            restart_rule.restart(i)  # the next Δ opens this path's next stage
+            self.solver.restart(i, point)
+            self.restart_rule.restart(i)  # the next Δ opens this path's next stage
             # Both halves gate the start, not just f: a finite f with a
             # non-finite gradient is proposed from (`-p.g`) and folded on
             # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
@@ -934,10 +942,7 @@ class _Paths:
     def step(
         self,
         idxs: list[int],
-        evaluator: _Evaluator,
-        solver: LocalSolver,
         clip: tuple[jnp.ndarray | float, jnp.ndarray | float],
-        restart_rule: RestartRule,
     ) -> None:
         """Advance the continue cohort one iteration and fold its samples.
 
@@ -979,9 +984,9 @@ class _Paths:
             # `bounds`, so the caller's map never sees a point outside the
             # box the engine advertised. The clipped step is the actual one, so
             # verdict() is handed the served point.
-            raw = jnp.stack([solver.propose(i, self.points[i]) for i in rejecting])
+            raw = jnp.stack([self.solver.propose(i, self.points[i]) for i in rejecting])
             x_trial = jnp.clip(raw, lo, hi)
-            f_trial, g_trial = evaluator.batch(x_trial)
+            f_trial, g_trial = self.evaluator.batch(x_trial)
             still_rejecting: list[int] = []
             for pos, i in enumerate(rejecting):
                 point = self.points[i]
@@ -989,13 +994,13 @@ class _Paths:
                 finite = math.isfinite(trial.f) and bool(jnp.all(jnp.isfinite(trial.g)))
                 if finite and (i not in best or trial.f < best[i].f):
                     best[i] = trial
-                verdict = solver.verdict(i, point, trial)
+                verdict = self.solver.verdict(i, point, trial)
                 if verdict == "accept":
                     if i not in best:  # no finite sample served: nothing to win
                         self.stalled[i] = True
                     else:
                         self.points[i] = best[i]
-                        solver.fold(i, point, best[i])
+                        self.solver.fold(i, point, best[i])
                 elif verdict == "retry":
                     still_rejecting.append(i)
                 else:  # "give_up": the method's own convergence test fired
@@ -1012,7 +1017,7 @@ class _Paths:
             delta = (
                 math.inf if self.stalled[i] else self.points[i].f - self.prev_f[i]
             )
-            restart_rule.observe_continue(i, delta)
+            self.restart_rule.observe_continue(i, delta)
             self.prev_f[i] = self.points[i].f
 
 
