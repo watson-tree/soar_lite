@@ -91,7 +91,6 @@ its own. Stopping is always a horizon or an extra gate.
 | `n_paths` | engine width: paths advanced in lockstep each iteration (default 16) |
 | `max_iters` | the horizon, counted in iterations (iteration 0 is the init probe); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | a wall-clock horizon in seconds, for when an iteration's cost is too uneven to budget in iterations |
-| `max_ls` | trials one step may serve before the path stalls (default 20) |
 | `n_probe_evals` | probe depth: draws per start (default 1); above 1 requires `evaluate_f` |
 | `sample` | your own prior `(key, n) -> (n, d)`; required when the box is unbounded |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
@@ -110,7 +109,8 @@ Three gotchas worth knowing up front:
   competition.
 - **The horizon counts iterations, not work.** What one iteration costs is the
   method's business: it serves from zero batches (a fully stalled flock) up to a
-  probe plus `max_ls` trial batches. So `max_iters` is a deterministic stop, not
+  probe plus however many trials the method's own line search serves. So
+  `max_iters` is a deterministic stop, not
   a cost estimate - read `n_batches` and `n_points` for what the run actually
   did, and pass `time_limit` if wall-clock is what you care about. `budget_check`
   is an extra gate consulted before every billed batch, so an external budget

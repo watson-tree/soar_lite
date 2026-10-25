@@ -34,8 +34,8 @@ One pass of the engine's main loop, counted in `n_iters`. Per iteration the engi
 decides which paths restart and then steps the rest: a path either probes or
 steps this iteration, never both. The parallel wall-clock unit; an iteration
 may serve zero batches (a dead iteration where nothing moves) or several (the
-restart probe's `n_probe_evals` batches plus the steppers' up to `max_ls`
-trials each). Iteration 0 is the initialization probe: the rule's cold-start
+restart probe's `n_probe_evals` batches plus the steppers' own trial budgets).
+Iteration 0 is the initialization probe: the rule's cold-start
 verdict says restart for every path, so starting the flock is the same
 operation as any later restart. `n_iters` counts finished iterations only — one
 cut short by a refused probe or batch is not counted, so a refused probe
@@ -50,7 +50,9 @@ _Avoid_: update, move
 
 **trial**:
 One served proposal within a step — one row of a batch that the method judges
-via `verdict`. `max_ls` caps how many trials a step may spend.
+via `verdict`. There is no engine-side cap: the method's own stopping test (or
+its own trial budget) ends the enumeration, so `verdict` must return `accept`
+or `give_up`.
 _Avoid_: line-search round (retired)
 
 **incumbent (B)**:
@@ -178,7 +180,8 @@ _Avoid_: accept, commit (as the name of this handoff)
 The engine's own stop, counted in iterations: every completed iteration costs
 one, and iteration 0 is the init probe. A deterministic bound, not a cost
 proxy — one iteration serves anywhere from no batch (a fully stalled flock) to a
-probe plus `max_ls` trial batches, so `n_batches`/`n_points` report what a run
+probe plus however many trials the method's own search serves, so
+`n_batches`/`n_points` report what a run
 actually billed. At least one of `max_iters`/`time_limit` must be given: a
 `budget_check` alone stops nothing, because a stalled iteration asks for no
 batch.

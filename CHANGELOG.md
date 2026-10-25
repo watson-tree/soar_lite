@@ -41,7 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the network at build time and is not covered by `uv.lock`.
 - The engine's own stop is an iteration horizon, `max_iters`, not a batch meter.
   One iteration costs one unit whatever it serves - from no batch, for a fully
-  stalled flock, up to a probe plus `max_ls` trial batches - so the stop is a
+  stalled flock, up to a probe plus however many trials the method's own line
+  search serves - so the stop is a
   deterministic, reproducible bound rather than a cost estimate; read
   `n_batches`/`n_points` for what a run actually billed. `time_limit` adds the
   same stop in wall-clock seconds, checked between iterations, and at least one
@@ -63,9 +64,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `max_ls`: the engine no longer caps a step's enumeration. How long a step may
+  run already belongs to the method (its convergence test, its own trial
+  budget), and `verdict` is where it says so, so an engine-side cap was a
+  second, invisible stopping rule for a decision the method owns. The engine now
+  loops until every path accepts or gives up, which makes one contract
+  load-bearing: `verdict` must eventually return `accept` or `give_up`. A custom
+  method that retried forever used to stall on `max_ls` alone and now hangs, so
+  give it its own bound. `DiagonalPreconditioner` already has one (`n_alpha` for
+  the post-warm-up grid; the warm-up's geometric shrink bottoms out at a
+  zero-length step, which passes Armijo).
 - `max_evals`: replaced by `max_iters` (batch budget - iteration horizon). The
-  migration is not a rename - an iteration can serve up to `n_probe_evals + 1 +
-  max_ls` batches - so a straight `max_evals=N` → `max_iters=N` raises the work
+  migration is not a rename - an iteration can serve up to `n_probe_evals + 1`
+  batches plus the method's own trial count - so a straight `max_evals=N` →
+  `max_iters=N` raises the work
   budget by up to that factor.
 - The `all_stalled` status and its early exit: a fully stalled flock now idles to
   the horizon, folding one `inf` sample per path per iteration, instead of

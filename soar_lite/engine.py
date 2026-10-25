@@ -48,15 +48,17 @@ class LocalSolver(Protocol):
     """The search method the n-path engine drives (the engine's plugin point).
 
     The engine owns the schedule: row composition, projection, the shared
-    horizon, the n-path state machine (restart/step/stall), the incumbent B,
-    and the per-step trial cap max_ls. The method owns the search: the
-    direction, the step size, and the acceptance test. All state is per path,
-    lives inside the instance, and is opaque to the engine (the engine never
-    reads it) - implementers index it by path i.
+    horizon, the n-path state machine (restart/step/stall), and the incumbent B.
+    The method owns the search: the direction, the step size, the acceptance
+    test, **and how long the enumeration may run** - the engine loops until the
+    method ends it, so ``verdict`` must reach "accept" or "give_up" on its own.
+    An enumerator with no bound of its own is a hang, not a slow run. All state
+    is per path, lives inside the instance, and is opaque to the engine (the
+    engine never reads it) - implementers index it by path i.
 
     One engine step, for every path i that steps this iteration: propose(i, p)
-    is called at most max_ls times. p is the path's current point, unchanged
-    for the whole step (the engine commits a point only on "accept"), so p is
+    is called repeatedly. p is the path's current point, unchanged for the whole
+    step (the engine commits a point only on "accept"), so p is
     also the step's starting point. The returned raw candidate is projected
     into the box by the engine before it is evaluated, so the actual step is
     the projected one: a method must judge the served point it is handed, not
@@ -71,7 +73,7 @@ class LocalSolver(Protocol):
     would drift). "retry" spends another trial, and "give_up" stalls the path
     at once - the hook for a method with its own convergence test (the
     delivery's method returns it once its per-coordinate stopping test is all
-    true; a method that never returns it stalls on max_ls alone). Arbitration
+    true, or once its own trial budget runs out). Arbitration
     is split: ``verdict`` rules the enumeration and may only mutate
     enumeration-local state (a step length, a trial counter); ``fold`` alone
     mutates the model, so a method folds exactly once per committed step.
@@ -104,7 +106,9 @@ class LocalSolver(Protocol):
         engine's per-step argmin (this trial, for a first-acceptant or
         single-sample method) which is then folded through ``fold``;
         "give_up" aborts the path's enumeration outright, the hook for a
-        method's own convergence test.
+        method's own convergence test. The engine keeps enumerating while this
+        says "retry", so one of the two terminal answers is this method's
+        responsibility - there is no engine-side trial cap to fall back on.
         """
         ...
 
@@ -295,14 +299,13 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     # max_iters iterations. An iteration is one move per path (a restart probe
     # or a step), not one eval, so this is a reproducible stop, not a cost or
     # wall-clock proxy - one iteration may serve from zero batches (a stalled
-    # one) up to a full probe plus max_ls trial batches. None leaves the
-    # horizon to `time_limit`.
+    # one) up to a probe plus however many trials the method's own search
+    # serves. None leaves the horizon to `time_limit`.
     max_iters: int | None = None,
     # A wall-clock deadline in seconds, for the caller who budgets time rather
     # than iterations. None means none. A run needs a horizon: at least one of
     # max_iters / time_limit must be given.
     time_limit: float | None = None,
-    max_ls: int = 20,  # trials one step may serve before stalling a path
     # Keyword-only and defaulted, like scipy's `callback`: an extra gate for a
     # budget the engine cannot see (points, dollars, an external clock),
     # consulted once per batch. None means "no extra gate". It is additional,
@@ -344,8 +347,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     move per path, so the same number reproduces on any machine and does not
     change when the probe depth or the f-only seam changes the per-iteration
     batch count. It is not a cost bound: one iteration serves from zero batches
-    (a fully stalled one) up to a full probe plus `max_ls` trial batches, so
-    migrating a batch budget to `max_iters` can multiply the work done by that
+    (a fully stalled one) up to a probe plus however many trials the method's
+    own search serves, so migrating a batch budget to `max_iters` can multiply
+    the work done by that
     per-iteration spread. budget_check() is the caller's additional batch-level
     predicate consulted once per batch (whole batch or None), for a budget the
     engine cannot see; a False verdict stops all paths globally (status
@@ -376,8 +380,8 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     (sigma_r > 0 for n_paths >= 2); n_paths=1 yields a single sample -> sigma_r = 0 ->
     degenerate EI_restart = 0 -> the single path never restarts. Every restart
     event extends {r_i} with the event's group-mins for all paths at once (a
-    payoff is a property of the sampler, not of one path). A path whose trials
-    exhaust max_ls stalls until an EI verdict revives it.
+    payoff is a property of the sampler, not of one path). A path whose method
+    gives up stalls until an EI verdict revives it.
 
     The verdict compares a probe against one continue sample. A probe spends
     n_probe_evals evals, while the continue side's evidence is one Δf per
@@ -425,7 +429,6 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
-        max_ls: the per-step trial cap after which a path stalls.
         budget_check: an extra gate asked before every g batch, for an external
             budget the engine cannot see; additional, not a horizon, and never
             consulted inside a probe's f-only draws (``None`` means none).
@@ -473,7 +476,6 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
     for name, value, low in (
         ("n_paths", n_paths, 1),
         ("n_probe_evals", n_probe_evals, 1),
-        ("max_ls", max_ls, 1),
     ):
         if value < low:
             msg = f"{name} must be >= {low}, got {value}"
@@ -732,8 +734,8 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         rejects, so the point handed to propose/verdict is also the step's
         start point. A path that just restarted is not a stepper: its probe was
         this iteration's move. On return, a path is stalled exactly when it did
-        not move at all this iteration (no probe, no commit: gave up, or max_ls
-        exhausted on rejects).
+        not move at all this iteration (no probe, no commit: its method gave up
+        on every trial).
         """
         active = [
             i for i in range(n_paths) if not stalled[i] and i not in just_restarted
@@ -749,11 +751,11 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         # the fold callback, never by tracking its own argmin (two copies
         # would drift).
         best: dict[int, PathPoint] = {}
-        # max_ls stays engine-side as a failsafe: a solver that returned
-        # "retry" forever would hang the engine without this cap.
-        for _ in range(max_ls):
-            if not rejecting:
-                break
+        # No engine-side trial cap: how long a step's enumeration may run is the
+        # method's own business (its convergence test, its own trial budget),
+        # and `verdict` is where it says so. A cap here would be a second,
+        # invisible stopping rule for a decision the method already owns.
+        while rejecting:
             # The method proposes raw candidates; the engine clips them into
             # `bounds`, so the caller's map never sees a point outside the
             # box the engine advertised. The clipped step is the actual one, so
@@ -780,8 +782,6 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
                 else:  # "give_up": the method's own convergence test fired
                     stalled[i] = True
             rejecting = still_rejecting
-        for i in rejecting:  # max_ls exhausted: stall; an EI verdict may revive
-            stalled[i] = True
 
     # Iteration 0 is the initialization probe: the first pass sees no probe
     # evidence, so every rule's verdict is "restart" and the flock is seeded

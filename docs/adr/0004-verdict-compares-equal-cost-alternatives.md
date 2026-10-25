@@ -145,3 +145,28 @@ Consequences:
   budget increase of up to ~`n_probe_evals + 1 + max_ls` times.
 - `samples_until_verdict()` loses its only engine caller, since the shortcut that
   read it is gone; it stays on the protocol for now, marked to be cut.
+
+## Amendment: the per-step trial cap moves into the method
+
+`max_ls` is gone. Both amendments above quote it as the bound on an iteration's
+batches, and both stay as written - they record what the engine looked like
+then. What changed is whose decision the enumeration length is.
+
+It was never the engine's. A step's enumeration ends because the method's own
+test fired (its convergence criterion, its `n_alpha` grid, its trial budget);
+`max_ls` was a second, invisible stopping rule layered over a decision the
+method already owned, and it could only fire in one of two ways: as a failsafe
+for a method that never terminates, or as a stall for a method that was still
+making progress. The first is the method's bug, and the second silently converts
+a converging step into a stall that only a restart can undo. So the step loop is
+`while rejecting` now, like the run loop, and termination is a stated contract
+instead of an engine knob: `verdict` must eventually return `accept` or
+`give_up`. A method that keeps saying "retry" hangs the engine - loudly, at the
+caller's own fault, rather than by being quietly truncated.
+
+Neither migration bullet above survives unchanged in spirit, so read them as
+history: an iteration's batches are bounded by the method's own search, and the
+engine cannot quote a number for them. `DiagonalPreconditioner` needs no new
+bound - its post-warm-up grid is capped by `n_alpha`, and its warm-up's
+geometric shrink bottoms out at a zero-length step, which passes Armijo because
+the directional derivative of that zero step is zero.

@@ -182,6 +182,7 @@ EI_restart  = σ_r·[z·Φ(z) + φ(z)],  z = (B − μ_r)/σ_r     任一路径�
 ```text
 advance_paths(it) 对每条路径一次移动：先问判决（只在它的 stage 填满时真的问）并重启胜出的，
                   未重启且未 stalled 的路径再 propose → clip 进 box → 批量 serve → 逐路径 verdict → commit
+                  （这条链循环到每条路径都 accept 或 give_up；枚举长度归方法，引擎不设上限）
 observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本）
 ```
 
@@ -216,8 +217,10 @@ value+grad 批，两侧就都只算一次梯度。延迟与否看**抽数**而�
 
 ### 3.4 `stalled` 是唯一的路径状态
 
-一条路径在某一次迭代「没有任何移动」（既没重启、也没提交步）就叫 stalled——可能是自己的收敛
-判据 `give_up`，也可能是重试次数 `max_ls` 耗尽。stalled 路径和本轮刚重启的路径都不进
+一条路径在某一次迭代「没有任何移动」（既没重启、也没提交步）就叫 stalled——判据只有方法的
+`give_up`：枚举多长是方法自己的事（它的收敛判据、它自己的试用预算），引擎**没有试用上限**。把上限
+留在引擎侧就是给方法已经拥有的决定加第二个隐形停止规则；代价是一项契约：`verdict` 必须最终返回
+`accept` 或 `give_up`，永不终止的枚举是挂死而不是慢跑。stalled 路径和本轮刚重启的路径都不进
 `step_paths`，但每个 stalled 的迭代仍然喂一个 inf 的 `Δf`（让它的判决节奏与同批前进的路径对齐，
 而不是领先一个样本），直到某次 EI 判决把它唤醒。
 
@@ -225,7 +228,8 @@ value+grad 批，两侧就都只算一次梯度。延迟与否看**抽数**而�
 
 `max_iters` 是引擎自己的地平线，单位是**迭代**：一次完成的迭代记一笔（迭代 0 就是初始化探测）。
 它是确定性的停车界，不是成本代理——一次迭代服务多少批是方法的自由，从零批（全停滞的一轮）到一次
-探测加 `max_ls` 个试用批。`time_limit` 是同一件事的墙钟版本，给那些「一次迭代多贵说不准」的调用方。
+探测加上方法自己线搜索的若干试用批。`time_limit` 是同一件事的墙钟版本，给那些「一次迭代多贵说不准」
+的调用方。
 两者至少要给一个，否则入口抛 `ValueError`：只有 `budget_check` 停不住空转的羊群（停滞的迭代不服务
 任何批，也就永远不会被批级闸拦住）。
 
@@ -295,6 +299,9 @@ live 路径同批前进；引擎就这么空转到 `max_iters`/`time_limit` 停�
 - 把批量目标写成任何可 vmap 的 callable，甚至写成一次同步阻塞的远程调用；
 - 把 `PathPoint`/`Verdict` 换成元组/枚举/字符串——只要语义一致。
 
+一条不是实现选择：枚举的长度归方法，所以 `verdict` 的终止责任也在方法（`accept` 或 `give_up`）。
+引擎已经没有试用上限可退还，一个永远「再来一个」的方法就是挂死。
+
 #### 必须保留的不变式（换了就坏）
 
 1. `d ≥ 0` ⇒ `−d⊙g` 恒下降 ⇒ 稳态不需要 acceptance test（1.2 之 1）。
@@ -339,7 +346,8 @@ live 路径同批前进；引擎就这么空转到 `max_iters`/`time_limit` 停�
 - 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
   `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
 - `stalled` 语义：`test_give_up_stalls_a_path`、`test_stalled_paths_wait_for_ei_then_restart`、
-  `test_nonfinite_start_waits_for_ei_instead_of_stepping`。
+  `test_a_step_serves_as_many_trials_as_the_method_asks_for`（引擎不设试用上限：方法要 31 个 trial
+  就给它 31 个）、`test_nonfinite_start_waits_for_ei_instead_of_stepping`。
 - 单一 argmin 所有者：`test_diag_line_search_walks_the_grid_and_folds_the_argmin`、
   `test_diag_line_search_gives_up_when_no_sample_is_finite`。
 - 判决节奏与可比样本数：`test_window_is_the_pool_size`、

@@ -200,9 +200,12 @@ class DiagonalPreconditioner(LocalSolver):
             return "give_up"
         if not self.has_secant[i]:
             # Monotone Armijo on the served (projected) step, reference = the
-            # step's own start f; a reject shrinks alpha and retries, and the
-            # engine's max_ls bounds that loop. -inf passes the `<=` below and
-            # would commit a non-objective, hence the finiteness gate too.
+            # step's own start f; a reject shrinks alpha and retries. That loop
+            # ends by itself: once alpha has shrunk far enough the served trial
+            # rounds back to the start, so delta = 0, gtd = 0 and Armijo passes
+            # (committing a no-op step, which then arms a real one). -inf passes
+            # the `<=` below and would commit a non-objective, hence the
+            # finiteness gate too.
             delta = trial.x - p.x
             gtd = jnp.vdot(p.g, delta).item()  # gᵀd for d = delta (delta carries alpha)
             if not math.isfinite(trial.f) or trial.f > p.f + self.armijo_c * gtd:
@@ -252,8 +255,8 @@ class DiagonalPreconditioner(LocalSolver):
         # candidate set: the sweep keeps shrinking alpha (a real line search
         # probes past a NaN), so n_alpha > 1 survives a bad early sample; at
         # n_alpha = 1 there is no next sample and a retry would re-propose
-        # the identical point for max_ls trials, so the path gives up instead
-        # and a rule may revive it.
+        # the identical point for the rest of the enumeration, so the path gives up
+        # instead and a rule may revive it.
         if finite:
             self.saw_finite[i] = True
         self.alpha_sample[i] += 1

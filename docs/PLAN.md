@@ -94,7 +94,7 @@ costs exactly one probe. Default `n_alpha=1` keeps a documented, bounded
 asymmetry (continue = one gradient point vs probe = min-of-n). A genuine Armijo
 line search is also f-only-compatible (its test reads the *start*'s g + the
 trial's f); only Wolfe/curvature conditions read the trial's own g and go
-asymmetric — bound by `max_ls`, document, don't redesign. Do **not** force
+asymmetric — bounded by the method's own enumeration, document, don't redesign. Do **not** force
 `n_alpha = n_probe_evals`: they are independent knobs (line-search resolution
 vs exploration breadth).
 
@@ -144,8 +144,8 @@ against one step, and the load-bearing cost is g-count — without `evaluate_f`
 the non-f-only world is g-symmetric only at `n_probe_evals = n_alpha` (default
 1 = 1, which the gate enforces); with `evaluate_f` both sides compute g once
 and the only residual is the cheap f-count `n_alpha != n_probe_evals`, plus a
-genuine Wolfe/curvature solver that reads the trial's own g (bounded by
-`max_ls`). Don't claim the verdict is exactly unbiased in those residual cases.
+genuine Wolfe/curvature solver that reads the trial's own g (bounded by its own
+enumeration). Don't claim the verdict is exactly unbiased in those residual cases.
 
 **Init folded into restart (landed):** the dedicated initialization path (a
 probe before the loop, then a cold-start `solver.init` / `observe_restart`
@@ -162,7 +162,8 @@ first fold.
 ### Budget: an iteration horizon (landed)
 
 `max_evals` billed served batches, which made the engine's own stop a cost
-meter. Two things broke it: a step can serve up to `max_ls` batches and a
+meter. Two things broke it: a step serves as many trials as its method asks for
+and a
 restart serves a probe, so an iteration's batch count is runtime state the
 caller cannot predict; and a stalled iteration serves nothing, so the meter
 under-counts exactly where the loop spins - which is why an all-stalled
@@ -170,7 +171,7 @@ shortcut had to exist at all. Replaced by:
 
 - `max_iters`: a deterministic horizon, iteration 0 = the init probe. Not a cost
   proxy - one iteration serves from zero batches (a fully stalled flock) up to a
-  probe plus `max_ls` trial batches.
+  probe plus however many trials the method's line search serves.
 - `time_limit`: the same stop in wall-clock seconds, checked between iterations
   and never inside one.
 - At least one of the two, else `ValueError`. `budget_check` stays an extra
@@ -186,8 +187,9 @@ shortcut had to exist at all. Replaced by:
   path per iteration. `samples_until_verdict()` loses its only engine caller and
   is marked to be cut.
 
-Migration is not a rename: an iteration can burn about `1 + (n_probe_evals + 1)
-+ max_ls` times the batches of a one-batch iteration, so `max_evals=N` →
+Migration is not a rename: an iteration can burn about `1 + (n_probe_evals + 1)`
+times the batches of a one-batch iteration before the method's own trials are
+counted, so `max_evals=N` →
 `max_iters=N` silently raises the work budget. Re-tune from `n_batches`.
 
 Still open, deferred until the finite-value refactor: a flock that stalls as a
@@ -208,13 +210,15 @@ the winner, and f-only would serve it twice). The clean home for this is a
 solver-side protocol ("this batch needs values only"), which is not worth
 extending for a cost the default configuration never pays.
 
-Deferred: **retire `max_ls`.** It is an engine-side cap on a loop the solver
+Landed: **`max_ls` is retired.** It was an engine-side cap on a loop the solver
 owns - the same quantity as `n_alpha`, on the wrong side of the seam. The step
-loop can be `while True` like the run loop, with termination a stated contract
-(`verdict` must eventually return `accept` or `give_up`) instead of an engine
-failsafe; `DiagonalPreconditioner`'s Armijo backtracking terminates on its own,
-and its grid is already capped by `n_alpha`. Cost of removing it: the migration bullet
-below stops quoting an engine-side bound for one iteration's batches.
+loop is now `while rejecting`, with termination a stated contract (`verdict` must
+eventually return `accept` or `give_up`) instead of an engine failsafe;
+`DiagonalPreconditioner` terminates on its own (the post-warm-up grid is capped
+by `n_alpha`, and the warm-up's geometric shrink bottoms out at a zero-length
+step, which passes Armijo because `gtd = 0`). The migration bullet
+above therefore no longer quotes an engine-side bound for one iteration's
+batches.
 
 ## Next
 

@@ -70,15 +70,15 @@ def _warm_up(
     p: PathPoint,
     quad: Callable[[jnp.ndarray], tuple[float, jnp.ndarray]],
 ) -> PathPoint:
-    """Drive the engine's warm-up loop for path 0: propose, evaluate, judge."""
-    for _ in range(20):  # the engine's max_ls bounds the retries
+    """Drive the warm-up loop by hand for path 0: propose, evaluate, judge."""
+    for _ in range(20):  # the loop bound is this helper's, not the engine's
         x = solver.propose(0, p)
         f, g = quad(x)
         trial = PathPoint(x=x, f=f, g=g)
         if solver.verdict(0, p, trial) == "accept":
             solver.fold(0, p, trial)
             return trial
-    raise AssertionError  # max_ls trials without an accepted warm-up step
+    raise AssertionError  # 20 trials without an accepted warm-up step
 
 
 def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:

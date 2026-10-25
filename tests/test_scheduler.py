@@ -51,24 +51,34 @@ class HalfStep:
 
     These tests are the engine's, so they must not depend on which local method
     is plugged in - the engine owns the paths, the box, the shared budget and the
-    EI cadence, and the method owns only direction, step size and acceptance.
-    This one is deliberately naive: it proposes `x - 0.5*g` and accepts only a
-    strict decrease, so a path stalls for an engine reason (a rejected trial,
+    EI cadence, and the method owns only direction, step size, acceptance and
+    how long its own enumeration runs. This one is deliberately naive: it
+    proposes `x - 0.5*g` and accepts only a strict decrease, giving up after
+    `trial_cap` rejects, so a path stalls for an engine reason (a rejected trial,
     typically one pinned at the box wall) and never because a curvature model
     went quiet. What the real method does is `test_solver.py`'s subject.
     """
 
+    def __init__(self, trial_cap: int = 20) -> None:
+        """Bound one step's enumeration at `trial_cap` rejects (the method's own)."""
+        self.trial_cap = trial_cap
+        self.n_rejects: dict[int, int] = {}
+
     def restart(self, i: int, p: PathPoint) -> None:  # noqa: ARG002
-        """Take no per-path state: the step depends only on the current point."""
-        return
+        """Take no per-path state beyond the reject counter, which restarts."""
+        self.n_rejects[i] = 0
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:  # noqa: ARG002
         """Return half a steepest-descent step from p."""
         return p.x - 0.5 * p.g
 
-    def verdict(self, i: int, p: PathPoint, trial: PathPoint) -> Verdict:  # noqa: ARG002
-        """Accept a strict decrease, retry otherwise."""
-        return "accept" if trial.f < p.f else "retry"
+    def verdict(self, i: int, p: PathPoint, trial: PathPoint) -> Verdict:
+        """Accept a strict decrease; give up once the trial cap is spent."""
+        if trial.f < p.f:
+            self.n_rejects[i] = 0  # the cap is per step, like an enumeration
+            return "accept"
+        self.n_rejects[i] = self.n_rejects.get(i, 0) + 1
+        return "retry" if self.n_rejects[i] < self.trial_cap else "give_up"
 
     def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:  # noqa: ARG002
         """Fold nothing: this method keeps no model."""
@@ -135,8 +145,8 @@ def test_batch_shape_and_point_counting() -> None:
     assert isinstance(res, NPathResult)
     assert res.n_points == rec.evals, (res.n_points, rec.evals)
     assert res.n_points <= 500
-    # n_iters counts engine iterations, not the trials inside them (one iteration
-    # may serve up to max_ls trials per path), so it stays far below the eval
+    # n_iters counts engine iterations, not the trials inside them (the method's
+    # own trial cap bounds one iteration), so it stays far below the eval
     # count and never passes the horizon.
     assert 0 < res.n_iters <= 50
     assert res.n_points >= res.n_iters * 4  # a batch serves at least the n_paths points
@@ -499,8 +509,8 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
     """
     n_paths = 3
     # The flat field makes every step a rejecting line search, so one iteration
-    # can burn max_ls trials; the horizon only has to carry init plus the
-    # iterations the verdicts need to come due.
+    # burns the method's whole trial cap; the horizon only has to carry init plus
+    # the iterations the verdicts need to come due.
     max_iters = 6
     init_f_vals = jnp.array([jnp.inf, 1.0, 3.0])  # row 0 = column 0 = dead
 
@@ -557,8 +567,8 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
     def evaluate_batch(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         calls[0] += 1
         served[0] += int(theta.shape[0])
-        # Column 1 needs a real objective: on a flat field it rejects max_ls
-        # times per step instead of committing one, and the per-step accounting
+        # Column 1 needs a real objective: on a flat field it burns the method's
+        # trial cap per step instead of committing one, and the per-step accounting
         # this test pins would measure the line search, not the stall.
         d = theta - 0.7
         f_vals = jnp.sum(d**4 + d**2, axis=1)
@@ -583,11 +593,11 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
 
 
 def test_stalled_paths_wait_for_ei_then_restart() -> None:
-    """max_ls exhaustion stalls a path; only a due EI verdict revives it.
+    """A method's own give-up stalls a path; only a due EI verdict revives it.
 
     Init probes return f = x[0] (a real spread, so sigma_r > 0 and B stays
     small); every later evaluation returns the same bad constant with a zero
-    gradient, so ZH backtracking rejects max_ls times and the paths stall. With
+    gradient, so the injected method rejects its trial cap and gives up. With
     window = 2 (the shortest stage that has a spread at all) and one sample per
     iteration, the stalled flock's second sample lands at iteration 2 and its
     verdict is due at iteration 3, with EI_continue = 0
@@ -601,7 +611,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     horizon ends the run. That idle tail is the price of a stop that does not
     depend on a rule's cadence.
     """
-    n_paths, max_ls, n_probe_evals = 4, 3, 1
+    n_paths, trial_cap, n_probe_evals = 4, 3, 1
     # Iterations: the init probe, the rejecting iteration that stalls the flock,
     # one idle iteration while the verdict comes due, then the restart probe.
     max_iters = 4
@@ -628,10 +638,9 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
             n_paths=n_paths,
             n_probe_evals=n_probe_evals,
             max_iters=max_iters,
-            max_ls=max_ls,
             # the horizon ends both runs
             budget_check=lambda: evals[0] < 10**6,
-            solver=HalfStep(),
+            solver=HalfStep(trial_cap=trial_cap),
             restart_rule=ForcedWindow(window),
             key=jax.random.PRNGKey(8),
         )
@@ -639,14 +648,14 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
 
     shapes_off, evals_off, res_off = seam_run(10**9)  # verdicts never due
     shapes_on, evals_on, res_on = seam_run(2)  # verdict once two samples land
-    # without verdicts: init + max_ls rejecting trials per path, then nothing
-    pre = n_probe_evals + max_ls
+    # without verdicts: init + trial_cap rejecting trials per path, then nothing
+    pre = n_probe_evals + trial_cap
     assert len(shapes_off) == pre, shapes_off
-    assert evals_off == (n_probe_evals + max_ls) * n_paths
+    assert evals_off == (n_probe_evals + trial_cap) * n_paths
     # The idle iteration serves no eval, then a restart probe of every path.
     # The tail is left as an inequality on purpose - what the revived
-    # paths do after the probe (accept, or reject again on the same flat field
-    # until the step cap) is the injected method's business.
+    # paths do after the probe (accept, or burn their own trial cap again on the
+    # same flat field) is the injected method's business.
     assert len(shapes_on) - pre >= n_probe_evals, shapes_on  # served after the stall
     assert all(m == n_paths for m, _d in shapes_on), shapes_on  # no shrinking batches
     assert evals_on == len(shapes_on) * n_paths > evals_off
@@ -657,6 +666,52 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     assert res_on.status == "max_iters", res_on  # a due verdict keeps it alive
     assert res_off.n_iters == max_iters, res_off
     assert res_on.n_iters == max_iters, res_on
+
+
+def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
+    """The engine has no trial cap: the enumeration's length is the method's.
+
+    A method that wants 30 rejects before its first acceptance must get all 31
+    trials in one iteration. An engine-side cap would have stalled the path
+    mid-errand, turning a converging step into a stall that only a restart could
+    undo - a stopping rule the method never asked for.
+    """
+    n_rejects = 30
+
+    class Patient:
+        """Propose uphill until the 30th reject, then the descent step."""
+
+        def __init__(self) -> None:
+            self.calls: dict[int, int] = {}
+
+        def restart(self, i: int, p: PathPoint) -> None:  # noqa: ARG002
+            self.calls[i] = 0
+
+        def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
+            self.calls[i] = self.calls.get(i, 0) + 1
+            return p.x + p.g if self.calls[i] <= n_rejects else p.x - p.g
+
+        def verdict(self, i: int, p: PathPoint, trial: PathPoint) -> Verdict:  # noqa: ARG002
+            return "accept" if trial.f < p.f else "retry"
+
+        def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:  # noqa: ARG002
+            return
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    rec = Recorder(quad)
+    res = n_path_schedule(
+        rec,
+        bounds=unit_bounds(),
+        n_paths=1,  # one path: a single batch per trial keeps the count exact
+        max_iters=2,  # the init probe, then this one step
+        solver=Patient(),
+        key=jax.random.PRNGKey(11),
+    )
+    assert len(rec.batch_shapes) == 1 + n_rejects + 1, rec.batch_shapes  # init + trials
+    assert res.n_iters == 2, res
+    assert rec.all_f_vals[-1] < rec.all_f_vals[0], rec.all_f_vals  # it committed
 
 
 def test_bounds_spellings_are_the_same_box() -> None:
@@ -815,7 +870,7 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
     """A bad budget knob fails once, at the entry, naming the knob.
 
     None of these shapes can run: zero paths advance nothing, and a negative
-    step cap means no iteration at all. The caller should see the knob, not an
+    horizon means no iteration at all. The caller should see the knob, not an
     empty result later.
     """
 
@@ -838,7 +893,6 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
     for bad in (
         {"n_paths": 0},
         {"n_probe_evals": 0},
-        {"max_ls": 0},
         {"max_iters": -1},
     ):
         assert next(iter(bad)) in rejects(**bad), bad
