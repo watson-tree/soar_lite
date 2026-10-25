@@ -358,6 +358,9 @@ live 路径同批前进；引擎就这么空转到 `max_iters`/`time_limit` 停�
 - `n_paths = 1` 退化（`σ_r = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
   `test_no_incumbent_never_restarts_but_does_not_stall_the_clock` 覆盖 B 缺失；**没有端到端 n_paths=1 断言**
   ——搬走前可补一条（n_paths=1 跑满地平线，断言 `restarts == []`）。
+- 多抽 probe 只有单测覆盖：`test_probe_group_min_skips_nan`、
+  `test_multi_draw_probe_is_refused_without_the_f_only_seam`、`test_the_gate_counts_g_batches_not_f_only_draws`。
+  实验按 `n_probe_evals=1`、不接 seam 跑（`f_only` 不计费，接入会白送评估），所以图里没有这条路径。
 - EI 闭式：`test_normal_functions_match_known_values`、`test_ei_continue_exact_degenerate_at_sigma_zero`、
   `test_ei_continue_matches_gaussian_ei_literal`、`test_ei_restart_matches_gaussian_fit_literal`、
   `test_ei_restart_fits_a_population_std`、`test_ei_restart_gaussian_tail_below_all_observations`、
