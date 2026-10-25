@@ -770,11 +770,14 @@ class _Evaluator:
         not move. Its winners' fused pass still is one, and a probe is entered
         only after the loop head accepted the iteration, so the gate's blind
         spot stays under one probe. Only `probe_select`'s f-only branch calls
-        this, which is why the `evaluate_f` assertion is here for the checker
-        rather than as a check.
+        this; the None-check below exists for the type checker (it cannot see
+        `probe_select`'s gate) and is unreachable at runtime.
         """
-        assert self._evaluate_f is not None  # the f-only branch's precondition
-        f_batch, feas = self._evaluate_f(x_batch)
+        evaluate_f = self._evaluate_f
+        if evaluate_f is None:
+            msg = "f_only requires evaluate_f"
+            raise RuntimeError(msg)
+        f_batch, feas = evaluate_f(x_batch)
         f_vals = f_batch.tolist()
         self._incumbent.observe(f_vals, x_batch, feas)
         return f_vals
