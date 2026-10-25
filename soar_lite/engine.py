@@ -482,7 +482,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     )
     box = _box_bounds(bounds)
     d_bounds: int | None = None if box is None else box[0].shape[0]
-    lo, hi = box if box is not None else (-math.inf, math.inf)
+    clip = box if box is not None else (-math.inf, math.inf)
     if sample is None:
         # The sample=None contract: a finite box is the only prior the engine
         # can synthesize, so an unbounded side (or no box at all) is a wiring
@@ -547,20 +547,20 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         # refusal mid-iteration arrives as _BudgetExhausted below instead.
         if not budget.accept():
             break
-        paths.begin_iteration()
+        to_restart = paths.restart_votes(restart_rule, incumbent.fun)
         try:
             # An iteration restarts a path or advances it, not both: a path that
-            # restarted moved by its probe and does not also step. A refused
-            # probe raises `_BudgetExhausted` before the step runs.
-            to_restart = paths.restart_votes(restart_rule, incumbent.fun)
-            if to_restart:
-                paths.restart(to_restart, evaluator, solver, restart_rule)
-            paths.step(evaluator, solver, lo, hi)
+            # restarted moved by its probe and does not also step, and both halves
+            # fold their own observation in place. A refused probe raises
+            # `_BudgetExhausted` before the step runs.
+            paths.restart(to_restart, evaluator, solver, restart_rule)
+            paths.step(
+                paths.continuers(to_restart), evaluator, solver, clip, restart_rule
+            )
         except _BudgetExhausted:
             # The iteration asked for a batch it could not afford and was cut
             # short: it did not finish, so it is not folded and not counted.
             break
-        paths.observe(restart_rule)
         budget.tick()  # counted after the body: only finished iterations
 
     return NPathResult(
@@ -848,7 +848,9 @@ class _Paths:
     - A path that restarted this iteration moved by its probe, so it does not
       also step, and its continue observation is skipped: its first Δ belongs
       to the next iteration, so the probe is never read back as a zero-length
-      step. `just_restarted` carries that for the iteration.
+      step. The loop's `to_restart` list carries that, threaded to both
+      `continuers` and `step` - one fact at the top instead of a stored flag
+      that must be cleared each iteration.
     - A path is stalled when it did not move at all this iteration - its method
       gave up on every trial, or its fresh start was not a usable point. A
       stalled path does not step and feeds `inf` to the rule ("no evidence"), so
@@ -872,15 +874,9 @@ class _Paths:
         # Nothing has arrived yet, and a path that has not arrived is not
         # stalled: iteration 0 probes every path before the step filter reads it.
         self.stalled: list[bool] = [False] * n_paths
-        # Paths whose probe ran this iteration.
-        self.just_restarted: set[int] = set()
         # The continue side's sample is one step, so the Δ it reports is
         # points[i].f - prev_f[i]; a restart resets the anchor to the probe's f.
         self.prev_f: list[float] = [math.inf] * n_paths
-
-    def begin_iteration(self) -> None:
-        """Drop last iteration's probe marks before this iteration's votes."""
-        self.just_restarted.clear()
 
     def restart_votes(self, restart_rule: RestartRule, incumbent: float) -> list[int]:
         """Paths whose restart rule fires against the current incumbent."""
@@ -906,6 +902,9 @@ class _Paths:
         the next EI verdict. The probe is this iteration's move for every
         restarted path, finite or not, so none of them also steps.
         """
+        if not idxs:
+            # No path restarted this iteration: nothing to probe or reset.
+            return
         starts = evaluator.probe_select(len(idxs))
         for point in starts:  # the event's group-mins extend the shared pool
             restart_rule.observe_restart(point.f)
@@ -922,34 +921,48 @@ class _Paths:
                 math.isfinite(point.f) and bool(jnp.all(jnp.isfinite(point.g)))
             )
             self.prev_f[i] = point.f
-        self.just_restarted.update(idxs)
+
+    def continuers(self, restarted: list[int]) -> list[int]:
+        """Return the continue cohort: every path not restarted this iteration.
+
+        Stalled paths stay in: a stalled path does not propose, but it still
+        folds an inf sample this iteration, so its clock keeps pace with its
+        live cohort. Only a restart removes a path from this cohort.
+        """
+        return [i for i in range(self.n_paths) if i not in restarted]
 
     def step(
         self,
+        idxs: list[int],
         evaluator: _Evaluator,
         solver: LocalSolver,
-        lo: jnp.ndarray | float,
-        hi: jnp.ndarray | float,
+        clip: tuple[jnp.ndarray | float, jnp.ndarray | float],
+        restart_rule: RestartRule,
     ) -> None:
-        """One batched engine step for every path that steps this iteration.
+        """Advance the continue cohort one iteration and fold its samples.
 
         The method proposes, the engine projects and serves, the method judges,
         the engine commits. Trial passes run in lockstep over the still-
         rejecting subset, each served whole or not at all (a budget failure
         stops globally). A path's point is unchanged while it rejects, so the
-        point handed to propose/verdict is also the step's start point. On
-        return, a path is stalled exactly when it moved by no probe and
-        committed no point: its method found nothing to win.
+        point handed to propose/verdict is also the step's start point.
+
+        The cohort also holds paths that are already stalled: they skip the
+        propose loop and only fold their sample. A path ends stalled exactly
+        when it moved by no probe and committed no point: its method found
+        nothing to win. Each cohort path then folds one sample - the finite step
+        Δ when it moved, `inf` ("no evidence") when it is stalled - so a stalled
+        path's clock keeps advancing with its live cohort, and a fully stalled
+        flock idles to the horizon instead of stalling the verdict's cadence.
         """
-        active = [
-            i
-            for i in range(self.n_paths)
-            if not self.stalled[i] and i not in self.just_restarted
-        ]
-        if not active:
-            # Every path either waits for a verdict or already moved by its probe.
+        if not idxs:
+            # Every path restarted this iteration: the cohort is empty.
             return
-        rejecting = list(active)
+        lo, hi = clip
+        # A path already stalled only folds a sample this iteration, so it stays
+        # out of the propose loop; `stalled` also gates the exit observation
+        # below without a second membership list.
+        rejecting = [i for i in idxs if not self.stalled[i]]
         # Per-step argmin cache: "accept" commits the lowest-f finite trial
         # served this step (not the last served one), so a method can sweep a
         # step-length grid without re-evaluating its argmin. The engine is the
@@ -988,22 +1001,14 @@ class _Paths:
                 else:  # "give_up": the method's own convergence test fired
                     self.stalled[i] = True
             rejecting = still_rejecting
-
-    def observe(self, restart_rule: RestartRule) -> None:
-        """Fold this iteration's one continue sample per path into the rule.
-
-        Every path folds one sample per iteration, stalled or not: a stalled
-        path has no step to report, so its sample is inf ("no evidence"), and
-        its own clock keeps advancing in step with its live cohort. A fully
-        stalled flock therefore keeps folding inf until the horizon or the
-        deadline ends the run - it is bounded by those, never by this loop.
-        """
-        for i in range(self.n_paths):
-            if i in self.just_restarted:
-                # The probe was this iteration's move, not a step: its first Δ
-                # belongs to the next iteration, so leave the anchor at the
-                # probe's f rather than reading the probe back as a zero-step.
-                continue
+        # Fold this iteration's one sample per cohort path, in cohort order. A
+        # path that stalled above (give_up, or accept with no finite sample) is
+        # read back through `stalled` here, so the observation rides the step's
+        # own exit state instead of an outside reader reconstructing it. A
+        # restarted path is never in `idxs`: its probe was this iteration's move,
+        # so its first Δ belongs to the next iteration and its anchor stays at
+        # the probe's f rather than being read back as a zero-length step.
+        for i in idxs:
             delta = (
                 math.inf if self.stalled[i] else self.points[i].f - self.prev_f[i]
             )
