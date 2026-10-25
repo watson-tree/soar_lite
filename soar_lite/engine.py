@@ -477,8 +477,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         n_probe_evals=n_probe_evals,
         max_iters=max_iters,
         time_limit=time_limit,
-        bounds=bounds,
         evaluate_f=evaluate_f,
+        bounds=bounds,
     )
     # The seam check: presence, not signatures, and the two defaults, bound
     # lazily - solver and restart import the engine's types, so importing them
@@ -522,9 +522,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # an unseeded call still runs (deterministically). The sampler owns the
     # draw's own d check - its d is a property of the callable, not of the
     # draw, so a box mismatch is validated once, on the first draw.
-    sampler = _Sampler(
-        draw, d_bounds, jax.random.PRNGKey(0) if key is None else key
-    )
+    sampler = _Sampler(draw, d_bounds, jax.random.PRNGKey(0) if key is None else key)
     budget = _Budget(max_iters, time_limit, budget_check)
     incumbent = _Incumbent(d_bounds)
 
@@ -604,38 +602,6 @@ class _Sampler:
         return x_cand
 
 
-class _Incumbent:
-    """B, the incumbent: the best feasible finite point served so far.
-
-    Defined over feasible designs only - with no aux, every point is feasible -
-    and over finite values only, so a NaN or inf trial neither becomes B nor
-    displaces one. It is the objective every restart verdict is asked against,
-    which is why it starts at inf: until something feasible arrives, no verdict
-    has anything to compare against.
-    """
-
-    def __init__(self, d: int | None) -> None:
-        self.fun = math.inf
-        # d is the sampler's business: when the box does not supply it, this is
-        # an empty placeholder until the first served point fills it in.
-        self.x = jnp.full(0 if d is None else d, math.nan)
-
-    def observe(
-        self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None
-    ) -> None:
-        """Fold one served batch's feasible finite values in."""
-        # With no aux a batch has no feasibility mask and every point counts.
-        ok_feas = [True] * len(f_vals) if feas is None else feas.tolist()
-        candidates = [j for j, feasible in enumerate(ok_feas) if feasible]
-        pos = _argmin_finite([f_vals[j] for j in candidates])
-        if pos is None:  # nothing feasible served, or all of it non-finite
-            return
-        j = candidates[pos]
-        if f_vals[j] < self.fun:
-            self.fun = f_vals[j]
-            self.x = x_batch[j]
-
-
 class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
     """A batch was requested past a closed gate.
 
@@ -710,6 +676,38 @@ class _Budget:
         if self.full():
             return "max_iters"
         return "time_limit" if self.expired() else "budget_exhausted"
+
+
+class _Incumbent:
+    """B, the incumbent: the best feasible finite point served so far.
+
+    Defined over feasible designs only - with no aux, every point is feasible -
+    and over finite values only, so a NaN or inf trial neither becomes B nor
+    displaces one. It is the objective every restart verdict is asked against,
+    which is why it starts at inf: until something feasible arrives, no verdict
+    has anything to compare against.
+    """
+
+    def __init__(self, d: int | None) -> None:
+        self.fun = math.inf
+        # d is the sampler's business: when the box does not supply it, this is
+        # an empty placeholder until the first served point fills it in.
+        self.x = jnp.full(0 if d is None else d, math.nan)
+
+    def observe(
+        self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None
+    ) -> None:
+        """Fold one served batch's feasible finite values in."""
+        # With no aux a batch has no feasibility mask and every point counts.
+        ok_feas = [True] * len(f_vals) if feas is None else feas.tolist()
+        candidates = [j for j, feasible in enumerate(ok_feas) if feasible]
+        pos = _argmin_finite([f_vals[j] for j in candidates])
+        if pos is None:  # nothing feasible served, or all of it non-finite
+            return
+        j = candidates[pos]
+        if f_vals[j] < self.fun:
+            self.fun = f_vals[j]
+            self.x = x_batch[j]
 
 
 class _Evaluator:
@@ -824,9 +822,7 @@ class _Evaluator:
         # method state for the rest of the run.
         picks: list[tuple[int, int]] = []
         for j in range(n):
-            best = _argmin_finite(
-                [f_by_draw[r][j] for r in range(self._n_probe_evals)]
-            )
+            best = _argmin_finite([f_by_draw[r][j] for r in range(self._n_probe_evals)])
             # Whole group non-finite: keep draw 0 rather than invent a point.
             # Its f is non-finite, so init/restart stalls this path on arrival
             # and only an EI verdict revives it.
@@ -1014,9 +1010,7 @@ class _Paths:
         # so its first Δ belongs to the next iteration and its anchor stays at
         # the probe's f rather than being read back as a zero-length step.
         for i in idxs:
-            delta = (
-                math.inf if self.stalled[i] else self.points[i].f - self.prev_f[i]
-            )
+            delta = math.inf if self.stalled[i] else self.points[i].f - self.prev_f[i]
             self.restart_rule.observe_continue(i, delta)
             self.prev_f[i] = self.points[i].f
 
@@ -1041,8 +1035,8 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
     n_probe_evals: int,
     max_iters: int | None,
     time_limit: float | None,
-    bounds: Bounds | None,
     evaluate_f: EvaluateF | None,
+    bounds: Bounds | None,
 ) -> None:
     """Reject a run the engine cannot promise to finish or cannot price.
 
@@ -1069,7 +1063,7 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
             "flock, since a stalled iteration serves no batch"
         )
         raise ValueError(msg)
-    _check_bounds(bounds)
+
     if evaluate_f is None and n_probe_evals != 1:
         # The verdict's expensive side is the gradient count, not the batch
         # count: a probe computes `g` once per draw, a continue step once. The
@@ -1082,6 +1076,7 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
             "pass evaluate_f for multi-draw probes"
         )
         raise ValueError(msg)
+    _check_bounds(bounds)
 
 
 def _check_bounds(bounds: Bounds | None) -> None:
