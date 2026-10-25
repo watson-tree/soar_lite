@@ -52,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are no such draws); a multi-draw probe no longer inflates the two counts, so
   they stay on the axis that dominates. The trade: the gate and the deadline
   have a blind spot under one probe.
+- A single-draw probe keeps the fused path even when `evaluate_f` is supplied:
+  there is no losing gradient to defer (the winner is the draw), so an f-only
+  draw plus a winner batch would serve the same point twice for nothing.
+  Deferral is keyed on `n_probe_evals`, not on the seam being present.
 - `status` is now `max_iters`, `time_limit` or `budget_exhausted`.
 - `budget_check` is unchanged as a per-batch gate but no longer a substitute for
   the horizon: a stalled iteration asks for no batch, so a gate alone cannot
@@ -66,6 +70,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `all_stalled` status and its early exit: a fully stalled flock now idles to
   the horizon, folding one `inf` sample per path per iteration, instead of
   reading the rule's cadence to decide it can never be revived.
+
+### Fixed
+
+- A probe start is committed only when `f` **and** its gradient are finite. A
+  finite `f` with a non-finite gradient was accepted as live and then proposed
+  from (`-p.g`), so one NaN poisoned that coordinate's magnitude EMAs for the
+  rest of the run. Such a start now arrives stalled, exactly like a dead draw,
+  and waits for an EI verdict. The step side already gated trials on both.
 
 ## [0.1.0] - unreleased
 

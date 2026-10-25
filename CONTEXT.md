@@ -144,10 +144,12 @@ _Avoid_: converge, stop, terminate
 
 **probe**:
 Drawing fresh starts: `n_probe_evals` batches of candidate points, per-column
-minimum → one start each. The same draw is one restart-payoff sample, and it
-costs `n_probe_evals` of the budget — plus one batch for the winners'
-gradients when an f-only evaluator is supplied. Initialization and restart use
-the same probe.
+minimum → one start each. The same draw is one restart-payoff sample, and a
+probe is one iteration (one billed g batch: either the draw's own fused pass,
+or the winners' fused pass when a multi-draw probe defers its gradients). A
+start is usable only if `f` **and** its gradient are finite; a finite `f` with
+a non-finite gradient arrives stalled instead of stepping. Initialization and
+restart use the same probe.
 _Avoid_: selection event, random init, sampling
 
 **payoff pool**:

@@ -623,6 +623,70 @@ def test_f_only_probe_computes_one_gradient_per_probe() -> None:
     assert res.status == "max_iters", res
 
 
+def test_a_single_draw_probe_keeps_the_fused_path() -> None:
+    """One draw plus evaluate_f: no f-only call, just the one fused batch.
+
+    A probe with a single draw has no losing gradient to defer - the winner is
+    the draw - so serving it f-only and re-serving the winner for its gradient
+    would pay an extra f for nothing. Deferral is a property of the probe's
+    depth, not of the seam being present.
+    """
+    f_calls: list[int] = []
+
+    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        f_vals, grads = jax.vmap(pointwise)(x)
+        return f_vals, grads, None
+
+    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        f_calls.append(int(x.shape[0]))
+        f_vals, _grads = jax.vmap(pointwise)(x)
+        return f_vals, None
+
+    res = n_path_schedule(
+        evaluate_batch,
+        evaluate_f=evaluate_f,
+        bounds=unit_bounds(),
+        n_paths=2,
+        n_probe_evals=1,
+        max_iters=1,  # the probe alone is one iteration
+        solver=StubSolver(),
+        key=jax.random.PRNGKey(3),
+    )
+    assert f_calls == [], f_calls
+    assert res.n_batches == 1, res
+    assert res.n_points == 2, res
+
+
+def test_a_non_finite_gradient_start_arrives_stalled() -> None:
+    """A start is committed only when f *and* g are finite.
+
+    A finite f with a non-finite gradient is not a usable start: `p.g` is what
+    the method proposes from and folds on, so one NaN in it poisons that
+    coordinate's magnitude EMAs for the rest of the run. Such a start arrives
+    stalled exactly like a dead draw and waits for an EI verdict instead of
+    stepping.
+    """
+
+    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        f_vals, _grads = jax.vmap(pointwise)(x)
+        return f_vals, jnp.full_like(x, jnp.nan), None
+
+    solver = StubSolver()
+    res = n_path_schedule(
+        evaluate_batch,
+        bounds=unit_bounds(),
+        n_paths=2,
+        n_probe_evals=1,
+        max_iters=2,
+        solver=solver,
+        key=jax.random.PRNGKey(4),
+    )
+    # No path was ever live, so nothing stepped and nothing was judged.
+    assert solver.verdicts == [], solver.verdicts
+    assert solver.folds == [], solver.folds
+    assert res.status == "max_iters", res
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

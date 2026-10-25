@@ -604,21 +604,25 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         for an EI verdict instead of stepping). Returns the n starts; raises
         `_BudgetExhausted` if a probe batch is unaffordable.
 
-        With `evaluate_f` the draws are f-only and the winners' gradients come
-        from one fused batch afterwards, so a probe computes `g` once however
-        many draws it made, at the cost of one extra batch. Without it each
-        draw returns its own gradient - the one its start needs anyway - so
-        there is nothing to defer. Both paths keep the batch width at exactly
+        With `evaluate_f` and more than one draw the draws are f-only and the
+        winners' gradients come from one fused batch afterwards, so such a probe
+        computes `g` once however many draws it made. One draw has nothing to
+        defer - its single gradient is the one its start needs anyway - so a
+        lone draw keeps the fused path even when `evaluate_f` is given, and so
+        does a run without the seam. Both paths keep the batch width at exactly
         n: widening the f-only draw would multiply the peak activations, and a
         value built through a wide intermediate (a residual vector longer than
         d) can outgrow the fused batch's retained set, so the memory-neutral
         width is the one to keep.
         """
+        # Folding a single draw's gradient into a winner batch would serve that
+        # same point twice for nothing: with one draw the winner *is* the draw.
+        defer_g = evaluate_f is not None and n_probe_evals > 1
         groups = [draw_batch(n) for _ in range(n_probe_evals)]
         f_by_draw: list[list[float]] = []
         g_by_draw: list[jnp.ndarray] = []
         for x_cand in groups:
-            if evaluate_f is None:
+            if not defer_g:
                 f_vals, g_batch = _evaluate_batch(x_cand)
                 f_by_draw.append(f_vals)
                 g_by_draw.append(g_batch)
@@ -634,7 +638,7 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             # Its f is non-finite, so init/restart stalls this path on arrival
             # and only an EI verdict revives it.
             picks.append((0 if best is None else best, j))
-        if evaluate_f is None:
+        if not defer_g:
             return [
                 PathPoint(groups[r][j], f_by_draw[r][j], g_by_draw[r][j])
                 for r, j in picks
@@ -679,9 +683,9 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         The event's group-min list extends the rule's one shared payoff pool;
         the method's and the rule's per-path state reset to cold start, while
         that pool is kept (same sampler, new trajectories). A path whose fresh
-        group-min is non-finite arrives stalled and waits for the next EI
-        verdict. The probe is this iteration's move for every restarted path,
-        finite or not, so none of them also steps.
+        group-min has a non-finite f *or* gradient arrives stalled and waits for
+        the next EI verdict. The probe is this iteration's move for every
+        restarted path, finite or not, so none of them also steps.
         """
         starts = probe_select(len(idxs))
         for point in starts:  # the event's group-mins extend the shared pool
@@ -690,7 +694,14 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             points[i] = point
             solver.restart(i, point)
             restart_rule.restart(i)  # the next Δ opens this path's next stage
-            stalled[i] = not math.isfinite(point.f)
+            # Both halves gate the start, not just f: a finite f with a
+            # non-finite gradient is proposed from (`-p.g`) and folded on
+            # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
+            # magnitude EMAs for the rest of the run. Its g is left as served -
+            # a stalled path never proposes, and a revival probes over it.
+            stalled[i] = not (
+                math.isfinite(point.f) and bool(jnp.all(jnp.isfinite(point.g)))
+            )
             prev_f[i] = point.f
         just_restarted.update(idxs)
 

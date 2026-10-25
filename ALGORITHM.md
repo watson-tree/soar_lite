@@ -198,9 +198,15 @@ observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本�
 判决两侧买的东西并不相等：一次探测花 `n_probe_evals` 个批、算 `n_probe_evals` 次梯度，而一步只算
 一次梯度（默认 `n_alpha=1`）。真正吃重的是**梯度次数**（g 约为 f 的 2–5 倍），所以 `n_probe_evals > 1`
 必须接 f-only 求值器 `evaluate_f`：探测先服务 `n_probe_evals` 个只有值的批，再对每列的赢家补一个
-value+grad 批，两侧就都只算一次梯度。不接就直接抛 `ValueError`——引擎看得见
+value+grad 批，两侧就都只算一次梯度。延迟与否看**抽数**而不是看接没接 seam：单抽没有“输家的梯度”可
+延迟（赢家就是那一次抽样），所以 `n_probe_evals == 1` 即使接了 `evaluate_f` 也走融合批，否则同一个点
+会白白被服务两次。不接就直接抛 `ValueError`——引擎看得见
 `solver` 有 `n_alpha` 这个成员，看不见它的值，只能把「没接 seam ⇒ 单抽探测」当作保守代理；默认值
 因此是 1。剩下的只是便宜的 f 计数差（完整推导见 `docs/PLAN.md`）。
+
+探测点要能在优化里用，`f` 和 `g` **两半都得有限**才算数：`f` 有限但梯度非有限的起点会被 `propose`
+读取（`-p.g`）并进 `fold`（`best.g - p.g`），一个 NaN 就能把那个坐标的量级 EMA 永久毒死。这样的
+起点按「死抽」处理、到达即 stalled，等 EI 判决复活。
 
 ### 3.3 单一 argmin 所有者与 `fold`
 
@@ -324,10 +330,12 @@ live 路径同批前进；引擎就这么空转到 `max_iters`/`time_limit` 停�
 
 - 接缝真的被驱动（而不是走默认）：`test_injected_solver_is_driven`、`test_injected_rule_is_driven`。
 - f-only 求值器接缝：`test_f_only_probe_computes_one_gradient_per_probe`（`n_probe_evals` 个只有值的批
-  + 一个赢家批，赢家仍是逐列 group-min；只有赢家批计费）、`test_multi_draw_probe_is_refused_without_the_f_only_seam`
+  + 一个赢家批，赢家仍是逐列 group-min；只有赢家批计费）、`test_a_single_draw_probe_keeps_the_fused_path`
+  （单抽不延迟：接了 seam 也不调 `evaluate_f`）、`test_multi_draw_probe_is_refused_without_the_f_only_seam`
   （不接 seam 时多抽必拒）、`test_the_gate_counts_g_batches_not_f_only_draws`（闸只数 g 批，f-only 抽
-  照样发生却不进账）
-  （不接就拒）。
+  照样发生却不进账）。
+- 起点要两半都有限：`test_a_non_finite_gradient_start_arrives_stalled`（`f` 有限、`g` 全 NaN 的
+  group-min 不进线搜索，直接 stalled 等 EI）。
 - 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
   `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
 - `stalled` 语义：`test_give_up_stalls_a_path`、`test_stalled_paths_wait_for_ei_then_restart`、

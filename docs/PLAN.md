@@ -36,13 +36,13 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
 - Docstrings: `n_path_schedule` carries `Args` + a runnable `Example`;
   `DiagonalPreconditioner.__init__` documents every knob.
 
-## Restart-cost symmetry — f-only (landed, uncommitted); horizon=1 (landed)
+## Restart-cost symmetry — f-only (landed); horizon=1 (landed)
 
 Not an ADR yet; the durable record of a decision + its in-progress refactor.
 The verdict's evidence (`observe_continue` Δ, `observe_restart` payoff, the
 incumbent) is f-only; `g` is needed only to propose the step direction (the
 start's `g`, free) and to fold the committed point's secant. Gradient-sweeping
-the losing points is pure waste. Two coupled moves:
+the losing points is pure waste. The moves:
 
 - **f-only evaluation (opt-in, landed).** A keyword-only
   `evaluate_f: EvaluateF | None = None` seam: points in, `(f, feas?)` out. The
@@ -61,12 +61,23 @@ the losing points is pure waste. Two coupled moves:
   f-only), collapsing that asymmetry and leaving only the cheap f-count to
   match. So `evaluate_f is None and n_probe_evals != 1`
   raises `ValueError` at entry, and the default becomes `n_probe_evals = 1`.
+  Deferral is keyed on depth, not on the seam: with a single draw there is no
+  losing gradient to defer (the winner *is* the draw), so `n_probe_evals == 1`
+  takes the fused path even when `evaluate_f` is supplied — otherwise the point
+  would be served twice for nothing.
   Consequences: under that default a restart payoff is a single fresh draw, not
   a min-of-n group-min — the "pinned 2 (empirical)" advice in the docstring
   moves to "2 iff you also pass `evaluate_f`", and the Phase A–D numbers were
   measured at 2. With `evaluate_f`,
   `n_alpha != n_probe_evals` is the cheap, bounded (f-only) asymmetry that is
   accepted, not banned.
+- **A start needs both halves finite (landed).** A probe start is committed
+  only when `f` *and* `g` are finite: a finite `f` with a non-finite gradient
+  is proposed from (`-p.g`) and folded on (`best.g - p.g`), so one NaN in it
+  poisons that coordinate's magnitude EMAs for the rest of the run. Such a
+  start arrives stalled, like a dead draw, and waits for an EI verdict. The
+  step side already gated trials on `f` and `g` together; this closes the same
+  hole on the probe side.
 - **Iteration clock stays; a work clock never lands.** A cost-denominated
   horizon would denominate in runtime state (how many paths restarted or
   stalled), which is not JIT-static — a restarted flock's size differs from
@@ -184,6 +195,26 @@ whole waits out its verdict cadence (the cheap fix is to restart every path once
 the flock stalls). The case that really needs it is a dead pool - a first probe
 that comes back all-non-finite, where `EI_restart = 0` and no verdict revives
 the paths.
+
+Deferred, and why: **f-only line search.** The trial's `g` is pure waste when the
+trial loses - warm-up backtracks and every non-argmin sample of an `n_alpha` grid
+pay a gradient the run never folds. Deferring it the way a probe does (serve `f`,
+let the winner be chosen, then pay one fused batch) would need the engine to know
+whether *this* step does more than one trial, and it cannot: `n_alpha` lives in
+the solver, and the seam deliberately reads presence, not member values. Keying
+the deferral on `n_alpha == 1` is therefore not expressible engine-side, and at
+the default `n_alpha = 1` there is nothing to defer anyway (the single trial is
+the winner, and f-only would serve it twice). The clean home for this is a
+solver-side protocol ("this batch needs values only"), which is not worth
+extending for a cost the default configuration never pays.
+
+Deferred: **retire `max_ls`.** It is an engine-side cap on a loop the solver
+owns - the same quantity as `n_alpha`, on the wrong side of the seam. The step
+loop can be `while True` like the run loop, with termination a stated contract
+(`verdict` must eventually return `accept` or `give_up`) instead of an engine
+failsafe; `DiagonalPreconditioner`'s Armijo backtracking terminates on its own,
+and its grid is already capped by `n_alpha`. Cost of removing it: the migration bullet
+below stops quoting an engine-side bound for one iteration's batches.
 
 ## Next
 
