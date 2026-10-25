@@ -56,7 +56,8 @@ class EIRestartRule(RestartRule):
     estimate the same global value from a shorter sample. NaN/inf Δ are kept in
     a path's stage but never read (guard), and still count towards the window.
     The incumbent B is a should_restart argument, not a field (the engine owns
-    B).
+    B), and it is the raw minimum: unfiltered, like the payoffs in the pool and
+    like the `f_k` it is compared with.
     """
 
     def __init__(self) -> None:
@@ -95,8 +96,8 @@ class EIRestartRule(RestartRule):
         last verdict, and the stage closes here whichever way the verdict goes -
         the gate is what opens a verdict, so a stage left open would be re-asked
         unchanged every iteration. A full stage also closes while there is no
-        incumbent (B = inf): the verdict has nothing to compare against yet, and
-        the engine owns B.
+        incumbent (B = inf, i.e. no finite point of any kind served yet): the
+        verdict has nothing to compare against, and the engine owns B.
 
         Cold start is the one verdict that is not the EI comparison: with an
         empty payoff pool there is no restart evidence at all, so this returns

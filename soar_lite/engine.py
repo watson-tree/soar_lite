@@ -135,7 +135,12 @@ class RestartRule(Protocol):
     verdicts; the evidence lives inside the instance and the engine never reads
     it. The incumbent B arrives as a should_restart argument rather than as
     stored state, so the engine stays the only writer of B and every verdict
-    reads the incumbent of its own iteration.
+    reads the incumbent of its own iteration. That B is the run's **raw**
+    minimum - over every finite point served, feasible or not - because the
+    rule's own evidence is unfiltered: `f_k` and the payoffs in its pool are raw
+    values, and a probe group-min cannot be filtered by feasibility without
+    dropping the event. The feasible minimum the run reports as `fun` is a
+    different number whenever a batch carries a feasibility mask.
 
     The engine offers exactly two evidence channels, and the signatures say
     which is which: `observe_continue(i, delta)` is per-path (what continuing
@@ -187,6 +192,9 @@ class RestartRule(Protocol):
         pool), which is what triggers the initialization probe. An empty pool
         is the true cold start; a pool that exists but is entirely non-finite
         is evidence of a dead start and must not be re-probed.
+
+        B is the raw minimum (see the class docstring) and `f_k` is path i's
+        current value in the same unfiltered terms.
         """
         ...
 
@@ -534,7 +542,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         # refusal mid-iteration arrives as _BudgetExhausted below instead.
         if not budget.accept():
             break
-        to_restart = paths.restart_votes(incumbent.fun)
+        to_restart = paths.restart_votes(incumbent.fun_raw)
         try:
             # An iteration restarts a path or advances it, not both: a path that
             # restarted moved by its probe and does not also step, and both halves
@@ -666,17 +674,27 @@ class _Budget:
 
 
 class _Incumbent:
-    """B, the incumbent: the best feasible finite point served so far.
+    """The two bests the run keeps: what it reports, and what a verdict reads.
 
-    Defined over feasible designs only - with no aux, every point is feasible -
-    and over finite values only, so a NaN or inf trial neither becomes B nor
-    displaces one. It is the objective every restart verdict is asked against,
-    which is why it starts at inf: until something feasible arrives, no verdict
-    has anything to compare against.
+    `fun`/`x` are the answer: the minimum over feasible finite points served,
+    which is what the run reports. Defined over feasible designs only - with no
+    aux, every point is feasible - and over finite values only, so a NaN or inf
+    trial neither becomes B nor displaces one. It starts at inf: until something
+    feasible arrives there is no answer to report.
+
+    `fun_raw` is the same minimum with the feasibility filter removed: every
+    finite point served, feasible or not. A restart verdict is asked against it
+    rather than against `fun`, because the evidence on both sides of a verdict is
+    unfiltered - `f_k` is the path's own served value and each payoff in the
+    rule's pool is a probe group-min wherever the sampler landed, and a probe
+    cannot be filtered by feasibility without dropping the event. A filtered B
+    read against unfiltered evidence would put the two sides of one verdict on
+    different scales.
     """
 
     def __init__(self, d: int | None) -> None:
         self.fun = math.inf
+        self.fun_raw = math.inf
         # d is the sampler's business: when the box does not supply it, this is
         # an empty placeholder until the first served point fills it in.
         self.x = jnp.full(0 if d is None else d, math.nan)
@@ -684,7 +702,10 @@ class _Incumbent:
     def observe(
         self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None
     ) -> None:
-        """Fold one served batch's feasible finite values in."""
+        """Fold one served batch's finite values into both bests."""
+        j_raw = _argmin_finite(f_vals)
+        if j_raw is not None and f_vals[j_raw] < self.fun_raw:
+            self.fun_raw = f_vals[j_raw]
         # With no aux a batch has no feasibility mask and every point counts.
         ok_feas = [True] * len(f_vals) if feas is None else feas.tolist()
         candidates = [j for j, feasible in enumerate(ok_feas) if feasible]

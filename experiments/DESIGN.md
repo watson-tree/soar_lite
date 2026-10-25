@@ -273,14 +273,14 @@ verdict is a pure tax. This is model mis-specification: the pool samples "what
 a random start is worth", which is a property of the landscape, while the
 restart payoff over B is a property of B and of where the feasible set sits.
 
-Open question the same reading raises: B and the payoff pool can disagree in
-kind. Both alternatives are free to sample infeasible points (the pool holds
-the engine's own penalized f), but B is the min over *feasible* points only
-(`inf` when none was served). The two EI sides are then compared against
-different scales. Either B should price infeasible samples too, or the pool
-should hold feasible-only payoffs; the rule cannot be consistent under both
-readings, and nothing downstream notices because the bias only shows up as a
-worse incumbent.
+Resolved: B was the min over feasible points only (`inf` when none was served),
+while both verdict alternatives are free to sample infeasible points. The engine
+now keeps two bests — `fun`/`x` (feasible, the reported answer) and `fun_raw`
+(every finite point) — and hands `fun_raw` to the verdict, so both sides of one
+comparison are unfiltered. Moving B was the only consistent direction: a probe
+group-min cannot be filtered by feasibility without dropping the restart event
+itself. No panel number moves, because every problem here is box-only (`feas` is
+`None`) and the two bests coincide.
 
 ### Ackley is a failure for every curve, not a loss for the preconditioner
 

@@ -333,8 +333,24 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     assert res.fun < 0.4, res.fun  # must slide near (1, 0), f=0.25
 
 
+class _RecordingIncumbent(EIRestartRule):
+    """An `EIRestartRule` that also logs the incumbent each verdict is asked.
+
+    Recording only: every decision is delegated, so the run is the default
+    rule's plus a log of what B it was handed.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.bs: list[float] = []
+
+    def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
+        self.bs.append(incumbent)
+        return super().should_restart(i, f_k, incumbent)
+
+
 def test_feasible_only_incumbent() -> None:
-    """B (incumbent) is the min over *feasible* points, not the raw min.
+    """The reported B is the feasible min; the one a verdict reads is raw.
 
     f = (θ-0.2)^2 has its global min at θ=0.2, which the feas mask marks
     infeasible (θ <= 0.5); the best feasible design is θ=0.5+ (f 0.09). The
@@ -364,6 +380,7 @@ def test_feasible_only_incumbent() -> None:
     def budget_check() -> bool:
         return evals < 600
 
+    rule = _RecordingIncumbent()
     res = n_path_schedule(
         evaluate_batch,
         bounds=unit_bounds(),
@@ -371,6 +388,7 @@ def test_feasible_only_incumbent() -> None:
         max_iters=100,
         budget_check=budget_check,
         solver=HalfStep(),
+        restart_rule=rule,
         key=jax.random.PRNGKey(5),
     )
 
@@ -378,9 +396,13 @@ def test_feasible_only_incumbent() -> None:
     assert feasible_f_vals, "no feasible point ever served"
     # the raw min sits in the infeasible basin, below every feasible point
     assert min(all_f_vals) < min(feasible_f_vals)
-    # B must be exactly the best feasible point, never the raw min
+    # the reported answer is the best feasible point, never the raw min
     assert res.fun == min(feasible_f_vals)
     assert res.x[0] > thr  # the reported best lies on the feasible side
+    # ... and the verdict reads the raw min: a B below every feasible value can
+    # only have come from an infeasible point.
+    assert rule.bs, "a verdict was never asked"
+    assert min(rule.bs) < min(feasible_f_vals)
 
 
 def test_nan_first_candidate_does_not_mask_batch_min() -> None:

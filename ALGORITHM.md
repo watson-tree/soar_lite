@@ -155,7 +155,9 @@ EI_restart  = σ_r·[z·Φ(z) + φ(z)],  z = (B − μ_r)/σ_r     任一路径�
 `M = 1` 时两侧同时落到各自的退化形式（stage 一折无展布、池子一样本 `σ_r = 0`），此时任何一条重复
 都赢不了 `EI_continue ≥ 0`，重启本就发不出来，所以也没有必要把窗口垫到 2。
 
-判决谓词：`EI_restart > EI_continue` 且 incumbent 有限。非有限的 `Δf` 会留在 stage 里、但读的时候
+判决谓词：`EI_restart > EI_continue` 且 incumbent 有限。这里的 incumbent 是**全域**最优 `fun_raw`
+（所有有限样本、含不可行点），与 `f_k` 和池子里的 payoff 同口径；结果里报告的 `fun`/`x` 仍是
+可行域最优。非有限的 `Δf` 会留在 stage 里、但读的时候
 跳过（一个 `+inf` 样本会让均值与标准差变 `NaN`，而 `NaN > EI_continue` 恒为 `False`，等于静默关掉
 该路径的重启）。
 

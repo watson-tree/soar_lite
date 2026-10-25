@@ -56,7 +56,10 @@ or `give_up`.
 _Avoid_: line-search round (retired)
 
 **incumbent (B)**:
-The best feasible point seen so far. The engine is its sole owner.
+The best point seen so far, kept twice: `fun`/`x` is the best *feasible* point
+(the run's reported answer), `fun_raw` the best over every finite point served.
+Restart verdicts are asked against `fun_raw`, because both sides of a verdict
+(`f_k`, the payoff pool) are unfiltered. The engine is the sole owner of both.
 _Avoid_: best-so-far, current optimum
 
 **stall / stalled**:
@@ -111,7 +114,7 @@ _Avoid_: value oracle, cheap evaluator
 
 **feasibility mask**:
 The optional per-point boolean saying which served points may count toward the
-incumbent.
+reported incumbent (`fun`/`x`). `fun_raw` and the restart verdicts ignore it.
 _Avoid_: validity mask
 
 ### Local method
