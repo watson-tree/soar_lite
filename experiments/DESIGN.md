@@ -115,6 +115,13 @@ adaptive.
 
 ### Step-length calibration (done: the knob is real, the win is not)
 
+**Provenance: the numbers below were measured on the engine as it stood before
+the 0.1.0 refactor and have not been re-measured since.** They are the evidence
+behind the verdict, not current benchmarks — the canonical command reproduces
+none of them, and the sweeps behind them were ad hoc. The verdict they support
+is architectural (direction, not length), so a stale number does not retract
+it; treat any figure here as a floor on effort, not as a reproducible result.
+
 The verdict, measured on one landscape before any library default moved: **on
 the rotated quadratic the full step is already the right length, and no scalar
 step rescaling helps.**
@@ -235,3 +242,73 @@ complement each other; the headline must not be counted as covering the funnel
 slot. Watch whether the diagonal approximation's "approximately right, not
 exact" banded coupling actually lands the discriminator on soar-lite's side — a
 two-curve self-check decides before the full run.
+
+## Reading the 0.1.0 rerun
+
+The figures were re-run on the refactored engine (20 seeds, 3000 batches). Adam
+and L-BFGS-B came back bit-identical — the harness did not move — so every
+shift below is engine-side. Three readings should travel with the plots.
+
+### Multi-path loses to single-path on a single-basin problem
+
+Oscillator F20: `n_paths=1` reaches `7.7e-6`, `n_paths=16` `1.3e-4` (17x worse;
+the pre-refactor run already had the same direction, `4.4e-6` vs `1.6e-5`). The
+cause is the restart rule, not the width. With 16 paths the payoff pool holds
+16 i.i.d. start values (`lo 1.7`, `hi 39`, `mu_r 7.0`, `sigma_r 9.0`) while the
+incumbent is `B = 0.054`, so `z = (B - mu_r)/sigma_r = -0.77` and
+the EI model prices one restart as `1.14` — a 20x improvement offered by an
+action whose entire observed history was 30x worse than B. The dispersion of a
+wide start sample puts `z` near the EI hump, so `EI_restart` stays large
+precisely because n_paths is large. `EI_continue` meanwhile decays with the
+path's own stage (`3.2 -> 0.02` as it converges), and an iteration restarts a
+path or advances it, never both. Measured: 292 restarts in 3000 batches (one
+every ~10 iterations, 116 of the batches spent on probes), final incumbent 17x
+worse.
+
+The single-path curve is the degenerate corner, not the control: a pool of one
+sample gives `sigma_r = 0`, so `EI_restart = max(B - mu_r, 0) = 0` exactly and
+the same rule never restarts. `n_paths=16` is the only configuration where the
+verdict is actually exercised — and on a single-basin problem the greedy
+verdict is a pure tax. This is model mis-specification: the pool samples "what
+a random start is worth", which is a property of the landscape, while the
+restart payoff over B is a property of B and of where the feasible set sits.
+
+Open question the same reading raises: B and the payoff pool can disagree in
+kind. Both alternatives are free to sample infeasible points (the pool holds
+the engine's own penalized f), but B is the min over *feasible* points only
+(`inf` when none was served). The two EI sides are then compared against
+different scales. Either B should price infeasible samples too, or the pool
+should hold feasible-only payoffs; the rule cannot be consistent under both
+readings, and nothing downstream notices because the bias only shows up as a
+worse incumbent.
+
+### Ackley is a failure for every curve, not a loss for the preconditioner
+
+Ackley d=100 at 3000 batches: `n_paths=16` 19.47, Adam 19.57, `n_paths=1`
+19.78, against `f* = 0`. All three miss the funnel; 19.5-19.9 is what Ackley
+looks like outside it, and the 1% spread only says where each froze.
+`n_paths=1` is bit-flat from batch 781 on: the diagonal secant has nothing to
+act on where the gradient is a ~1e-8 radial term buried in cos-frequency noise,
+so Armijo keeps shrinking `alpha` until it commits a no-op step. That is the
+designed boundary of a first-order diagonal preconditioner, not a tuning
+failure — no saddle/vanishing-gradient handling is built in (a Zhang-Li power
+iteration triggered on a small gradient norm was considered and rejected:
+multi-path sampling plus restart already cover that regime, so the extra
+complexity would buy nothing). `n_paths=16`'s 0.1 edge over Adam is brute-force
+best-of-16 starts, which is why a working restart-and-sample story is expected
+to show up rather than suspicious.
+
+### The unit-rescaling residual is exactly the warm-up
+
+Diag quadratic d=100, `x' = 10x`, zero retune: soar-lite lands at `3.3e-65` in
+19 points (base) and `1.6e-65` in 12 (rescaled); Adam goes `2.0e-63` vs
+`7.2e-5`, 58 orders apart. The panel claims outcome-level overlap, and it holds
+— 2x in f at a floor of machine zero, against 58 orders for a single-lr method.
+The 1.6x in points is fully explained and not noise: the warm-up step is
+`alpha0 * (-g)`, unpreconditioned, so under `x' = s x` its physical length
+scales as `1/s^2`, and the base system needs `ceil(log2(s^2)) = 7` more Armijo
+halvings. Measured: base is rejected 12 times, the rescaled system 5 — exactly
+7 apart — and after the first acceptance both need exactly 6 points to reach
+their floor. The visible horizontal shift is therefore a first-step artefact,
+not path-dependent optimization; removing it needs a scale-free warm-up, which
+the secant cannot provide before it has its first pair.
