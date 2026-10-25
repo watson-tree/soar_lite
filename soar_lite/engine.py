@@ -3,9 +3,11 @@
 This module is the seam (拍板) of soar_lite: it owns the two plugin contracts
 (`LocalSolver` and `RestartRule`), the data the plugins exchange (`PathPoint`,
 `Verdict`), and the shared plumbing (`NPathResult`, the box/prior/evaluator
-seams, the `_argmin_finite` helper, the state holder `_Budget`, and the
-`n_path_schedule` loop). Concretes import *from*
-here, never the other way around at module level:
+seams, and the `n_path_schedule` loop). The run's state lives in five private
+holders, one per state family: `_Sampler` (the draws), `_Evaluator` (the two
+seams and the one charged site), `_Paths` (the n-path state machine),
+`_Incumbent` (B), and `_Budget` (the stop meter and work report). Concretes
+import *from* here, never the other way around at module level:
 
     soar_lite/
       engine.py   <- LocalSolver, RestartRule, PathPoint, Verdict, n_path_schedule
@@ -281,9 +283,8 @@ class NPathResult:
     status: NPathStatus
 
 
-def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
-    # orchestration: knobs + seams + per-iteration dispatch, with the shared
-    # state that could move out already moved - _Budget)
+def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
+    # after the one positional seam: one name per dial beats a config object here)
     evaluate_batch: BatchEvaluator,
     *,
     evaluate_f: EvaluateF | None = None,
@@ -471,44 +472,14 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
             0.0
 
     """
-    # The caller's own inputs are checked here, once per run - the only place
-    # a human hands this engine something. Nothing below re-checks them.
-    for name, value, low in (
-        ("n_paths", n_paths, 1),
-        ("n_probe_evals", n_probe_evals, 1),
-    ):
-        if value < low:
-            msg = f"{name} must be >= {low}, got {value}"
-            raise ValueError(msg)
-    if max_iters is not None and max_iters < 0:
-        msg = f"max_iters must be >= 0, got {max_iters}"
-        raise ValueError(msg)
-    if time_limit is not None and time_limit <= 0:
-        msg = f"time_limit must be > 0, got {time_limit}"
-        raise ValueError(msg)
-    if max_iters is None and time_limit is None:
-        msg = (
-            "a run needs a horizon: pass max_iters (iterations) or "
-            "time_limit (seconds); budget_check alone cannot stop a stalled "
-            "flock, since a stalled iteration serves no batch"
-        )
-        raise ValueError(msg)
-    _check_bounds(bounds)
-    if evaluate_f is None and n_probe_evals != 1:
-        # The verdict's expensive side is the gradient count, not the batch
-        # count: a probe computes `g` once per draw, a continue step once. The
-        # engine cannot see the solver's `n_alpha` (the seam checks presence,
-        # not members), so the exact symmetry `n_alpha == n_probe_evals` is out
-        # of reach. This is the conservative proxy it can express.
-        msg = (
-            f"n_probe_evals={n_probe_evals} without evaluate_f prices a probe "
-            f"at {n_probe_evals} gradients against one step's single gradient; "
-            "pass evaluate_f for multi-draw probes"
-        )
-        raise ValueError(msg)
-    # The random source: an explicit key wins, otherwise the fixed default, so
-    # an unseeded call still runs (deterministically).
-    rng: jnp.ndarray = jax.random.PRNGKey(0) if key is None else key
+    _validate_run(
+        n_paths=n_paths,
+        n_probe_evals=n_probe_evals,
+        max_iters=max_iters,
+        time_limit=time_limit,
+        bounds=bounds,
+        evaluate_f=evaluate_f,
+    )
     box = _box_bounds(bounds)
     d_bounds: int | None = None if box is None else box[0].shape[0]
     lo, hi = box if box is not None else (-math.inf, math.inf)
@@ -532,138 +503,26 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         draw: Sampler = default_sample
     else:
         draw = sample
+    # The random source: an explicit key wins, otherwise the fixed default, so
+    # an unseeded call still runs (deterministically). The sampler owns the
+    # draw's own d check - its d is a property of the callable, not of the
+    # draw, so a box mismatch is validated once, on the first draw.
+    sampler = _Sampler(
+        draw, d_bounds, jax.random.PRNGKey(0) if key is None else key
+    )
     budget = _Budget(max_iters, time_limit, budget_check)
     incumbent = _Incumbent(d_bounds)
-    # The sampler's d is a property of the callable, not of the draw, so a box
-    # mismatch is a wiring bug validated once - on the first draw - rather than
-    # re-checked on every probe draw.
-    d_checked = False
 
-    def _evaluate_batch(x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
-        """Serve one g batch, or raise `_BudgetExhausted` if it is unaffordable.
+    evaluator = _Evaluator(
+        evaluate_batch,
+        evaluate_f,
+        budget=budget,
+        incumbent=incumbent,
+        n_probe_evals=n_probe_evals,
+        sampler=sampler,
+    )
+    paths = _Paths(n_paths)
 
-        The gate is asked before the charge, so a batch is served whole or not
-        at all - no partial prefix of a batch is ever evaluated - and the
-        counters only ever hold g batches that were served. This is the run's
-        only charged site: a probe's extra draws are f-only and cheaper, and
-        are not budget events. The refusal is a signal, not a state: it unwinds
-        straight to the run's one catch, so no intermediate frame has to check
-        it. Returns (f_vals, g_batch).
-        """
-        if not budget.accept():
-            raise _BudgetExhausted
-        budget.charge(x_batch.shape[0])
-        f_batch, g_batch, feas = evaluate_batch(x_batch)
-        # per-path bookkeeping (secant/restart) stays Python float,
-        # so pull the batch values onto the host in one shot.
-        f_vals = f_batch.tolist()
-        incumbent.observe(f_vals, x_batch, feas)
-        return f_vals, g_batch
-
-    def _evaluate_f(x_batch: jnp.ndarray) -> list[float]:
-        """Serve one f-only batch: no gate asked, no charge, same bookkeeping.
-
-        A probe's extra draws are the f half alone, which is the cheap half, so
-        they are not budget events: the gate is not asked and the counters do
-        not move. Its winners' fused pass still is one, and a probe is entered
-        only after the loop head accepted the iteration, so the gate's blind
-        spot stays under one probe. Only `probe_select`'s f-only branch calls
-        this, which is why the `evaluate_f` assertion is here for the checker
-        rather than as a check.
-        """
-        assert evaluate_f is not None  # the f-only branch's own precondition
-        f_batch, feas = evaluate_f(x_batch)
-        f_vals = f_batch.tolist()
-        incumbent.observe(f_vals, x_batch, feas)
-        return f_vals
-
-    def draw_batch(n: int) -> jnp.ndarray:
-        """Draw n candidate points; the sampler's d is validated on first draw."""
-        nonlocal rng, d_checked
-        rng, sub = jax.random.split(rng)
-        x_cand = draw(sub, n)
-        if not d_checked:
-            d_checked = True
-            # The sampler is the only authority on d, so a mismatch with the
-            # box we were handed is the "two different Nones" wiring bug. Its
-            # d is a property of the callable, constant for the run, so one
-            # check on this first draw suffices.
-            if d_bounds is not None and x_cand.shape[1] != d_bounds:
-                msg = (
-                    f"the sampler drew d={x_cand.shape[1]} but bounds has d={d_bounds}"
-                )
-                raise ValueError(msg)
-        return x_cand
-
-    def probe_select(n: int) -> list[PathPoint]:
-        """Draw n_probe_evals groups of n points, return n group-min starts.
-
-        Each draw is one (n,d) batch sized exactly n, and every draw comes
-        from the same sampler, so the fixed column j across draws is already a
-        random group of n_probe_evals points; each group's min becomes one
-        start (x, f, grad), its value doubling as an {r_i} sample (a group with
-        no finite member keeps its draw-0 point and arrives stalled - it waits
-        for an EI verdict instead of stepping). Returns the n starts; raises
-        `_BudgetExhausted` if a probe batch is unaffordable.
-
-        With `evaluate_f` and more than one draw the draws are f-only and the
-        winners' gradients come from one fused batch afterwards, so such a probe
-        computes `g` once however many draws it made. One draw has nothing to
-        defer - its single gradient is the one its start needs anyway - so a
-        lone draw keeps the fused path even when `evaluate_f` is given, and so
-        does a run without the seam. Both paths keep the batch width at exactly
-        n: widening the f-only draw would multiply the peak activations, and a
-        value built through a wide intermediate (a residual vector longer than
-        d) can outgrow the fused batch's retained set, so the memory-neutral
-        width is the one to keep.
-        """
-        # Folding a single draw's gradient into a winner batch would serve that
-        # same point twice for nothing: with one draw the winner *is* the draw.
-        defer_g = evaluate_f is not None and n_probe_evals > 1
-        groups = [draw_batch(n) for _ in range(n_probe_evals)]
-        f_by_draw: list[list[float]] = []
-        g_by_draw: list[jnp.ndarray] = []
-        for x_cand in groups:
-            if not defer_g:
-                f_vals, g_batch = _evaluate_batch(x_cand)
-                f_by_draw.append(f_vals)
-                g_by_draw.append(g_batch)
-            else:
-                f_by_draw.append(_evaluate_f(x_cand))
-        # Finite-only group-min: a failed (non-finite) probe ranked before a
-        # real one would be selected as the start, poisoning that path's local
-        # method state for the rest of the run.
-        picks: list[tuple[int, int]] = []
-        for j in range(n):
-            best = _argmin_finite([f_by_draw[r][j] for r in range(n_probe_evals)])
-            # Whole group non-finite: keep draw 0 rather than invent a point.
-            # Its f is non-finite, so init/restart stalls this path on arrival
-            # and only an EI verdict revives it.
-            picks.append((0 if best is None else best, j))
-        if not defer_g:
-            return [
-                PathPoint(groups[r][j], f_by_draw[r][j], g_by_draw[r][j])
-                for r, j in picks
-            ]
-        winners = jnp.stack([groups[r][j] for r, j in picks])
-        f_win, g_win = _evaluate_batch(winners)
-        return [PathPoint(winners[i], f_win[i], g_win[i]) for i in range(n)]
-
-    # A path's point is one object, not three parallel lists: it is what every
-    # seam call takes, and a step commits one path at a time (so a list, whose
-    # item assignment is the commit, beats a stacked array). The placeholders
-    # are replaced by the initialization probe on iteration 0, before any path
-    # can step, so their empty coords and inf f are never served.
-    points = [PathPoint(jnp.zeros(0), math.inf, jnp.zeros(0)) for _ in range(n_paths)]
-    # Nothing has arrived yet, and a path that has not arrived is not stalled:
-    # iteration 0 probes every path before the step filter reads this.
-    stalled: list[bool] = [False] * n_paths
-    # Paths whose probe ran this iteration. They moved by the probe, so they
-    # do not also step: an iteration restarts a path or advances it, not both.
-    just_restarted: set[int] = set()
-    # The continue side's sample is one step, so the Δ it reports is
-    # points[i].f - prev_f[i]; a restart resets the anchor to the probe's f.
-    prev_f: list[float] = [math.inf] * n_paths
     # The seam check: presence, not signatures. The seam's own members run per
     # path per iteration and stay unvalidated.
     _check_seam(solver, LocalSolver, "solver")
@@ -679,140 +538,29 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
 
         restart_rule = EIRestartRule()
 
-    def apply_restarts(idxs: list[int]) -> None:
-        """Restart the given paths from one fresh probe-select event.
-
-        The event's group-min list extends the rule's one shared payoff pool;
-        the method's and the rule's per-path state reset to cold start, while
-        that pool is kept (same sampler, new trajectories). A path whose fresh
-        group-min has a non-finite f *or* gradient arrives stalled and waits for
-        the next EI verdict. The probe is this iteration's move for every
-        restarted path, finite or not, so none of them also steps.
-        """
-        starts = probe_select(len(idxs))
-        for point in starts:  # the event's group-mins extend the shared pool
-            restart_rule.observe_restart(point.f)
-        for i, point in zip(idxs, starts, strict=True):
-            points[i] = point
-            solver.restart(i, point)
-            restart_rule.restart(i)  # the next Δ opens this path's next stage
-            # Both halves gate the start, not just f: a finite f with a
-            # non-finite gradient is proposed from (`-p.g`) and folded on
-            # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
-            # magnitude EMAs for the rest of the run. Its g is left as served -
-            # a stalled path never proposes, and a revival probes over it.
-            stalled[i] = not (
-                math.isfinite(point.f) and bool(jnp.all(jnp.isfinite(point.g)))
-            )
-            prev_f[i] = point.f
-        just_restarted.update(idxs)
-
-    def advance_paths() -> None:
-        """Advance every path one move: restart it, or step it.
-
-        The iteration's restart votes are folded in here, so a verdict reads the
-        incumbent of its own iteration (the engine is B's only writer). A path
-        that restarted moved by its probe and does not also step. A refused
-        probe raises `_BudgetExhausted` out of here before the step runs.
-        """
-        to_restart = [
-            i
-            for i in range(n_paths)
-            if restart_rule.should_restart(i, points[i].f, incumbent.fun)
-        ]
-        if to_restart:
-            apply_restarts(to_restart)
-        step_paths()
-
-    def step_paths() -> None:
-        """One batched engine step for every path that steps this iteration.
-
-        The method proposes, the engine projects and serves, the method
-        judges, the engine commits. Trial passes run in lockstep over the
-        still-rejecting subset, each served whole or not at all (a budget
-        failure stops globally). A path's point is unchanged while it
-        rejects, so the point handed to propose/verdict is also the step's
-        start point. A path that just restarted is not a stepper: its probe was
-        this iteration's move. On return, a path is stalled exactly when it did
-        not move at all this iteration (no probe, no commit: its method gave up
-        on every trial).
-        """
-        active = [
-            i for i in range(n_paths) if not stalled[i] and i not in just_restarted
-        ]
-        if not active:
-            # Every path either waits for a verdict or already moved by its probe.
-            return
-        rejecting = list(active)
-        # Per-step argmin cache: "accept" commits the lowest-f finite trial
-        # served this step (not the last served one), so a method can sweep a
-        # step-length grid without re-evaluating its argmin. The engine is the
-        # sole owner of "who won": the method learns the winner only through
-        # the fold callback, never by tracking its own argmin (two copies
-        # would drift).
-        best: dict[int, PathPoint] = {}
-        # No engine-side trial cap: how long a step's enumeration may run is the
-        # method's own business (its convergence test, its own trial budget),
-        # and `verdict` is where it says so. A cap here would be a second,
-        # invisible stopping rule for a decision the method already owns.
-        while rejecting:
-            # The method proposes raw candidates; the engine clips them into
-            # `bounds`, so the caller's map never sees a point outside the
-            # box the engine advertised. The clipped step is the actual one, so
-            # verdict() is handed the served point.
-            raw = jnp.stack([solver.propose(i, points[i]) for i in rejecting])
-            x_trial = jnp.clip(raw, lo, hi)
-            f_trial, g_trial = _evaluate_batch(x_trial)
-            still_rejecting: list[int] = []
-            for pos, i in enumerate(rejecting):
-                point = points[i]
-                trial = PathPoint(x_trial[pos], f_trial[pos], g_trial[pos])
-                finite = math.isfinite(trial.f) and bool(jnp.all(jnp.isfinite(trial.g)))
-                if finite and (i not in best or trial.f < best[i].f):
-                    best[i] = trial
-                verdict = solver.verdict(i, point, trial)
-                if verdict == "accept":
-                    if i not in best:  # no finite sample served: nothing to win
-                        stalled[i] = True
-                    else:
-                        points[i] = best[i]
-                        solver.fold(i, point, best[i])
-                elif verdict == "retry":
-                    still_rejecting.append(i)
-                else:  # "give_up": the method's own convergence test fired
-                    stalled[i] = True
-            rejecting = still_rejecting
-
     # Iteration 0 is the initialization probe: the first pass sees no probe
     # evidence, so every rule's verdict is "restart" and the flock is seeded
-    # through the same apply_restarts path a later restart uses.
+    # through the same restart path a later restart uses.
     while True:
         # The horizon and the caller's gate are plain queries, asked before a new
         # iteration starts so the run never begins one it cannot finish. A
         # refusal mid-iteration arrives as _BudgetExhausted below instead.
         if not budget.accept():
             break
-        just_restarted.clear()
+        paths.begin_iteration()
         try:
-            advance_paths()
+            # An iteration restarts a path or advances it, not both: a path that
+            # restarted moved by its probe and does not also step. A refused
+            # probe raises `_BudgetExhausted` before the step runs.
+            to_restart = paths.restart_votes(restart_rule, incumbent.fun)
+            if to_restart:
+                paths.restart(to_restart, evaluator, solver, restart_rule)
+            paths.step(evaluator, solver, lo, hi)
         except _BudgetExhausted:
             # The iteration asked for a batch it could not afford and was cut
             # short: it did not finish, so it is not folded and not counted.
             break
-        # Every path folds one sample per iteration, stalled or not: a stalled
-        # path has no step to report, so its sample is inf ("no evidence"), and
-        # its own clock keeps advancing in step with its live cohort. A fully
-        # stalled flock therefore keeps folding inf until the horizon or the
-        # deadline ends the run - it is bounded by those, never by this loop.
-        for i in range(n_paths):
-            if i in just_restarted:
-                # The probe was this iteration's move, not a step: its first Δ
-                # belongs to the next iteration, so leave the anchor at the
-                # probe's f rather than reading the probe back as a zero-step.
-                continue
-            delta = math.inf if stalled[i] else points[i].f - prev_f[i]
-            restart_rule.observe_continue(i, delta)
-            prev_f[i] = points[i].f
+        paths.observe(restart_rule)
         budget.tick()  # counted after the body: only finished iterations
 
     return NPathResult(
@@ -823,6 +571,37 @@ def n_path_schedule(  # noqa: PLR0912, PLR0913, PLR0915, C901 (the run's own
         n_iters=budget.n_iters,
         status=budget.stop_status(),
     )
+
+
+class _Sampler:
+    """The run's one random source: the prior plus the draw's own d check.
+
+    Holds the splitting key and the invariant that the sampler's d is a
+    property of the callable, not of the draw, so a box mismatch is a wiring
+    bug caught once rather than on every probe draw.
+    """
+
+    def __init__(self, draw: Sampler, d_bounds: int | None, key: jnp.ndarray) -> None:
+        self._draw = draw
+        self._d_bounds = d_bounds
+        self._key = key
+        self._checked = False
+
+    def batch(self, n: int) -> jnp.ndarray:
+        """Draw n candidate points; the sampler's d is validated on first draw."""
+        self._key, sub = jax.random.split(self._key)
+        x_cand = self._draw(sub, n)
+        if not self._checked:
+            # d is a property of the callable, constant for the run: one check
+            # after the first draw suffices.
+            self._checked = True
+            if self._d_bounds is not None and x_cand.shape[1] != self._d_bounds:
+                msg = (
+                    f"the sampler drew d={x_cand.shape[1]} but bounds has "
+                    f"d={self._d_bounds}"
+                )
+                raise ValueError(msg)
+        return x_cand
 
 
 class _Incumbent:
@@ -861,7 +640,7 @@ class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
     """A batch was requested past a closed gate.
 
     Raised only inside `n_path_schedule`, at the run's one charged site
-    (`_evaluate_batch`), and caught by the loop. It carries
+    (`_Evaluator.batch`), and caught by the loop. It carries
     nothing: the run's status is derived from the same queries, and an unserved
     batch is never charged, so they name the gate correctly.
     """
@@ -933,6 +712,302 @@ class _Budget:
         return "time_limit" if self.expired() else "budget_exhausted"
 
 
+class _Evaluator:
+    """The run's evaluation seams, and what they charge and observe.
+
+    Both halves share one rule, stated here once so no call site has to restate
+    it: a fused `batch` is the run's only charged site (the gate is asked before
+    the charge, so a batch is served whole or not at all), and an `f_only` draw
+    is cheaper work that is not a budget event. Whichever half served a point
+    updates the incumbent. `probe_select` lives here too: a probe is draw-then-
+    evaluate, and its depth and deferral are properties of this seam, not of a
+    path.
+    """
+
+    def __init__(  # noqa: PLR0913 - the run's collaborators, assembled once
+        self,
+        evaluate_batch: BatchEvaluator,
+        evaluate_f: EvaluateF | None,
+        *,
+        budget: _Budget,
+        incumbent: _Incumbent,
+        n_probe_evals: int,
+        sampler: _Sampler,
+    ) -> None:
+        self._evaluate_batch = evaluate_batch
+        self._evaluate_f = evaluate_f
+        self._budget = budget
+        self._incumbent = incumbent
+        self._n_probe_evals = n_probe_evals
+        self._sampler = sampler
+
+    def batch(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
+        """Serve one g batch, or raise `_BudgetExhausted` if it is unaffordable.
+
+        The gate is asked before the charge, so a batch is served whole or not
+        at all - no partial prefix of a batch is ever evaluated - and the
+        counters only ever hold g batches that were served. This is the run's
+        only charged site: a probe's extra draws are f-only and cheaper, and
+        are not budget events. The refusal is a signal, not a state: it unwinds
+        straight to the run's one catch, so no intermediate frame has to check
+        it. Returns (f_vals, g_batch).
+        """
+        if not self._budget.accept():
+            raise _BudgetExhausted
+        self._budget.charge(x_batch.shape[0])
+        f_batch, g_batch, feas = self._evaluate_batch(x_batch)
+        # per-path bookkeeping (secant/restart) stays Python float,
+        # so pull the batch values onto the host in one shot.
+        f_vals = f_batch.tolist()
+        self._incumbent.observe(f_vals, x_batch, feas)
+        return f_vals, g_batch
+
+    def f_only(self, x_batch: jnp.ndarray) -> list[float]:
+        """Serve one f-only batch: no gate asked, no charge, same bookkeeping.
+
+        A probe's extra draws are the f half alone, which is the cheap half, so
+        they are not budget events: the gate is not asked and the counters do
+        not move. Its winners' fused pass still is one, and a probe is entered
+        only after the loop head accepted the iteration, so the gate's blind
+        spot stays under one probe. Only `probe_select`'s f-only branch calls
+        this, which is why the `evaluate_f` assertion is here for the checker
+        rather than as a check.
+        """
+        assert self._evaluate_f is not None  # the f-only branch's precondition
+        f_batch, feas = self._evaluate_f(x_batch)
+        f_vals = f_batch.tolist()
+        self._incumbent.observe(f_vals, x_batch, feas)
+        return f_vals
+
+    def probe_select(self, n: int) -> list[PathPoint]:
+        """Draw n_probe_evals groups of n points, return n group-min starts.
+
+        Each draw is one (n,d) batch sized exactly n, and every draw comes
+        from the same sampler, so the fixed column j across draws is already a
+        random group of n_probe_evals points; each group's min becomes one
+        start (x, f, grad), its value doubling as an {r_i} sample (a group with
+        no finite member keeps its draw-0 point and arrives stalled - it waits
+        for an EI verdict instead of stepping). Returns the n starts; raises
+        `_BudgetExhausted` if a probe batch is unaffordable.
+
+        With `evaluate_f` and more than one draw the draws are f-only and the
+        winners' gradients come from one fused batch afterwards, so such a probe
+        computes `g` once however many draws it made. One draw has nothing to
+        defer - its single gradient is the one its start needs anyway - so a
+        lone draw keeps the fused path even when `evaluate_f` is given, and so
+        does a run without the seam. Both paths keep the batch width at exactly
+        n: widening the f-only draw would multiply the peak activations, and a
+        value built through a wide intermediate (a residual vector longer than
+        d) can outgrow the fused batch's retained set, so the memory-neutral
+        width is the one to keep.
+        """
+        # Folding a single draw's gradient into a winner batch would serve that
+        # same point twice for nothing: with one draw the winner *is* the draw.
+        defer_g = self._evaluate_f is not None and self._n_probe_evals > 1
+        groups = [self._sampler.batch(n) for _ in range(self._n_probe_evals)]
+        f_by_draw: list[list[float]] = []
+        g_by_draw: list[jnp.ndarray] = []
+        for x_cand in groups:
+            if not defer_g:
+                f_vals, g_batch = self.batch(x_cand)
+                f_by_draw.append(f_vals)
+                g_by_draw.append(g_batch)
+            else:
+                f_by_draw.append(self.f_only(x_cand))
+        # Finite-only group-min: a failed (non-finite) probe ranked before a
+        # real one would be selected as the start, poisoning that path's local
+        # method state for the rest of the run.
+        picks: list[tuple[int, int]] = []
+        for j in range(n):
+            best = _argmin_finite(
+                [f_by_draw[r][j] for r in range(self._n_probe_evals)]
+            )
+            # Whole group non-finite: keep draw 0 rather than invent a point.
+            # Its f is non-finite, so init/restart stalls this path on arrival
+            # and only an EI verdict revives it.
+            picks.append((0 if best is None else best, j))
+        if not defer_g:
+            return [
+                PathPoint(groups[r][j], f_by_draw[r][j], g_by_draw[r][j])
+                for r, j in picks
+            ]
+        winners = jnp.stack([groups[r][j] for r, j in picks])
+        f_win, g_win = self.batch(winners)
+        return [PathPoint(winners[i], f_win[i], g_win[i]) for i in range(n)]
+
+
+class _Paths:
+    """The n-path state machine: one point, one anchor and one stall flag per path.
+
+    The invariants that four sites of the loop used to carry implicitly, stated
+    once here instead:
+
+    - A path that restarted this iteration moved by its probe, so it does not
+      also step, and its continue observation is skipped: its first Δ belongs
+      to the next iteration, so the probe is never read back as a zero-length
+      step. `just_restarted` carries that for the iteration.
+    - A path is stalled when it did not move at all this iteration - its method
+      gave up on every trial, or its fresh start was not a usable point. A
+      stalled path does not step and feeds `inf` to the rule ("no evidence"), so
+      its own clock keeps advancing in step with its live cohort.
+    - A start gates on both halves: a finite f with a non-finite gradient is
+      proposed from (`-p.g`) and folded on (`best.g - p.g`), so one NaN in it
+      would poison that coordinate's magnitude EMAs for the rest of the run.
+    """
+
+    def __init__(self, n_paths: int) -> None:
+        self.n_paths = n_paths
+        # A path's point is one object, not three parallel lists: it is what
+        # every seam call takes, and a step commits one path at a time (so a
+        # list, whose item assignment is the commit, beats a stacked array). The
+        # placeholders are replaced by the initialization probe on iteration 0,
+        # before any path can step, so their empty coords and inf f are never
+        # served.
+        self.points = [
+            PathPoint(jnp.zeros(0), math.inf, jnp.zeros(0)) for _ in range(n_paths)
+        ]
+        # Nothing has arrived yet, and a path that has not arrived is not
+        # stalled: iteration 0 probes every path before the step filter reads it.
+        self.stalled: list[bool] = [False] * n_paths
+        # Paths whose probe ran this iteration.
+        self.just_restarted: set[int] = set()
+        # The continue side's sample is one step, so the Δ it reports is
+        # points[i].f - prev_f[i]; a restart resets the anchor to the probe's f.
+        self.prev_f: list[float] = [math.inf] * n_paths
+
+    def begin_iteration(self) -> None:
+        """Drop last iteration's probe marks before this iteration's votes."""
+        self.just_restarted.clear()
+
+    def restart_votes(self, restart_rule: RestartRule, incumbent: float) -> list[int]:
+        """Paths whose restart rule fires against the current incumbent."""
+        return [
+            i
+            for i in range(self.n_paths)
+            if restart_rule.should_restart(i, self.points[i].f, incumbent)
+        ]
+
+    def restart(
+        self,
+        idxs: list[int],
+        evaluator: _Evaluator,
+        solver: LocalSolver,
+        restart_rule: RestartRule,
+    ) -> None:
+        """Restart the given paths from one fresh probe-select event.
+
+        The event's group-min list extends the rule's one shared payoff pool;
+        the method's and the rule's per-path state reset to cold start, while
+        that pool is kept (same sampler, new trajectories). A path whose fresh
+        group-min has a non-finite f *or* gradient arrives stalled and waits for
+        the next EI verdict. The probe is this iteration's move for every
+        restarted path, finite or not, so none of them also steps.
+        """
+        starts = evaluator.probe_select(len(idxs))
+        for point in starts:  # the event's group-mins extend the shared pool
+            restart_rule.observe_restart(point.f)
+        for i, point in zip(idxs, starts, strict=True):
+            self.points[i] = point
+            solver.restart(i, point)
+            restart_rule.restart(i)  # the next Δ opens this path's next stage
+            # Both halves gate the start, not just f: a finite f with a
+            # non-finite gradient is proposed from (`-p.g`) and folded on
+            # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
+            # magnitude EMAs for the rest of the run. Its g is left as served -
+            # a stalled path never proposes, and a revival probes over it.
+            self.stalled[i] = not (
+                math.isfinite(point.f) and bool(jnp.all(jnp.isfinite(point.g)))
+            )
+            self.prev_f[i] = point.f
+        self.just_restarted.update(idxs)
+
+    def step(
+        self,
+        evaluator: _Evaluator,
+        solver: LocalSolver,
+        lo: jnp.ndarray | float,
+        hi: jnp.ndarray | float,
+    ) -> None:
+        """One batched engine step for every path that steps this iteration.
+
+        The method proposes, the engine projects and serves, the method judges,
+        the engine commits. Trial passes run in lockstep over the still-
+        rejecting subset, each served whole or not at all (a budget failure
+        stops globally). A path's point is unchanged while it rejects, so the
+        point handed to propose/verdict is also the step's start point. On
+        return, a path is stalled exactly when it moved by no probe and
+        committed no point: its method found nothing to win.
+        """
+        active = [
+            i
+            for i in range(self.n_paths)
+            if not self.stalled[i] and i not in self.just_restarted
+        ]
+        if not active:
+            # Every path either waits for a verdict or already moved by its probe.
+            return
+        rejecting = list(active)
+        # Per-step argmin cache: "accept" commits the lowest-f finite trial
+        # served this step (not the last served one), so a method can sweep a
+        # step-length grid without re-evaluating its argmin. The engine is the
+        # sole owner of "who won": the method learns the winner only through
+        # the fold callback, never by tracking its own argmin (two copies
+        # would drift).
+        best: dict[int, PathPoint] = {}
+        # No engine-side trial cap: how long a step's enumeration may run is the
+        # method's own business (its convergence test, its own trial budget),
+        # and `verdict` is where it says so. A cap here would be a second,
+        # invisible stopping rule for a decision the method already owns.
+        while rejecting:
+            # The method proposes raw candidates; the engine clips them into
+            # `bounds`, so the caller's map never sees a point outside the
+            # box the engine advertised. The clipped step is the actual one, so
+            # verdict() is handed the served point.
+            raw = jnp.stack([solver.propose(i, self.points[i]) for i in rejecting])
+            x_trial = jnp.clip(raw, lo, hi)
+            f_trial, g_trial = evaluator.batch(x_trial)
+            still_rejecting: list[int] = []
+            for pos, i in enumerate(rejecting):
+                point = self.points[i]
+                trial = PathPoint(x_trial[pos], f_trial[pos], g_trial[pos])
+                finite = math.isfinite(trial.f) and bool(jnp.all(jnp.isfinite(trial.g)))
+                if finite and (i not in best or trial.f < best[i].f):
+                    best[i] = trial
+                verdict = solver.verdict(i, point, trial)
+                if verdict == "accept":
+                    if i not in best:  # no finite sample served: nothing to win
+                        self.stalled[i] = True
+                    else:
+                        self.points[i] = best[i]
+                        solver.fold(i, point, best[i])
+                elif verdict == "retry":
+                    still_rejecting.append(i)
+                else:  # "give_up": the method's own convergence test fired
+                    self.stalled[i] = True
+            rejecting = still_rejecting
+
+    def observe(self, restart_rule: RestartRule) -> None:
+        """Fold this iteration's one continue sample per path into the rule.
+
+        Every path folds one sample per iteration, stalled or not: a stalled
+        path has no step to report, so its sample is inf ("no evidence"), and
+        its own clock keeps advancing in step with its live cohort. A fully
+        stalled flock therefore keeps folding inf until the horizon or the
+        deadline ends the run - it is bounded by those, never by this loop.
+        """
+        for i in range(self.n_paths):
+            if i in self.just_restarted:
+                # The probe was this iteration's move, not a step: its first Δ
+                # belongs to the next iteration, so leave the anchor at the
+                # probe's f rather than reading the probe back as a zero-step.
+                continue
+            delta = (
+                math.inf if self.stalled[i] else self.points[i].f - self.prev_f[i]
+            )
+            restart_rule.observe_continue(i, delta)
+            self.prev_f[i] = self.points[i].f
+
+
 def _check_seam(obj: object | None, proto: type, what: str) -> None:
     """Reject a seam object that does not carry the Protocol's methods.
 
@@ -945,6 +1020,55 @@ def _check_seam(obj: object | None, proto: type, what: str) -> None:
     if obj is not None and not isinstance(obj, proto):
         msg = f"{what} does not implement {proto.__name__} (a method is missing)"
         raise TypeError(msg)
+
+
+def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
+    *,
+    n_paths: int,
+    n_probe_evals: int,
+    max_iters: int | None,
+    time_limit: float | None,
+    bounds: Bounds | None,
+    evaluate_f: EvaluateF | None,
+) -> None:
+    """Reject a run the engine cannot promise to finish or cannot price.
+
+    The caller's own inputs are checked here, once per run - the only place a
+    human hands this engine something. Nothing below re-checks them.
+    """
+    for name, value, low in (
+        ("n_paths", n_paths, 1),
+        ("n_probe_evals", n_probe_evals, 1),
+    ):
+        if value < low:
+            msg = f"{name} must be >= {low}, got {value}"
+            raise ValueError(msg)
+    if max_iters is not None and max_iters < 0:
+        msg = f"max_iters must be >= 0, got {max_iters}"
+        raise ValueError(msg)
+    if time_limit is not None and time_limit <= 0:
+        msg = f"time_limit must be > 0, got {time_limit}"
+        raise ValueError(msg)
+    if max_iters is None and time_limit is None:
+        msg = (
+            "a run needs a horizon: pass max_iters (iterations) or "
+            "time_limit (seconds); budget_check alone cannot stop a stalled "
+            "flock, since a stalled iteration serves no batch"
+        )
+        raise ValueError(msg)
+    _check_bounds(bounds)
+    if evaluate_f is None and n_probe_evals != 1:
+        # The verdict's expensive side is the gradient count, not the batch
+        # count: a probe computes `g` once per draw, a continue step once. The
+        # engine cannot see the solver's `n_alpha` (the seam checks presence,
+        # not members), so the exact symmetry `n_alpha == n_probe_evals` is out
+        # of reach. This is the conservative proxy it can express.
+        msg = (
+            f"n_probe_evals={n_probe_evals} without evaluate_f prices a probe "
+            f"at {n_probe_evals} gradients against one step's single gradient; "
+            "pass evaluate_f for multi-draw probes"
+        )
+        raise ValueError(msg)
 
 
 def _check_bounds(bounds: Bounds | None) -> None:
