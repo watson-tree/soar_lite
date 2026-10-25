@@ -123,10 +123,6 @@ class RecordingRule:
         self.verdicts.append(i)
         return not self.group_mins  # the engine's initialization probe
 
-    def samples_until_verdict(self) -> int:
-        """Report an unknown cadence: the engine keeps its ordinary iterations."""
-        return 0
-
     def restart(self, i: int) -> None:
         """Record path i's restart notification."""
         self.restarts.append(i)

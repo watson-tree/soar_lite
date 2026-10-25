@@ -275,7 +275,7 @@ def test_no_incumbent_never_restarts_but_does_not_stall_the_clock() -> None:
     assert policy.should_restart(0, 0.0, math.inf) is False
     assert policy._stage_deltas(0) == []  # the read was skipped, the gate was not
     policy.observe_continue(0, 0.5)
-    assert policy.samples_until_verdict() == WINDOW - 1  # a fresh stage is running
+    assert policy._stage_deltas(0) == [0.5]  # a fresh stage is running
 
 
 def test_payoff_pool_is_shared_across_paths() -> None:
@@ -318,32 +318,6 @@ def test_restart_keeps_the_shared_payoff_pool() -> None:
     policy.restart(0)
     assert policy.group_mins == [0.0, 2.0]
     assert policy._restart_payoff(1.0) == _ei_restart(1.0, [0.0, 2.0])
-
-
-def test_samples_until_verdict_counts_to_the_next_full_stage() -> None:
-    """The shortcut's cadence oracle: window - folds, per the earliest path.
-
-    0 with nothing observed (no cadence to bound -> the engine keeps its ordinary
-    rounds). The window is read fresh, so a stage that runs while the pool grows
-    is counted down against the grown window - and since the pool only ever
-    grows, this can never put a verdict further off than it is (an overestimated
-    cadence would be the engine stopping for a vote that was still due).
-    """
-    policy = EIRestartRule()
-    assert policy.samples_until_verdict() == 0  # no path evidence at all
-    grow_pool(policy)  # window = 8
-    for step in range(1, WINDOW + 1):  # two paths folded in lockstep
-        policy.observe_continue(0, 0.0)
-        policy.observe_continue(1, 0.0)
-        assert policy.samples_until_verdict() == max(WINDOW - step, 0)
-    policy.restart(0)  # a restarted path counts from 0: a full window away
-    assert policy.samples_until_verdict() == 0  # path 1's full stage is due now
-    policy.restart(1)  # both stages are fresh, so both count a full window
-    assert policy.samples_until_verdict() == WINDOW
-    policy.observe_continue(0, 0.0)
-    assert policy.samples_until_verdict() == WINDOW - 1  # path 0 is the earliest
-    grow_pool(policy, 20)  # the pool grows to 28 while path 0's stage runs
-    assert policy.samples_until_verdict() == 27  # read over the current window
 
 
 if __name__ == "__main__":

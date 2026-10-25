@@ -115,23 +115,6 @@ class EIRestartRule(RestartRule):
         self.deltas[i] = []  # the stage's one read is taken; the next Δ opens one
         return restart
 
-    def samples_until_verdict(self) -> int:
-        """Report how many more samples until the earliest path's stage fills up.
-
-        `window - folds` per path: exact while the pool stands still and an
-        underestimate once it grows, since `window` only lengthens. Samples, not
-        iterations, but with one sample per iteration the two coincide, so this
-        can be read against the iterations a run has left. The engine itself no
-        longer reads it: its stop is the horizon, and a stalled flock idles
-        there instead of being ended early. A path that has just restarted
-        counts from 0, i.e. as a full window: the iteration after its probe
-        delivers the first sample. A rule whose path stages are all empty reports
-        their full window too, so 0 means "this rule keeps no cadence" rather
-        than a particular moment in the run.
-        """
-        window = self._stage_window()
-        return min((window - len(d) for d in self.deltas.values()), default=0)
-
     def restart(self, i: int) -> None:
         """Drop path i's stage after a restart (the shared payoff pool is kept)."""
         self.deltas[i] = []
@@ -147,11 +130,11 @@ class EIRestartRule(RestartRule):
         evidence and no fold buys more than its weight.
 
         The only floor is 1, and it is not a prior: a window of zero samples has
-        no centre to read (`_continue_payoff` returns 0.0 on an empty stage, and
-        `samples_until_verdict` would go negative), which is reachable only
-        before any finite restart payoff exists. At M = 1 the read is its own
-        degenerate branch - a stage of one fold has no spread, and a pool of one
-        gives `sigma_r = 0`, so no restart can fire until a second payoff lands.
+        no centre to read (`_continue_payoff` returns 0.0 on an empty stage),
+        which is reachable only before any finite restart payoff exists. At M = 1
+        the read is its own degenerate branch - a stage of one fold has no
+        spread, and a pool of one gives `sigma_r = 0`, so no restart can fire
+        until a second payoff lands.
 
         This method is the seam a rule variant moves (a capped window, a forced
         cadence for an experiment); the rule itself takes no knob, so its own

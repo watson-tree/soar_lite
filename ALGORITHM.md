@@ -352,8 +352,7 @@ live 路径同批前进；引擎就这么空转到 `max_iters`/`time_limit` 停�
   `test_diag_line_search_gives_up_when_no_sample_is_finite`。
 - 判决节奏与可比样本数：`test_window_is_the_pool_size`、
   `test_the_two_sides_read_the_same_samples_the_same_way`、
-  `test_verdict_is_due_once_per_window_and_closes_the_stage`、
-  `test_samples_until_verdict_counts_to_the_next_full_stage`。
+  `test_verdict_is_due_once_per_window_and_closes_the_stage`。
 - 池子共享 / stage 独立 / 重启保留池子：`test_payoff_pool_is_shared_across_paths`、
   `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_payoff_pool`。
 - `n_paths = 1` 退化（`σ_r = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，

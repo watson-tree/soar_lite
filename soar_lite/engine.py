@@ -146,7 +146,7 @@ class RestartRule(Protocol):
     engine owns; a rule needing more (point geometry, a surrogate over the
     whole sample history) is an engine variant, not a RestartRule.
 
-    These five methods are a **lower bound** on the engine's call surface - what
+    These four methods are a **lower bound** on the engine's call surface - what
     any rule must accept to be pluggable - not a claim that two scalars are all
     a restart decision could ever use. A wider interface would not widen what a
     rule can see; only the engine's call sites could.
@@ -187,19 +187,6 @@ class RestartRule(Protocol):
         pool), which is what triggers the initialization probe. An empty pool
         is the true cold start; a pool that exists but is entirely non-finite
         is evidence of a dead start and must not be re-probed.
-        """
-        ...
-
-    def samples_until_verdict(self) -> int:
-        """Report how many more samples until a verdict can be due (0 = unknown).
-
-        TODO(to be cut): the engine no longer calls this. It lost its only
-        caller when the all-stalled shortcut went away - the iteration horizon
-        bounds a stalled flock now, not a cadence query. Kept until a caller
-        needs it; delete it (and `EIRestartRule`'s copy) once confirmed unused.
-
-        A cadence hint, not evidence: samples, not iterations, though with one
-        sample per iteration the two coincide. 0 means "unknown cadence".
         """
         ...
 

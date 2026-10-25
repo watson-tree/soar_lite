@@ -162,7 +162,7 @@ To replace one outright, implement its protocol and pass the instance:
   projection, the horizon and the per-step argmin. `restart` is the only
   cold-start call, so it runs at initialization and after every restart.
 - **`RestartRule`** — the continue-versus-restart decision: `observe_continue`,
-  `observe_restart`, `should_restart`, `samples_until_verdict`, `restart`.
+  `observe_restart`, `should_restart`, `restart`.
 
 Both protocols are documented in the [API Reference](../reference/api.md), which
 is the contract to code against.
