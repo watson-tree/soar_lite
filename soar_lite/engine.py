@@ -962,9 +962,9 @@ class _Paths:
     - A path that restarted this iteration moved by its probe, so it does not
       also step, and its continue observation is skipped: its first Δ belongs
       to the next iteration, so the probe is never read back as a zero-length
-      step. `move` computes that list once per iteration and threads it to both
-      `continuers` and the two halves - one fact at the top instead of a stored
-      flag that must be cleared each iteration.
+      step. `move` computes that list once per iteration and threads it to the
+      probe and to the complement both halves share - one fact at the top
+      instead of a stored flag that must be cleared each iteration.
     - An iteration decides on values and pays for gradients once: whatever the
       f-only seam left ungraded (probe starts and step winners alike) is bought
       in one batch before anything is placed, so a decision is never priced
@@ -1026,9 +1026,10 @@ class _Paths:
         served fused and reaches `settle` already graded: every point of a run
         without the seam.
 
-        The two halves touch disjoint paths (`continuers`), and every call into a
-        collaborator here is per path, so deciding all moves before placing any of
-        them is the same schedule as placing each move as it is decided.
+        The two halves touch disjoint paths - a restarted path is in neither -
+        and every call into a collaborator here is per path, so deciding all
+        moves before placing any of them is the same schedule as placing each
+        move as it is decided.
 
         `incumbent_raw` is the barrier a restart has to clear: the value the rule
         judges against, not the incumbent's reported value, which is why it
@@ -1039,7 +1040,10 @@ class _Paths:
             for i in range(self.n_paths)
             if self.restart_rule.should_restart(i, self.points[i].f, incumbent_raw)
         ]
-        cohort = self.continuers(restarted)
+        # Every path the rule did not fire on, stalled ones included: a stalled
+        # path proposes nothing but still reports a stall this iteration, so its
+        # own stage clock keeps pace with its live cohort.
+        cohort = [i for i in range(self.n_paths) if i not in restarted]
         starts = self.evaluator.probe_select(len(restarted)) if restarted else []
         won = self._decide(cohort)
         # One batch: restart starts first, then the winners in path order. A
@@ -1081,15 +1085,6 @@ class _Paths:
             # a stalled path never proposes, and a revival probes over it.
             self.stalled[i] = not (math.isfinite(point.f) and _finite_grad(point.g))
             self.prev_f[i] = point.f
-
-    def continuers(self, restarted: list[int]) -> list[int]:
-        """Return the continue cohort: every path not restarted this iteration.
-
-        Stalled paths stay in: a stalled path does not propose, but it still
-        reports a stall this iteration, so its own stage clock keeps pace with
-        its live cohort. Only a restart removes a path from this cohort.
-        """
-        return [i for i in range(self.n_paths) if i not in restarted]
 
     def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
         """Run the cohort's trials: the method judges, the engine records winners.
