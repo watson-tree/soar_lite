@@ -587,7 +587,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     )
     # Last, because it takes the resolved seams and their collaborators: the
     # state machine drives them rather than receiving them per call.
-    paths = _Paths(n_paths, evaluator, solver, restart_rule, clip)
+    paths = _Paths(n_paths, clip, evaluator, solver, restart_rule)
 
     # Iteration 0 is the initialization probe: the first pass sees no probe
     # evidence, so every rule's verdict is "restart" and the flock is seeded
@@ -777,8 +777,8 @@ class _Evaluator:
     """The run's evaluation seams, and what they charge and observe.
 
     Both halves share one rule, stated here once so no call site has to restate
-    it: a fused `batch` is the run's only charged site (the gate is asked before
-    the charge, so a batch is served whole or not at all), and an `f_only` call
+    it: a fused `_batch` is the run's only charged site (the gate is asked before
+    the charge, so a batch is served whole or not at all), and an `_f_only` call
     is cheaper work that is not a budget event. Whichever half served a point
     updates the incumbent. `probe_select` and `settle` live here too: a probe is
     draw-then-evaluate and its depth and deferral are properties of this seam,
@@ -804,48 +804,6 @@ class _Evaluator:
         self._budget = budget
         self._incumbent = incumbent
         self._n_probe_evals = n_probe_evals
-
-    def batch(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
-        """Serve one g batch, or raise `_BudgetExhausted` if it is unaffordable.
-
-        The gate is asked before the charge, so a batch is served whole or not
-        at all - no partial prefix of a batch is ever evaluated - and the
-        counters only ever hold g batches that were served. This is the run's
-        only charged site: a probe's extra draws are f-only and cheaper, and
-        are not budget events. The refusal is a signal, not a state: it unwinds
-        straight to the run's one catch, so no intermediate frame has to check
-        it. Returns (f_vals, g_batch).
-        """
-        if not self._budget.accept():
-            raise _BudgetExhausted
-        self._budget.charge(x_batch.shape[0])
-        f_batch, g_batch, feas = self._evaluate_batch(x_batch)
-        # per-path bookkeeping (secant/restart) stays Python float,
-        # so pull the batch values onto the host in one shot.
-        f_vals = f_batch.tolist()
-        self._incumbent.observe(f_vals, x_batch, feas)
-        return f_vals, g_batch
-
-    def f_only(self, x_batch: jnp.ndarray) -> list[float]:
-        """Serve one f-only batch: no gate asked, no charge, same bookkeeping.
-
-        A probe's extra draws and a step's rejected trials are the f half alone,
-        which is the cheap half, so they are not budget events: the gate is not
-        asked and the counters do not move. The winners' fused pass still is
-        one, and both call sites are entered only after the loop head accepted
-        the iteration, so the gate's blind spot stays under one probe and one
-        step. Only `probe_select` and `serve_trials` call this; the None-check
-        below is for the type checker (it cannot see their gates) and is
-        unreachable at runtime.
-        """
-        evaluate_f = self._evaluate_f
-        if evaluate_f is None:
-            msg = "f_only requires evaluate_f"
-            raise RuntimeError(msg)
-        f_batch, feas = evaluate_f(x_batch)
-        f_vals = f_batch.tolist()
-        self._incumbent.observe(f_vals, x_batch, feas)
-        return f_vals
 
     def probe_select(self, n: int) -> list[_Pending]:
         """Draw n_probe_evals groups of n points, return n group-min starts.
@@ -884,9 +842,9 @@ class _Evaluator:
         g_by_draw: list[jnp.ndarray] = []
         for x_cand in groups:
             if defer_g:
-                f_by_draw.append(self.f_only(x_cand))
+                f_by_draw.append(self._f_only(x_cand))
             else:
-                f_vals, g_batch = self.batch(x_cand)
+                f_vals, g_batch = self._batch(x_cand)
                 f_by_draw.append(f_vals)
                 g_by_draw.append(g_batch)
         # Finite-only group-min: a failed (non-finite) probe ranked before a
@@ -918,9 +876,9 @@ class _Evaluator:
         if self._evaluate_f is not None:
             return [
                 _Pending(row, f, None)
-                for row, f in zip(x_batch, self.f_only(x_batch), strict=True)
+                for row, f in zip(x_batch, self._f_only(x_batch), strict=True)
             ]
-        f_vals, g_batch = self.batch(x_batch)
+        f_vals, g_batch = self._batch(x_batch)
         return [
             _Pending(x_batch[pos], f_vals[pos], g_batch[pos])
             for pos in range(len(f_vals))
@@ -940,7 +898,7 @@ class _Evaluator:
         pending_idxs = [k for k, point in enumerate(decided) if point.g is None]
         settled: dict[int, PathPoint] = {}
         if pending_idxs:
-            f_vals, g_batch = self.batch(
+            f_vals, g_batch = self._batch(
                 jnp.stack([decided[k].x for k in pending_idxs])
             )
             settled = {
@@ -951,6 +909,48 @@ class _Evaluator:
             settled[k] if point.g is None else point.graded()
             for k, point in enumerate(decided)
         ]
+
+    def _batch(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
+        """Serve one g batch, or raise `_BudgetExhausted` if it is unaffordable.
+
+        The gate is asked before the charge, so a batch is served whole or not
+        at all - no partial prefix of a batch is ever evaluated - and the
+        counters only ever hold g batches that were served. This is the run's
+        only charged site: a probe's extra draws are f-only and cheaper, and
+        are not budget events. The refusal is a signal, not a state: it unwinds
+        straight to the run's one catch, so no intermediate frame has to check
+        it. Returns (f_vals, g_batch).
+        """
+        if not self._budget.accept():
+            raise _BudgetExhausted
+        self._budget.charge(x_batch.shape[0])
+        f_batch, g_batch, feas = self._evaluate_batch(x_batch)
+        # per-path bookkeeping (secant/restart) stays Python float,
+        # so pull the batch values onto the host in one shot.
+        f_vals = f_batch.tolist()
+        self._incumbent.observe(f_vals, x_batch, feas)
+        return f_vals, g_batch
+
+    def _f_only(self, x_batch: jnp.ndarray) -> list[float]:
+        """Serve one f-only batch: no gate asked, no charge, same bookkeeping.
+
+        A probe's extra draws and a step's rejected trials are the f half alone,
+        which is the cheap half, so they are not budget events: the gate is not
+        asked and the counters do not move. The winners' fused pass still is
+        one, and both call sites are entered only after the loop head accepted
+        the iteration, so the gate's blind spot stays under one probe and one
+        step. Only `probe_select` and `serve_trials` call this; the None-check
+        below is for the type checker (it cannot see their gates) and is
+        unreachable at runtime.
+        """
+        evaluate_f = self._evaluate_f
+        if evaluate_f is None:
+            msg = "_f_only requires evaluate_f"
+            raise RuntimeError(msg)
+        f_batch, feas = evaluate_f(x_batch)
+        f_vals = f_batch.tolist()
+        self._incumbent.observe(f_vals, x_batch, feas)
+        return f_vals
 
 
 class _Paths:
@@ -982,21 +982,21 @@ class _Paths:
     def __init__(
         self,
         n_paths: int,
+        clip: tuple[jnp.ndarray | float, jnp.ndarray | float],
         evaluator: _Evaluator,
         solver: LocalSolver,
         restart_rule: RestartRule,
-        clip: tuple[jnp.ndarray | float, jnp.ndarray | float],
     ) -> None:
         self.n_paths = n_paths
-        # The three collaborators this state machine drives, plus the box every
-        # proposal is clipped into. Held rather than handed in per call: every
-        # method below uses at least one of them, and a step would otherwise
-        # thread them only to pass them straight back. `clip` is constant for the
-        # whole run, so it belongs here rather than in `move`'s signature.
+        # Constant for the whole run, so it belongs beside the shape rather than
+        # in `move`'s signature: every proposal below is clipped into this box.
+        self.clip = clip
+        # The three collaborators this state machine drives. Held rather than
+        # handed in per call: every method below uses at least one of them, and
+        # a step would otherwise thread them only to pass them straight back.
         self.evaluator = evaluator
         self.solver = solver
         self.restart_rule = restart_rule
-        self.clip = clip
         # A path's point is one object, not three parallel lists: it is what
         # every seam call takes, and a step commits one path at a time (so a
         # list, whose item assignment is the commit, beats a stacked array). The
@@ -1056,35 +1056,6 @@ class _Paths:
         self._place(restarted, settled[: len(starts)])
         self._advance(dict(zip(order, settled[len(starts) :], strict=True)))
         self._report(cohort)
-
-    def _place(self, idxs: list[int], starts: list[PathPoint]) -> None:
-        """Place the given paths on their fresh probe starts (one restart event).
-
-        The event's group-min list extends the rule's one shared group-min pool;
-        the method's per-path state resets to cold start, while that pool is kept
-        (same sampler, new trajectories). The rule is told about the event and
-        decides for itself what, if anything, it resets there - `EIRestartRule`
-        closed the stage at its verdict, so it has nothing left to drop. A path
-        whose fresh group-min has a non-finite f *or* gradient arrives stalled and
-        waits for the next EI verdict. The probe is this iteration's move for
-        every restarted path, finite or not, so none of them also steps.
-        """
-        if not idxs:
-            # No path restarted this iteration: nothing to place or reset.
-            return
-        for point in starts:  # the event's group-mins extend the shared pool
-            self.restart_rule.observe_restart(point.f)
-        for i, point in zip(idxs, starts, strict=True):
-            self.points[i] = point
-            self.solver.restart(i, point)
-            self.restart_rule.restart(i)  # report the event; its stage was its own
-            # Both halves gate the start, not just f: a finite f with a
-            # non-finite gradient is proposed from (`-p.g`) and folded on
-            # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
-            # magnitude EMAs for the rest of the run. Its g is left as served -
-            # a stalled path never proposes, and a revival probes over it.
-            self.stalled[i] = not (math.isfinite(point.f) and _finite_grad(point.g))
-            self.prev_f[i] = point.f
 
     def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
         """Run the cohort's trials: the method judges, the engine records winners.
@@ -1158,6 +1129,35 @@ class _Paths:
                     self.stalled[i] = True
             rejecting = still_rejecting
         return won
+
+    def _place(self, idxs: list[int], starts: list[PathPoint]) -> None:
+        """Place the given paths on their fresh probe starts (one restart event).
+
+        The event's group-min list extends the rule's one shared group-min pool;
+        the method's per-path state resets to cold start, while that pool is kept
+        (same sampler, new trajectories). The rule is told about the event and
+        decides for itself what, if anything, it resets there - `EIRestartRule`
+        closed the stage at its verdict, so it has nothing left to drop. A path
+        whose fresh group-min has a non-finite f *or* gradient arrives stalled and
+        waits for the next EI verdict. The probe is this iteration's move for
+        every restarted path, finite or not, so none of them also steps.
+        """
+        if not idxs:
+            # No path restarted this iteration: nothing to place or reset.
+            return
+        for point in starts:  # the event's group-mins extend the shared pool
+            self.restart_rule.observe_restart(point.f)
+        for i, point in zip(idxs, starts, strict=True):
+            self.points[i] = point
+            self.solver.restart(i, point)
+            self.restart_rule.restart(i)  # report the event; its stage was its own
+            # Both halves gate the start, not just f: a finite f with a
+            # non-finite gradient is proposed from (`-p.g`) and folded on
+            # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
+            # magnitude EMAs for the rest of the run. Its g is left as served -
+            # a stalled path never proposes, and a revival probes over it.
+            self.stalled[i] = not (math.isfinite(point.f) and _finite_grad(point.g))
+            self.prev_f[i] = point.f
 
     def _advance(self, won: dict[int, PathPoint]) -> None:
         """Commit each accepted winner as its path's next point, then fold it.
