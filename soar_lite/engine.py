@@ -32,6 +32,8 @@ from typing import Literal, Protocol, TypeAlias, runtime_checkable
 import jax
 import jax.numpy as jnp
 
+Verdict: TypeAlias = Literal["retry", "accept", "give_up"]
+
 
 @dataclass(frozen=True)
 class PathPoint:
@@ -40,9 +42,6 @@ class PathPoint:
     x: jnp.ndarray
     f: float
     g: jnp.ndarray
-
-
-Verdict: TypeAlias = Literal["retry", "accept", "give_up"]
 
 
 @dataclass(frozen=True)
@@ -1115,7 +1114,7 @@ class _Paths:
                 # whose gradient is not all finite. A value-only trial has none
                 # to gate yet - it is gated by `settle` + `_advance` instead.
                 finite = math.isfinite(f_trial) and (
-                    trial.g is None or _finite_grad(trial.g)
+                    trial.g is None or _all_finite(trial.g)
                 )
                 if finite and (i not in best or f_trial < best[i].value()):
                     best[i] = trial
@@ -1147,8 +1146,6 @@ class _Paths:
         if not placed:
             # No path restarted this iteration: nothing to place or reset.
             return
-        for point in placed.values():  # the event's group-mins extend the shared pool
-            self.restart_rule.observe_restart(point.f)
         for i, point in placed.items():
             self.points[i] = point
             self.solver.restart(i, point)
@@ -1158,8 +1155,10 @@ class _Paths:
             # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
             # magnitude EMAs for the rest of the run. Its g is left as served -
             # a stalled path never proposes, and a revival probes over it.
-            self.stalled[i] = not (math.isfinite(point.f) and _finite_grad(point.g))
+            self.stalled[i] = not (math.isfinite(point.f) and _all_finite(point.g))
             self.prev_f[i] = point.f
+        for point in placed.values():  # the event's group-mins extend the shared pool
+            self.restart_rule.observe_restart(point.f)
 
     def _advance(self, won: dict[int, PathPoint]) -> None:
         """Commit each accepted winner as its path's next point, then fold it.
@@ -1169,7 +1168,7 @@ class _Paths:
         engine refuses here is refused before the method has been told anything.
         """
         for i, best in won.items():
-            if not _finite_grad(best.g):
+            if not _all_finite(best.g):
                 # The step is decided on f, so the winner's gradient is first seen
                 # here: an unusable one cannot become the next start (see
                 # `_place`), and the step is not committed at all.
@@ -1319,12 +1318,12 @@ def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None
 def _finite_box(box: tuple[jnp.ndarray, jnp.ndarray]) -> bool:
     """Report whether every side of every dim is finite (no-sampler precondition)."""
     lo, hi = box
-    return bool(jnp.all(jnp.isfinite(lo)) and jnp.all(jnp.isfinite(hi)))
+    return _all_finite(lo) and _all_finite(hi)
 
 
-def _finite_grad(g: jnp.ndarray) -> bool:
-    """Report whether every component of a gradient is finite (all-or-nothing)."""
-    return bool(jnp.all(jnp.isfinite(g)))
+def _all_finite(a: jnp.ndarray) -> bool:
+    """Report whether every component of an array is finite (all-or-nothing)."""
+    return bool(jnp.all(jnp.isfinite(a)))
 
 
 def _argmin_finite(values: list[float]) -> int | None:
