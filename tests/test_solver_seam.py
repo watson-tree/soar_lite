@@ -89,7 +89,7 @@ class StubSolver:
         """Return a halved steepest-descent step from p."""
         return p.x - 0.5 * p.g
 
-    def verdict(self, i: int, p: PathPoint, trial: PathPoint) -> Verdict:  # noqa: ARG002
+    def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:  # noqa: ARG002
         """Record the verdict: accept, or give up on the first trial."""
         self.verdicts.append(i)
         return "give_up" if self.give_up else "accept"
@@ -618,17 +618,20 @@ def test_f_only_probe_computes_one_gradient_per_probe() -> None:
     assert res.status == "max_iters", res
 
 
-def test_a_single_draw_probe_keeps_the_fused_path() -> None:
-    """One draw plus evaluate_f: no f-only call, just the one fused batch.
+def test_a_single_draw_probe_reads_its_start_at_the_gradient() -> None:
+    """One draw plus evaluate_f: the start is never read on its own.
 
-    A probe with a single draw has no losing gradient to defer - the winner is
-    the draw - so serving it f-only and re-serving the winner for its gradient
-    would pay an extra f for nothing. Deferral is a property of the probe's
-    depth, not of the seam being present.
+    Values are read early only to choose between candidates, and a single draw
+    has no group to choose within - so the seam can leave the start unread. It
+    travels to `settle` and comes back with f and g from the same pass, its
+    value computed exactly once, where reading the draw first would have spent
+    an f that the graded pass then repeated.
     """
     f_calls: list[int] = []
+    fused_shapes: list[tuple[int, int]] = []
 
     def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        fused_shapes.append((int(x.shape[0]), int(x.shape[1])))
         f_vals, grads = jax.vmap(pointwise)(x)
         return f_vals, grads, None
 
@@ -647,9 +650,148 @@ def test_a_single_draw_probe_keeps_the_fused_path() -> None:
         solver=StubSolver(),
         key=jax.random.PRNGKey(3),
     )
-    assert f_calls == [], f_calls
-    assert res.n_batches == 1, res
+    assert f_calls == [], f_calls  # nothing to compare, so nothing read early
+    assert fused_shapes == [(2, 1)], fused_shapes  # both halves, one pass
+    assert res.n_batches == 1, res  # that pass is also the iteration's g batch
     assert res.n_points == 2, res
+
+
+def test_a_rejected_trial_is_bought_no_gradient() -> None:
+    """A retrying step pays one gradient pass in total, not one per trial.
+
+    The ruled-on quantity is f, so each trial is served for its value alone and
+    only the winner is graded. Two trial rounds therefore cost two f-only calls
+    and one charged batch - the same single batch a no-line-search step costs,
+    which is what makes a value-only seam cost-matched across the two sides.
+    """
+    k = 1
+    f_calls: list[int] = []
+
+    class OneRetry(StubSolver):
+        """Retry the first trial, then accept - the shortest line search."""
+
+        def __init__(self) -> None:
+            """Start with no verdict served."""
+            super().__init__()
+            self.rounds = 0
+
+        def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:  # noqa: ARG002
+            """Reject the first trial, accept the second (no reason but the round)."""
+            self.verdicts.append(i)
+            self.rounds += 1
+            return "retry" if self.rounds == 1 else "accept"
+
+    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        f_vals, grads = jax.vmap(pointwise)(x)
+        return f_vals, grads, None
+
+    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        f_calls.append(int(x.shape[0]))
+        f_vals, _grads = jax.vmap(pointwise)(x)
+        return f_vals, None
+
+    solver = OneRetry()
+    res = n_path_schedule(
+        evaluate_batch,
+        evaluate_f=evaluate_f,
+        bounds=unit_bounds(),
+        n_paths=k,
+        max_iters=2,  # the init probe, then this one step
+        solver=solver,
+        key=jax.random.PRNGKey(3),
+    )
+    # The step's two trial rounds, value-only. The probe's single draw now
+    # travels to `settle` unread, so it spends no f of its own.
+    assert f_calls == [k, k], f_calls
+    assert solver.verdicts == [0, 0], solver.verdicts
+    assert solver.folds == [0], solver.folds  # one winner, one fold
+    # Two batches for the whole iteration pair: the starts', then the winner's.
+    assert res.n_batches == 2, res
+    assert res.n_points == 2 * k, res
+
+
+def test_one_gradient_batch_per_iteration() -> None:
+    """A restart's starts and a step's winner share one g batch.
+
+    Deciding on values lets an iteration put everything it kept into a single
+    gradient pass: the restarted paths' fresh starts and the stepped paths'
+    winners travel together, so a mixed iteration costs one call instead of one
+    per half. The shapes are what pins it - unmerged, iteration 1 would show two
+    width-1 batches rather than one width-2 batch.
+    """
+    k = 2
+    fused_shapes: list[tuple[int, int]] = []
+
+    class RestartFirst(RecordingRule):
+        """Cold start, then only path 0 keeps restarting."""
+
+        def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:  # noqa: ARG002
+            """Seed the pool cold, then keep restarting path 0 alone."""
+            return not self.group_mins or i == 0
+
+    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        fused_shapes.append((int(x.shape[0]), int(x.shape[1])))
+        f_vals, grads = jax.vmap(pointwise)(x)
+        return f_vals, grads, None
+
+    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        f_vals, _grads = jax.vmap(pointwise)(x)
+        return f_vals, None
+
+    res = n_path_schedule(
+        evaluate_batch,
+        evaluate_f=evaluate_f,
+        bounds=unit_bounds(),
+        n_paths=k,
+        max_iters=2,  # the cold start, then one mixed iteration
+        solver=StubSolver(),
+        restart_rule=RestartFirst(),
+        key=jax.random.PRNGKey(3),
+    )
+    assert fused_shapes == [(2, 1), (2, 1)], fused_shapes  # k=2 both times
+    assert res.n_batches == 2, res
+    assert res.n_points == 2 * k, res
+
+
+def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
+    """The step is decided on f, so its winner's gradient is gated on arrival.
+
+    Nothing gates a value-only trial (there is no gradient to gate), and the
+    method is told nothing about gradients at all, so the engine's commit is the
+    only place that can refuse one. A winner whose gradient is unusable does not
+    become the next start - it stalls the path exactly like a dead probe start -
+    and the fold never happens, so the method is not told a step landed.
+    """
+    fused = [0]
+
+    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        """Finite f always; the gradient is usable only for the probe's start."""
+        fused[0] += 1
+        f_vals, grads = jax.vmap(pointwise)(x)
+        if fused[0] > 1:  # the second batch is the step winner's
+            grads = jnp.full_like(grads, jnp.nan)
+        return f_vals, grads, None
+
+    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        f_vals, _grads = jax.vmap(pointwise)(x)
+        return f_vals, None
+
+    solver = StubSolver()
+    rule = RecordingRule()
+    res = n_path_schedule(
+        evaluate_batch,
+        evaluate_f=evaluate_f,
+        bounds=unit_bounds(),
+        n_paths=1,
+        max_iters=2,  # the init probe, then this one step
+        solver=solver,
+        restart_rule=rule,
+        key=jax.random.PRNGKey(3),
+    )
+    assert solver.verdicts == [0], solver.verdicts  # the trial was judged
+    assert solver.folds == [], solver.folds  # but never committed
+    assert rule.deltas == [(0, None)], rule.deltas  # the stall, as absence
+    assert res.status == "max_iters", res
 
 
 def test_a_non_finite_gradient_start_arrives_stalled() -> None:

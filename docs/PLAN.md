@@ -61,16 +61,25 @@ the losing points is pure waste. The moves:
   f-only), collapsing that asymmetry and leaving only the cheap f-count to
   match. So `evaluate_f is None and n_probe_evals != 1`
   raises `ValueError` at entry, and the default becomes `n_probe_evals = 1`.
-  Deferral is keyed on depth, not on the seam: with a single draw there is no
-  losing gradient to defer (the winner *is* the draw), so `n_probe_evals == 1`
-  takes the fused path even when `evaluate_f` is supplied — otherwise the point
-  would be served twice for nothing.
+  Deferral is keyed on the seam, not on depth: with the f-only evaluator every
+  point the search rules on is read for its value and graded afterwards, in the
+  iteration's one g batch. A single draw is the shallowest case of that - with
+  no group to compare it need not read its start at all, so the start goes to
+  that batch unread and its f is computed exactly once, by the pass that also
+  buys its g.
   Consequences: under that default a group-min is a single fresh draw, not
   a min-of-n group-min — the "pinned 2 (empirical)" advice in the docstring
   moves to "2 iff you also pass `evaluate_f`", and the Phase A–D numbers were
   measured at 2. With `evaluate_f`,
   `n_alpha != n_probe_evals` is the cheap, bounded (f-only) asymmetry that is
   accepted, not banned.
+- **The step is ruled on values, one g batch grades what it kept (landed).**
+  `verdict` is handed the trial's coords and value, never its gradient, and the
+  engine buys `g` only for the winners. Deferral lets a probe and a step share
+  that one batch: the restarted paths' starts and the stepped paths' winners
+  travel together, so an iteration costs one gradient round trip however many
+  moves it made. A winner whose gradient turns out unusable stalls the path at
+  that commit point instead of folding it.
 - **A start needs both halves finite (landed).** A probe start is committed
   only when `f` *and* `g` are finite: a finite `f` with a non-finite gradient
   is proposed from (`-p.g`) and folded on (`best.g - p.g`), so one NaN in it
@@ -135,9 +144,10 @@ listed doc are swept; 68 tests green, ruff and pyright clean. The default
 `n_probe_evals` was flipped 2 → 1 in the `_Horizon` deletion (`0ffe135`); the
 `evaluate_f` seam and its gate follow in the next commit. Shape the seam took:
 `n_path_schedule(..., evaluate_f=...)` is keyword-only and optional, a probe
-serves `n_probe_evals` value-only draws then one fused batch at the per-column
-winners (so a probe serves `n_probe_evals` uncharged f-only draws plus one
-billed fused batch, and one `g`), the draws
+serves one value-only draw per evaluation and then one fused batch at the
+per-column winners (so a probe serves `n_probe_evals` uncharged f-only draws
+plus one billed fused batch and one `g` - none of the former at
+`n_probe_evals = 1`), the draws
 stay exactly `n` wide rather than widening to `n_probe_evals × n`, and
 `evaluate_f is None and n_probe_evals != 1` raises `ValueError` at entry.
 
@@ -182,7 +192,7 @@ shortcut had to exist at all. Replaced by:
 - `n_batches`/`n_points` are reports, not caps, and they count the only billed
   unit: the fused value+gradient pass. A probe's f-only draws are cheaper work
   and appear in neither (nor are they gated), so the counts stay on the axis
-  that dominates; the default shape has no f-only draw at all. `status` is
+  that dominates; the default probe produces no f-only draw at all. `status` is
   `max_iters`, `time_limit` or `budget_exhausted`.
 - The all-stalled shortcut, the `all_stalled` status and the loop's `it` counter
   are gone: a stalled flock idles to the horizon, folding one `inf` sample per
@@ -200,17 +210,16 @@ the flock stalls). The case that really needs it is a dead pool - a first probe
 that comes back all-non-finite, where `EI_restart = 0` and no verdict revives
 the paths.
 
-Deferred, and why: **f-only line search.** The trial's `g` is pure waste when the
-trial loses - warm-up backtracks and every non-argmin sample of an `n_alpha` grid
-pay a gradient the run never folds. Deferring it the way a probe does (serve `f`,
-let the winner be chosen, then pay one fused batch) would need the engine to know
-whether *this* step does more than one trial, and it cannot: `n_alpha` lives in
-the solver, and the seam deliberately reads presence, not member values. Keying
-the deferral on `n_alpha == 1` is therefore not expressible engine-side, and at
-the default `n_alpha = 1` there is nothing to defer anyway (the single trial is
-the winner, and f-only would serve it twice). The clean home for this is a
-solver-side protocol ("this batch needs values only"), which is not worth
-extending for a cost the default configuration never pays.
+Landed: **f-only line search.** The trial's `g` was pure waste when the trial
+lost - warm-up backtracks and every non-argmin sample of an `n_alpha` grid paid
+a gradient the run never folded. It is deferred the way a probe's start is:
+every trial is served for its value, the method rules on that value, and the
+iteration's one `settle` batch grades whatever the iteration kept. The engine
+still does not know whether *this* step runs more than one trial, and no longer
+needs to - with the seam it defers every trial, and a single-trial step simply
+pays its one gradient in `settle` beside the restart starts. The price is a
+repeated `f` for any trial whose gradient was bought later: the value read to
+rule on it is recomputed by the fused pass that grades it.
 
 Landed: **`max_ls` is retired.** It was an engine-side cap on a loop the solver
 owns - the same quantity as `n_alpha`, on the wrong side of the seam. The step

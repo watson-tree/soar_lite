@@ -94,7 +94,7 @@ class DiagonalPreconditioner(LocalSolver):
         backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
         armijo_c: float = 1e-4,  # warm-up Armijo sufficient-decrease slope
     ) -> None:
-        """Store the knobs; per-path state is seeded by init.
+        """Store the knobs; per-path state is seeded by restart.
 
         ``alpha0`` is the step length every path is armed at (``_reset_step``),
         in units of the natural step: -g in the warm-up, -d⊙g after - the
@@ -189,8 +189,15 @@ class DiagonalPreconditioner(LocalSolver):
             d = jnp.sqrt(d)
         return p.x - self.alpha[i] * (d * p.g)
 
-    def verdict(self, i: int, p: PathPoint, trial: PathPoint) -> Verdict:
-        """Give up at a stationary point; otherwise accept (the warm-up may retry)."""
+    def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
+        """Give up at a stationary point; otherwise accept (the warm-up may retry).
+
+        Ruled on the served trial's coords `x` and value `f` alone: the engine
+        buys a trial's gradient only for the step's winner, so nothing here may
+        depend on one, and the winner's gradient is gated by the engine before it
+        folds. The stopping test reads ``p`` - the step's start, whose gradient a
+        path always has.
+        """
         # Checked on the *current* point, so a path that has just landed on a
         # stationary one gives up on the next iteration (costing that one trial's
         # eval, which the engine's incumbent still counts) rather than stepping
@@ -206,14 +213,13 @@ class DiagonalPreconditioner(LocalSolver):
             # (committing a no-op step, which then arms a real one). -inf passes
             # the `<=` below and would commit a non-objective, hence the
             # finiteness gate too.
-            delta = trial.x - p.x
+            delta = x - p.x
             gtd = jnp.vdot(p.g, delta).item()  # gᵀd for d = delta (delta carries alpha)
-            if not math.isfinite(trial.f) or trial.f > p.f + self.armijo_c * gtd:
+            if not math.isfinite(f) or f > p.f + self.armijo_c * gtd:
                 self.alpha[i] *= self.backtrack
                 return "retry"
-            self._reset_step(i)  # first post-warmup step starts at a full step
             return "accept"
-        return self._step_verdict(i, trial)
+        return self._step_verdict(i, f)
 
     def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
         """Fold the engine's committed argmin for path i (the step that won).
@@ -225,11 +231,15 @@ class DiagonalPreconditioner(LocalSolver):
         and the two can never disagree. The first call after init/restart is
         the warm-up pair and seeds the EMAs outright (weight 1); later calls
         blend at beta - `has_secant` doubles as the first-fold marker, so it is
-        set here rather than in ``verdict``.
+        set here rather than in ``verdict``. This is also where a step is
+        re-armed: the fold is the step's commit, so a ruling that the engine did
+        not commit (a winner whose gradient it refused) leaves the method
+        untouched rather than half-reset.
         """
         first = not self.has_secant[i]
         self._fold(i, best.x - p.x, best.g - p.g, first=first)
         self.has_secant[i] = True
+        self._reset_step(i)
 
     def _reset_step(self, i: int) -> None:
         """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
@@ -237,8 +247,8 @@ class DiagonalPreconditioner(LocalSolver):
         self.alpha_sample[i] = 0
         self.saw_finite[i] = False
 
-    def _step_verdict(self, i: int, trial: PathPoint) -> Verdict:
-        """Judge a served post-warmup step; never fold here.
+    def _step_verdict(self, i: int, f: float) -> Verdict:
+        """Judge a served post-warmup step on its value; never fold here.
 
         One alpha grid of ``n_alpha`` samples along the current -d⊙g step,
         shrinking alpha by the warm-up backtrack constant each retry; the win
@@ -246,18 +256,19 @@ class DiagonalPreconditioner(LocalSolver):
         and folds the winner through ``fold``. ``n_alpha = 1`` (the
         default) is the no-line-search case in the same code: the single
         sample is accepted if finite, else the path gives up.
+
+        The ruling reads `f` alone: no sample's gradient is in hand, and the
+        engine gates the winner's gradient before it folds, so a non-finite
+        gradient stalls the path there instead of poisoning a secant here.
+        Nothing non-finite may reach ``fold``: one inf folded into Y leaves
+        den = inf forever, and that coordinate never steps again. A non-finite
+        value drops out of the candidate set: the sweep keeps shrinking alpha (a
+        real line search probes past a NaN), so n_alpha > 1 survives a bad early
+        sample; at n_alpha = 1 there is no next sample and a retry would
+        re-propose the identical point for the rest of the enumeration, so the
+        path gives up instead and a rule may revive it.
         """
-        finite = math.isfinite(trial.f) and bool(jnp.all(jnp.isfinite(trial.g)))
-        # Nothing non-finite may reach _fold: one inf folded into Y leaves
-        # den = inf forever, and that coordinate never steps again. The
-        # gradient is checked too - a finite f with an inf component would
-        # poison the EMA just the same. A non-finite sample drops out of the
-        # candidate set: the sweep keeps shrinking alpha (a real line search
-        # probes past a NaN), so n_alpha > 1 survives a bad early sample; at
-        # n_alpha = 1 there is no next sample and a retry would re-propose
-        # the identical point for the rest of the enumeration, so the path gives up
-        # instead and a rule may revive it.
-        if finite:
+        if math.isfinite(f):
             self.saw_finite[i] = True
         self.alpha_sample[i] += 1
         if self.alpha_sample[i] < self.n_alpha:
@@ -265,7 +276,6 @@ class DiagonalPreconditioner(LocalSolver):
             return "retry"
         if not self.saw_finite[i]:  # every sample this step was non-finite
             return "give_up"
-        self._reset_step(i)
         return "accept"
 
     def _fold(self, i: int, s: jnp.ndarray, y: jnp.ndarray, *, first: bool) -> None:

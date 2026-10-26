@@ -195,15 +195,17 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 
 ```text
 advance(it)       对每条路径一次移动：先问判决（只在它的 stage 填满时真的问）并重启胜出的，
-                  未重启且未 stalled 的路径再 propose → clip 进 box → 批量 serve → 逐路径 verdict → commit
+                  未重启且未 stalled 的路径再 propose → clip 进 box → 服务 trial → 逐路径 verdict
                   （这条链循环到每条路径都 accept 或 give_up；枚举长度归方法，引擎不设上限）
+                  两半都只凭 f 定下坐标，之后把它们留下的点合成一个批买 g，再逐个放置/提交
 observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本）
 ```
 
 判决与步进同在一轮迭代里是刻意的：一次迭代只推进「一步」，判决读的是本轮自己的 B；被拒的探测
 跳过本轮步进，并在请求点抛出私有异常 `_BudgetExhausted`，径直 unwind 到最外层循环的 catch。
 
-重启的路径本轮只做探测、不进 `step`：一条路径一次迭代要么探测要么步进，不会两头都花预算。
+重启的路径本轮只做探测、不提交步：一条路径一次迭代要么探测要么步进，不会两头都花预算。两半碰的
+是互不相交的路径（`continuers`），所以「先定完再一起买 g」与「逐个定完就买」是同一个日程。
 
 `observe_continue` 的样本就是**一次迭代的一步**：每条路径各自计时、互不重叠。重启的路径本轮只探测、
 不步进，它这一次迭代不喂样本（重启把锚点重置到探测点的 f，第一个 Δ 留给下一步），所以既不会把探测
@@ -211,13 +213,16 @@ observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本�
 可读，但这一轮照样计入阶段钟，所以停摆不会把判决推迟，也不会拿一个横跨停顿的 Δ 冒充进步。
 
 判决两侧买的东西并不相等：一次探测花 `n_probe_evals` 个批、算 `n_probe_evals` 次梯度，而一步只算
-一次梯度（默认 `n_alpha=1`）。真正吃重的是**梯度次数**（g 约为 f 的 2–5 倍），所以 `n_probe_evals > 1`
-必须接 f-only 求值器 `evaluate_f`：探测先服务 `n_probe_evals` 个只有值的批，再对每列的赢家补一个
-value+grad 批，两侧就都只算一次梯度。延迟与否看**抽数**而不是看接没接 seam：单抽没有“输家的梯度”可
-延迟（赢家就是那一次抽样），所以 `n_probe_evals == 1` 即使接了 `evaluate_f` 也走融合批，否则同一个点
-会白白被服务两次。不接就直接抛 `ValueError`——引擎看得见
-`solver` 有 `n_alpha` 这个成员，看不见它的值，只能把「没接 seam ⇒ 单抽探测」当作保守代理；默认值
-因此是 1。剩下的只是便宜的 f 计数差（完整推导见 `docs/PLAN.md`）。
+一次梯度（默认 `n_alpha=1`）。真正吃重的是**梯度次数**（g 约为 f 的 2–5 倍），所以只要接了 f-only
+求值器 `evaluate_f`，搜索期就**一律只读值**：探测的抽、步的每一个 trial 都只服务 f，判决也只听这些
+f（3.3），留到最后的点——每列的探测起点与每条路径步的赢家——在同一批里补 g，一次迭代一次梯度往返。
+多抽探测因此仍与一步成本对齐，单抽也不再有例外：延迟是接缝的性质，不是抽数的性质。接缝下多付的只有
+f，而单抽连这份都不付——它没有组内可比的候选，起点不必先读值，随补 g 的那一批一起求 f 与 g（多抽才
+需要先把每抽的 f 读出来做 group-min，那次 f 随后被融合批重算，这是用便宜的一半换掉一次梯度往返）。
+没接 seam 时每个 trial 都是融合批（值与梯度一起送达），这条路径的计数与引入接缝前逐位相同。多抽
+（`n_probe_evals > 1`）且没接 seam 则抛 `ValueError`——引擎看得见 `solver` 有 `n_alpha` 这个成员，
+看不见它的值，只能把「没接 seam ⇒ 单抽探测」当作保守代理；默认值因此是 1。剩下的只是便宜的 f 计数差
+（完整推导见 `docs/PLAN.md`）。
 
 探测点要能在优化里用，`f` 和 `g` **两半都得有限**才算数：`f` 有限但梯度非有限的起点会被 `propose`
 读取（`-p.g`）并进 `fold`（`best.g - p.g`），一个 NaN 就能把那个坐标的量级 EMA 永久毒死。这样的
@@ -228,6 +233,12 @@ value+grad 批，两侧就都只算一次梯度。延迟与否看**抽数**而�
 一次 step 里若某方法扫了一个步长网格，引擎把所有被服务的 trial 中 `f` 最低的那个提交。**引擎是
 「谁赢」的唯一所有者**：方法只通过 `fold` 回调得知获胜点，不自己维护第二份 argmin。这样重启/折叠
 的簿记不会与方法的内部状态漂移。
+
+方法的判定因此只收**坐标与值**（`verdict(i, p, x, f)`，`p` 是这一步的起点）：trial 的梯度刻意不在
+契约里，因为引擎只为赢家买 g，方法拿不到别的 trial 的梯度；需要 trial 梯度才能判决的方法不是这个
+引擎能驱动的对象。相应地，赢家的梯度是**在提交点才第一次被看见**的（`f` 先定，g 随收）：非有限的
+`g` 就不提交、按 stalled 处理（与死抽同路），所以 `fold` 是唯一的提交点，方法不会先被告知「落点」
+再被收回。
 
 ### 3.4 `stalled` 是唯一的路径状态
 
@@ -263,10 +274,11 @@ False 之后就等下一个窗口再判，而不是每轮重问同一个问题�
 `status` 按 `max_iters` → `time_limit` → `budget_exhausted` 的顺序报第一个成立的闸。
 
 `budget_check` 只留给引擎看不见的预算（点数、墙钟、钱、外部早停策略）。它同样在批边界翻转，所以那类
-外部预算可能超跑不到一个批大小。它只在 g 批前被问：多抽探测的 f-only 段不查，因此那一段的停车
-（含墙钟）粒度是「不到一个探测」。这是一个有意接受的代价，靠「f 便宜、g 约为 f 的 2–5 倍」的前提
-兜底；f 本身贵的调用方就不该开多抽探测。`n_batches`/`n_points` 只报不预算：引擎无法在一个不可分
-的批内部设卡。
+外部预算可能超跑不到一个批大小。它只在 g 批前被问：f-only 段不查，因此那一段的停车
+（含墙钟）粒度是「不到一个探测/一步」——接缝下一次迭代只有一个 g 批，它同时被这道闸计数。这是一个
+有意接受的代价，靠「f 便宜、g 约为 f 的 2–5 倍」的前提
+兜底；f 本身贵的调用方就不该接 f-only 接缝、也不该开多抽探测。`n_batches`/`n_points` 只报不预算：
+引擎无法在一个不可分的批内部设卡。
 
 ### 3.6 全停不早退，空转到地平线
 
@@ -294,9 +306,10 @@ False 之后就等下一个窗口再判，而不是每轮重问同一个问题�
 | `n_points` | 被计费的**点**（一批 n_paths 点计 n_paths） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
 | `n_batches` | 被计费的**批**（一批 n_paths 点计 1） | 并行效率：一次调用买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
 
-两个字段只数 **value+grad 融合批（g 批）**——“被计费”就是这个意思。探测的多抽 f-only 批是便宜的
-那一半，既不进这两个数也不问闸（3.5）。所以默认配置（不接 `evaluate_f`、`n_probe_evals=1`）下
-`n_batches` 恰好等于服务批数；一旦开了多抽探测，它就变成“g 批数”——而后者才是承重轴上的真账。
+两个字段只数 **value+grad 融合批（g 批）**——“被计费”就是这个意思。f-only 的批（探测的抽、被拒的
+trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一次迭代只有一个 g 批，它带的是这一步保留下来的
+点（重启的起点 + 步的赢家）。所以默认配置（不接 `evaluate_f`、`n_probe_evals=1`）下
+`n_batches` 恰好等于服务批数；一旦接了 f-only 接缝，它就变成“g 批数”——而后者才是承重轴上的真账。
 
 两个都要报：串行轴下，n_paths 条路径的收益会被 n_paths 除，多路径的账面上限被压低；并行轴下一次求值
 就是一次并行调用的成本，「多样本 + 自适应重启」的收益才如实显形。两者都不等于墙钟（换底层语言能把
@@ -348,19 +361,25 @@ False 之后就等下一个窗口再判，而不是每轮重问同一个问题�
 - 单位不变：`test_diag_step_scales_with_the_coordinate_unit`（同一 secant 在缩放坐标下 `d̃ = c²d`、
   `Δx̃ = c·Δx`；注意要注入 secant 对，不能走暖机——暖机步按设计就不是坐标不变的）。
 - 停止条件：`test_diag_gives_up_only_when_the_gradient_norm_converged`、
-  `test_diag_gives_up_on_a_nonfinite_trial`、`test_diag_gives_up_on_a_nonfinite_gradient`。
+  `test_diag_gives_up_on_a_nonfinite_trial`、`test_diag_judges_a_trial_on_its_value_alone`（判定只读 `x`
+  与 `f`，非有限的梯度根本到不了方法）。
 - 暖机重试非有限 trial：`test_diag_warmup_retries_a_nonfinite_trial`。
 
 #### 引擎（跟着 n_paths 路径框架走，`test_solver_seam.py` / `test_scheduler.py` / `test_restart.py`）
 
 - 接缝真的被驱动（而不是走默认）：`test_injected_solver_is_driven`、`test_injected_rule_is_driven`。
-- f-only 求值器接缝：`test_f_only_probe_computes_one_gradient_per_probe`（`n_probe_evals` 个只有值的批
-  + 一个赢家批，赢家仍是逐列 group-min；只有赢家批计费）、`test_a_single_draw_probe_keeps_the_fused_path`
-  （单抽不延迟：接了 seam 也不调 `evaluate_f`）、`test_multi_draw_probe_is_refused_without_the_f_only_seam`
+- f-only 求值器接缝：`test_f_only_probe_computes_one_gradient_per_probe`（`n_probe_evals` 个只有值的抽
+  + 一个赢家批，赢家仍是逐列 group-min；只有赢家批计费）、
+  `test_a_single_draw_probe_reads_its_start_at_the_gradient`（单抽连 f 也不先读：没有可比的组，起点由
+  补 g 的那一批一次求出 f 与 g，f 只算一次）、`test_a_rejected_trial_is_bought_no_gradient`
+  （重试轮只花 f，整轮一步付一个 g 批）、`test_one_gradient_batch_per_iteration`（重启的起点与步的赢家
+  同乘一个 g 批：形状是 `[(2,1),(2,1)]` 而不是两个宽 1 的批）、
+  `test_multi_draw_probe_is_refused_without_the_f_only_seam`
   （不接 seam 时多抽必拒）、`test_the_gate_counts_g_batches_not_f_only_draws`（闸只数 g 批，f-only 抽
   照样发生却不进账）。
 - 起点要两半都有限：`test_a_non_finite_gradient_start_arrives_stalled`（`f` 有限、`g` 全 NaN 的
-  group-min 不进线搜索，直接 stalled 等 EI）。
+  group-min 不进线搜索，直接 stalled 等 EI）、`test_a_winner_with_no_usable_gradient_is_not_committed`
+  （赢家只在提交点才被看见梯度：非有限则不 `fold`、按 stalled 报 `None`）。
 - 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
   `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
 - `stalled` 语义：`test_give_up_stalls_a_path`、`test_stalled_paths_wait_for_ei_then_restart`、

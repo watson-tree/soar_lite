@@ -10,14 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `evaluate_f`: an optional value-only evaluator seam, the f-only sibling of
-  `evaluate_batch` (`(f, feas?)` out, no gradient). Supplying it lets a
-  multi-draw probe compute one gradient for all its draws - `n_probe_evals`
-  value-only batches, then one fused batch at the per-column winners - which is
-  what makes a probe deeper than one draw cost-matched with a step. Without it
-  the engine refuses `n_probe_evals > 1` with a `ValueError`.
+  `evaluate_batch` (`(f, feas?)` out, no gradient). Supplying it makes the whole
+  search read values: every probe draw and every step trial is served for its
+  value alone, the method rules on that value, and the single g batch the
+  iteration serves grades what it kept - the probe's starts and the step's
+  winners, together. A deeper probe therefore costs no extra gradient, a
+  retrying line search costs one pass instead of one per trial, and a
+  single-draw probe, having no group to compare, defers its start entirely: its
+  value is first computed by that same batch.
+  Without the seam every trial keeps its fused pass, and the engine refuses
+  `n_probe_evals > 1` with a `ValueError`.
 
 ### Changed
 
+- `LocalSolver.verdict` takes `(i, p, x, f)`, not the served trial point: a
+  method rules on the step's start and the trial's coords and value. The trial's
+  gradient is deliberately absent, because the engine buys a gradient only for
+  the step's winner - a method that needs one to rule is out of this engine's
+  reach. The winner's gradient is then first seen at the commit point; an
+  unusable one stalls the path there and `fold` never runs, so the method is
+  never told a step landed that did not. Everything a step needs to re-arm is
+  now armed by the fold, not by the ruling.
+- An iteration buys **one** gradient batch. Both halves decide on values first
+  (the restarted paths by their probe, the cohort by its trials) and the
+  gradients those decisions need go out as a single call, so a probe and a step
+  no longer pay separate round trips. What is billed is unchanged in kind - the g
+  pass - and a run without the seam bills exactly as before.
 - `EIRestartRule` no longer fits a single Gaussian to either side. Both the
   continue side (the path's Δ stage) and the restart side (the shared payoff
   pool) are now a scott_mad KDE - one Gaussian kernel per sample, bandwidth
@@ -86,10 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are no such draws); a multi-draw probe no longer inflates the two counts, so
   they stay on the axis that dominates. The trade: the gate and the deadline
   have a blind spot under one probe.
-- A single-draw probe keeps the fused path even when `evaluate_f` is supplied:
-  there is no losing gradient to defer (the winner is the draw), so an f-only
-  draw plus a winner batch would serve the same point twice for nothing.
-  Deferral is keyed on `n_probe_evals`, not on the seam being present.
+- A single-draw probe defers its whole start, not just its gradient, as long as
+  `evaluate_f` is supplied: a draw with no group to compare has no value worth
+  reading early, so the start travels to the iteration's one g batch unread and
+  both halves arrive from that pass. Deferral is keyed on the seam, not on
+  `n_probe_evals`, and the cheap half it spends nothing of is the `f` a
+  value-read draw would have had recomputed anyway.
 - `status` is now `max_iters`, `time_limit` or `budget_exhausted`.
 - `budget_check` is unchanged as a per-batch gate but no longer a substitute for
   the horizon: a stalled iteration asks for no batch, so a gate alone cannot

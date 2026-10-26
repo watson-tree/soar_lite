@@ -42,12 +42,12 @@ def test_diag_warmup_is_a_monotone_backtracked_gradient_step() -> None:
     # Monotone Armijo, not mere descent: the bound is f + c·gᵀ(-g) = 2 - 1e-4·25,
     # so a trial that does improve on f = 2 but misses that bound must retry.
     just_short = PathPoint(x=p.x - p.g, f=1.999, g=p.g)
-    assert solver.verdict(0, p, just_short) == "retry"
+    assert solver.verdict(0, p, just_short.x, just_short.f) == "retry"
     assert not solver.has_secant[0]
     assert solver.alpha[0] == solver.backtrack
     assert close(solver.propose(0, p), p.x + solver.backtrack * (-p.g), 1e-12)
     accepted = PathPoint(x=p.x - solver.backtrack * p.g, f=1.0, g=p.g)
-    assert solver.verdict(0, p, accepted) == "accept"
+    assert solver.verdict(0, p, accepted.x, accepted.f) == "accept"
     solver.fold(0, p, accepted)
     assert solver.has_secant[0]
     assert close(solver.s_ema[0], jnp.square(solver.backtrack * p.g), 1e-12)
@@ -60,7 +60,7 @@ def test_diag_warmup_retries_a_nonfinite_trial() -> None:
         p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
         solver.restart(0, p)
         trial = PathPoint(x=p.x - p.g, f=bad, g=p.g)
-        assert solver.verdict(0, p, trial) == "retry"
+        assert solver.verdict(0, p, trial.x, trial.f) == "retry"
         assert not solver.has_secant[0]
         assert solver.alpha[0] == solver.backtrack
 
@@ -75,7 +75,7 @@ def _warm_up(
         x = solver.propose(0, p)
         f, g = quad(x)
         trial = PathPoint(x=x, f=f, g=g)
-        if solver.verdict(0, p, trial) == "accept":
+        if solver.verdict(0, p, trial.x, trial.f) == "accept":
             solver.fold(0, p, trial)
             return trial
     raise AssertionError  # 20 trials without an accepted warm-up step
@@ -158,7 +158,7 @@ def test_diag_gradient_floor_carries_a_flat_secant() -> None:
     solver.restart(0, p)
     x1 = p.x - g  # alpha = 1, accepted: f = 0.5 <= 1 - 1e-4·5
     trial = PathPoint(x=x1, f=0.5, g=g)  # g unchanged ⇒ y = 0
-    assert solver.verdict(0, p, trial) == "accept"
+    assert solver.verdict(0, p, trial.x, trial.f) == "accept"
     solver.fold(0, p, trial)
     # d_i = |s_i|/(√θ·|g_i|) = |g_i|/(√θ·|g_i|) = 1/√θ = 100 for both dims.
     assert close(solver.propose(0, trial), x1 - 100.0 * g, 1e-9)
@@ -173,10 +173,10 @@ def test_diag_armijo_c_is_a_knob() -> None:
     trial = PathPoint(x=p.x - g, f=0.9, g=g)  # gtd = -‖g‖² = -1
     default = DiagonalPreconditioner()
     default.restart(0, p)
-    assert default.verdict(0, p, trial) == "accept"  # 0.9 ≤ 1 - 1e-4
+    assert default.verdict(0, p, trial.x, trial.f) == "accept"  # 0.9 ≤ 1 - 1e-4
     tight = DiagonalPreconditioner(armijo_c=0.5)
     tight.restart(0, p)
-    assert tight.verdict(0, p, trial) == "retry"  # 0.9 > 1 - 0.5
+    assert tight.verdict(0, p, trial.x, trial.f) == "retry"  # 0.9 > 1 - 0.5
 
 
 def test_diag_floor_is_a_floor_not_an_addend() -> None:
@@ -195,7 +195,7 @@ def test_diag_floor_is_a_floor_not_an_addend() -> None:
     # crossover Y = θ·g1² = λ (elementwise, in the mean-square spelling).
     g1 = g0 / (1.0 + math.sqrt(theta))
     trial = PathPoint(x=p.x - g0, f=0.9, g=g1)  # Armijo: 0.9 ≤ 1 - 1e-4·‖g0‖²
-    assert solver.verdict(0, p, trial) == "accept"
+    assert solver.verdict(0, p, trial.x, trial.f) == "accept"
     solver.fold(0, p, trial)
     lam = theta * jnp.square(g1)
     assert close(solver.y_ema[0], lam, 1e-12)  # secant sits on the crossover
@@ -216,14 +216,14 @@ def test_diag_decay_blends_later_secants() -> None:
     x1 = p.x - g0  # alpha = 1, accepted: f = 0.9 <= 1 - 1e-4·5
     g1 = jnp.array([0.5, 1.0])
     first = PathPoint(x=x1, f=0.9, g=g1)
-    assert solver.verdict(0, p, first) == "accept"
+    assert solver.verdict(0, p, first.x, first.f) == "accept"
     solver.fold(0, p, first)
     s1, y1 = x1 - p.x, g1 - g0
     assert close(solver.s_ema[0], jnp.square(s1), 1e-12)
     assert close(solver.y_ema[0], jnp.square(y1), 1e-12)
     s2, y2 = jnp.array([0.25, -0.5]), jnp.array([0.1, 0.2])
     second = PathPoint(x=x1 + s2, f=0.8, g=g1 + y2)
-    assert solver.verdict(0, first, second) == "accept"
+    assert solver.verdict(0, first, second.x, second.f) == "accept"
     solver.fold(0, first, second)
     assert close(solver.s_ema[0], 0.5 * jnp.square(s1) + 0.5 * jnp.square(s2), 1e-12)
     assert close(solver.y_ema[0], 0.5 * jnp.square(y1) + 0.5 * jnp.square(y2), 1e-12)
@@ -236,13 +236,13 @@ def test_diag_gives_up_only_when_the_gradient_norm_converged() -> None:
     solver.restart(0, p)
     # The start never trips the test: ‖g0‖ <= τ‖g0‖ is false for τ < 1.
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
-    assert solver.verdict(0, p, first) == "accept"  # warm-up
+    assert solver.verdict(0, p, first.x, first.f) == "accept"  # warm-up
     solver.fold(0, p, first)
     # dim 1's magnitude dominates the norm: not converged.
     partial = PathPoint(x=first.x, f=0.5, g=jnp.array([1e-5, 1.0]))
-    assert solver.verdict(0, partial, partial) == "accept"
+    assert solver.verdict(0, partial, partial.x, partial.f) == "accept"
     converged = PathPoint(x=first.x, f=0.5, g=jnp.array([9e-4, 3e-4]))
-    assert solver.verdict(0, converged, converged) == "give_up"
+    assert solver.verdict(0, converged, converged.x, converged.f) == "give_up"
 
 
 def test_diag_gives_up_on_a_nonfinite_trial() -> None:
@@ -252,24 +252,27 @@ def test_diag_gives_up_on_a_nonfinite_trial() -> None:
         p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
         solver.restart(0, p)
         warm = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 0.5]))
-        assert solver.verdict(0, p, warm) == "accept"
+        assert solver.verdict(0, p, warm.x, warm.f) == "accept"
         solver.fold(0, p, warm)
         trial = PathPoint(x=warm.x - 0.1 * warm.g, f=bad, g=warm.g)
-        assert solver.verdict(0, warm, trial) == "give_up"
+        assert solver.verdict(0, warm, trial.x, trial.f) == "give_up"
 
 
-def test_diag_gives_up_on_a_nonfinite_gradient() -> None:
-    """A finite f with an inf gradient component must not reach the EMA."""
+def test_diag_judges_a_trial_on_its_value_alone() -> None:
+    """A trial is handed over as x and f: its gradient cannot decide anything.
+
+    The engine buys a trial's gradient only for the step's winner and gates it
+    there, so the method's ruling is a function of f (and the step's start). A
+    non-finite *value* is still a ruling: past the warm-up the only sample gives
+    up, and nothing about a gradient can change that.
+    """
     solver = DiagonalPreconditioner()
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.restart(0, p)
     warm = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 0.5]))
-    assert solver.verdict(0, p, warm) == "accept"
+    assert solver.verdict(0, p, warm.x, warm.f) == "accept"
     solver.fold(0, p, warm)
-    trial = PathPoint(x=warm.x - 0.1 * warm.g, f=0.4, g=jnp.array([math.inf, 0.5]))
-    assert solver.verdict(0, warm, trial) == "give_up"
-    # The inf secant never landed: y_ema holds only the warm-up pair.
-    assert close(solver.y_ema[0], jnp.square(warm.g - p.g), 1e-12)
+    assert solver.verdict(0, warm, warm.x, 0.4) == "accept"
 
 
 def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
@@ -278,7 +281,7 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 2.0]))
     solver.restart(0, p)
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
-    assert solver.verdict(0, p, first) == "accept"
+    assert solver.verdict(0, p, first.x, first.f) == "accept"
     solver.fold(0, p, first)
     assert solver.has_secant[0]
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
@@ -334,7 +337,7 @@ def test_diag_line_search_walks_the_grid_and_folds_the_argmin() -> None:
         x = solver.propose(0, p)
         f, g = quad(x)
         trial = PathPoint(x=x, f=f, g=g)
-        verdicts.append(solver.verdict(0, p, trial))
+        verdicts.append(solver.verdict(0, p, trial.x, trial.f))
         trials.append(trial)
     assert verdicts == ["retry", "retry", "accept"]
     # The grid shrank by the backtrack constant: 1.0, bt, bt².
@@ -370,7 +373,7 @@ def test_diag_line_search_gives_up_when_no_sample_is_finite() -> None:
     for rnd in range(3):  # two shrinks, then the last sample finds no finite win
         x = solver.propose(0, p)
         trial = PathPoint(x=x, f=math.nan, g=jnp.full(2, math.nan))
-        v = solver.verdict(0, p, trial)
+        v = solver.verdict(0, p, trial.x, trial.f)
         assert v == ("give_up" if rnd == 2 else "retry")
 
 

@@ -21,9 +21,10 @@ Three pieces, three modules (`soar_lite/engine.py`, `soar_lite/solver.py`,
   off the path's own recent f changes and a pool of group-mins shared by every
   path. Each side is a scott_mad Gaussian-kernel KDE over its own samples,
   so neither assumes a single Gaussian; no surrogate model of `f` is fitted.
-- **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep, one batched
-  evaluation per iteration, and owns the box, the shared horizon, the restart verdicts
-  and the stall state machine. `n_paths = 1` is the single-path baseline.
+- **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep: an
+  iteration decides every move on values and buys the gradients it kept in one
+  batch. Owns the box, the shared horizon, the restart verdicts and the stall
+  state machine. `n_paths = 1` is the single-path baseline.
 
 `ALGORITHM.md` is the derivation: what each piece does, why the floor is a floor
 and not an addend, the two cost axes, what may be redesigned freely, the

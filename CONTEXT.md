@@ -31,10 +31,11 @@ _Avoid_: population size, swarm size
 
 **iteration**:
 One pass of the engine's main loop, counted in `n_iters`. Per iteration the engine
-decides which paths restart and then steps the rest: a path either probes or
+decides which paths restart and then moves the rest: a path either probes or
 steps this iteration, never both. The parallel wall-clock unit; an iteration
 may serve zero batches (a dead iteration where nothing moves) or several (the
-restart probe's `n_probe_evals` batches plus the steppers' own trial budgets).
+probe's draws, the steppers' trials, and the g batch that grades what they
+kept).
 Iteration 0 is the initialization probe: the rule's cold-start
 verdict says restart for every path, so starting the flock is the same
 operation as any later restart. `n_iters` counts finished iterations only — one
@@ -50,9 +51,11 @@ _Avoid_: update, move
 
 **trial**:
 One served proposal within a step — one row of a batch that the method judges
-via `verdict`. There is no engine-side cap: the method's own stopping test (or
-its own trial budget) ends the enumeration, so `verdict` must return `accept`
-or `give_up`.
+via `verdict`. The method is handed its coords and value, never its gradient:
+only the winner's gradient is bought (see *settle*), so a method that needs one
+to rule is out of this engine's reach. There is no engine-side cap: the
+method's own stopping test (or its own trial budget) ends the enumeration, so
+`verdict` must return `accept` or `give_up`.
 _Avoid_: line-search round (retired)
 
 **incumbent (B)**:
@@ -95,9 +98,9 @@ _Avoid_: query, sample, evaluation (retired)
 **n_points / n_batches**:
 The two reported work counts: g points and g batches (fused value+gradient
 passes) billed. They are different numbers on different axes and must never
-share a chart. Only fused passes are billed: a probe's f-only draws are the
-cheap half and appear in neither count. The result reports both, replacing
-scipy's single `nfev`.
+share a chart. Only g passes are billed: value-only work — a probe's f-only
+draws, a rejected trial — is the cheap half and appears in neither count. The
+result reports both, replacing scipy's single `nfev`.
 _Avoid_: nfev (retired)
 
 **objective** (目标 f):
@@ -194,8 +197,19 @@ _Avoid_: restart check, reset decision
 **fold**:
 The handoff by which the engine tells a method which of its served trials won,
 so the method commits the matching state. The engine is the only owner of
-"who won".
+"who won", and the fold is the only commit: a winner whose gradient turns out
+unusable is refused before the method is told anything.
 _Avoid_: accept, commit (as the name of this handoff)
+
+**settle**:
+The iteration's one g batch, and the only place a produced point becomes a
+graded one. Everything the f-only seam left unread or ungraded — a probe's
+starts and a step's winners — is bought here, after both halves have decided on
+values and before anything is placed. A point that already arrived with its
+gradient (a run without the seam, or a probe's fused start) is promoted as it
+stands: a pass that served both halves is never served twice. A run without the
+seam therefore serves nothing here — there is nothing pending.
+_Avoid_: commit batch, gradient round
 
 ### Cost model
 

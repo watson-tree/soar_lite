@@ -159,8 +159,10 @@ To replace one outright, implement its protocol and pass the instance:
 
 - **`LocalSolver`** — the search method: `restart`, `propose`, `verdict`,
   `fold`. You own direction, step size and acceptance; the engine owns
-  projection, the horizon and the per-step argmin. `restart` is the only
-  cold-start call, so it runs at initialization and after every restart.
+  projection, the horizon and the per-step argmin. `verdict` is handed a
+  trial's coords and value, not its gradient — the engine buys gradients only
+  for the points it keeps, and `fold` is where a step lands. `restart` is the
+  only cold-start call, so it runs at initialization and after every restart.
 - **`RestartRule`** — the continue-versus-restart decision: `observe_continue`,
   `observe_restart`, `should_restart`, `restart`.
 
