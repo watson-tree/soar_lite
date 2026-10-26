@@ -47,20 +47,20 @@ def grow_pool(policy: EIRestartRule, to: int = WINDOW) -> None:
         policy.observe_restart(2.0)
 
 
-def continue_payoff(f_k: float, incumbent: float, deltas: list[float]) -> float:
+def continue_payoff(f_k: float, best_fun_raw: float, deltas: list[float]) -> float:
     """Read path 0's continue payoff after folding `deltas` into its stage."""
     policy = EIRestartRule()
     for delta in deltas:
         policy.observe_continue(0, delta)
-    return policy._continue_payoff(0, f_k, incumbent)
+    return policy._continue_payoff(0, f_k, best_fun_raw)
 
 
-def restart_payoff(incumbent: float, group_mins: list[float]) -> float:
+def restart_payoff(best_fun_raw: float, group_mins: list[float]) -> float:
     """Read the restart payoff with `group_mins` as the shared pool."""
     policy = EIRestartRule()
     for group_min in group_mins:
         policy.observe_restart(group_min)
-    return policy._restart_payoff(incumbent)
+    return policy._restart_payoff(best_fun_raw)
 
 
 def test_normal_functions_match_known_values() -> None:
@@ -332,8 +332,8 @@ def test_no_restart_evidence_never_restarts() -> None:
     assert policy.should_restart(0, 0.0, 0.0) is False  # 0 > 0 is False
 
 
-def test_no_incumbent_never_restarts_but_does_not_leave_the_gate_open() -> None:
-    """Cold start (incumbent = inf) never restarts, even at a due gate.
+def test_no_best_never_restarts_but_does_not_leave_the_gate_open() -> None:
+    """Cold start (best = inf) never restarts, even at a due gate.
 
     The stage still closes: B is the engine's to write, and holding a full stage
     open would stall the path's cadence behind a verdict that cannot be read.

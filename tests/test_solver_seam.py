@@ -22,7 +22,7 @@ from soar_lite.engine import PathPoint, Verdict, n_path_schedule
 
 jax.config.update("jax_enable_x64", val=True)
 
-PROBE_EVALS = 1  # the shipping probe depth: sizes above 1 need the f-only seam
+PROBE_DRAWS = 1  # the shipping probe depth: sizes above 1 need the f-only seam
 
 
 def unit_bounds(d: int = 1) -> jnp.ndarray:
@@ -117,7 +117,7 @@ class RecordingRule:
         """Record one restart event's group-min (the pool carries no path index)."""
         self.group_mins.append(group_min)
 
-    def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:  # noqa: ARG002
+    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
         """Record the verdict call; restart only while the pool is empty."""
         self.verdicts.append(i)
         return not self.group_mins  # the engine's initialization probe
@@ -130,7 +130,7 @@ class RecordingRule:
 class AlwaysRestartRule(RecordingRule):
     """Same recorder, but every verdict says restart."""
 
-    def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:  # noqa: ARG002
+    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
         """Record the verdict call for path i and always restart."""
         self.verdicts.append(i)
         return True
@@ -146,15 +146,15 @@ def test_injected_solver_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_iters=PROBE_EVALS + 1,  # iteration 0 is the init probe
-        n_probe_evals=PROBE_EVALS,
+        max_iters=PROBE_DRAWS + 1,  # iteration 0 is the init probe
+        n_draws=PROBE_DRAWS,
         solver=solver,
         restart_rule=RecordingRule(),
         key=jax.random.PRNGKey(0),
     )
     assert solver.inited == [0, 1, 2], solver.inited
     assert solver.verdicts == [0, 1, 2], solver.verdicts  # one trial, then accept
-    assert res.n_points == sum(w for w, _d in shapes) == PROBE_EVALS * k + k
+    assert res.n_points == sum(w for w, _d in shapes) == PROBE_DRAWS * k + k
     assert res.status == "max_iters"
 
 
@@ -168,15 +168,15 @@ def test_give_up_stalls_a_path() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_iters=PROBE_EVALS + 1,  # iteration 0 is the init probe
-        n_probe_evals=PROBE_EVALS,
+        max_iters=PROBE_DRAWS + 1,  # iteration 0 is the init probe
+        n_draws=PROBE_DRAWS,
         solver=solver,
         restart_rule=RecordingRule(),
         key=jax.random.PRNGKey(1),
     )
     assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
     # init probe + the single stalled iteration; the rest serve nothing
-    assert res.n_points == sum(w for w, _d in shapes) == PROBE_EVALS * k + k
+    assert res.n_points == sum(w for w, _d in shapes) == PROBE_DRAWS * k + k
     assert res.status == "max_iters"
 
 
@@ -190,13 +190,13 @@ def test_injected_rule_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_iters=PROBE_EVALS + PROBE_EVALS,  # init probe + one step
-        n_probe_evals=PROBE_EVALS,
+        max_iters=PROBE_DRAWS + PROBE_DRAWS,  # init probe + one step
+        n_draws=PROBE_DRAWS,
         solver=StubSolver(),
         restart_rule=rule,
         key=jax.random.PRNGKey(2),
     )
-    n_iterations = PROBE_EVALS  # max_iters minus the init probe's iteration
+    n_iterations = PROBE_DRAWS  # max_iters minus the init probe's iteration
     assert len(rule.group_mins) == k  # cold start: the n_paths init group-mins, once
     # Iteration 0 is the initialization probe, so the cold-start ask restarts
     # every path before any step; the one iteration the budget still buys steps.
@@ -218,17 +218,17 @@ def test_rule_can_force_restarts() -> None:
         budget_check=lambda: True,
         n_paths=k,
         # Each iteration restarts every path, so each one buys a probe
-        # (PROBE_EVALS batches) and no step: a restarted path is skipped by that
+        # (PROBE_DRAWS batches) and no step: a restarted path is skipped by that
         # iteration's step.
         max_iters=3,  # the init probe plus two restart iterations
-        n_probe_evals=PROBE_EVALS,
+        n_draws=PROBE_DRAWS,
         solver=solver,
         restart_rule=rule,
         key=jax.random.PRNGKey(3),
     )
     # init probe + two restart events, and nothing else
     assert res.n_points == sum(w for w, _d in shapes)
-    assert res.n_points == PROBE_EVALS * k + 2 * (PROBE_EVALS * k)
+    assert res.n_points == PROBE_DRAWS * k + 2 * (PROBE_DRAWS * k)
     # The cold start is a restart event too: every path restarts on
     # iteration 0 and on each of the two iterations after it.
     assert rule.restarts == [0, 1] * 3  # every iteration, cold start first
@@ -274,7 +274,7 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
             budget_check=lambda: billed < limit,
             n_paths=k,
             max_iters=10,  # not the binding stop: the gate closes first
-            n_probe_evals=probe_evals,
+            n_draws=probe_evals,
             solver=StubSolver(),
             restart_rule=AlwaysRestartRule(),
             key=jax.random.PRNGKey(7),
@@ -300,14 +300,14 @@ def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=k,
-        max_iters=PROBE_EVALS + 3,  # the init probe plus three steps
-        n_probe_evals=PROBE_EVALS,
+        max_iters=PROBE_DRAWS + 3,  # the init probe plus three steps
+        n_draws=PROBE_DRAWS,
         solver=StubSolver(),
         restart_rule=RecordingRule(),
         key=jax.random.PRNGKey(4),
     )
     assert res.status == "max_iters", res
-    assert res.n_points == sum(w for w, _d in shapes) == PROBE_EVALS * k + 3 * k
+    assert res.n_points == sum(w for w, _d in shapes) == PROBE_DRAWS * k + 3 * k
 
 
 def test_box_is_data_not_a_unit_cube_assumption() -> None:
@@ -334,7 +334,7 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
         budget_check=None,
         n_paths=2,
         max_iters=3,
-        n_probe_evals=PROBE_EVALS,
+        n_draws=PROBE_DRAWS,
         solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
         restart_rule=RecordingRule(),
         key=jax.random.PRNGKey(5),
@@ -384,7 +384,7 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
             budget_check=None,
             n_paths=2,
             max_iters=3,
-            n_probe_evals=PROBE_EVALS,
+            n_draws=PROBE_DRAWS,
             solver=StubSolver(),
             restart_rule=AlwaysRestartRule(),
             key=jax.random.PRNGKey(7),
@@ -418,7 +418,7 @@ def test_every_path_feeds_once_per_iteration() -> None:
     def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         calls[0] += 1
         f_vals = jnp.full((x.shape[0],), 1.0, dtype=x.dtype)
-        if calls[0] <= PROBE_EVALS:  # init probe evals: column 0 has no evidence
+        if calls[0] <= PROBE_DRAWS:  # init probe evals: column 0 has no evidence
             f_vals = f_vals.at[0].set(jnp.inf)
         return f_vals, jnp.zeros_like(x), None
 
@@ -428,8 +428,8 @@ def test_every_path_feeds_once_per_iteration() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_iters=PROBE_EVALS + 3,  # init probe + three iterations
-        n_probe_evals=PROBE_EVALS,
+        max_iters=PROBE_DRAWS + 3,  # init probe + three iterations
+        n_draws=PROBE_DRAWS,
         solver=StubSolver(),
         restart_rule=rule,
         key=jax.random.PRNGKey(6),
@@ -464,8 +464,8 @@ def test_a_probes_iteration_is_not_read_back_as_a_zero_step() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
-        max_iters=PROBE_EVALS + 1,  # init probe + one step
-        n_probe_evals=PROBE_EVALS,
+        max_iters=PROBE_DRAWS + 1,  # init probe + one step
+        n_draws=PROBE_DRAWS,
         solver=StubSolver(),
         restart_rule=rule,
         key=jax.random.PRNGKey(9),
@@ -475,16 +475,16 @@ def test_a_probes_iteration_is_not_read_back_as_a_zero_step() -> None:
     deltas = [d for _i, d in rule.deltas]
     assert len(deltas) == k, rule.deltas  # one step each, after its probe
     assert all(d is not None and d < 0.0 for d in deltas), deltas
-    assert res.n_batches == PROBE_EVALS + 1, res
+    assert res.n_batches == PROBE_DRAWS + 1, res
 
 
 def test_one_sample_per_iteration_at_every_probe_size() -> None:
     """Each iteration folds one sample per path, at every probe size.
 
     The continue side's sample is one step, so it does not depend on
-    n_probe_evals: after the init probe, M iterations of budget buy exactly M
+    n_draws: after the init probe, M iterations of budget buy exactly M
     samples per path. This is what changed when the horizon clock went away - a
-    sample used to span n_probe_evals iterations, so the same budget bought
+    sample used to span n_draws iterations, so the same budget bought
     fewer of them. Sizes above 1 take the f-only seam, whose single extra batch
     for the winners is all the probe's depth costs in the batch count.
     """
@@ -499,7 +499,7 @@ def test_one_sample_per_iteration_at_every_probe_size() -> None:
             bounds=unit_bounds(),
             n_paths=k,
             max_iters=3,  # init probe + two steps
-            n_probe_evals=probe_evals,
+            n_draws=probe_evals,
             solver=StubSolver(),
             restart_rule=rule,
             key=jax.random.PRNGKey(5),
@@ -527,16 +527,16 @@ def test_reports_points_and_batches_separately() -> None:
             bounds=unit_bounds(),
             budget_check=lambda: True,
             n_paths=k,
-            max_iters=PROBE_EVALS + 1,  # init probe + one accepted trial
-            n_probe_evals=PROBE_EVALS,
+            max_iters=PROBE_DRAWS + 1,  # init probe + one accepted trial
+            n_draws=PROBE_DRAWS,
             solver=StubSolver(),
             restart_rule=RecordingRule(),
             key=jax.random.PRNGKey(8),
         )
         return res.n_points, res.n_batches
 
-    # one probe of PROBE_EVALS(=1) batch, then one accepted trial batch
-    batches = PROBE_EVALS + 1  # = 2, independent of n_paths
+    # one probe of PROBE_DRAWS(=1) batch, then one accepted trial batch
+    batches = PROBE_DRAWS + 1  # = 2, independent of n_paths
     points_3, batches_3 = run(3)
     points_1, batches_1 = run(1)
     assert batches_3 == batches_1 == batches
@@ -545,7 +545,7 @@ def test_reports_points_and_batches_separately() -> None:
 
 
 def test_multi_draw_probe_is_refused_without_the_f_only_seam() -> None:
-    """n_probe_evals > 1 needs evaluate_f: it would price g once per draw.
+    """n_draws > 1 needs evaluate_f: it would price g once per draw.
 
     The probe's cost asymmetry is in gradient counts, not batch counts - a step
     computes g once while an un-seamed multi-draw probe computes it once per
@@ -559,21 +559,21 @@ def test_multi_draw_probe_is_refused_without_the_f_only_seam() -> None:
             evaluate_batch,
             bounds=unit_bounds(),
             n_paths=2,
-            n_probe_evals=2,
+            n_draws=2,
             max_iters=8,
             solver=StubSolver(),
             key=jax.random.PRNGKey(0),
         )
     except ValueError as e:
         refused = str(e)
-    assert refused is not None, "n_probe_evals=2 was accepted without evaluate_f"
+    assert refused is not None, "n_draws=2 was accepted without evaluate_f"
     assert "evaluate_f" in refused, refused
 
 
 def test_f_only_probe_computes_one_gradient_per_probe() -> None:
-    """An f-only probe: n_probe_evals f-only draws, then one fused batch.
+    """An f-only probe: n_draws f-only draws, then one fused batch.
 
-    That single fused batch is what makes n_probe_evals > 1 cost-matched with a
+    That single fused batch is what makes n_draws > 1 cost-matched with a
     one-gradient step: every draw costs an f, the winners then pay the one
     gradient between them. Only that fused batch is billed. The group-min still
     picks per column across the draws, so the batch re-serves the same winners
@@ -598,7 +598,7 @@ def test_f_only_probe_computes_one_gradient_per_probe() -> None:
         evaluate_f=evaluate_f,
         bounds=unit_bounds(),
         n_paths=k,
-        n_probe_evals=probe_evals,
+        n_draws=probe_evals,
         max_iters=1,  # the probe alone is one iteration
         solver=StubSolver(),
         key=jax.random.PRNGKey(1),
@@ -645,7 +645,7 @@ def test_a_single_draw_probe_reads_its_start_at_the_gradient() -> None:
         evaluate_f=evaluate_f,
         bounds=unit_bounds(),
         n_paths=2,
-        n_probe_evals=1,
+        n_draws=1,
         max_iters=1,  # the probe alone is one iteration
         solver=StubSolver(),
         key=jax.random.PRNGKey(3),
@@ -725,7 +725,7 @@ def test_one_gradient_batch_per_iteration() -> None:
     class RestartFirst(RecordingRule):
         """Cold start, then only path 0 keeps restarting."""
 
-        def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:  # noqa: ARG002
+        def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
             """Seed the pool cold, then keep restarting path 0 alone."""
             return not self.group_mins or i == 0
 
@@ -813,7 +813,7 @@ def test_a_non_finite_gradient_start_arrives_stalled() -> None:
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=2,
-        n_probe_evals=1,
+        n_draws=1,
         max_iters=2,
         solver=solver,
         key=jax.random.PRNGKey(4),

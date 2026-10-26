@@ -333,8 +333,8 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     assert res.fun < 0.4, res.fun  # must slide near (1, 0), f=0.25
 
 
-class _RecordingIncumbent(EIRestartRule):
-    """An `EIRestartRule` that also logs the incumbent each verdict is asked.
+class _RecordingBest(EIRestartRule):
+    """An `EIRestartRule` that also logs the raw best each verdict is asked.
 
     Recording only: every decision is delegated, so the run is the default
     rule's plus a log of what B it was handed.
@@ -344,12 +344,12 @@ class _RecordingIncumbent(EIRestartRule):
         super().__init__()
         self.bs: list[float] = []
 
-    def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
-        self.bs.append(incumbent)
-        return super().should_restart(i, f_k, incumbent)
+    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:
+        self.bs.append(best_fun_raw)
+        return super().should_restart(i, f_k, best_fun_raw)
 
 
-def test_feasible_only_incumbent() -> None:
+def test_feasible_only_best() -> None:
     """The reported B is the feasible min; the one a verdict reads is raw.
 
     f = (θ-0.2)^2 has its global min at θ=0.2, which the feas mask marks
@@ -380,7 +380,7 @@ def test_feasible_only_incumbent() -> None:
     def budget_check() -> bool:
         return evals < 600
 
-    rule = _RecordingIncumbent()
+    rule = _RecordingBest()
     res = n_path_schedule(
         evaluate_batch,
         bounds=unit_bounds(),
@@ -463,7 +463,7 @@ def run_probe_pass_with_nan_draw(nan_draw: int) -> None:
         n_paths=n_paths,
         # group-min needs two draws to skip between; this test pins the skip,
         # not the default, so it states the probe size it assumes.
-        n_probe_evals=2,
+        n_draws=2,
         max_iters=2,  # the 3-batch probe, then one step
         solver=HalfStep(),
         key=jax.random.PRNGKey(7),
@@ -580,9 +580,9 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
     n_paths = 2
     # the horizon counts iterations, and iteration 0 is the init probe, so it is
     # that one plus the three trial iterations this test counts
-    n_probe_evals = 1
+    n_draws = 1
     n_iterations = 3
-    max_iters = n_probe_evals + n_iterations
+    max_iters = n_draws + n_iterations
     served = [0]
     calls = [0]
 
@@ -595,7 +595,7 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
         d = theta - 0.7
         f_vals = jnp.sum(d**4 + d**2, axis=1)
         grads = 4.0 * d**3 + 2.0 * d
-        if calls[0] <= n_probe_evals:  # the init probe: column 0 gets no evidence
+        if calls[0] <= n_draws:  # the init probe: column 0 gets no evidence
             f_vals = f_vals.at[0].set(jnp.inf)
         return f_vals, grads, None
 
@@ -603,7 +603,7 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
         evaluate_batch,
         bounds=unit_bounds(),
         n_paths=n_paths,
-        n_probe_evals=n_probe_evals,
+        n_draws=n_draws,
         max_iters=max_iters,
         budget_check=lambda: served[0] < 60,
         solver=HalfStep(),
@@ -611,7 +611,7 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
         key=jax.random.PRNGKey(0),
     )
     # one point per live path per iteration, not two evals per step
-    assert res.n_points == n_probe_evals * n_paths + n_iterations, res.n_points
+    assert res.n_points == n_draws * n_paths + n_iterations, res.n_points
 
 
 def test_stalled_paths_wait_for_ei_then_restart() -> None:
@@ -633,7 +633,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     horizon ends the run. That idle tail is the price of a stop that does not
     depend on a rule's cadence.
     """
-    n_paths, trial_cap, n_probe_evals = 4, 3, 1
+    n_paths, trial_cap, n_draws = 4, 3, 1
     # Iterations: the init probe, the rejecting iteration that stalls the flock,
     # one idle iteration while the verdict comes due, then the restart probe.
     max_iters = 4
@@ -646,7 +646,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
         def evaluate_batch(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             shapes.append((int(theta.shape[0]), int(theta.shape[1])))
             evals[0] += int(theta.shape[0])
-            if len(shapes) <= n_probe_evals:  # init probe evals: real objective
+            if len(shapes) <= n_draws:  # init probe evals: real objective
                 return theta[:, 0], jnp.ones_like(theta), None
             return (
                 jnp.full((theta.shape[0],), bad, dtype=theta.dtype),
@@ -658,7 +658,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
             evaluate_batch,
             bounds=unit_bounds(),
             n_paths=n_paths,
-            n_probe_evals=n_probe_evals,
+            n_draws=n_draws,
             max_iters=max_iters,
             # the horizon ends both runs
             budget_check=lambda: evals[0] < 10**6,
@@ -671,14 +671,14 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
     shapes_off, evals_off, res_off = seam_run(10**9)  # verdicts never due
     shapes_on, evals_on, res_on = seam_run(2)  # verdict once two samples land
     # without verdicts: init + trial_cap rejecting trials per path, then nothing
-    pre = n_probe_evals + trial_cap
+    pre = n_draws + trial_cap
     assert len(shapes_off) == pre, shapes_off
-    assert evals_off == (n_probe_evals + trial_cap) * n_paths
+    assert evals_off == (n_draws + trial_cap) * n_paths
     # The idle iteration serves no eval, then a restart probe of every path.
     # The tail is left as an inequality on purpose - what the revived
     # paths do after the probe (accept, or burn their own trial cap again on the
     # same flat field) is the injected method's business.
-    assert len(shapes_on) - pre >= n_probe_evals, shapes_on  # served after the stall
+    assert len(shapes_on) - pre >= n_draws, shapes_on  # served after the stall
     assert all(m == n_paths for m, _d in shapes_on), shapes_on  # no shrinking batches
     assert evals_on == len(shapes_on) * n_paths > evals_off
     # The horizon ends both arms. A stalled flock idles rather than stopping at
@@ -914,7 +914,7 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
 
     for bad in (
         {"n_paths": 0},
-        {"n_probe_evals": 0},
+        {"n_draws": 0},
         {"max_iters": -1},
     ):
         assert next(iter(bad)) in rejects(**bad), bad

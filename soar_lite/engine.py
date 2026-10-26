@@ -6,7 +6,7 @@ This module is the seam (拍板) of soar_lite: it owns the two plugin contracts
 seams, and the `n_path_schedule` loop). The run's state lives in five private
 holders, one per state family: `_Sampler` (the draws), `_Evaluator` (the two
 seams and the one charged site), `_Paths` (the n-path state machine),
-`_Incumbent` (B), and `_Budget` (the stop meter and work report). Concretes
+`_Best` (B), and `_Budget` (the stop meter and work report). Concretes
 import *from* here, never the other way around at module level:
 
     soar_lite/
@@ -85,7 +85,7 @@ class LocalSolver(Protocol):
     """The search method the n-path engine drives (the engine's plugin point).
 
     The engine owns the schedule: row composition, projection, the shared
-    horizon, the n-path state machine (restart/step/stall), and the incumbent B.
+    horizon, the n-path state machine (restart/step/stall), and the best B.
     The method owns the search: the direction, the step size, the acceptance
     test, **and how long the enumeration may run** - the engine loops until the
     method ends it, so ``verdict`` must reach "accept" or "give_up" on its own.
@@ -178,9 +178,9 @@ class RestartRule(Protocol):
     lives inside it in dicts keyed by the path index, exactly as the method
     holds its `eta`/`reference`/`q`. The engine feeds the rule and asks for
     verdicts; the evidence lives inside the instance and the engine never reads
-    it. The incumbent B arrives as a should_restart argument rather than as
+    it. The raw best B arrives as a should_restart argument rather than as
     stored state, so the engine stays the only writer of B and every verdict
-    reads the incumbent of its own iteration. That B is the run's **raw**
+    reads the best of its own iteration. That B is the run's **raw**
     minimum - over every finite point served, feasible or not - because the
     rule's own evidence is unfiltered: `f_k` and the group-mins in its pool are
     raw values, and a probe group-min cannot be filtered by feasibility without
@@ -190,7 +190,7 @@ class RestartRule(Protocol):
     The engine offers exactly two evidence channels, and the signatures say
     which is which: `observe_continue(i, delta)` is per-path (what continuing
     bought *that* path), while `observe_restart(group_min)` carries **no path
-    index** because a group-min is a property of the sampler and the incumbent,
+    index** because a group-min is a property of the sampler and the best,
     not of any one path - every path pools the same history. Those two are the
     two alternatives the verdict compares, and they are the scalar facts the
     engine owns; a rule needing more (point geometry, a surrogate over the
@@ -224,14 +224,14 @@ class RestartRule(Protocol):
         """Fold in the group-min a fresh restart start achieved.
 
         The engine draws each restart start as the min of one probe group
-        (`n_probe_evals` i.i.d. points), so `group_min` is that group's min - a
+        (`n_draws` i.i.d. points), so `group_min` is that group's min - a
         real sample of "what a restart buys". The history is pooled across paths
         (hence no path index); a rule that ignores the payoff no-ops.
         """
         ...
 
-    def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
-        """Return True iff path i should restart from f_k with incumbent B.
+    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:
+        """Return True iff path i should restart from f_k with the raw best B.
 
         The engine asks this for every path on its first iteration, before any
         probe has run, and that ask is how the flock is seeded: a rule must
@@ -316,7 +316,7 @@ class NPathResult:
 
     Two deliberate differences from `OptimizeResult`: `success`/`message` are
     absent because the engine has no convergence criterion at all, and `fun` is
-    the incumbent over *feasible* points only, so it is `inf` when nothing
+    the best over *feasible* points only, so it is `inf` when nothing
     feasible was ever served - the
     trajectory still moves on the penalized objective, but B does not. scipy's `fun`
     has no such filter.
@@ -342,7 +342,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # start to draw and is rejected below rather than guessed.
     sample: Sampler | None = None,
     n_paths: int = 16,  # number of paths advanced each iteration, the engine's width
-    n_probe_evals: int = 1,  # draws per start; >1 needs evaluate_f
+    n_draws: int = 1,  # draws per start; >1 needs evaluate_f
     # The run's horizon, counted in iterations: the engine completes at most
     # max_iters iterations. An iteration is one move per path (a restart probe
     # or a step), not one eval, so this is a reproducible stop, not a cost or
@@ -370,8 +370,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     """Advance n_paths independent chains in x under one shared horizon.
 
     The engine owns the schedule: it composes and clips the rows into
-    `bounds`, serves one batched evaluate_batch call per eval, keeps the
-    n-path state machine, and owns the incumbent B. The search itself is
+    `bounds`, serves each batch as one `evaluate_batch` call, keeps the
+    n-path state machine, and owns the best B. The search itself is
     injected: `solver` owns direction, step size and
     acceptance and keeps its per-path state in Python floats, and
     `restart_rule` is the engine's one rule instance (default
@@ -411,19 +411,19 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
     Selection events (init, restart) never descend blind: each event with n
     starts to fill (n = n_paths at init, n = N restarting paths on a restart) draws
-    n_probe_evals value-only batches of n points (pool = n_probe_evals * n).
-    Each eval draws n i.i.d. points from the injected sampler (`sample`,
+    n_draws batches of n points (pool = n_draws * n).
+    Each draw samples n i.i.d. points from the injected sampler (`sample`,
     default uniform over a finite `bounds`: the rule's payoff statistic below
     is defined against that sampler, so a different prior is injected rather
     than reparameterized into the box),
-    so the n column-wise groups across evals
+    so the n column-wise groups across draws
     are already random groups, and each group's min becomes one start - n
-    starts whose values are honest samples of the "min of n_probe_evals random
-    points" distribution (at the default n_probe_evals = 1 a group is a single
+    starts whose values are honest samples of the "min of n_draws random
+    points" distribution (at the default n_draws = 1 a group is a single
     draw and that point is the start; more draws buy a fuller min-of-k and need
     the f-only seam), identical for init and restart regardless of how many
     paths restart (by design). Probe-batch grads are reused for the selected
-    starts: starts cost zero extra evals. The rule's
+    starts: the probe gradients are reused, so a start costs no extra g pass. The rule's
     one shared group-min pool is cold-started with the n_paths init group-mins
     (a real spread for n_paths >= 2); n_paths=1 yields a single sample -> h = 0 ->
     degenerate EI_restart = 0 -> the single path never restarts. Every restart
@@ -432,7 +432,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     gives up stalls until an EI verdict revives it.
 
     The verdict compares a probe against one continue sample. A probe spends
-    n_probe_evals evals, while the continue side's evidence is one Δf per
+    n_draws draws, while the continue side's evidence is one Δf per
     iteration - the step it just took - non-overlapping, each path on its own
     clock (a restart opens a new stage, and the first iteration after a restart
     is skipped so the probe is not read back as a step's Δ). A stalled iteration
@@ -441,8 +441,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     clock, so a stall cannot postpone a verdict past its cohort's.
     So a stage of M iterations costs at most M evals (a stalled one serves no
     batch), but the batch count is not the cost
-    that dominates: a probe computes g n_probe_evals times while a step computes
-    it once, and g is the dearer half. So n_probe_evals > 1 requires evaluate_f;
+    that dominates: a probe computes g n_draws times while a step computes
+    it once, and g is the dearer half. So n_draws > 1 requires evaluate_f;
     with it both sides compute g exactly once (the probe's f-only draws are not
     charged; only its winners' fused pass is), leaving only the cheap f-count to
     differ. That is why the default is 1.
@@ -472,7 +472,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         sample: the injected prior ``(key, n) -> (n, d)`` in the engine's own
             coordinates; ``None`` draws i.i.d. uniform over a finite ``bounds``.
         n_paths: number of paths advanced in lockstep each iteration.
-        n_probe_evals: probe group size - the draws per start. ``1`` (the
+        n_draws: probe group size - the draws per start. ``1`` (the
             default) is one draw. Above 1 requires ``evaluate_f``: without it a
             probe would compute ``g`` once per draw against a step's single
             ``g``, and that gradient count - not the batch count - is the
@@ -492,7 +492,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         An ``NPathResult`` with the run's end state:
 
         - ``x``: the argmin in the caller's coordinates
-        - ``fun``: the incumbent (min finite feasible eval; ``inf`` if none)
+        - ``fun``: the best value (min finite feasible eval; ``inf`` if none)
         - ``n_points``: g points served (the serial-cost count)
         - ``n_batches``: g batches served (the parallel wall-clock count)
         - ``n_iters``: completed iterations (the init probe is iteration 0)
@@ -524,7 +524,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     """
     _validate_run(
         n_paths=n_paths,
-        n_probe_evals=n_probe_evals,
+        n_draws=n_draws,
         max_iters=max_iters,
         time_limit=time_limit,
         evaluate_f=evaluate_f,
@@ -574,15 +574,15 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # draw, so a box mismatch is validated once, on the first draw.
     sampler = _Sampler(draw, d_bounds, jax.random.PRNGKey(0) if key is None else key)
     budget = _Budget(max_iters, time_limit, budget_check)
-    incumbent = _Incumbent(d_bounds)
+    best = _Best(d_bounds)
 
     evaluator = _Evaluator(
         evaluate_batch,
         evaluate_f,
         sampler=sampler,
         budget=budget,
-        incumbent=incumbent,
-        n_probe_evals=n_probe_evals,
+        best=best,
+        n_draws=n_draws,
     )
     # Last, because it takes the resolved seams and their collaborators: the
     # state machine drives them rather than receiving them per call.
@@ -598,11 +598,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         if not budget.accept():
             break
         try:
-            # The iteration reads the incumbent, decides which paths restart,
+            # The iteration reads the best, decides which paths restart,
             # decides every move on values, then buys the gradients those
             # decisions need in one batch. A refused batch raises
             # `_BudgetExhausted` here, before anything is placed.
-            paths.move(incumbent.fun_raw)
+            paths.move(best.fun_raw)
         except _BudgetExhausted:
             # The iteration asked for a batch it could not afford and was cut
             # short: it did not finish, so it is not folded and not counted.
@@ -610,8 +610,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         budget.tick()  # counted after the body: only finished iterations
 
     return NPathResult(
-        x=incumbent.x,
-        fun=incumbent.fun,
+        x=best.x,
+        fun=best.fun,
         n_points=budget.n_points,
         n_batches=budget.n_batches,
         n_iters=budget.n_iters,
@@ -727,7 +727,7 @@ class _Budget:
         return "time_limit" if self.expired() else "budget_exhausted"
 
 
-class _Incumbent:
+class _Best:
     """The two bests the run keeps: what it reports, and what a verdict reads.
 
     `fun`/`x` are the answer: the minimum over feasible finite points served,
@@ -779,7 +779,7 @@ class _Evaluator:
     it: a fused `_batch` is the run's only charged site (the gate is asked before
     the charge, so a batch is served whole or not at all), and an `_f_only` call
     is cheaper work that is not a budget event. Whichever half served a point
-    updates the incumbent. `probe_select` and `settle` live here too: a probe is
+    updates the best. `probe_select` and `settle` live here too: a probe is
     draw-then-evaluate and its depth and deferral are properties of this seam,
     not of a path, and `settle` is where an iteration's deferred gradients are
     bought together, since this object owns both the seam and the charge.
@@ -794,22 +794,22 @@ class _Evaluator:
         # then the two objects it feeds, then the probe dial that is not one.
         sampler: _Sampler,
         budget: _Budget,
-        incumbent: _Incumbent,
-        n_probe_evals: int,
+        best: _Best,
+        n_draws: int,
     ) -> None:
         self._evaluate_batch = evaluate_batch
         self._evaluate_f = evaluate_f
         self._sampler = sampler
         self._budget = budget
-        self._incumbent = incumbent
-        self._n_probe_evals = n_probe_evals
+        self._best = best
+        self._n_draws = n_draws
 
     def probe_select(self, n: int) -> list[_Pending]:
-        """Draw n_probe_evals groups of n points, return n group-min starts.
+        """Draw n_draws batches of n points, return n group-min starts.
 
         Each draw is one (n,d) batch sized exactly n, and every draw comes
         from the same sampler, so the fixed column j across draws is already a
-        random group of n_probe_evals points; each group's min becomes one
+        random group of n_draws points; each group's min becomes one
         start, its value doubling as an {r_i} sample (a group with no finite
         member keeps its draw-0 point and arrives stalled - it waits for an EI
         verdict instead of stepping). Returns the n starts; raises
@@ -833,8 +833,8 @@ class _Evaluator:
         """
         defer_g = self._evaluate_f is not None
         # One draw is its own group: nothing to compare, so nothing to read.
-        unread = defer_g and self._n_probe_evals == 1
-        groups = [self._sampler.batch(n) for _ in range(self._n_probe_evals)]
+        unread = defer_g and self._n_draws == 1
+        groups = [self._sampler.batch(n) for _ in range(self._n_draws)]
         if unread:
             return [_Pending(groups[0][j], None, None) for j in range(n)]
         f_by_draw: list[list[float]] = []
@@ -851,7 +851,7 @@ class _Evaluator:
         # method state for the rest of the run.
         picks: list[tuple[int, int]] = []
         for j in range(n):
-            best = _argmin_finite([f_by_draw[r][j] for r in range(self._n_probe_evals)])
+            best = _argmin_finite([f_by_draw[r][j] for r in range(self._n_draws)])
             # Whole group non-finite: keep draw 0 rather than invent a point.
             # Its f is non-finite, so init/restart stalls this path on arrival
             # and only an EI verdict revives it.
@@ -927,7 +927,7 @@ class _Evaluator:
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
         f_vals = f_batch.tolist()
-        self._incumbent.observe(f_vals, x_batch, feas)
+        self._best.observe(f_vals, x_batch, feas)
         return f_vals, g_batch
 
     def _f_only(self, x_batch: jnp.ndarray) -> list[float]:
@@ -948,7 +948,7 @@ class _Evaluator:
             raise RuntimeError(msg)
         f_batch, feas = evaluate_f(x_batch)
         f_vals = f_batch.tolist()
-        self._incumbent.observe(f_vals, x_batch, feas)
+        self._best.observe(f_vals, x_batch, feas)
         return f_vals
 
 
@@ -1012,10 +1012,10 @@ class _Paths:
         # points[i].f - prev_f[i]; a restart resets the anchor to the probe's f.
         self.prev_f: list[float] = [math.inf] * n_paths
 
-    def move(self, incumbent_raw: float) -> None:
+    def move(self, best_fun_raw: float) -> None:
         """Take one iteration's move for every path, then settle what it deferred.
 
-        The restart decision comes first, against the incumbent the caller holds:
+        The restart decision comes first, against the best the caller holds:
         a path whose rule fires is probed fresh instead of stepped this
         iteration. Both halves then decide where a path goes from values alone
         when the f-only seam is present - the restarted paths by their probe, the
@@ -1030,14 +1030,14 @@ class _Paths:
         moves before placing any of them is the same schedule as placing each
         move as it is decided.
 
-        `incumbent_raw` is the barrier a restart has to clear: the value the rule
-        judges against, not the incumbent's reported value, which is why it
+        `best_fun_raw` is the barrier a restart has to clear: the value the rule
+        judges against, not the best point's reported value, which is why it
         arrives already unwrapped.
         """
         restarted = [
             i
             for i in range(self.n_paths)
-            if self.restart_rule.should_restart(i, self.points[i].f, incumbent_raw)
+            if self.restart_rule.should_restart(i, self.points[i].f, best_fun_raw)
         ]
         # Every path the rule did not fire on, stalled ones included: a stalled
         # path proposes nothing but still reports a stall this iteration, so its
@@ -1219,7 +1219,7 @@ def _check_seam(obj: object | None, proto: type, what: str) -> None:
 def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
     *,
     n_paths: int,
-    n_probe_evals: int,
+    n_draws: int,
     max_iters: int | None,
     time_limit: float | None,
     evaluate_f: EvaluateF | None,
@@ -1232,7 +1232,7 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
     """
     for name, value, low in (
         ("n_paths", n_paths, 1),
-        ("n_probe_evals", n_probe_evals, 1),
+        ("n_draws", n_draws, 1),
     ):
         if value < low:
             msg = f"{name} must be >= {low}, got {value}"
@@ -1251,15 +1251,15 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
         )
         raise ValueError(msg)
 
-    if evaluate_f is None and n_probe_evals != 1:
+    if evaluate_f is None and n_draws != 1:
         # The verdict's expensive side is the gradient count, not the batch
         # count: a probe computes `g` once per draw, a continue step once. The
         # engine cannot see the solver's `n_alpha` (the seam checks presence,
-        # not members), so the exact symmetry `n_alpha == n_probe_evals` is out
+        # not members), so the exact symmetry `n_alpha == n_draws` is out
         # of reach. This is the conservative proxy it can express.
         msg = (
-            f"n_probe_evals={n_probe_evals} without evaluate_f prices a probe "
-            f"at {n_probe_evals} gradients against one step's single gradient; "
+            f"n_draws={n_draws} without evaluate_f prices a probe "
+            f"at {n_draws} gradients against one step's single gradient; "
             "pass evaluate_f for multi-draw probes"
         )
         raise ValueError(msg)

@@ -142,7 +142,7 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 - 两侧**都不假设样本服从单个高斯**：各自用样本本身做高斯核 KDE（一折一核），偏斜的 `Δf` 流也照原
   样读。带宽取稳健的 MAD 尺度而不是标准差，所以一条长尾顶不爆它。
 
-**池子是全路径共用一个，不是每条路径一份**：一次重启买到多少，是「抽样器 + 当前 incumbent」的
+**池子是全路径共用一个，不是每条路径一份**：一次重启买到多少，是「抽样器 + 当前最优 B」的
 全局属性，与哪条路径无关。共用池子用最多样本估计同一个全局核密度，方差最小；按路径切分只会
 用更短的样本估同一个量。
 
@@ -153,7 +153,7 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 的：两侧是同一种 scott_mad KDE，
 只有样本数相当，它们的带宽与核均值才在同一个精度上，`EI_restart` 与 `EI_continue` 才是可比的两个
 估计。若继续侧只读最近两三步，它会低估自身展布、把 `EI_continue` 压低，重启就会赢下证据并不支持
-的判决——这种偏差不会报错，只会让最终 incumbent 更差。所以 window 是**推导出来的**，不是暴露给
+的判决——这种偏差不会报错，只会让最终 B 更差。所以 window 是**推导出来的**，不是暴露给
 调用方的旋钮。
 
 **不额外垫长度**：read 是 KDE 上的等权、一折一核，多折进来就是多一条证据、不多也不少；
@@ -166,7 +166,7 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 `M = 1` 时两侧同时落到各自的退化形式（stage 一折、池子一样本，MAD = 0 ⇒ `h = 0`），此时任何一条
 重复都赢不了 `EI_continue ≥ 0`，重启本就发不出来，所以也没有必要把窗口垫到 2。
 
-判决谓词：`EI_restart > EI_continue` 且 incumbent 有限。这里的 incumbent 是**全域**最优 `fun_raw`
+判决谓词：`EI_restart > EI_continue` 且 B 有限。这里的 B 是**全域**最优 `fun_raw`
 （所有有限样本、含不可行点），与 `f_k` 和池子里的 payoff 同口径；结果里报告的 `fun`/`x` 仍是
 可行域最优。池子里的 `+inf` 是**死起步**，不是被丢掉的值：它自己对改进的贡献恰好是 0，所以它作为
 同一个均值的零项进账——`EI_restart` 等于有限子集的 KDE 均值乘以「活着的起步占比」
@@ -183,13 +183,13 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 
 ### 3.1 选择事件不盲降
 
-初始化与重启都走同一个事件：抽 `n_probe_evals` 次求值、每次 `n` 个点（`n = n_paths` 或本次重启的路径数），
+初始化与重启都走同一个事件：抽 `n_draws` 批点、每批 `n` 个（`n = n_paths` 或本次重启的路径数），
 **按列**取最小值，得到 `n` 个起点；这些点的梯度直接复用（起点零额外 eval）。
 
-为什么按列取最小：每一列跨求值就是从同一抽样器里抽出的一个随机组，组最小值既是「`n_probe_evals`
+为什么按列取最小：每一列跨批就是从同一抽样器里抽出的一个随机组，组最小值既是「`n_draws`
 个随机点里最好的那个」（比盲降好），它的值又同时是 group-min pool 的一个**真实样本**——一次选择事件
-买到的改进。所以「选起点」与「收集证据」是同一个动作，不额外花预算。`n_probe_evals = 1` 退化为
-朴素初始化，`∞` 退化为随机搜索；默认 2。
+买到的改进。所以「选起点」与「收集证据」是同一个动作，不额外花预算。`n_draws = 1` 退化为
+朴素初始化，`∞` 退化为随机搜索；默认 1。
 
 ### 3.2 每次迭代两步
 
@@ -212,7 +212,7 @@ observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本�
 的收益记成一步，也不会把探测读成零步。任意一次迭代 stalled 就报 `None`——那是缺席不是值：没有 Δ
 可读，但这一轮照样计入阶段钟，所以停摆不会把判决推迟，也不会拿一个横跨停顿的 Δ 冒充进步。
 
-判决两侧买的东西并不相等：一次探测花 `n_probe_evals` 个批、算 `n_probe_evals` 次梯度，而一步只算
+判决两侧买的东西并不相等：一次探测花 `n_draws` 个批、算 `n_draws` 次梯度，而一步只算
 一次梯度（默认 `n_alpha=1`）。真正吃重的是**梯度次数**（g 约为 f 的 2–5 倍），所以只要接了 f-only
 求值器 `evaluate_f`，搜索期就**一律只读值**：探测的抽、步的每一个 trial 都只服务 f，判决也只听这些
 f（3.3），留到最后的点——每列的探测起点与每条路径步的赢家——在同一批里补 g，一次迭代一次梯度往返。
@@ -220,7 +220,7 @@ f（3.3），留到最后的点——每列的探测起点与每条路径步的�
 f，而单抽连这份都不付——它没有组内可比的候选，起点不必先读值，随补 g 的那一批一起求 f 与 g（多抽才
 需要先把每抽的 f 读出来做 group-min，那次 f 随后被融合批重算，这是用便宜的一半换掉一次梯度往返）。
 没接 seam 时每个 trial 都是融合批（值与梯度一起送达），这条路径的计数与引入接缝前逐位相同。多抽
-（`n_probe_evals > 1`）且没接 seam 则抛 `ValueError`——引擎看得见 `solver` 有 `n_alpha` 这个成员，
+（`n_draws > 1`）且没接 seam 则抛 `ValueError`——引擎看得见 `solver` 有 `n_alpha` 这个成员，
 看不见它的值，只能把「没接 seam ⇒ 单抽探测」当作保守代理；默认值因此是 1。剩下的只是便宜的 f 计数差
 （完整推导见 `docs/PLAN.md`）。
 
@@ -263,7 +263,7 @@ False 之后就等下一个窗口再判，而不是每轮重问同一个问题�
 任何批，也就永远不会被批级闸拦住）。
 
 `_Budget` 因此合了两个职责：停车计量（`max_iters`、`deadline`、调用方的闸）与工作量报告
-（`n_batches`、`n_points`）。**只有 value+grad 的融合批（g 批）计入账单**：探测的 `n_probe_evals` 个
+（`n_batches`、`n_points`）。**只有 value+grad 的融合批（g 批）计入账单**：探测的 `n_draws` 个
 只有值的批便宜，既不记账也不问闸，所以 `n_batches`/`n_points` 正好落在承重轴（梯度次数）上。
 `charge` 只记账，`tick` 只在迭代体完成后记一次迭代；`accept` 是唯一的
 停车查询（地平线到了、墙钟到了，或调用方的闸关闭），拒绝不存成状态——否则它就和自己的证据脱钩了。
@@ -294,7 +294,7 @@ False 之后就等下一个窗口再判，而不是每轮重问同一个问题�
   保证与 Adam/RMSProp 同级，不追牛顿/拟牛顿。
 - 逐坐标估计忽略耦合项 `Σ_{j≠i} Hᵢⱼ sⱼ`，后者落在 `|yᵢ|` 内使 `d` 成为 `1/Hᵢᵢ` 的有偏估计
   （耦合越强偏差越大，倾向系统性欠步：更稳但更慢）。这是拿「安全」换「潜在快」。
-- 重启频率与 `n_probe_evals`、`β`、`θ`、`τ_rel` 相关；文档只给结构，不给某类问题的推荐值——
+- 重启频率与 `n_draws`、`β`、`θ`、`τ_rel` 相关；文档只给结构，不给某类问题的推荐值——
   那些值由目标决定。
 
 ## 5. 两条成本轴（成本模型，不是评分）
@@ -308,7 +308,7 @@ False 之后就等下一个窗口再判，而不是每轮重问同一个问题�
 
 两个字段只数 **value+grad 融合批（g 批）**——“被计费”就是这个意思。f-only 的批（探测的抽、被拒的
 trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一次迭代只有一个 g 批，它带的是这一步保留下来的
-点（重启的起点 + 步的赢家）。所以默认配置（不接 `evaluate_f`、`n_probe_evals=1`）下
+点（重启的起点 + 步的赢家）。所以默认配置（不接 `evaluate_f`、`n_draws=1`）下
 `n_batches` 恰好等于服务批数；一旦接了 f-only 接缝，它就变成“g 批数”——而后者才是承重轴上的真账。
 
 两个都要报：串行轴下，n_paths 条路径的收益会被 n_paths 除，多路径的账面上限被压低；并行轴下一次求值
@@ -368,7 +368,7 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
 #### 引擎（跟着 n_paths 路径框架走，`test_solver_seam.py` / `test_scheduler.py` / `test_restart.py`）
 
 - 接缝真的被驱动（而不是走默认）：`test_injected_solver_is_driven`、`test_injected_rule_is_driven`。
-- f-only 求值器接缝：`test_f_only_probe_computes_one_gradient_per_probe`（`n_probe_evals` 个只有值的抽
+- f-only 求值器接缝：`test_f_only_probe_computes_one_gradient_per_probe`（`n_draws` 个只有值的抽
   + 一个赢家批，赢家仍是逐列 group-min；只有赢家批计费）、
   `test_a_single_draw_probe_reads_its_start_at_the_gradient`（单抽连 f 也不先读：没有可比的组，起点由
   补 g 的那一批一次求出 f 与 g，f 只算一次）、`test_a_rejected_trial_is_bought_no_gradient`
@@ -397,11 +397,11 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
 - 池子共享 / stage 独立 / 重启保留池子：`test_group_min_pool_is_shared_across_paths`、
   `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_group_min_pool`。
 - `n_paths = 1` 退化（无展布 ⇒ `h = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
-  `test_no_incumbent_never_restarts_but_does_not_leave_the_gate_open` 覆盖 B 缺失；**没有端到端 n_paths=1 断言**
+  `test_no_best_never_restarts_but_does_not_leave_the_gate_open` 覆盖 B 缺失；**没有端到端 n_paths=1 断言**
   ——搬走前可补一条（n_paths=1 跑满地平线，断言 `restarts == []`）。
 - 多抽 probe 只有单测覆盖：`test_probe_group_min_skips_nan`、
   `test_multi_draw_probe_is_refused_without_the_f_only_seam`、`test_the_gate_counts_g_batches_not_f_only_draws`。
-  实验按 `n_probe_evals=1`、不接 seam 跑（`f_only` 不计费，接入会白送评估），所以图里没有这条路径。
+  实验按 `n_draws=1`、不接 seam 跑（`f_only` 不计费，接入会白送评估），所以图里没有这条路径。
 - EI 闭式：`test_normal_functions_match_known_values`、`test_ei_continue_degenerate_at_zero_bandwidth`、
   `test_ei_continue_is_a_mean_of_per_sample_ei`、`test_ei_restart_matches_kde_literal`、
   `test_ei_restart_is_a_mean_of_per_sample_ei`、`test_ei_restart_tail_below_all_observations`、

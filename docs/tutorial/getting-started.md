@@ -21,7 +21,7 @@ Constraints reach the engine by two independent routes:
 - **The box.** `bounds` clips every candidate into the box *before* it is
   served, so the objective never sees a point outside it.
 - **The mask.** A point masked `False` is still served - its f value and gradient
-  come back normally and are used - but it never becomes the incumbent. So
+  come back normally and are used - but it never becomes the best. So
   `result.fun` is a minimum over feasible points only, and is `inf` if nothing
   feasible was ever served.
 
@@ -74,7 +74,7 @@ correspond:
 | Field | Meaning |
 | --- | --- |
 | `x` | argmin, in the coordinates you handed the engine |
-| `fun` | its value: the incumbent over feasible finite points, `inf` if none |
+| `fun` | its value: the best over feasible finite points, `inf` if none |
 | `n_points` | points billed - the serial-cost count |
 | `n_batches` | batches billed, one per `evaluate_batch` call - the parallel-cost count |
 | `n_iters` | engine iterations completed (iteration 0 is the initialization probe); one iteration may serve several batches |
@@ -91,7 +91,7 @@ its own. Stopping is always a horizon or an extra gate.
 | `n_paths` | engine width: paths advanced in lockstep each iteration (default 16) |
 | `max_iters` | the horizon, counted in iterations (iteration 0 is the init probe); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | a wall-clock horizon in seconds, for when an iteration's cost is too uneven to budget in iterations |
-| `n_probe_evals` | probe depth: draws per start (default 1); above 1 requires `evaluate_f` |
+| `n_draws` | probe depth: draws per start (default 1); above 1 requires `evaluate_f` |
 | `sample` | your own prior `(key, n) -> (n, d)`; required when the box is unbounded |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |
@@ -127,12 +127,12 @@ on whether your objective is really parallel:
   barely grows as the batch widens, up to the device's parallel limit. Set
   `n_paths` to that limit and measure progress in `n_batches`: it is very nearly
   your wall-clock. Wider paths are then almost free, so raising `n_paths` (and
-  `n_probe_evals` with it, which needs `evaluate_f`) shrinks the spread of the
-  incumbent and buys a larger
+  `n_draws` with it, which needs `evaluate_f`) shrinks the spread of the
+  best and buys a larger
   improvement for the same number of batches.
 - **On a CPU.** Batches run mostly serially, so the sampling work per point is
   what costs, and `n_points` is the honest number: raising `n_paths` or
-  `n_probe_evals` improves the incumbent per point far less than it improves it
+  `n_draws` improves the best per point far less than it improves it
   per batch.
 
 One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a

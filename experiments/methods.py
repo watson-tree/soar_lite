@@ -37,7 +37,7 @@ class Trace:
     points: list[int] = field(default_factory=list)
     batches: list[int] = field(default_factory=list)
     best: list[float] = field(default_factory=list)
-    fun: float = math.inf  # final incumbent
+    fun: float = math.inf  # final best
 
     def as_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return (points, batches, best) as float arrays for aggregation."""

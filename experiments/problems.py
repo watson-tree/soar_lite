@@ -5,7 +5,7 @@ Every problem exposes the engine's seam directly:
     evaluate_batch(x: (M, d)) -> (f: (M,), grad: (M, d), feas: None)
 
 ``feas`` is always ``None``: the box is the only constraint and the engine
-clips into it, so every served point counts toward the incumbent. Each problem
+clips into it, so every served point counts toward the best. Each problem
 is one batched JAX pass, differentiable, and has a known global value
 ``f_star``.
 

@@ -7,16 +7,18 @@ restarting beats that of continuing.
 
 ## Language
 
-Verbs count, nouns name: **eval** is the verb (one `evaluate_batch` call),
-**batch** is the noun (the points that call serves), and the two always
-correspond one to one. Counts take the unit they count — `n_probe_evals` counts
-evals, `max_iters` counts iterations — and names take the nouns (`batch`,
+Verbs count, nouns name: **eval** is the verb (one serve of the objective —
+a fused `evaluate_batch` pass, or a value-only `evaluate_f` pass when that seam
+is injected), **batch** is the noun (the points that serve returns), and the
+two always correspond one to one. Counts take the unit they count — `n_draws`
+counts draws, `max_iters` counts iterations — and names take the nouns (`batch`,
 `point`, `path`).
 
 Public knob history (pre-0.1.0 renames): `max_steps` → `max_evals` →
-`max_iters`, `n_probe_rounds` → `n_probe_evals`, `per_round_evals` removed (both
-counts are now always reported), `nfev` → `n_points` + `n_batches`. The old
-names let "round"/"step"/"eval" each do double duty; they are dead in new code.
+`max_iters`, `n_probe_rounds` → `n_probe_evals` → `n_draws`, `per_round_evals`
+removed (both counts are now always reported), `nfev` → `n_points` +
+`n_batches`. The old names let "round"/"step"/"eval" each do double duty; they
+are dead in new code.
 
 ### Engine
 
@@ -58,12 +60,13 @@ method's own stopping test (or its own trial budget) ends the enumeration, so
 `verdict` must return `accept` or `give_up`.
 _Avoid_: line-search round (retired)
 
-**incumbent (B)**:
-The best point seen so far, kept twice: `fun`/`x` is the best *feasible* point
-(the run's reported answer), `fun_raw` the best over every finite point served.
-Restart verdicts are asked against `fun_raw`, because both sides of a verdict
-(`f_k`, the group-min pool) are unfiltered. The engine is the sole owner of both.
-_Avoid_: best-so-far, current optimum
+**best (B)**:
+The run's running best, kept twice: `fun`/`x` is the best *feasible* point — the
+run's reported answer, and what `NPathResult` calls `fun`/`x` — while `fun_raw`
+is the best over every finite point served. Restart verdicts are asked against
+`fun_raw`, because both sides of a verdict (`f_k`, the group-min pool) are
+unfiltered. The engine is the sole owner of both.
+_Avoid_: incumbent (retired), best-so-far, current optimum
 
 **stall / stalled**:
 A path that moved nowhere this iteration — it neither restarted nor committed a
@@ -80,10 +83,10 @@ _Avoid_: paused, idle, dead
 ### Evaluation
 
 **eval** (verb, counted):
-One `evaluate_batch` call — one serve. The unit of a probe's cost
-(`n_probe_evals`) and of a `budget_check` gate that counts batches. The engine's
-own stop does not count these: it counts iterations (`max_iters`). One eval
-serves one batch.
+One serve of the objective: a fused `evaluate_batch` pass, or a value-only
+`evaluate_f` pass when that seam is injected. A probe's draws are evals, and so
+is a step's trial. The engine's own stop does not count these: it counts
+iterations (`max_iters`). One eval returns one batch.
 _Avoid_: query, sample (when counting cost)
 
 **batch** (noun):
@@ -123,7 +126,7 @@ _Avoid_: value oracle, cheap evaluator
 
 **feasibility mask**:
 The optional per-point boolean saying which served points may count toward the
-reported incumbent (`fun`/`x`). `fun_raw` and the restart verdicts ignore it.
+reported best (`fun`/`x`). `fun_raw` and the restart verdicts ignore it.
 _Avoid_: validity mask
 
 ### Local method
@@ -157,7 +160,7 @@ _Avoid_: converge, stop, terminate
 ### Restart
 
 **probe**:
-Drawing fresh starts: `n_probe_evals` batches of candidate points, per-column
+Drawing fresh starts: `n_draws` batches of candidate points, per-column
 minimum → one start each. The same draw is one group-min sample, and a probe is
 one iteration (one billed g batch: either the draw's own fused pass, or the
 winners' fused pass when a multi-draw probe defers its gradients). A start is
@@ -191,7 +194,7 @@ a value — so its `EI_continue` is 0 and its verdict is one-sided; a moving pat
 is only compared once it has folded the same number of steps the restart side
 already holds. The two sides are cost-matched in gradient count only when
 an f-only evaluator is supplied; without one the engine refuses
-`n_probe_evals > 1`, so the un-seamed default stays at 1.
+`n_draws > 1`, so the un-seamed default stays at 1.
 _Avoid_: restart check, reset decision
 
 **fold**:

@@ -40,7 +40,7 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
 
 Not an ADR yet; the durable record of a decision + its in-progress refactor.
 The verdict's evidence (`observe_continue` Δ, `observe_restart` payoff, the
-incumbent) is f-only; `g` is needed only to propose the step direction (the
+best) is f-only; `g` is needed only to propose the step direction (the
 start's `g`, free) and to fold the committed point's secant. Gradient-sweeping
 the losing points is pure waste. The moves:
 
@@ -53,14 +53,14 @@ the losing points is pure waste. The moves:
   positional argument (sealed).
 - **Multi-draw probes are f-only-only (gate + default).** The engine cannot see
   the solver's `n_alpha` (the seam checks presence, not members), so it cannot
-  enforce the true symmetry `n_alpha == n_probe_evals`; its conservative proxy
-  is the **g-count**: without `evaluate_f`, a probe computes `g` `n_probe_evals`
+  enforce the true symmetry `n_alpha == n_draws`; its conservative proxy
+  is the **g-count**: without `evaluate_f`, a probe computes `g` `n_draws`
   times while one continue step computes `g` once (default `n_alpha=1`), so the
-  expensive term diverges `n_probe_evals:1` — the f-count barely matters (g ≈
+  expensive term diverges `n_draws:1` — the f-count barely matters (g ≈
   2–5× f). With `evaluate_f`, both sides compute `g` exactly once (the rest is
   f-only), collapsing that asymmetry and leaving only the cheap f-count to
-  match. So `evaluate_f is None and n_probe_evals != 1`
-  raises `ValueError` at entry, and the default becomes `n_probe_evals = 1`.
+  match. So `evaluate_f is None and n_draws != 1`
+  raises `ValueError` at entry, and the default becomes `n_draws = 1`.
   Deferral is keyed on the seam, not on depth: with the f-only evaluator every
   point the search rules on is read for its value and graded afterwards, in the
   iteration's one g batch. A single draw is the shallowest case of that - with
@@ -71,7 +71,7 @@ the losing points is pure waste. The moves:
   a min-of-n group-min — the "pinned 2 (empirical)" advice in the docstring
   moves to "2 iff you also pass `evaluate_f`", and the Phase A–D numbers were
   measured at 2. With `evaluate_f`,
-  `n_alpha != n_probe_evals` is the cheap, bounded (f-only) asymmetry that is
+  `n_alpha != n_draws` is the cheap, bounded (f-only) asymmetry that is
   accepted, not banned.
 - **The step is ruled on values, one g batch grades what it kept (landed).**
   `verdict` is handed the trial's coords and value, never its gradient, and the
@@ -97,14 +97,14 @@ the losing points is pure waste. The moves:
 `f`, an algorithmic constant on CPU and GPU alike (the "batch wall-clock"
 argument is about *widening*, not *f vs f+g*: the backward pass over the batch
 is real work on GPU too). Under f-only, one argmin step = `n_alpha` f-only +
-1 g, one probe = `n_probe_evals` f-only + 1 g; equal iff
-`n_alpha == n_probe_evals`, and then one continue sample (one step, horizon=1)
+1 g, one probe = `n_draws` f-only + 1 g; equal iff
+`n_alpha == n_draws`, and then one continue sample (one step, horizon=1)
 costs exactly one probe. Default `n_alpha=1` keeps a documented, bounded
 asymmetry (continue = one gradient point vs probe = min-of-n). A genuine Armijo
 line search is also f-only-compatible (its test reads the *start*'s g + the
 trial's f); only Wolfe/curvature conditions read the trial's own g and go
 asymmetric — bounded by the method's own enumeration, document, don't redesign. Do **not** force
-`n_alpha = n_probe_evals`: they are independent knobs (line-search resolution
+`n_alpha = n_draws`: they are independent knobs (line-search resolution
 vs exploration breadth).
 
 ### `_Horizon` deletion (landed, uncommitted)
@@ -131,7 +131,7 @@ restart is back in phase instantly (no out-of-phase clock). Replace with:
 
 Ripple (swept): `engine.py` (module doc, `n_path_schedule` doc, loop
 comments); `restart.py` (`observe_continue` / `samples_until_verdict` / class
-docstrings — the "priced n_probe_evals evals" wording is gone);
+docstrings — the "priced n_draws evals" wording is gone);
 `tests/test_solver_seam.py` (the horizon-count runs restated as one sample per
 iteration, `test_one_sample_per_iteration_at_every_probe_size`, and
 `test_every_path_feeds_once_per_iteration`); `tests/test_scheduler.py`
@@ -141,21 +141,21 @@ superseded), `docs/tutorial/getting-started.md`.
 
 **Landed in the working tree (uncommitted):** engine, restart, tests, and every
 listed doc are swept; 68 tests green, ruff and pyright clean. The default
-`n_probe_evals` was flipped 2 → 1 in the `_Horizon` deletion (`0ffe135`); the
+`n_draws` was flipped 2 → 1 in the `_Horizon` deletion (`0ffe135`); the
 `evaluate_f` seam and its gate follow in the next commit. Shape the seam took:
 `n_path_schedule(..., evaluate_f=...)` is keyword-only and optional, a probe
 serves one value-only draw per evaluation and then one fused batch at the
-per-column winners (so a probe serves `n_probe_evals` uncharged f-only draws
+per-column winners (so a probe serves `n_draws` uncharged f-only draws
 plus one billed fused batch and one `g` - none of the former at
-`n_probe_evals = 1`), the draws
-stay exactly `n` wide rather than widening to `n_probe_evals × n`, and
-`evaluate_f is None and n_probe_evals != 1` raises `ValueError` at entry.
+`n_draws = 1`), the draws
+stay exactly `n` wide rather than widening to `n_draws × n`, and
+`evaluate_f is None and n_draws != 1` raises `ValueError` at entry.
 
 Caveat to record, not erase: after horizon→1 the verdict compares one probe
 against one step, and the load-bearing cost is g-count — without `evaluate_f`
-the non-f-only world is g-symmetric only at `n_probe_evals = n_alpha` (default
+the non-f-only world is g-symmetric only at `n_draws = n_alpha` (default
 1 = 1, which the gate enforces); with `evaluate_f` both sides compute g once
-and the only residual is the cheap f-count `n_alpha != n_probe_evals`, plus a
+and the only residual is the cheap f-count `n_alpha != n_draws`, plus a
 genuine Wolfe/curvature solver that reads the trial's own g (bounded by its own
 enumeration). Don't claim the verdict is exactly unbiased in those residual cases.
 
@@ -199,7 +199,7 @@ shortcut had to exist at all. Replaced by:
   path per iteration. `samples_until_verdict()` loses its only engine caller and
   is marked to be cut.
 
-Migration is not a rename: an iteration can burn about `1 + (n_probe_evals + 1)`
+Migration is not a rename: an iteration can burn about `1 + (n_draws + 1)`
 times the batches of a one-batch iteration before the method's own trials are
 counted, so `max_evals=N` →
 `max_iters=N` silently raises the work budget. Re-tune from `n_batches`.

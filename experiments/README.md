@@ -87,7 +87,7 @@ All in `experiments/` (gitignored — regenerated, not source):
 - **Zero knobs on soar-lite**: its two start lengths / grid sizes ship inert
   (`n_alpha=1`, `alpha0=1`); the formal runs use factory defaults end to end.
   Adam pays the per-problem lr grid each time — that asymmetry is the point.
-- **No probe-side knobs either**: `n_probe_evals=1` and no `evaluate_f` seam, so
+- **No probe-side knobs either**: `n_draws=1` and no `evaluate_f` seam, so
   every batch the axis counts is a full f + g. Multi-draw probes and the f-only
   seam are user-side exploration, off the comparison: `f_only` batches are
   deliberately not budget events, so enabling the seam would let soar-lite buy

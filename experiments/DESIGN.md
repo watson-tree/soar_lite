@@ -257,7 +257,7 @@ they have not been re-run since.
 Oscillator F20: `n_paths=1` reaches `7.7e-6`, `n_paths=16` `1.3e-4` (17x worse;
 the pre-refactor run already had the same direction, `4.4e-6` vs `1.6e-5`). The
 cause is the restart rule, not the width. With 16 paths the group-min pool holds
-16 i.i.d. start values (`lo 1.7`, `hi 39`) while the incumbent is `B = 0.054`.
+16 i.i.d. start values (`lo 1.7`, `hi 39`) while the best is `B = 0.054`.
 That pool is a **mixture** - one draw per path - and the rule used to fold it
 into a single Gaussian (`mu_r 7.0`, `sigma_r 9.0`), which put
 `z = (B - mu_r)/sigma_r = -0.77` near the EI hump and priced one restart at
@@ -267,7 +267,7 @@ into a single Gaussian (`mu_r 7.0`, `sigma_r 9.0`), which put
 meanwhile decays with the path's own stage (`3.2 -> 0.02` as it converges), and
 an iteration restarts a path or advances it, never both. Measured: 292 restarts
 in 3000 batches (one every ~10 iterations, 116 of the batches spent on probes),
-final incumbent 17x worse.
+final best 17x worse.
 
 This is model mis-specification, not a bad decision rule: the pool samples
 "what a random start is worth", which is a property of the landscape, and it is

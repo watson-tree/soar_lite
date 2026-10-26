@@ -19,10 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-draw probe, having no group to compare, defers its start entirely: its
   value is first computed by that same batch.
   Without the seam every trial keeps its fused pass, and the engine refuses
-  `n_probe_evals > 1` with a `ValueError`.
+  `n_draws > 1` with a `ValueError`.
 
 ### Changed
 
+- `n_probe_evals` is now `n_draws`. The knob counts draws - batches of
+  candidate points whose column minima become the starts - and one draw is the
+  same unit whether the seam serves it fused or value-only, which "evals" (tied
+  to one `evaluate_batch` call) no longer was. The default and the
+  `evaluate_f` requirement above one draw are unchanged.
+- The run's running best is `_Best` internally: `fun`/`x` is the reported answer
+  and `fun_raw` is the barrier a verdict reads. Same numbers, named after what
+  `NPathResult` reports instead of the optimizer jargon "incumbent"; the float
+  handed to a verdict is `best_fun_raw`.
 - `LocalSolver.verdict` takes `(i, p, x, f)`, not the served trial point: a
   method rules on the step's start and the trial's coords and value. The trial's
   gradient is deliberately absent, because the engine buys a gradient only for
@@ -78,9 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of `0`, and a refused probe (`0`) is no longer confused with a refused first
   step (`1`).
 - The continue side's sample is now one iteration's step, not one
-  `n_probe_evals`-iteration horizon: the `_Horizon` clock was removed, and a
+  `n_draws`-iteration horizon: the `_Horizon` clock was removed, and a
   restarted path skips sampling for the iteration its probe served.
-  `n_probe_evals` therefore defaults to `1`; a larger probe is only
+  `n_draws` therefore defaults to `1`; a larger probe is only
   cost-matched with the continue side through `evaluate_f` (see Added), and is
   refused without it.
 - `pytest` is now a declared `dev` dependency and the canonical test runner
@@ -100,7 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the two must be given (else `ValueError`).
 - Only the fused value+gradient pass is billed: `n_batches`/`n_points` count `g`
   batches and `g` points, and a probe's f-only draws are neither charged nor
-  gated. A run with no f-only seam and `n_probe_evals = 1` is unaffected (there
+  gated. A run with no f-only seam and `n_draws = 1` is unaffected (there
   are no such draws); a multi-draw probe no longer inflates the two counts, so
   they stay on the axis that dominates. The trade: the gate and the deadline
   have a blind spot under one probe.
@@ -108,7 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `evaluate_f` is supplied: a draw with no group to compare has no value worth
   reading early, so the start travels to the iteration's one g batch unread and
   both halves arrive from that pass. Deferral is keyed on the seam, not on
-  `n_probe_evals`, and the cheap half it spends nothing of is the `f` a
+  `n_draws`, and the cheap half it spends nothing of is the `f` a
   value-read draw would have had recomputed anyway.
 - `status` is now `max_iters`, `time_limit` or `budget_exhausted`.
 - `budget_check` is unchanged as a per-batch gate but no longer a substitute for
@@ -128,7 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the post-warm-up grid; the warm-up's geometric shrink bottoms out at a
   zero-length step, which passes Armijo).
 - `max_evals`: replaced by `max_iters` (batch budget - iteration horizon). The
-  migration is not a rename - an iteration can serve up to `n_probe_evals + 1`
+  migration is not a rename - an iteration can serve up to `n_draws + 1`
   batches plus the method's own trial count - so a straight `max_evals=N` →
   `max_iters=N` raises the work
   budget by up to that factor.

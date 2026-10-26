@@ -312,7 +312,7 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
     )
     # θ = 0 makes the post-warm-up step exactly Newton, so g = 0 after it and
     # the next verdict gives up (the stopping test); the point is still the
-    # incumbent, which is what `fun`/`x` report.
+    # best, which is what `fun`/`x` report.
     assert close(result.x, center, 1e-9)
     assert result.fun < 1e-12
 

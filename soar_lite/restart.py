@@ -38,7 +38,7 @@ class EIRestartRule(RestartRule):
     continue side reads the last few steps' own noise instead of the stage's, an
     understated spread shrinks EI_continue, and the restart tail wins verdicts
     the evidence does not support. That bias never shows up as an error, only as
-    a worse incumbent, so the rule **derives** the two counts instead of
+    a worse final value, so the rule **derives** the two counts instead of
     exposing a knob: the continue side is read over `_stage_window()` = the
     pool's defined-sample count M, which is the most samples a verdict can have
     in as many iterations as the restart side already has, and a caller cannot
@@ -68,7 +68,7 @@ class EIRestartRule(RestartRule):
     improvement is exactly 0 - it enters the read as a zero term that dilutes the
     finite KDE by the alive fraction - while `nan` is no information and `-inf`
     is not read yet, so neither is counted or fitted.
-    The incumbent B is a should_restart argument, not a field (the engine owns
+    The raw best B is a should_restart argument, not a field (the engine owns
     B), and it is the raw minimum: unfiltered, like the group-mins in the pool and
     like the `f_k` it is compared with.
     """
@@ -116,7 +116,7 @@ class EIRestartRule(RestartRule):
         """
         self.group_mins.append(group_min)
 
-    def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
+    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:
         """Return True iff path i's verdict is due and restart beats continuing.
 
         One clock, one comparison. The stage clock counts iterations, not folds:
@@ -125,7 +125,7 @@ class EIRestartRule(RestartRule):
         whatever it lived through - a path that stalls mid-stage keeps the wait it
         has already served instead of starting a second one.
 
-        A due stage is read against the engine's incumbent: restart wins when
+        A due stage is read against the engine's best: restart wins when
         `EI_restart > EI_continue`, and a stalled stage is the same comparison at
         the degenerate `EI_continue` - `_continue_payoff` returns 0.0 on the empty
         stage a stall leaves, so a stalled path is exactly "does restarting buy
@@ -140,7 +140,7 @@ class EIRestartRule(RestartRule):
         next Δ or stall opens the next stage, so a path that never gets restarted
         is re-judged once per window - the same cadence a continuing path has.
 
-        Both the comparison and the close are skipped while there is no incumbent
+        Both the comparison and the close are skipped while there is no best
         (B = inf, i.e. no finite point of any kind served yet): the verdict has
         nothing to compare against, and the engine owns B.
 
@@ -155,8 +155,9 @@ class EIRestartRule(RestartRule):
             return True
         if self.rounds.get(i, 0) < self._stage_window():
             return False
-        restart = math.isfinite(incumbent) and (
-            self._restart_payoff(incumbent) > self._continue_payoff(i, f_k, incumbent)
+        restart = math.isfinite(best_fun_raw) and (
+            self._restart_payoff(best_fun_raw)
+            > self._continue_payoff(i, f_k, best_fun_raw)
         )
         self.deltas[i] = []  # the stage is read; the next Δ or stall opens the next
         self.rounds[i] = 0
@@ -201,7 +202,7 @@ class EIRestartRule(RestartRule):
         n_defined = sum(1 for v in self.group_mins if math.isfinite(v) or v == math.inf)
         return max(1, n_defined)
 
-    def _continue_payoff(self, i: int, f_k: float, incumbent: float) -> float:
+    def _continue_payoff(self, i: int, f_k: float, best_fun_raw: float) -> float:
         """Return the expected improvement of path i continuing one more step.
 
         Same scott_mad KDE as the restart side, over the stage's Δ: the read is
@@ -219,10 +220,10 @@ class EIRestartRule(RestartRule):
         if not deltas:
             return 0.0
         h = _scott_mad_bandwidth(deltas)
-        total = sum(_gaussian_ei(h, incumbent, f_k + delta) for delta in deltas)
+        total = sum(_gaussian_ei(h, best_fun_raw, f_k + delta) for delta in deltas)
         return total / len(deltas)
 
-    def _restart_payoff(self, incumbent: float) -> float:
+    def _restart_payoff(self, best_fun_raw: float) -> float:
         """Return the expected improvement of any path restarting (global).
 
         Two events share the pool. The finite group-mins are read as a scott_mad
@@ -246,20 +247,20 @@ class EIRestartRule(RestartRule):
         h = _scott_mad_bandwidth(finite) if finite else 0.0
         # A +inf sample is the zero term of this same mean: restarting onto it
         # buys nothing, so it lowers the price without widening the bandwidth.
-        total = sum(_gaussian_ei(h, incumbent, group_min) for group_min in finite)
+        total = sum(_gaussian_ei(h, best_fun_raw, group_min) for group_min in finite)
         return total / n_defined
 
 
-def _gaussian_ei(sigma: float, incumbent: float, mu: float) -> float:
-    """Return the expected improvement over the incumbent `B` for X ~ N(mu, sigma²).
+def _gaussian_ei(sigma: float, best_fun_raw: float, mu: float) -> float:
+    """Return the expected improvement over the raw best `B` for X ~ N(mu, sigma²).
 
     EI = sigma·(z·Φ(z) + φ(z)) with z = (B - mu)/sigma; sigma = 0 degenerates
     exactly to max(B - mu, 0). The scott_mad KDE on both sides decomposes into
     one call per sample: EI_continue at mu = f_k + Δ_j and EI_restart at mu = r_i.
     """
     if sigma == 0.0:
-        return max(incumbent - mu, 0.0)
-    z = (incumbent - mu) / sigma
+        return max(best_fun_raw - mu, 0.0)
+    z = (best_fun_raw - mu) / sigma
     return sigma * (z * _normal_cdf(z) + _normal_pdf(z))
 
 

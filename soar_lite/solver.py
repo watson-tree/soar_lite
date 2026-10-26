@@ -200,7 +200,7 @@ class DiagonalPreconditioner(LocalSolver):
         """
         # Checked on the *current* point, so a path that has just landed on a
         # stationary one gives up on the next iteration (costing that one trial's
-        # eval, which the engine's incumbent still counts) rather than stepping
+        # eval, which the engine's best still counts) rather than stepping
         # off it. g0 is the anchor: the same test at the start is ‖g0‖ ≤ τ‖g0‖,
         # true only for a zero-gradient start.
         if bool(jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self.g0[i])):

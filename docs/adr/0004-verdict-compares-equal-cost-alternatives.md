@@ -1,10 +1,10 @@
 # The restart verdict compares equal-cost alternatives, and every probe is billed
 
-**Status: amended, twice.** Part 1 (the `n_probe_evals`-iteration horizon) is
-superseded: the horizon clock `_Horizon` was removed and one continue sample is
-now one step. Part 2's batch budget is superseded: the engine stops on
+**Status: amended, three times.** Part 1 (the `n_probe_evals`-iteration horizon)
+is superseded: the horizon clock `_Horizon` was removed and one continue sample
+is now one step. Part 2's batch budget is superseded: the engine stops on
 `max_iters`/`time_limit`, and batches are reported, not budgeted. Part 3 stands.
-See "Amendment" at the end of each.
+The third amendment is naming only. See "Amendment" at the end of each.
 
 `EI_restart` is fitted on probe group-mins, and one probe costs `n_probe_evals`
 served batches (one batch each). `EI_continue` was fitted on one-step Δ samples,
@@ -180,3 +180,21 @@ of per-start draws, and the continue side's Δ stream is not guaranteed Gaussian
 either. What this amendment keeps is the decision the point argued for - one
 estimator on both sides, reading `_stage_window() = M` samples with the continue
 side's count matched to the pool's - not the particular estimator.
+
+## Amendment: two terms renamed, no decision changed
+
+This record is left as written; two of its names are retired. Read them as
+follows, here and in any other pre-0.1.0 text.
+
+- `n_probe_evals` is now **`n_draws`**. The knob counts draws: a draw is one
+  batch of candidate points whose column minima become the starts, and a probe
+  serves `n_draws` of them. The old name counted "evals", which was defined as
+  one `evaluate_batch` call - no longer the only way to serve a probe, since an
+  f-only evaluator serves the draws value-only. The count itself, the
+  `evaluate_f` requirement above one draw, and the pricing argument in this
+  record are unchanged; only the unit's name moved off the batch.
+- **`incumbent`** is now **`best`**. It is the same object kept twice: `fun`/`x`
+  is the reported answer (best feasible point) and `fun_raw` the raw minimum the
+  verdict reads. The float handed to `should_restart` is `best_fun_raw`, and the
+  engine's holder is `_Best`. "Incumbent" was optimizer jargon for something the
+  public result already names `fun`/`x`, so a reader of both had to translate.
