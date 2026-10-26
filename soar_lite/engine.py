@@ -384,11 +384,12 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     which is then also the sole source of d; an unbounded box (or none) needs
     `sample`, because the engine has no x0 of its own. `key` seeds every draw
     (starts, restart probes); None means the fixed default PRNGKey(0), so an
-    unseeded call still runs, deterministically. Work is reported on two axes,
-    never mixed: `n_points` counts every served point (probe, trial, restart
-    probe - one each), the serial-cost number; `n_batches` counts served
-    batches (evals), the parallel wall-clock number where one n-path batch is
-    one unit. They are reports, not caps. The run's own stop is the horizon: at
+    unseeded call still runs, deterministically. Work is billed on two axes,
+    never mixed, and only the fused value+gradient pass is charged: f-only
+    draws and rejected trials are billed nowhere. `n_points` is the g points
+    served (probe starts and trial winners, one each), the serial-cost number;
+    `n_batches` is the g batches (one per fused pass), the parallel wall-clock
+    number. They are reports, not caps. The run's own stop is the horizon: at
     most `max_iters` iterations (status "max_iters"), or, if `time_limit` is
     given, the wall-clock deadline (status "time_limit"); at least one of the
     two must be passed. Iterations are the unit on purpose - an iteration is one

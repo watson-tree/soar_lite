@@ -303,8 +303,8 @@ False 之后就等下一个窗口再判，而不是每轮重问同一个问题�
 
 | 字段 | 数什么 | 回答的问题 | 用途 |
 | --- | --- | --- | --- |
-| `n_points` | 被计费的**点**（一批 n_paths 点计 n_paths） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
-| `n_batches` | 被计费的**批**（一批 n_paths 点计 1） | 并行效率：一次调用买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
+| `n_points` | 被计费的**点**（一个 g 批按其实际点数计点） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
+| `n_batches` | 被计费的**批**（一个 g 批计 1 批） | 并行效率：一次调用买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
 
 两个字段只数 **value+grad 融合批（g 批）**——“被计费”就是这个意思。f-only 的批（探测的抽、被拒的
 trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一次迭代只有一个 g 批，它带的是这一步保留下来的
@@ -406,11 +406,11 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
   `test_ei_continue_is_a_mean_of_per_sample_ei`、`test_ei_restart_matches_kde_literal`、
   `test_ei_restart_is_a_mean_of_per_sample_ei`、`test_ei_restart_tail_below_all_observations`、
   `test_ei_restart_prices_inf_as_a_dead_start_and_skips_nan_and_neginf`、`test_stage_read_is_a_kde_over_its_deltas`。
-- **两条成本轴**：`test_reports_points_and_batches_separately`（`n_batches` 与 `n_paths` 无关，
-  `n_points` 等于 `n_batches × n_paths`）。
+- **两条成本轴**：`test_reports_points_and_batches_separately`（`n_batches` 与 `n_paths` 无关；
+  `n_points = n_batches × n_paths` 只在每个 g 批都是满 n_paths 批时成立，该测试正是这种全满批场景）。
 - 停车在闸门上：`test_budget_exhaustion_stops_everything`、
   `test_a_run_without_an_extra_gate_reports_max_iters`、
-  `test_batch_gate_is_asked_before_every_batch`（批级闸：重启风暴也超不过闸给的批数）、
+  `test_the_gate_counts_g_batches_not_f_only_draws`（批级闸：重启风暴也超不过闸给的批数）、
   `test_every_path_feeds_once_per_iteration`（每迭代恰好一个样本，停摆的那个报 `None`）。
 - 盒是数据：`test_box_is_data_not_a_unit_cube_assumption`、`test_bounds_spellings_are_the_same_box`、
   `test_unbounded_or_absent_box_needs_an_injected_sampler`、

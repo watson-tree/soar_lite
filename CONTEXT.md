@@ -7,13 +7,6 @@ restarting beats that of continuing.
 
 ## Language
 
-Verbs count, nouns name: **eval** is the verb (one serve of the objective —
-a fused `evaluate_batch` pass, or a value-only `evaluate_f` pass when that seam
-is injected), **batch** is the noun (the points that serve returns), and the
-two always correspond one to one. Counts take the unit they count — `n_draws`
-counts draws, `max_iters` counts iterations — and names take the nouns (`batch`,
-`point`, `path`).
-
 Public knob history (pre-0.1.0 renames): `max_steps` → `max_evals` →
 `max_iters`, `n_probe_rounds` → `n_probe_evals` → `n_draws`, `per_round_evals`
 removed (both counts are now always reported), `nfev` → `n_points` +
@@ -57,7 +50,8 @@ via `verdict`. The method is handed its coords and value, never its gradient:
 only the winner's gradient is bought (see *settle*), so a method that needs one
 to rule is out of this engine's reach. There is no engine-side cap: the
 method's own stopping test (or its own trial budget) ends the enumeration, so
-`verdict` must return `accept` or `give_up`.
+`verdict` cannot keep answering `retry` — it must at some point return `accept`
+or `give_up`.
 _Avoid_: line-search round (retired)
 
 **best (B)**:
@@ -161,8 +155,9 @@ _Avoid_: converge, stop, terminate
 
 **probe**:
 Drawing fresh starts: `n_draws` batches of candidate points, per-column
-minimum → one start each. The same draw is one group-min sample, and a probe is
-one iteration (one billed g batch: either the draw's own fused pass, or the
+minimum → one start each. Each column's minimum is one group-min sample, so a
+probe both picks starts and feeds the group-min pool, and a probe is one
+iteration (one billed g batch: either the draw's own fused pass, or the
 winners' fused pass when a multi-draw probe defers its gradients). A start is
 usable only if `f` **and** its gradient are finite; a finite `f` with a
 non-finite gradient arrives stalled instead of stepping. Initialization and
@@ -176,7 +171,8 @@ not a reward.
 _Avoid_: sample, payoff, reward, fitness
 
 **group-min pool**:
-The shared multiset of group-mins (one per probe), measured rather than modelled.
+The shared multiset of group-mins (one per draw group — n per probe event),
+measured rather than modelled.
 One pool serves every path. It is the sample the restart payoff is priced off,
 not a pool of payoffs. A `+inf` group-min is a dead start: a real sample whose
 own improvement is exactly 0, so it dilutes the finite read instead of being
@@ -229,8 +225,9 @@ _Avoid_: budget (in evals), cost estimate, time limit
 
 **deadline (`time_limit`)**:
 The same stop in seconds, for callers whose per-iteration cost is too uneven to
-count iterations. Checked between iterations, never inside one, so a run can
-over-run it by one iteration.
+count iterations. Checked before each g batch (and at the loop head, like the
+horizon), so the over-run is under one g batch plus the one in-flight eval; only
+an f-only prelude goes unchecked, so a seam run can over-run by that prelude.
 _Avoid_: budget, timeout (that is a per-call concern)
 
 **budget gate** (`budget_check`):
