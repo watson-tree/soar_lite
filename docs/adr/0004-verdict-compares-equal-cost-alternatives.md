@@ -170,3 +170,13 @@ engine cannot quote a number for them. `DiagonalPreconditioner` needs no new
 bound - its post-warm-up grid is capped by `n_alpha`, and its warm-up's
 geometric shrink bottoms out at a zero-length step, which passes Armijo because
 the directional derivative of that zero step is zero.
+
+## Amendment: neither side is a single Gaussian
+
+The "plain mean and population sd" in point 3 above is history. Both sides of
+the verdict are now a scott_mad KDE over their own samples (one Gaussian kernel
+per sample, `h = 1.06 · MAD/Φ⁻¹(3/4) · n^(-1/5)`): the restart side's pool is a mixture
+of per-start draws, and the continue side's Δ stream is not guaranteed Gaussian
+either. What this amendment keeps is the decision the point argued for - one
+estimator on both sides, reading `_stage_window() = M` samples with the continue
+side's count matched to the pool's - not the particular estimator.

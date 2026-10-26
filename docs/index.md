@@ -17,7 +17,8 @@ Three pieces, no dependencies beyond JAX and the standard library:
 - **`EIRestartRule`** — the default restart rule: compares the expected
   improvement of continuing a path against the expected improvement of
   restarting it, both read off the path's own recent f changes and a pool of
-  restart payoffs.
+  group-mins. Each side is a scott_mad Gaussian-kernel KDE over its own
+  samples, so neither assumes a single Gaussian.
 
 ## Install
 

@@ -7,36 +7,42 @@ the evaluated-sample statistics the engine forwards. It implements the engine's
 """
 
 import math
+import statistics
 
 from soar_lite.engine import RestartRule
+
+# Φ⁻¹(3/4): normal-consistency constant that turns a MAD into a scale estimate.
+PHI14 = 0.6744897501960817
+# (4/3)^(1/5) ≈ 1.06: the normal-reference constant of Scott's rule.
+SCOTT = (4.0 / 3.0) ** 0.2
 
 
 # --- restart rule: EI_continue vs EI_restart ---
 class EIRestartRule(RestartRule):
     """Sample-based restarts: the paths estimate their own restart payoff.
 
-    The rule fits no surrogate - the n_paths i.i.d. sampled starts are the sample. The
-    lightweight restart rule of a SOAR-style adaptive-restart engine
+    The rule fits no surrogate - the n_paths i.i.d. sampled starts are the
+    sample. The lightweight restart rule of a SOAR-style adaptive-restart engine
     [Mathesen et al. 2021]: it never fits a model, so it stays cheap in high
     dimension, and it samples rather than learns the restart payoff. Restart
     fires only when a fresh draw's expected improvement exceeds continuing the
-    path's (``_ei_restart`` vs ``_ei_continue``) - both closed forms off the same
+    path's (continue-payoff vs restart-payoff) - both closed forms off the same
     evidence. The i.i.d. assumption is what makes this exact: every path starts
-    as an i.i.d. draw from the injected sampler, so each recorded restart payoff
-    is a real sample of "what a fresh start buys", and the shared pool below
-    estimates that single global (mu_r, sigma_r) with minimal variance.
+    as an i.i.d. draw from the injected sampler, so each recorded group-min is
+    a real sample of "what a fresh start buys", and the shared pool below
+    estimates that single global payoff distribution with minimal variance.
 
-    The verdict compares two sample estimates of comparable form - the path's
-    own one-step spread against the pool's - and what makes the comparison
-    readable is that the two are worth about the same number of samples: both
-    relative sds are ~1/sqrt(2(n - 1)), so a shorter continue side reads the last
-    few steps' own jitter instead of the path's, an understated sigma shrinks
-    EI_continue, and the restart tail wins verdicts the evidence does not
-    support. That bias never shows up as an error, only as a worse incumbent, so
-    the rule **derives** the two counts instead of exposing a knob: the
-    continue side is read over `_stage_window()` = the pool's size M, which is the
-    most samples a verdict can have in as many iterations as the restart side
-    already has, and a caller cannot ask for a window its own pool cannot back.
+    The verdict compares two estimates of the same KDE form - the path's own
+    one-step sample against the pool's - and what makes the comparison readable
+    is that the two are worth about the same number of samples: a shorter
+    continue side reads the last few steps' own noise instead of the stage's, an
+    understated spread shrinks EI_continue, and the restart tail wins verdicts
+    the evidence does not support. That bias never shows up as an error, only as
+    a worse incumbent, so the rule **derives** the two counts instead of
+    exposing a knob: the continue side is read over `_stage_window()` = the
+    pool's size M, which is the most samples a verdict can have in as many
+    iterations as the restart side already has, and a caller cannot ask for a
+    window its own pool cannot back.
 
     Equal weights are the only form that uses a whole stage: a windowed estimate
     that fades its older samples is worth fewer effective samples than it holds
@@ -49,20 +55,20 @@ class EIRestartRule(RestartRule):
     `_stage_window()` iterations, so the loop re-reads the path as regularly as it
     collects evidence.
 
-    `group_mins` is **one pool for every path**, not a copy per path: a restart
-    payoff is a draw from the sampler+incumbent distribution, the same quantity
-    for all paths, so pooling every event estimates that single global
-    (mu_r, sigma_r) with the smallest variance - a per-path subset would
+    `group_mins` is **one pool for every path**, not a copy per path: a group-min
+    is a draw from the sampler, the same quantity for all paths, so pooling every
+    event estimates that single global payoff distribution with the smallest
+    variance - a per-path subset would
     estimate the same global value from a shorter sample. NaN/inf Δ are kept in
     a path's stage but never read (guard), and still count towards the window.
     The incumbent B is a should_restart argument, not a field (the engine owns
-    B), and it is the raw minimum: unfiltered, like the payoffs in the pool and
+    B), and it is the raw minimum: unfiltered, like the group-mins in the pool and
     like the `f_k` it is compared with.
     """
 
     def __init__(self) -> None:
-        """Start with an empty payoff pool and no per-path evidence."""
-        self.group_mins: list[float] = []  # one shared restart-payoff pool {r_i}
+        """Start with an empty group-min pool and no per-path evidence."""
+        self.group_mins: list[float] = []  # one shared group-min pool
         self.pool_size = 0  # usable pool samples: the M the window is matched to
         self.deltas: dict[int, list[float]] = {}  # per path: Δ since its last verdict
 
@@ -72,21 +78,21 @@ class EIRestartRule(RestartRule):
         A non-finite Δ is stored, not dropped: a stalled path folds one every
         iteration and its verdict has to stay due on the same clock as its moving
         cohort (the engine reports the stall through the value, not by skipping
-        the call), so the guard belongs at the read, where one +inf sample would
-        otherwise make the mean and spread NaN - and `NaN > EI_continue` is
-        False, which silently disables that path's restarts.
+        the call), so the guard belongs at the read, where one +inf sample must
+        not enter the KDE - and `NaN > EI_continue` is False, which silently
+        disables that path's restarts.
         """
         self.deltas.setdefault(i, []).append(delta)
 
-    def observe_restart(self, r: float) -> None:
-        """Append one restart event's payoff r to the shared payoff pool.
+    def observe_restart(self, group_min: float) -> None:
+        """Append one restart event's group minimum to the shared group-min pool.
 
-        Non-finite payoffs stay in the list (`_ei_restart` filters them, and a
-        single +inf must not corrupt the fit) but do not count towards M: the
-        window is matched to the samples sigma_r is actually fitted on.
+        Non-finite group-mins stay in the list (`_restart_payoff` filters them,
+        and a single +inf must not corrupt the KDE) but do not count towards M:
+        the window is matched to the samples the KDE is actually built on.
         """
-        self.group_mins.append(r)
-        if math.isfinite(r):
+        self.group_mins.append(group_min)
+        if math.isfinite(group_min):
             self.pool_size += 1
 
     def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:
@@ -100,7 +106,7 @@ class EIRestartRule(RestartRule):
         verdict has nothing to compare against, and the engine owns B.
 
         Cold start is the one verdict that is not the EI comparison: with an
-        empty payoff pool there is no restart evidence at all, so this returns
+        empty group-min pool there is no restart evidence at all, so this returns
         True and the engine's first iteration probes every path. A pool that is
         non-empty but entirely non-finite is *not* cold start - the probe ran and
         every start was dead, so an empty `group_mins`, not `pool_size == 0`, is
@@ -117,7 +123,7 @@ class EIRestartRule(RestartRule):
         return restart
 
     def restart(self, i: int) -> None:
-        """Drop path i's stage after a restart (the shared payoff pool is kept)."""
+        """Drop path i's stage after a restart (the shared group-min pool is kept)."""
         self.deltas[i] = []
 
     def _stage_window(self) -> int:
@@ -126,16 +132,16 @@ class EIRestartRule(RestartRule):
         Read fresh at each verdict rather than fixed per stage, because the pool
         only grows - samples are appended, never dropped or aged out - so `M` at
         the verdict is an upper bound on the stage that produced it, and matched
-        counts is the property the verdict needs. Nothing pads it: the read is a
-        plain mean and population sd over the stage, so extra folds are extra
-        evidence and no fold buys more than its weight.
+        counts is the property the verdict needs. Nothing pads it: the KDE
+        weights every sample equally, so extra folds are extra evidence and no
+        fold buys more than its weight.
 
         The only floor is 1, and it is not a prior: a window of zero samples has
         no centre to read (`_continue_payoff` returns 0.0 on an empty stage),
-        which is reachable only before any finite restart payoff exists. At M = 1
-        the read is its own degenerate branch - a stage of one fold has no
-        spread, and a pool of one gives `sigma_r = 0`, so no restart can fire
-        until a second payoff lands.
+        which is reachable only before any finite group-min exists. At M = 1
+        the read is its own degenerate branch - one fold has no spread (MAD = 0,
+        so h = 0), and a pool of one gives `EI_restart = max(B - group_min, 0) <= 0`,
+        so no restart can fire until a second group-min lands.
 
         This method is the seam a rule variant moves (a capped window, a forced
         cadence for an experiment); the rule itself takes no knob, so its own
@@ -145,70 +151,82 @@ class EIRestartRule(RestartRule):
 
     def _stage_deltas(self, i: int) -> list[float]:
         """Return path i's finite Δ values from the stage it is in now."""
-        return [d for d in self.deltas.get(i, ()) if math.isfinite(d)]
+        return [delta for delta in self.deltas.get(i, ()) if math.isfinite(delta)]
 
     def _continue_payoff(self, i: int, f_k: float, incumbent: float) -> float:
         """Return the expected improvement of path i continuing one more step.
 
-        The stage's plain mean and population std - the same ÷n the restart side
-        fits its pool with, so the read is worth exactly the samples it holds.
-        An empty stage has neither centre nor spread and returns 0.0: the
-        degenerate "continuing buys nothing" read (the same one a zero-spread
-        stage gives), which leaves the verdict resting on the restart side's own
-        evidence. One fold is the other degenerate corner (sigma = 0), where the
-        read is exactly max(B - (f_k + mu), 0).
+        Same scott_mad KDE as the restart side, over the stage's Δ: the read is
+        worth exactly the samples it holds. An empty stage returns 0.0 - the
+        degenerate "continuing buys nothing" read - which leaves the verdict
+        resting on the restart side's own evidence. One fold (or a constant
+        stage) has MAD = 0, so h = 0 and the read is exactly max(B - (f_k + Δ), 0).
+
+        The next value is f_k + Δ, so the KDE's centres are f_k + Δ_j while its
+        bandwidth comes from the Δ themselves - no single Gaussian is assumed, so
+        a skewed Δ stream is read as it is.
         """
-        d = self._stage_deltas(i)
-        if not d:
+        deltas = self._stage_deltas(i)
+        if not deltas:
             return 0.0
-        mu = sum(d) / len(d)
-        sd = math.sqrt(sum((v - mu) ** 2 for v in d) / len(d))
-        return _ei_continue(sd, incumbent, f_k, mu)
+        h = _scott_mad_bandwidth(deltas)
+        total = sum(_gaussian_ei(h, incumbent, f_k + delta) for delta in deltas)
+        return total / len(deltas)
 
     def _restart_payoff(self, incumbent: float) -> float:
-        """Return the expected improvement of any path restarting (global)."""
-        return _ei_restart(incumbent, self.group_mins)
+        """Return the expected improvement of any path restarting (global).
 
+        The pool holds one group-min per path start, so it is read as a mixture
+        of draws - a scott_mad KDE (one Gaussian kernel per sample) - rather than
+        one Gaussian fitted to all of it. M = 0 → 0.0 (no evidence); M = 1 (or a
+        constant pool) → h = 0 → degenerate max(B - group_min, 0).
 
-def _ei_continue(sigma_p: float, incumbent: float, f_k: float, mu_p: float) -> float:
-    """Return the expected improvement of one more step from f_k.
-
-    L_next ~ N(f_k + mu_p, sigma_p²), so EI_continue = _gaussian_ei(sigma_p, B,
-    f_k + mu_p).
-    """
-    return _gaussian_ei(sigma_p, incumbent, f_k + mu_p)
-
-
-def _ei_restart(incumbent: float, group_mins: list[float]) -> float:
-    """Return the expected improvement of one restart.
-
-    Fits N(mu_r, sigma_r²) over the probe group-min history {r_i} (mean +
-    population std, non-finite skipped): EI_restart = _gaussian_ei(sigma_r, B, mu_r).
-    M = 0 → 0.0 (no evidence); M = 1 → sigma_r = 0 → degenerate max(B - mu_r, 0).
-
-    Skipping isfinite, not just NaN, is load-bearing: one +inf sample makes mu_r
-    inf and variance inf - inf = NaN, so sigma_r = NaN and this returns NaN -
-    and `NaN > EI_continue` is False, which permanently silences every restart.
-    """
-    r = [v for v in group_mins if math.isfinite(v)]
-    if not r:
-        return 0.0
-    mu_r = sum(r) / len(r)
-    variance = sum((v - mu_r) ** 2 for v in r) / len(r)
-    return _gaussian_ei(math.sqrt(variance), incumbent, mu_r)
+        Skipping isfinite, not just NaN, is load-bearing: one +inf sample would
+        blow the bandwidth to inf (or NaN), so the read stops being
+        evidence-backed and the verdict either fires unconditionally (h = inf)
+        or never fires again (h = NaN).
+        """
+        group_mins = [v for v in self.group_mins if math.isfinite(v)]
+        if not group_mins:
+            return 0.0
+        h = _scott_mad_bandwidth(group_mins)
+        total = sum(_gaussian_ei(h, incumbent, group_min) for group_min in group_mins)
+        return total / len(group_mins)
 
 
 def _gaussian_ei(sigma: float, incumbent: float, mu: float) -> float:
     """Return the expected improvement over the incumbent `B` for X ~ N(mu, sigma²).
 
     EI = sigma·(z·Φ(z) + φ(z)) with z = (B - mu)/sigma; sigma = 0 degenerates
-    exactly to max(B - mu, 0). Shared closed form: EI_continue (mu = f_k + mu_p)
-    and EI_restart (mu = mu_r) both route through here.
+    exactly to max(B - mu, 0). The scott_mad KDE on both sides decomposes into
+    one call per sample: EI_continue at mu = f_k + Δ_j and EI_restart at mu = r_i.
     """
     if sigma == 0.0:
         return max(incumbent - mu, 0.0)
     z = (incumbent - mu) / sigma
     return sigma * (z * _normal_cdf(z) + _normal_pdf(z))
+
+
+def _scott_mad_bandwidth(samples: list[float]) -> float:
+    """Return the scott_mad KDE bandwidth 1.06 · mad_scale · n^(-1/5).
+
+    Scott's normal-reference bandwidth on a robust MAD scale: the breadth is a
+    property of the sample's body rather than of a long tail, which is what a
+    plain sd gets wrong on a wide start mix. Degenerates to h = 0 (empirical EI)
+    when the sample has no spread.
+    """
+    return SCOTT * _mad_sigma(samples) * len(samples) ** -0.2
+
+
+def _mad_sigma(samples: list[float]) -> float:
+    """Return the MAD-based scale estimate MAD / Φ⁻¹(3/4).
+
+    Median absolute deviation, normal-consistent: for a Gaussian it estimates the
+    sd with the same breakdown resistance the median has. One sample - or a sample
+    with no spread - gives 0, the degenerate bandwidth the KDE reads as h = 0.
+    """
+    med = statistics.median(samples)
+    return statistics.median([abs(v - med) for v in samples]) / PHI14
 
 
 def _normal_cdf(z: float) -> float:

@@ -59,7 +59,7 @@ _Avoid_: line-search round (retired)
 The best point seen so far, kept twice: `fun`/`x` is the best *feasible* point
 (the run's reported answer), `fun_raw` the best over every finite point served.
 Restart verdicts are asked against `fun_raw`, because both sides of a verdict
-(`f_k`, the payoff pool) are unfiltered. The engine is the sole owner of both.
+(`f_k`, the group-min pool) are unfiltered. The engine is the sole owner of both.
 _Avoid_: best-so-far, current optimum
 
 **stall / stalled**:
@@ -149,24 +149,33 @@ _Avoid_: converge, stop, terminate
 
 **probe**:
 Drawing fresh starts: `n_probe_evals` batches of candidate points, per-column
-minimum → one start each. The same draw is one restart-payoff sample, and a
-probe is one iteration (one billed g batch: either the draw's own fused pass,
-or the winners' fused pass when a multi-draw probe defers its gradients). A
-start is usable only if `f` **and** its gradient are finite; a finite `f` with
-a non-finite gradient arrives stalled instead of stepping. Initialization and
+minimum → one start each. The same draw is one group-min sample, and a probe is
+one iteration (one billed g batch: either the draw's own fused pass, or the
+winners' fused pass when a multi-draw probe defers its gradients). A start is
+usable only if `f` **and** its gradient are finite; a finite `f` with a
+non-finite gradient arrives stalled instead of stepping. Initialization and
 restart use the same probe.
 _Avoid_: selection event, random init, sampling
 
-**payoff pool**:
-The shared multiset of restart payoffs (each probe's group minimum), measured
-rather than modelled. One pool serves every path.
-_Avoid_: restart history, bandit arms
+**group-min**:
+The minimum `f` of one probe's draw group. It is one sample in the group-min
+pool, and it is the value a restarted path starts from; it is not a payoff, and
+not a reward.
+_Avoid_: sample, payoff, reward, fitness
+
+**group-min pool**:
+The shared multiset of group-mins (one per probe), measured rather than modelled.
+One pool serves every path. It is the sample the restart payoff is priced off,
+not a pool of payoffs.
+_Avoid_: payoff pool, restart history, bandit arms
 
 **restart verdict**:
 The per-path comparison of continuing's expected improvement against
 restarting's; `EI_restart > EI_continue` restarts the path. One sample each —
 one step for continuing, one probe for restarting — so the verdict is a decision
-about what to buy. The two sides are cost-matched in gradient count only when
+about what to buy. Each side is modelled by a scott_mad KDE over its own
+samples (one Gaussian kernel per sample), so neither side assumes a single
+Gaussian. The two sides are cost-matched in gradient count only when
 an f-only evaluator is supplied; without one the engine refuses
 `n_probe_evals > 1`, so the un-seamed default stays at 1.
 _Avoid_: restart check, reset decision

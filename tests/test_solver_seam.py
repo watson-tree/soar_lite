@@ -114,9 +114,9 @@ class RecordingRule:
         """Record one f change delta for path i."""
         self.deltas.append((i, delta))
 
-    def observe_restart(self, r: float) -> None:
-        """Record one restart event's payoff r (the pool carries no path index)."""
-        self.group_mins.append(r)
+    def observe_restart(self, group_min: float) -> None:
+        """Record one restart event's group-min (the pool carries no path index)."""
+        self.group_mins.append(group_min)
 
     def should_restart(self, i: int, f_k: float, incumbent: float) -> bool:  # noqa: ARG002
         """Record the verdict call; restart only while the pool is empty."""

@@ -18,9 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `EIRestartRule` no longer fits a single Gaussian to either side. Both the
+  continue side (the path's Δ stage) and the restart side (the shared payoff
+  pool) are now a scott_mad KDE - one Gaussian kernel per sample, bandwidth
+  `1.06 · MAD/Φ⁻¹(3/4) · n^(-1/5)` - so a wide or skewed sample is read as the mixture
+  it is instead of having its tail inflated by a single-Gaussian fit. This is
+  the regime behind the spurious restarts on single-basin problems (oscillator
+  F20, `n_paths=16`), where the old fit priced restarts the payoff history did
+  not support; scott_mad is chosen for its cost (O(n ln n), ten lines), not
+  because it was shown to beat a direct-plug-in bandwidth end to end.
+  Degenerate corners are unchanged: a stage or pool with no spread has
+  `h = 0`, so the read is exactly `max(B - x, 0)` and `n_paths=1` still never
+  restarts.
 - Initialization and restart are one operation: the engine's first iteration is
   the initialization probe, driven by the rule's cold-start verdict
-  (`should_restart` must return `True` while the payoff pool is empty, so an
+  (`should_restart` must return `True` while the group-min pool is empty, so an
   empty `group_mins` - not `pool_size == 0` - is the test). `LocalSolver.init`
   is gone - `restart` is the single cold-start call - and `n_iters` counts the probe
   as iteration 0, so a run that only seeds the flock reports `n_iters = 1` instead

@@ -247,31 +247,54 @@ two-curve self-check decides before the full run.
 
 The figures were re-run on the refactored engine (20 seeds, 3000 batches). Adam
 and L-BFGS-B came back bit-identical — the harness did not move — so every
-shift below is engine-side. Three readings should travel with the plots.
+shift below is engine-side. Three readings should travel with the plots. These
+panels also predate the KDE restart rule described under the first reading: they
+show the single-Gaussian fit, which is what makes the diagnosis legible, and
+they have not been re-run since.
 
 ### Multi-path loses to single-path on a single-basin problem
 
 Oscillator F20: `n_paths=1` reaches `7.7e-6`, `n_paths=16` `1.3e-4` (17x worse;
 the pre-refactor run already had the same direction, `4.4e-6` vs `1.6e-5`). The
-cause is the restart rule, not the width. With 16 paths the payoff pool holds
-16 i.i.d. start values (`lo 1.7`, `hi 39`, `mu_r 7.0`, `sigma_r 9.0`) while the
-incumbent is `B = 0.054`, so `z = (B - mu_r)/sigma_r = -0.77` and
-the EI model prices one restart as `1.14` — a 20x improvement offered by an
-action whose entire observed history was 30x worse than B. The dispersion of a
-wide start sample puts `z` near the EI hump, so `EI_restart` stays large
-precisely because n_paths is large. `EI_continue` meanwhile decays with the
-path's own stage (`3.2 -> 0.02` as it converges), and an iteration restarts a
-path or advances it, never both. Measured: 292 restarts in 3000 batches (one
-every ~10 iterations, 116 of the batches spent on probes), final incumbent 17x
-worse.
+cause is the restart rule, not the width. With 16 paths the group-min pool holds
+16 i.i.d. start values (`lo 1.7`, `hi 39`) while the incumbent is `B = 0.054`.
+That pool is a **mixture** - one draw per path - and the rule used to fold it
+into a single Gaussian (`mu_r 7.0`, `sigma_r 9.0`), which put
+`z = (B - mu_r)/sigma_r = -0.77` near the EI hump and priced one restart at
+`1.14`: a 20x improvement offered by an action whose entire observed history was
+30x worse than B. Fitting one Gaussian to a wide mix inflates the tail, so
+`EI_restart` stayed large precisely because n_paths is large. `EI_continue`
+meanwhile decays with the path's own stage (`3.2 -> 0.02` as it converges), and
+an iteration restarts a path or advances it, never both. Measured: 292 restarts
+in 3000 batches (one every ~10 iterations, 116 of the batches spent on probes),
+final incumbent 17x worse.
+
+This is model mis-specification, not a bad decision rule: the pool samples
+"what a random start is worth", which is a property of the landscape, and it is
+not one Gaussian. Both sides of the verdict now model their samples with a
+scott_mad KDE (one Gaussian kernel per sample,
+`h = 1.06 * MAD/Phi^-1(3/4) * n^-1/5`) instead of a single Gaussian each - the
+continue side's Δ stream is no more guaranteed Gaussian than the pool is.
+
+Measured on the estimator alone (one 8-draw pool, `B = 0.054`): the
+single-Gaussian fit prices `EI_restart` at `0.83` against the KDE's `0.30`, a
+2.8x inflated tail. That is the mechanism, with no run behind it.
+
+End to end the picture is not settled. A 3-seed diagnostic on the same
+oscillator (`n_paths=16`, canonical 3000-batch, **not** the 20-seed panel) puts
+the shipped rule at median `9.1e-5` (range `2.0e-5` to `2.0e-4`) and a
+Sheather-Jones restart side at `5.6e-5` (`5.6e-5` to `6.9e-5`): with the
+continue side a KDE too, SJ is ahead on the median and ~8x tighter across three
+seeds. Three seeds cannot settle that. Nor can the older diagnostic's
+single-Gaussian arm be reused to settle it: that arm inherited the shipped KDE
+when the shipped rule changed, so it now *is* the shipped rule. scott_mad is
+shipped on cost - `O(n ln n)`, ten lines, degenerating cleanly to `h = 0` - not
+because it was shown to beat SJ.
 
 The single-path curve is the degenerate corner, not the control: a pool of one
-sample gives `sigma_r = 0`, so `EI_restart = max(B - mu_r, 0) = 0` exactly and
-the same rule never restarts. `n_paths=16` is the only configuration where the
-verdict is actually exercised — and on a single-basin problem the greedy
-verdict is a pure tax. This is model mis-specification: the pool samples "what
-a random start is worth", which is a property of the landscape, while the
-restart payoff over B is a property of B and of where the feasible set sits.
+sample gives no spread, so `h = 0` and `EI_restart = max(B - r, 0) = 0` exactly
+and the same rule never restarts. `n_paths=16` is the only configuration where
+the verdict is actually exercised.
 
 Resolved: B was the min over feasible points only (`inf` when none was served),
 while both verdict alternatives are free to sample infeasible points. The engine

@@ -18,8 +18,9 @@ Three pieces, three modules (`soar_lite/engine.py`, `soar_lite/solver.py`,
   matrix, no linear solve, no scalar learning rate, unit-invariant.
 - **`EIRestartRule`** — sample-based restarts. Compares the expected improvement of
   continuing a path against the expected improvement of restarting it, both read
-  off the path's own recent f changes and a pool of restart payoffs shared by
-  every path. No surrogate model is fitted.
+  off the path's own recent f changes and a pool of group-mins shared by every
+  path. Each side is a scott_mad Gaussian-kernel KDE over its own samples,
+  so neither assumes a single Gaussian; no surrogate model of `f` is fitted.
 - **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep, one batched
   evaluation per iteration, and owns the box, the shared horizon, the restart verdicts
   and the stall state machine. `n_paths = 1` is the single-path baseline.

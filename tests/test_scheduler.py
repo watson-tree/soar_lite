@@ -242,9 +242,9 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     x0 ~ uniform(0,1) and the identity map makes θ = x, so the single
     path's fate depends on its pair-min start (min of 2 draws) relative
     to the saddle.  Cold-start
-    evidence asymmetry: n_paths=1 feeds one group-min -> sigma_r = 0 -> degenerate
+    evidence asymmetry: n_paths=1 feeds one group-min -> h = 0 -> degenerate
     EI_restart = 0 -> the single path never restarts; n_paths=16 feeds a real
-    spread -> sigma_r > 0 -> stalled paths may probe their way to the
+    spread -> h > 0 -> stalled paths may probe their way to the
     global well.
     """
     sigma_g, sigma_l = 0.04, 0.04
@@ -324,7 +324,7 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     res = n_path_schedule(
         rec,
         bounds=unit_bounds(2),
-        n_paths=1,  # n_paths=1 -> sigma_r=0 -> never restart, pure projected descent
+        n_paths=1,  # n_paths=1 -> h=0 -> never restart, pure projected descent
         max_iters=100,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
@@ -500,7 +500,7 @@ def test_probe_group_min_skips_nan() -> None:
 class ForcedWindow(EIRestartRule):
     """The delivery rule with its verdict window pinned (a test/arm knob).
 
-    The rule derives its own window from the payoff pool, so a test
+    The rule derives its own window from the group-min pool, so a test
     that wants a literal cadence for an engine run states it here: it stays the
     same estimator and the same gate, only the length is forced. The delivery
     rule has no such parameter - a fixed cadence is a variant of it, not a knob
@@ -521,10 +521,10 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
     """An all-+inf probe group must not disable every restart in the flock.
 
     Column 0 is +inf in both init probe evals (a group with no finite
-    member), so the shared init group-min list carries an inf sample. Fitting
-    it naively gives mu_r = inf, sigma_r = NaN and EI_restart = NaN, and
+    member), so the shared init group-min list carries an inf sample. Feeding
+    it naively into the KDE blows the bandwidth and gives EI_restart = NaN, and
     `NaN > EI_continue` is False forever - no path would ever restart again
-    even though B is finite. The payoff pool proves the verdicts still fire:
+    even though B is finite. The group-min pool proves the verdicts still fire:
     it is n_paths long after init and every restart event appends its own
     entries, so a run with verdicts grows past n_paths while the same run with
     the window pushed out of reach does not.
@@ -545,7 +545,7 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
             calls[0] += 1
             if calls[0] <= 2:  # init probe evals: shared cold-start evidence
                 f_vals = init_f_vals
-            else:  # everything afterwards is finite and flat (Δ = 0, sigma_p = 0)
+            else:  # everything afterwards is finite and flat (Δ = 0, so h = 0)
                 f_vals = jnp.full((theta.shape[0],), 1.0, dtype=theta.dtype)
             return f_vals, jnp.zeros_like(theta), None
 
@@ -617,7 +617,7 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
 def test_stalled_paths_wait_for_ei_then_restart() -> None:
     """A method's own give-up stalls a path; only a due EI verdict revives it.
 
-    Init probes return f = x[0] (a real spread, so sigma_r > 0 and B stays
+    Init probes return f = x[0] (a real spread, so h > 0 and B stays
     small); every later evaluation returns the same bad constant with a zero
     gradient, so the injected method rejects its trial cap and gives up. With
     window = 2 (the shortest stage that has a spread at all) and one sample per

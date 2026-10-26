@@ -137,15 +137,15 @@ class RestartRule(Protocol):
     stored state, so the engine stays the only writer of B and every verdict
     reads the incumbent of its own iteration. That B is the run's **raw**
     minimum - over every finite point served, feasible or not - because the
-    rule's own evidence is unfiltered: `f_k` and the payoffs in its pool are raw
-    values, and a probe group-min cannot be filtered by feasibility without
+    rule's own evidence is unfiltered: `f_k` and the group-mins in its pool are
+    raw values, and a probe group-min cannot be filtered by feasibility without
     dropping the event. The feasible minimum the run reports as `fun` is a
     different number whenever a batch carries a feasibility mask.
 
     The engine offers exactly two evidence channels, and the signatures say
     which is which: `observe_continue(i, delta)` is per-path (what continuing
-    bought *that* path), while `observe_restart(r)` carries **no path index**
-    because a restart payoff is a property of the sampler and the incumbent,
+    bought *that* path), while `observe_restart(group_min)` carries **no path
+    index** because a group-min is a property of the sampler and the incumbent,
     not of any one path - every path pools the same history. Those two are the
     two alternatives the verdict compares, and they are the scalar facts the
     engine owns; a rule needing more (point geometry, a surrogate over the
@@ -173,13 +173,13 @@ class RestartRule(Protocol):
         """
         ...
 
-    def observe_restart(self, r: float) -> None:
-        """Fold in the value r a fresh restart start achieved (restart payoff).
+    def observe_restart(self, group_min: float) -> None:
+        """Fold in the group-min a fresh restart start achieved.
 
         The engine draws each restart start as the min of one probe group
-        (`n_probe_evals` i.i.d. points), so r is that group's min - a real
-        sample of "what a restart buys". The history is pooled across paths
-        (hence no path index); a rule that ignores payoff no-ops.
+        (`n_probe_evals` i.i.d. points), so `group_min` is that group's min - a
+        real sample of "what a restart buys". The history is pooled across paths
+        (hence no path index); a rule that ignores the payoff no-ops.
         """
         ...
 
@@ -372,8 +372,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     the f-only seam), identical for init and restart regardless of how many
     paths restart (by design). Probe-batch grads are reused for the selected
     starts: starts cost zero extra evals. The rule's
-    one shared payoff pool is cold-started with the n_paths init group-mins
-    (sigma_r > 0 for n_paths >= 2); n_paths=1 yields a single sample -> sigma_r = 0 ->
+    one shared group-min pool is cold-started with the n_paths init group-mins
+    (a real spread for n_paths >= 2); n_paths=1 yields a single sample -> h = 0 ->
     degenerate EI_restart = 0 -> the single path never restarts. Every restart
     event extends {r_i} with the event's group-mins for all paths at once (a
     payoff is a property of the sampler, not of one path). A path whose method
@@ -907,7 +907,7 @@ class _Paths:
     def restart(self, idxs: list[int]) -> None:
         """Restart the given paths from one fresh probe-select event.
 
-        The event's group-min list extends the rule's one shared payoff pool;
+        The event's group-min list extends the rule's one shared group-min pool;
         the method's and the rule's per-path state reset to cold start, while
         that pool is kept (same sampler, new trajectories). A path whose fresh
         group-min has a non-finite f *or* gradient arrives stalled and waits for

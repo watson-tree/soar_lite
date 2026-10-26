@@ -65,7 +65,7 @@ the losing points is pure waste. The moves:
   losing gradient to defer (the winner *is* the draw), so `n_probe_evals == 1`
   takes the fused path even when `evaluate_f` is supplied — otherwise the point
   would be served twice for nothing.
-  Consequences: under that default a restart payoff is a single fresh draw, not
+  Consequences: under that default a group-min is a single fresh draw, not
   a min-of-n group-min — the "pinned 2 (empirical)" advice in the docstring
   moves to "2 iff you also pass `evaluate_f`", and the Phase A–D numbers were
   measured at 2. With `evaluate_f`,
@@ -149,10 +149,10 @@ enumeration). Don't claim the verdict is exactly unbiased in those residual case
 
 **Init folded into restart (landed):** the dedicated initialization path (a
 probe before the loop, then a cold-start `solver.init` / `observe_restart`
-block) was redundant - `apply_restarts` already probes, extends the payoff pool
+block) was redundant - `apply_restarts` already probes, extends the group-min pool
 and re-seeds the method. The loop's iteration 0 is now the initialization
 probe, unlocked by one rule contract: `should_restart` returns `True` while the
-payoff pool is empty. `LocalSolver.init` is gone (`restart` is the only
+group-min pool is empty. `LocalSolver.init` is gone (`restart` is the only
 cold-start call). Two consequences worth keeping: `n_iters` counts iteration 0, so
 the two stops that both used to report `0` are now distinct (a refused probe is
 `0`, a refused first step is `1`); and the cold start opens each path's stage,
