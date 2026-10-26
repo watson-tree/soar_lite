@@ -42,7 +42,7 @@ class PathPoint:
     g: jnp.ndarray
 
 
-Verdict: TypeAlias = Literal["accept", "retry", "give_up"]
+Verdict: TypeAlias = Literal["retry", "accept", "give_up"]
 
 
 @runtime_checkable
@@ -1012,14 +1012,14 @@ class _Paths:
                 if finite and (i not in best or trial.f < best[i].f):
                     best[i] = trial
                 verdict = self.solver.verdict(i, point, trial)
-                if verdict == "accept":
+                if verdict == "retry":
+                    still_rejecting.append(i)
+                elif verdict == "accept":
                     if i not in best:  # no finite sample served: nothing to win
                         self.stalled[i] = True
                     else:
                         self.points[i] = best[i]
                         self.solver.fold(i, point, best[i])
-                elif verdict == "retry":
-                    still_rejecting.append(i)
                 else:  # "give_up": the method's own convergence test fired
                     self.stalled[i] = True
             rejecting = still_rejecting
