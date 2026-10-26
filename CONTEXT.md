@@ -66,6 +66,12 @@ _Avoid_: best-so-far, current optimum
 A path that moved nowhere this iteration — it neither restarted nor committed a
 step: its local method signalled `give_up`, or its trials were exhausted.
 Stalled is not dead: a stalled path can still be restarted by a later verdict.
+The engine reports it to the restart rule as `None` — absence, not a sample —
+so the rule reads no continuation from it. The iteration still counts: the rule
+keeps one stage clock per path that every report advances by one, moved or
+stalled, so a stall never postpones a verdict past its cohort's. A verdict ends
+the stage either way — a window is one stage, whatever the answer — so a stalled
+path with nothing to win is re-judged once per window, not every round.
 _Avoid_: paused, idle, dead
 
 ### Evaluation
@@ -166,7 +172,9 @@ _Avoid_: sample, payoff, reward, fitness
 **group-min pool**:
 The shared multiset of group-mins (one per probe), measured rather than modelled.
 One pool serves every path. It is the sample the restart payoff is priced off,
-not a pool of payoffs.
+not a pool of payoffs. A `+inf` group-min is a dead start: a real sample whose
+own improvement is exactly 0, so it dilutes the finite read instead of being
+dropped, while `nan` is no information and `-inf` is not read.
 _Avoid_: payoff pool, restart history, bandit arms
 
 **restart verdict**:
@@ -175,7 +183,10 @@ restarting's; `EI_restart > EI_continue` restarts the path. One sample each —
 one step for continuing, one probe for restarting — so the verdict is a decision
 about what to buy. Each side is modelled by a scott_mad KDE over its own
 samples (one Gaussian kernel per sample), so neither side assumes a single
-Gaussian. The two sides are cost-matched in gradient count only when
+Gaussian. A stalled path supplies no continuation sample at all — absence, not
+a value — so its `EI_continue` is 0 and its verdict is one-sided; a moving path
+is only compared once it has folded the same number of steps the restart side
+already holds. The two sides are cost-matched in gradient count only when
 an f-only evaluator is supplied; without one the engine refuses
 `n_probe_evals > 1`, so the un-seamed default stays at 1.
 _Avoid_: restart check, reset decision

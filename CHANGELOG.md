@@ -30,10 +30,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Degenerate corners are unchanged: a stage or pool with no spread has
   `h = 0`, so the read is exactly `max(B - x, 0)` and `n_paths=1` still never
   restarts.
+- A stalled path no longer fabricates a sample. `observe_continue` takes
+  `delta: float | None`, and the engine reports a stall as `None` - absence, not
+  a value - so folding an `inf` that had to be filtered back out at the read is
+  gone. The continue side is then exactly the evidence the path has: a stalled
+  path's continuation is 0 by definition, so its verdict is one-sided
+  (`EI_restart > 0`). One stage clock per path counts **iterations**, not folds,
+  so both shapes of report advance it and a verdict comes due on the same round
+  whatever the path lived through - a path that stalls mid-stage keeps the wait
+  it had already served instead of starting a second full one. A verdict closes
+  its stage whichever way it went (a window is one stage, the answer is not part
+  of the window), so a path that is never restarted is re-judged once per window
+  rather than re-asking the same question every round; `restart` therefore only
+  reports the event, and a rule that resets at the verdict treats it as a no-op.
+  A moving path still reads a full window of Δ, so the two sides are only ever
+  compared on paths that actually folded one.
+- A `+inf` group-min is read as a dead start instead of being dropped: it is a
+  legal observation whose own improvement is exactly 0, so `EI_restart` is the
+  finite KDE mean diluted by the fraction of starts that were alive
+  (`|finite| / (|finite| + |+inf|)`), with the bandwidth taken from the finite
+  subset alone. `nan` is still no information, and `-inf` is still not read.
 - Initialization and restart are one operation: the engine's first iteration is
   the initialization probe, driven by the rule's cold-start verdict
   (`should_restart` must return `True` while the group-min pool is empty, so an
-  empty `group_mins` - not `pool_size == 0` - is the test). `LocalSolver.init`
+  empty `group_mins` is the test - a pool that exists but is entirely dead must
+  not re-probe). `LocalSolver.init`
   is gone - `restart` is the single cold-start call - and `n_iters` counts the probe
   as iteration 0, so a run that only seeds the flock reports `n_iters = 1` instead
   of `0`, and a refused probe (`0`) is no longer confused with a refused first
@@ -92,7 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_iters=N` raises the work
   budget by up to that factor.
 - The `all_stalled` status and its early exit: a fully stalled flock now idles to
-  the horizon, folding one `inf` sample per path per iteration, instead of
+  the horizon, ticking one stall report per path per iteration, instead of
   reading the rule's cadence to decide it can never be revived.
 
 ### Fixed

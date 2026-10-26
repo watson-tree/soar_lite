@@ -111,6 +111,8 @@ restart is back in phase instantly (no out-of-phase clock). Replace with:
   `for i in range(n_paths): if i in just_restarted: continue; delta = inf if
   stalled[i] else points[i].f - prev_f[i]; observe_continue(i, delta);
   prev_f[i] = points[i].f`
+  (a later increment replaced the `inf` with `None` - see
+  `docs/adr/0006-restart-rule-reads-stall-as-absence.md`)
 - the all-stalled shortcut collapses to
   `if restart_rule.samples_until_verdict() >= max_evals - it: all_stalled =
   True; break` (one sample = 1 iteration; the `+1` vote term merges into

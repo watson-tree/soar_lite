@@ -1,8 +1,8 @@
 """Assert-style self-checks for the empirical EI restart policy.
 
 The rule takes no cadence knob: a path is read over a window that
-`_stage_window()` derives from the group-min pool's size, with a scott_mad KDE over
-that window's finite Δ on both sides. These tests therefore choose a
+`_stage_window()` derives from the group-min pool's defined sample count, with a
+scott_mad KDE over that window's Δ on both sides. These tests therefore choose a
 window by growing a pool, and read the stage's evidence back off the rule.
 
 No jax: the policy is pure-Python float bookkeeping. Run with:
@@ -16,6 +16,8 @@ No jax: the policy is pure-Python float bookkeeping. Run with:
 # importing them here is the intended read, not a boundary crossing.
 
 import math
+
+import pytest
 
 from soar_lite.restart import (
     EIRestartRule,
@@ -114,31 +116,38 @@ def test_ei_restart_tail_below_all_observations() -> None:
     assert close(restart_payoff(1.0, [1.5, 2.0]), 0.005531593511968263, 1e-12)
 
 
-def test_ei_restart_empty_single_and_nonfinite_skipped() -> None:
-    """M=0 → 0; M=1 → h=0 degenerate max(B-r,0); non-finite skipped."""
+def test_ei_restart_prices_inf_as_a_dead_start_and_skips_nan_and_neginf() -> None:
+    """M=0 → 0; M=1 → h=0 degenerate; +inf is a 0-buy event; NaN/-inf not read."""
     assert restart_payoff(1.0, []) == 0.0
     assert restart_payoff(3.0, [2.0]) == 1.0  # max(3 - 2, 0)
     assert restart_payoff(1.0, [2.0]) == 0.0  # max(1 - 2, 0)
+    # NaN is "no information": neither counted nor fitted.
     assert close(restart_payoff(1.0, [0.0, 2.0, float("nan")]), KDE_LITERAL, 1e-9)
-    # +inf must be skipped too, not only NaN: keeping it blows the scott_mad
-    # bandwidth to inf (or NaN), so the read stops being evidence and the
-    # verdict fires unconditionally (or is silently disabled by NaN).
-    assert close(restart_payoff(1.0, [float("inf"), 0.0, 2.0]), KDE_LITERAL, 1e-9)
+    # +inf is a dead start: a legal 0-improvement event, so it dilutes the finite
+    # KDE by the alive fraction 2/3 instead of vanishing from the read (and it
+    # must not widen the bandwidth either, which is why h stays the finite one).
+    assert close(
+        restart_payoff(1.0, [float("inf"), 0.0, 2.0]),
+        KDE_LITERAL * 2.0 / 3.0,
+        1e-9,
+    )
+    # No finite start at all: the finite subset is empty, so the read is 0.
     assert restart_payoff(1.0, [float("inf"), float("inf"), 2.0]) == 0.0
     assert restart_payoff(1.0, [float("inf"), float("-inf")]) == 0.0
 
 
-def test_window_is_the_pool_size() -> None:
-    """The cadence follows the evidence: window = M, with 1 standing for "empty".
+def test_window_is_the_defined_sample_count() -> None:
+    """The cadence follows the evidence: window = finite plus +inf, floor 1.
 
     The two sides are worth about the same number of samples only when their
     counts match, so reading the path over exactly the pool's M is what stops
     the noisier side's own noise from deciding the verdict - and it is derived
     rather than injected, so no caller can ask for a window the pool cannot
-    back. Nothing pads M to 2:
-    at M = 1 both reads collapse to their documented degenerate form (no spread
-    on either side), so a longer window would only delay a verdict that already
-    cannot restart.
+    back. A dead start is still a defined sample (it is the zero term of the
+    same mean), so it counts; `nan` is no information and does not. Nothing pads
+    M to 2: at M = 1 both reads collapse to their documented degenerate form (no
+    spread on either side), so a longer window would only delay a verdict that
+    already cannot restart.
     """
     policy = EIRestartRule()
     assert policy._stage_window() == 1  # empty pool: nothing to read, not a prior
@@ -147,18 +156,21 @@ def test_window_is_the_pool_size() -> None:
     for m in range(2, 12):
         policy.observe_restart(0.0)
         assert policy._stage_window() == m  # M itself
-    policy.observe_restart(math.inf)  # stays in the pool, is not fitted
+    policy.observe_restart(math.inf)  # a dead start is a defined sample: counted
     assert len(policy.group_mins) == 12
-    assert policy.pool_size == 11
-    assert policy._stage_window() == 11  # matched to what the KDE is built on
+    assert policy._stage_window() == 12
+    policy.observe_restart(math.nan)  # no information: not counted
+    assert len(policy.group_mins) == 13
+    assert policy._stage_window() == 12
 
 
-def test_stage_read_is_a_kde_over_its_finite_deltas() -> None:
+def test_stage_read_is_a_kde_over_its_deltas() -> None:
     """One read per stage: the scott_mad KDE over its Δ, equal weight per fold.
 
     No fading weights, so the read is worth exactly the folds it holds; it is
     the same KDE the restart side reads (equal weights on the *same* samples
-    must give the same numbers), with `f_k + Δ` as the next value's centre.
+    must give the same numbers), with `f_k + Δ` as the next value's centre. A
+    stall never lands here - it is reported as `None`, not as a value.
     """
     policy = EIRestartRule()
     grow_pool(policy)  # window = 8
@@ -167,7 +179,7 @@ def test_stage_read_is_a_kde_over_its_finite_deltas() -> None:
         policy.observe_continue(0, delta)
     one_ruler = continue_payoff(-1.0, 0.0, deltas)
     assert close(policy._continue_payoff(0, -1.0, 0.0), one_ruler, 1e-15)
-    assert policy._stage_deltas(0) == deltas
+    assert policy.deltas.get(0, []) == deltas
 
 
 def test_the_two_sides_read_the_same_samples_the_same_way() -> None:
@@ -188,43 +200,81 @@ def test_the_two_sides_read_the_same_samples_the_same_way() -> None:
     )
 
 
-def test_nonfinite_delta_counts_towards_the_window_but_is_not_read() -> None:
-    """A stall folds inf every round: the gate must still come due, the read not.
+def test_a_stall_supplies_no_delta_and_counts_the_iteration() -> None:
+    """A stall is absence: the stage drops, the round still counts.
 
-    The engine reports a stalled path by feeding inf, and that path's verdict has
-    to stay on the same clock as its moving cohort - so the guard sits at the
-    read, where an empty stage returns 0.0 (the degenerate "continuing buys
-    nothing" read, the same one a zero-bandwidth stage gives). That is what
-    revives a stalled flock instead of letting one +inf poison the KDE into NaN
-    (`NaN > EI_continue` is False, so no path would ever restart again).
+    The engine reports a stalled path with `None`, not a value, so the continue
+    side holds no sample to read (payoff 0.0 - continuing bought nothing). The
+    stage clock is one clock for both shapes of evidence, so a stalled path comes
+    due on the same round a moving one would, not on a fabricated fold count
+    whose reads could never be matched against the pool.
     """
     policy = EIRestartRule()
     grow_pool(policy)  # window = 8, h well defined
     for _ in range(WINDOW - 1):
-        policy.observe_continue(0, math.inf)
-    assert policy._stage_deltas(0) == []
-    assert policy.should_restart(0, 0.0, 0.0) is False  # one fold short of due
-    policy.observe_continue(0, math.nan)
-    assert policy.should_restart(0, 0.0, 0.0) is True  # due, and EI_restart > 0
+        policy.observe_continue(0, None)
+    assert policy.deltas.get(0, []) == []
+    assert policy.rounds[0] == WINDOW - 1
+    assert policy.should_restart(0, 0.0, 0.0) is False  # one round short of due
+    policy.observe_continue(0, None)
+    assert policy.should_restart(0, 0.0, 0.0) is True  # due: continue 0 < restart > 0
     assert policy._continue_payoff(0, 0.0, 0.0) == 0.0
+    assert policy.rounds[0] == 0  # the verdict closed the stage, restart won or not
 
 
-def test_an_empty_pool_is_the_cold_start_and_a_dead_pool_is_not() -> None:
-    """An empty group-min pool seeds the flock; a pool of dead starts must not.
+def test_a_stall_clears_a_partial_stage_and_keeps_its_wait() -> None:
+    """A stall drops the folds but not the rounds already served for them.
 
-    The engine asks every path on its first iteration, before any probe has
-    run, and that ask is what triggers the initialization probe - so a rule must
-    answer True while it holds no restart evidence at all. `group_mins` is the
-    test, not `pool_size`: a pool that exists but is entirely non-finite means
-    the probe ran and every start was dead, which should stall the flock and
-    wait for a later vote rather than re-probe every iteration.
+    The read is one sided once the stage is gone (continue = 0), and the clock is
+    what decides when to ask - so a mid-stage stall comes due when its cohort
+    does, never a full window later.
+    """
+    policy = EIRestartRule()
+    grow_pool(policy)  # window = 8
+    for _ in range(WINDOW - 3):
+        policy.observe_continue(0, 0.1)
+    policy.observe_continue(0, None)
+    assert policy.deltas.get(0, []) == []  # no continuation to average
+    assert policy.rounds[0] == WINDOW - 2  # the stall served its round
+    assert policy.should_restart(0, 0.0, 0.0) is False
+    policy.observe_continue(0, None)
+    assert policy.should_restart(0, 0.0, 0.0) is False  # one short, as a mover would be
+    policy.observe_continue(0, None)
+    assert policy.should_restart(0, 0.0, 0.0) is True  # due on its cohort's round
+
+
+def test_a_nonfinite_delta_is_rejected_at_the_seam() -> None:
+    """`inf`/`nan` are not stall spellings: the engine says `None`, so reject."""
+    policy = EIRestartRule()
+    for bad in (math.inf, math.nan, -math.inf):
+        with pytest.raises(ValueError, match="finite"):
+            policy.observe_continue(0, bad)
+
+
+def test_an_empty_pool_is_the_cold_start_and_a_dead_pool_does_not_restart() -> None:
+    """An empty pool seeds the flock; a pool of dead starts never restarts it.
+
+    The cold-start ask happens before any probe has run, and that ask is what
+    triggers the initialization probe - so a rule must answer True while it
+    holds no restart evidence at all. A pool that exists but is entirely `+inf`
+    (or `nan`) is the opposite: the probe ran and every start was dead, so
+    `EI_restart` prices 0 and a fully stalled flock idles instead of re-probing
+    every iteration.
     """
     policy = EIRestartRule()
     assert policy.should_restart(0, math.inf, math.inf) is True  # no probe yet
     for _ in range(WINDOW):
         policy.observe_restart(math.inf)  # the probe ran; every start was dead
-    assert policy.pool_size == 0  # nothing usable, but the pool is not empty
-    assert policy.should_restart(0, math.inf, math.inf) is False
+    assert policy._stage_window() == WINDOW  # dead starts are still defined samples
+    for _ in range(WINDOW):  # the flock stalls out on the dead landscape
+        policy.observe_continue(0, None)
+    assert policy.should_restart(0, 0.0, 0.0) is False  # EI_restart = 0: no re-probe
+    # A False verdict still closes the stage: one window, one verdict - so the
+    # clock is not left in the due band re-asking the same question every round.
+    assert policy.rounds[0] == 0
+    assert policy.deltas.get(0, []) == []
+    policy.observe_continue(0, None)
+    assert policy.should_restart(0, 0.0, 0.0) is False  # not due again until a window
 
 
 def test_verdict_is_due_once_per_window_and_closes_the_stage() -> None:
@@ -241,7 +291,7 @@ def test_verdict_is_due_once_per_window_and_closes_the_stage() -> None:
             policy.observe_continue(0, 0.1)
             assert policy.should_restart(0, 0.0, 0.0) is (step == WINDOW)
         assert policy.deltas[0] == []  # the stage's one read was taken
-        assert policy._stage_deltas(0) == []
+        assert policy.rounds[0] == 0  # ... and its clock starts over with it
     # A stage that only closed is not restarted by the rule itself: the engine
     # restarts paths, not the rule, and `restart` only drops evidence.
     assert policy.group_mins == [0.0, 2.0] * (WINDOW // 2)
@@ -276,13 +326,13 @@ def test_no_restart_evidence_never_restarts() -> None:
     policy = EIRestartRule()
     for _ in range(WINDOW):  # pool = 8 copies of 0.0: MAD = 0, so h = 0
         policy.observe_restart(0.0)
-    assert policy.pool_size == WINDOW
+    assert policy._stage_window() == WINDOW
     for _ in range(WINDOW):
         policy.observe_continue(0, 0.5)
     assert policy.should_restart(0, 0.0, 0.0) is False  # 0 > 0 is False
 
 
-def test_no_incumbent_never_restarts_but_does_not_stall_the_clock() -> None:
+def test_no_incumbent_never_restarts_but_does_not_leave_the_gate_open() -> None:
     """Cold start (incumbent = inf) never restarts, even at a due gate.
 
     The stage still closes: B is the engine's to write, and holding a full stage
@@ -293,9 +343,9 @@ def test_no_incumbent_never_restarts_but_does_not_stall_the_clock() -> None:
     for _ in range(WINDOW):
         policy.observe_continue(0, 0.5)
     assert policy.should_restart(0, 0.0, math.inf) is False
-    assert policy._stage_deltas(0) == []  # the read was skipped, the gate was not
+    assert policy.deltas.get(0, []) == []  # the read was skipped, the gate was not
     policy.observe_continue(0, 0.5)
-    assert policy._stage_deltas(0) == [0.5]  # a fresh stage is running
+    assert policy.deltas.get(0, []) == [0.5]  # a fresh stage is running
 
 
 def test_group_min_pool_is_shared_across_paths() -> None:
@@ -316,28 +366,37 @@ def test_group_min_pool_is_shared_across_paths() -> None:
 
 
 def test_per_path_stage_is_independent() -> None:
-    """Folds and restarts are per path; only the group-min pool is shared."""
+    """Folds and closes are per path; only the group-min pool is shared."""
     policy = EIRestartRule()
+    grow_pool(policy)  # window = 8
     policy.observe_continue(0, 0.4)
     policy.observe_continue(0, 0.6)
-    assert policy._stage_deltas(0) == [0.4, 0.6]
-    assert policy._stage_deltas(1) == []  # path 1 has folded nothing
     policy.observe_continue(1, -0.5)
-    assert policy._stage_deltas(1) == [-0.5]
-    policy.restart(0)
-    assert policy._stage_deltas(0) == []  # path 0's stage is dropped
-    assert policy._stage_deltas(1) == [-0.5]  # path 1's is untouched
-    assert policy.group_mins == []  # restart keeps the (empty) shared pool
+    assert policy.deltas.get(0, []) == [0.4, 0.6]
+    assert policy.deltas.get(1, []) == [-0.5]  # its own stage, its own fold
+    for _ in range(WINDOW - 2):
+        policy.observe_continue(0, 0.1)
+    policy.observe_continue(1, -0.5)  # path 1 is two rounds in, not due
+    assert policy.rounds[0] == WINDOW
+    assert policy.rounds[1] == 2
+    policy.should_restart(0, 0.0, 0.0)  # path 0 is due: its stage closes
+    assert policy.deltas.get(0, []) == []
+    assert policy.rounds[0] == 0
+    assert policy.deltas.get(1, []) == [-0.5, -0.5]  # path 1's stage is untouched
+    assert policy.rounds[1] == 2
+    assert policy.group_mins == [0.0, 2.0] * (WINDOW // 2)  # the pool is shared
 
 
 def test_restart_keeps_the_shared_group_min_pool() -> None:
-    """A restart drops the path's stage but never discards pooled group-mins."""
+    """The restart event never discards pooled group-mins (it touches no state)."""
     policy = EIRestartRule()
     policy.observe_restart(0.0)
     policy.observe_restart(2.0)
     policy.observe_continue(0, 0.1)
     policy.restart(0)
     assert policy.group_mins == [0.0, 2.0]
+    assert policy.deltas.get(0, []) == [0.1]  # resets at the verdict, not here
+    assert policy.rounds[0] == 1
     assert policy._restart_payoff(1.0) == restart_payoff(1.0, [0.0, 2.0])
 
 

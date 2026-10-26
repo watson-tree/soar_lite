@@ -13,7 +13,6 @@ Run with:
     uv run python -m tests.test_solver_seam
 """
 
-import math
 from collections.abc import Callable
 
 import jax
@@ -106,12 +105,12 @@ class RecordingRule:
     def __init__(self) -> None:
         """Start with empty evidence, no restarts and no verdicts."""
         self.group_mins: list[float] = []
-        self.deltas: list[tuple[int, float]] = []
+        self.deltas: list[tuple[int, float | None]] = []
         self.restarts: list[int] = []
         self.verdicts: list[int] = []
 
-    def observe_continue(self, i: int, delta: float) -> None:
-        """Record one f change delta for path i."""
+    def observe_continue(self, i: int, delta: float | None) -> None:
+        """Record one f change (or a stall tick, `None`) for path i."""
         self.deltas.append((i, delta))
 
     def observe_restart(self, group_min: float) -> None:
@@ -408,7 +407,7 @@ def test_every_path_feeds_once_per_iteration() -> None:
 
     Column 0 is non-finite in both init probe evals, so path 0 arrives
     stalled and never steps; the engine must still feed it one
-    `observe_continue(0, inf)` per iteration, so its sample count advances in
+    `observe_continue(0, None)` per iteration, so its stage clock advances in
     lockstep with its advancing cohort instead of leading it by one verdict
     (the off-by-one a top-of-iteration stall count would cause). A continue
     sample is one step, so three iterations take three iterations.
@@ -440,7 +439,7 @@ def test_every_path_feeds_once_per_iteration() -> None:
     for i, _delta in rule.deltas:
         counts[i] = counts.get(i, 0) + 1
     assert counts == {0: 3, 1: 3}, counts
-    assert [d for i, d in rule.deltas if i == 0] == [math.inf] * 3
+    assert [d for i, d in rule.deltas if i == 0] == [None] * 3
 
 
 def test_a_probes_iteration_is_not_read_back_as_a_zero_step() -> None:
@@ -475,7 +474,7 @@ def test_a_probes_iteration_is_not_read_back_as_a_zero_step() -> None:
     # step is a strict decrease and the probe's own f never reappears as a zero.
     deltas = [d for _i, d in rule.deltas]
     assert len(deltas) == k, rule.deltas  # one step each, after its probe
-    assert all(d < 0.0 for d in deltas), deltas
+    assert all(d is not None and d < 0.0 for d in deltas), deltas
     assert res.n_batches == PROBE_EVALS + 1, res
 
 

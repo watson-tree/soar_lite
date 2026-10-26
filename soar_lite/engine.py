@@ -164,12 +164,14 @@ class RestartRule(Protocol):
     nothing here re-checks.
     """
 
-    def observe_continue(self, i: int, delta: float) -> None:
+    def observe_continue(self, i: int, delta: float | None) -> None:
         """Fold path i's one-step value change into its continuation evidence.
 
         The sample is the engine's: one iteration's step, so this side is
-        priced in the step it just took. A stall arrives as `inf` (the rule
-        stores it and drops it at the read), never as a Δ that spans the stall.
+        priced in the step it just took. A stall arrives as `None` - absence,
+        not a value: the path did not move, so there is no Δ to fold and the
+        rule counts the iteration on the path's stage clock instead of storing a
+        sample that spans it.
         """
         ...
 
@@ -190,8 +192,10 @@ class RestartRule(Protocol):
         probe has run, and that ask is how the flock is seeded: a rule must
         return True while it holds no restart evidence at all (an empty payoff
         pool), which is what triggers the initialization probe. An empty pool
-        is the true cold start; a pool that exists but is entirely non-finite
-        is evidence of a dead start and must not be re-probed.
+        is the true cold start; a pool that exists but is entirely dead (every
+        start of it unusable) is evidence of a dead start and must not be
+        re-probed - and a fully stalled flock keeps asking, so a rule that
+        prices such a pool at 0 is what keeps it idling rather than probing.
 
         B is the raw minimum (see the class docstring) and `f_k` is path i's
         current value in the same unfiltered terms.
@@ -199,11 +203,13 @@ class RestartRule(Protocol):
         ...
 
     def restart(self, i: int) -> None:
-        """Drop path i's step-local evidence; the engine assumes nothing else.
+        """Handle path i's restart event; the engine assumes no state is dropped.
 
-        Called for every path at initialization (right after its probe), and
-        for each path a restart re-probes, so a rule's per-path stage opens
-        clean on the first iteration too.
+        Called for every path at initialization (right after its probe), and for
+        each path a restart re-probes. What a rule does here is its own choice:
+        resetting per-path evidence at the event is legal, and so is resetting it
+        at the verdict instead (then this is a no-op). The engine only guarantees
+        the event is reported, never that the rule's stage was still open.
         """
         ...
 
@@ -213,8 +219,9 @@ class RestartRule(Protocol):
 NPathStatus: TypeAlias = Literal["budget_exhausted", "max_iters", "time_limit"]
 # Three names for the three gates that can end a run, in the order they are
 # checked: the iteration horizon, the wall-clock deadline, and the caller's
-# extra batch gate. A stalled flock has no fourth stop - it keeps folding inf
-# samples until the horizon or the deadline ends the run.
+# extra batch gate. A stalled flock has no fourth stop - every report still
+# advances a stage clock, so the verdicts keep coming until the horizon or the
+# deadline ends the run.
 
 # The one way the engine sees the objective: x rows (M,d) inside `bounds` in,
 # (f (M,), grads_x (M,d), feas (M,)|None) out. Value and gradient come back
@@ -384,8 +391,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     iteration - the step it just took - non-overlapping, each path on its own
     clock (a restart opens a new stage, and the first iteration after a restart
     is skipped so the probe is not read back as a step's Δ). A stalled iteration
-    feeds inf - the read drops the value - rather than a Δ that spans the stall.
-    So a stage of M samples costs M evals, but the batch count is not the cost
+    reports `None` - no Δ to fold, so the read has no continuation sample from it -
+    rather than a Δ that spans the stall; it still advances that path's stage
+    clock, so a stall cannot postpone a verdict past its cohort's.
+    So a stage of M iterations costs at most M evals (a stalled one serves no
+    batch), but the batch count is not the cost
     that dominates: a probe computes g n_probe_evals times while a step computes
     it once, and g is the dearer half. So n_probe_evals > 1 requires evaluate_f;
     with it both sides compute g exactly once (the probe's f-only draws are not
@@ -859,8 +869,8 @@ class _Paths:
       that must be cleared each iteration.
     - A path is stalled when it did not move at all this iteration - its method
       gave up on every trial, or its fresh start was not a usable point. A
-      stalled path does not step and feeds `inf` to the rule ("no evidence"), so
-      its own clock keeps advancing in step with its live cohort.
+      stalled path does not step and reports `None` to the rule (a stall tick,
+      no evidence), so its own stage clock keeps pace with its live cohort.
     - A start gates on both halves: a finite f with a non-finite gradient is
       proposed from (`-p.g`) and folded on (`best.g - p.g`), so one NaN in it
       would poison that coordinate's magnitude EMAs for the rest of the run.
@@ -908,11 +918,13 @@ class _Paths:
         """Restart the given paths from one fresh probe-select event.
 
         The event's group-min list extends the rule's one shared group-min pool;
-        the method's and the rule's per-path state reset to cold start, while
-        that pool is kept (same sampler, new trajectories). A path whose fresh
-        group-min has a non-finite f *or* gradient arrives stalled and waits for
-        the next EI verdict. The probe is this iteration's move for every
-        restarted path, finite or not, so none of them also steps.
+        the method's per-path state resets to cold start, while that pool is kept
+        (same sampler, new trajectories). The rule is told about the event and
+        decides for itself what, if anything, it resets there - `EIRestartRule`
+        closed the stage at its verdict, so it has nothing left to drop. A path
+        whose fresh group-min has a non-finite f *or* gradient arrives stalled and
+        waits for the next EI verdict. The probe is this iteration's move for
+        every restarted path, finite or not, so none of them also steps.
         """
         if not idxs:
             # No path restarted this iteration: nothing to probe or reset.
@@ -923,7 +935,7 @@ class _Paths:
         for i, point in zip(idxs, starts, strict=True):
             self.points[i] = point
             self.solver.restart(i, point)
-            self.restart_rule.restart(i)  # the next Δ opens this path's next stage
+            self.restart_rule.restart(i)  # report the event; its stage was its own
             # Both halves gate the start, not just f: a finite f with a
             # non-finite gradient is proposed from (`-p.g`) and folded on
             # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
@@ -938,8 +950,8 @@ class _Paths:
         """Return the continue cohort: every path not restarted this iteration.
 
         Stalled paths stay in: a stalled path does not propose, but it still
-        folds an inf sample this iteration, so its clock keeps pace with its
-        live cohort. Only a restart removes a path from this cohort.
+        reports a stall this iteration, so its own stage clock keeps pace with
+        its live cohort. Only a restart removes a path from this cohort.
         """
         return [i for i in range(self.n_paths) if i not in restarted]
 
@@ -957,20 +969,21 @@ class _Paths:
         point handed to propose/verdict is also the step's start point.
 
         The cohort also holds paths that are already stalled: they skip the
-        propose loop and only fold their sample. A path ends stalled exactly
+        propose loop and only report their sample. A path ends stalled exactly
         when it moved by no probe and committed no point: its method found
-        nothing to win. Each cohort path then folds one sample - the finite step
-        Δ when it moved, `inf` ("no evidence") when it is stalled - so a stalled
-        path's clock keeps advancing with its live cohort, and a fully stalled
-        flock idles to the horizon instead of stalling the verdict's cadence.
+        nothing to win. Each cohort path then reports one sample - the finite
+        step Δ when it moved, `None` (a stall tick, no evidence) when it is
+        stalled - so a stalled path's stage clock keeps pace with its live
+        cohort and a fully stalled flock idles to the horizon instead of stalling
+        the verdict's cadence.
         """
         if not idxs:
             # Every path restarted this iteration: the cohort is empty.
             return
         lo, hi = clip
-        # A path already stalled only folds a sample this iteration, so it stays
-        # out of the propose loop; `stalled` also gates the exit observation
-        # below without a second membership list.
+        # A path already stalled only reports its sample this iteration, so it
+        # stays out of the propose loop; `stalled` also gates the exit
+        # observation below without a second membership list.
         rejecting = [i for i in idxs if not self.stalled[i]]
         # Per-step argmin cache: "accept" commits the lowest-f finite trial
         # served this step (not the last served one), so a method can sweep a
@@ -1018,9 +1031,13 @@ class _Paths:
         # so its first Δ belongs to the next iteration and its anchor stays at
         # the probe's f rather than being read back as a zero-length step.
         for i in idxs:
-            delta = math.inf if self.stalled[i] else self.points[i].f - self.prev_f[i]
-            self.restart_rule.observe_continue(i, delta)
-            self.prev_f[i] = self.points[i].f
+            if self.stalled[i]:
+                # Absence, not a value: the rule counts the iteration, not a Δ.
+                self.restart_rule.observe_continue(i, None)
+            else:
+                delta = self.points[i].f - self.prev_f[i]
+                self.restart_rule.observe_continue(i, delta)
+                self.prev_f[i] = self.points[i].f
 
 
 def _check_seam(obj: object | None, proto: type, what: str) -> None:

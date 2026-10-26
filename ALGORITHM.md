@@ -149,22 +149,29 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 ### 2.3 判决与节奏：让两侧样本数可比
 
 判决只在路径攒够一个 window 的 `Δf` 时问一次，问完就关掉这个 stage（下一个 `Δf` 开新 stage）。
-`window = M`，`M` 是池子里可用的（有限）样本数。这个匹配是承重的：两侧是同一种 scott_mad KDE，
+`window = M`，`M` 是池子里**有定义**的样本数（有限值加上 `+inf` 死起步；`nan` 不算）。这个匹配是承重
+的：两侧是同一种 scott_mad KDE，
 只有样本数相当，它们的带宽与核均值才在同一个精度上，`EI_restart` 与 `EI_continue` 才是可比的两个
 估计。若继续侧只读最近两三步，它会低估自身展布、把 `EI_continue` 压低，重启就会赢下证据并不支持
 的判决——这种偏差不会报错，只会让最终 incumbent 更差。所以 window 是**推导出来的**，不是暴露给
 调用方的旋钮。
 
 **不额外垫长度**：read 是 KDE 上的等权、一折一核，多折进来就是多一条证据、不多也不少；
-唯一的例外是 `M = 0`（还没有任何有限 payoff）时窗口取 1——那不是先验，是「零样本的窗口读不出东西」。
+唯一的例外是 `M = 0`（还没有任何有定义的 group-min）时窗口取 1——那不是先验，是「零样本的窗口读不出东西」。
+停摆路径根本不读 stage：它的继续侧按定义为 0，所以判决退化成单侧 `EI_restart > 0`。到期只由一条
+**阶段钟**决定——它数的是迭代而不是折数：每次 `observe_continue`（移动的 Δ 或停摆的 `None`）都
+走一格，所以一条路径的判决轮次与它这一程怎么走来无关。中途停摆的路径因此保留它已经等过的轮数，
+不会从停摆那一刻重新起算（否则它会比同 cohort 晚整整一个窗口才到期）；变的只是证据从全比较
+变成单侧。
 `M = 1` 时两侧同时落到各自的退化形式（stage 一折、池子一样本，MAD = 0 ⇒ `h = 0`），此时任何一条
 重复都赢不了 `EI_continue ≥ 0`，重启本就发不出来，所以也没有必要把窗口垫到 2。
 
 判决谓词：`EI_restart > EI_continue` 且 incumbent 有限。这里的 incumbent 是**全域**最优 `fun_raw`
 （所有有限样本、含不可行点），与 `f_k` 和池子里的 payoff 同口径；结果里报告的 `fun`/`x` 仍是
-可行域最优。非有限的 `Δf` 会留在 stage 里、但读的时候
-跳过（一个 `+inf` 样本会把带宽顶成 `inf` 或 `NaN`，`EI_restart` 随即失去证据含义，而
-`NaN > EI_continue` 恒为 `False`，等于静默关掉该路径的重启）。
+可行域最优。池子里的 `+inf` 是**死起步**，不是被丢掉的值：它自己对改进的贡献恰好是 0，所以它作为
+同一个均值的零项进账——`EI_restart` 等于有限子集的 KDE 均值乘以「活着的起步占比」
+`|finite| / (|finite| + |+inf|)`，带宽只在有限子集上算（死起步不许把它撑开）。`nan` 是没有信息，
+`-inf` 尚不读，两者都不进计数。
 
 ### 2.4 n_paths=1 的退化
 
@@ -200,8 +207,8 @@ observe_continue  每完成一次迭代喂一次 Δf（一次 step 一个样本�
 
 `observe_continue` 的样本就是**一次迭代的一步**：每条路径各自计时、互不重叠。重启的路径本轮只探测、
 不步进，它这一次迭代不喂样本（重启把锚点重置到探测点的 f，第一个 Δ 留给下一步），所以既不会把探测
-的收益记成一步，也不会把探测读成零步。任意一次迭代 stalled 就喂 `inf`——宁可丢一个样本，也不让横跨
-停顿的 Δ 冒充进步。
+的收益记成一步，也不会把探测读成零步。任意一次迭代 stalled 就报 `None`——那是缺席不是值：没有 Δ
+可读，但这一轮照样计入阶段钟，所以停摆不会把判决推迟，也不会拿一个横跨停顿的 Δ 冒充进步。
 
 判决两侧买的东西并不相等：一次探测花 `n_probe_evals` 个批、算 `n_probe_evals` 次梯度，而一步只算
 一次梯度（默认 `n_alpha=1`）。真正吃重的是**梯度次数**（g 约为 f 的 2–5 倍），所以 `n_probe_evals > 1`
@@ -228,8 +235,12 @@ value+grad 批，两侧就都只算一次梯度。延迟与否看**抽数**而�
 `give_up`：枚举多长是方法自己的事（它的收敛判据、它自己的试用预算），引擎**没有试用上限**。把上限
 留在引擎侧就是给方法已经拥有的决定加第二个隐形停止规则；代价是一项契约：`verdict` 必须最终返回
 `accept` 或 `give_up`，永不终止的枚举是挂死而不是慢跑。stalled 路径和本轮刚重启的路径都不进
-`step`，但每个 stalled 的迭代仍然喂一个 inf 的 `Δf`（让它的判决节奏与同批前进的路径对齐，
-而不是领先一个样本），直到某次 EI 判决把它唤醒。
+`step`，但每个 stalled 的迭代仍然报一次 `None`（让阶段钟照走，而不是冻结在停摆那一刻），
+直到某次 EI 判决把它唤醒。停摆的继续侧按定义为 0——继续买不到东西——所以它的判决退化成单侧
+`EI_restart > 0`，且在这条路径的阶段钟走满一个窗口后到期。**到期即结阶段**：判决无论 True 还是
+False，`deltas` 与阶段钟都在判决点归零（一个窗口换一个阶段，阶段何时结束不看答案）；于是判为
+False 之后就等下一个窗口再判，而不是每轮重问同一个问题——引擎空转到地平线，既不是探测风暴也不是
+每轮一次的空判。
 
 ### 3.5 停车是三闸门，记账只报告
 
@@ -259,8 +270,8 @@ value+grad 批，两侧就都只算一次梯度。延迟与否看**抽数**而�
 
 ### 3.6 全停不早退，空转到地平线
 
-所有路径都 stalled 时，这一轮不服务任何批，但每条路径仍然喂一个 inf 的 `Δf`（3.4），判决节奏与
-live 路径同批前进；引擎就这么空转到 `max_iters`/`time_limit` 停（`status` 报 `max_iters` 或
+所有路径都 stalled 时，这一轮不服务任何批，但每条路径仍然报一次 `None`（3.4），阶段钟
+照走；引擎就这么空转到 `max_iters`/`time_limit` 停（`status` 报 `max_iters` 或
 `time_limit`），或者等某次 EI 判决把羊群唤醒。这是有意接受的代价：停车条件只依赖调用方给的数字，
 不依赖 `restart_rule` 的节奏，所以任何第三方规则都不会让循环永不结束。
 空转的账在 `n_batches` 上是零，在 `n_iters` 上是满额——这就是为什么 `max_iters` 不是成本数字。
@@ -357,13 +368,17 @@ live 路径同批前进；引擎就这么空转到 `max_iters`/`time_limit` 停�
   就给它 31 个）、`test_nonfinite_start_waits_for_ei_instead_of_stepping`。
 - 单一 argmin 所有者：`test_diag_line_search_walks_the_grid_and_folds_the_argmin`、
   `test_diag_line_search_gives_up_when_no_sample_is_finite`。
-- 判决节奏与可比样本数：`test_window_is_the_pool_size`、
+- 判决节奏与可比样本数：`test_window_is_the_defined_sample_count`、
   `test_the_two_sides_read_the_same_samples_the_same_way`、
   `test_verdict_is_due_once_per_window_and_closes_the_stage`。
+- 停摆是缺席不是值、`+inf` 是死起步：`test_a_stall_supplies_no_delta_and_counts_the_iteration`、
+  `test_a_stall_clears_a_partial_stage_and_keeps_its_wait`、`test_a_nonfinite_delta_is_rejected_at_the_seam`、
+  `test_ei_restart_prices_inf_as_a_dead_start_and_skips_nan_and_neginf`、
+  `test_an_empty_pool_is_the_cold_start_and_a_dead_pool_does_not_restart`。
 - 池子共享 / stage 独立 / 重启保留池子：`test_group_min_pool_is_shared_across_paths`、
   `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_group_min_pool`。
 - `n_paths = 1` 退化（无展布 ⇒ `h = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
-  `test_no_incumbent_never_restarts_but_does_not_stall_the_clock` 覆盖 B 缺失；**没有端到端 n_paths=1 断言**
+  `test_no_incumbent_never_restarts_but_does_not_leave_the_gate_open` 覆盖 B 缺失；**没有端到端 n_paths=1 断言**
   ——搬走前可补一条（n_paths=1 跑满地平线，断言 `restarts == []`）。
 - 多抽 probe 只有单测覆盖：`test_probe_group_min_skips_nan`、
   `test_multi_draw_probe_is_refused_without_the_f_only_seam`、`test_the_gate_counts_g_batches_not_f_only_draws`。
@@ -371,13 +386,13 @@ live 路径同批前进；引擎就这么空转到 `max_iters`/`time_limit` 停�
 - EI 闭式：`test_normal_functions_match_known_values`、`test_ei_continue_degenerate_at_zero_bandwidth`、
   `test_ei_continue_is_a_mean_of_per_sample_ei`、`test_ei_restart_matches_kde_literal`、
   `test_ei_restart_is_a_mean_of_per_sample_ei`、`test_ei_restart_tail_below_all_observations`、
-  `test_ei_restart_empty_single_and_nonfinite_skipped`、`test_stage_read_is_a_kde_over_its_finite_deltas`。
+  `test_ei_restart_prices_inf_as_a_dead_start_and_skips_nan_and_neginf`、`test_stage_read_is_a_kde_over_its_deltas`。
 - **两条成本轴**：`test_reports_points_and_batches_separately`（`n_batches` 与 `n_paths` 无关，
   `n_points` 等于 `n_batches × n_paths`）。
 - 停车在闸门上：`test_budget_exhaustion_stops_everything`、
   `test_a_run_without_an_extra_gate_reports_max_iters`、
   `test_batch_gate_is_asked_before_every_batch`（批级闸：重启风暴也超不过闸给的批数）、
-  `test_every_path_feeds_once_per_iteration`（每迭代恰好一个样本，停顿的那个喂 inf）。
+  `test_every_path_feeds_once_per_iteration`（每迭代恰好一个样本，停摆的那个报 `None`）。
 - 盒是数据：`test_box_is_data_not_a_unit_cube_assumption`、`test_bounds_spellings_are_the_same_box`、
   `test_unbounded_or_absent_box_needs_an_injected_sampler`、
   `test_the_sampler_is_the_only_authority_on_d`、`test_an_injected_sampler_searches_outside_the_old_box`。
