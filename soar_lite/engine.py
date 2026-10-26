@@ -1053,8 +1053,10 @@ class _Paths:
         # `settle` without being served again.
         order = sorted(won)
         settled = self.evaluator.settle([*starts, *(won[i] for i in order)])
-        self._place(restarted, settled[: len(starts)])
-        self._advance(dict(zip(order, settled[len(starts) :], strict=True)))
+        restarts = dict(zip(restarted, settled[: len(starts)], strict=True))
+        wins = dict(zip(order, settled[len(starts) :], strict=True))
+        self._place(restarts)
+        self._advance(wins)
         self._report(cohort)
 
     def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
@@ -1130,7 +1132,7 @@ class _Paths:
             rejecting = still_rejecting
         return won
 
-    def _place(self, idxs: list[int], starts: list[PathPoint]) -> None:
+    def _place(self, placed: dict[int, PathPoint]) -> None:
         """Place the given paths on their fresh probe starts (one restart event).
 
         The event's group-min list extends the rule's one shared group-min pool;
@@ -1142,12 +1144,12 @@ class _Paths:
         waits for the next EI verdict. The probe is this iteration's move for
         every restarted path, finite or not, so none of them also steps.
         """
-        if not idxs:
+        if not placed:
             # No path restarted this iteration: nothing to place or reset.
             return
-        for point in starts:  # the event's group-mins extend the shared pool
+        for point in placed.values():  # the event's group-mins extend the shared pool
             self.restart_rule.observe_restart(point.f)
-        for i, point in zip(idxs, starts, strict=True):
+        for i, point in placed.items():
             self.points[i] = point
             self.solver.restart(i, point)
             self.restart_rule.restart(i)  # report the event; its stage was its own
