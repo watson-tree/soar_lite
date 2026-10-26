@@ -150,6 +150,7 @@ from soar_lite import DiagonalPreconditioner, EIRestartRule, n_path_schedule
 result = n_path_schedule(
     evaluate_batch,
     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
+    max_iters=30,
     solver=DiagonalPreconditioner(n_alpha=4, backtrack=0.5),
     restart_rule=EIRestartRule(),
 )

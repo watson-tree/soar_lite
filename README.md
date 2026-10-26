@@ -49,7 +49,7 @@ uv run python -m tests.test_solver        # the local method
 uv run python -m tests.test_restart       # the restart rule
 uv run python -m tests.test_scheduler     # the engine, driven by a stub method
 uv run python -m tests.test_solver_seam   # the injection seams
-uv run --no-sync python -m pytest -q   # or all 66 in one go
+uv run --no-sync python -m pytest -q   # or all 77 in one go
 uv run ruff check && uv run pyright
 ```
 
