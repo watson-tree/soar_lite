@@ -131,10 +131,10 @@ n_paths 条路径的起点是 n_paths 个 i.i.d. 抽样。**样本本身就是�
 都从同一份证据出发，闭式给出：
 
 ```text
-EI(B; x, h) = h·[z·Φ(z) + φ(z)],  z = (B − x)/h          单核高斯 EI（h = 0 → max(B − x, 0)）
+EI(f⋆; x, h) = h·[z·Φ(z) + φ(z)],  z = (f⋆ − x)/h        单核高斯 EI（h = 0 → max(f⋆ − x, 0)）
 h(样本)      = 1.06 · MAD(样本)/Φ⁻¹(3/4) · n^(−1/5)    scott_mad 带宽（1.06 = (4/3)^(1/5)）
-EI_continue  = mean_j EI(B; f_k + Δⱼ, h_Δ)               本路径继续一步的期望改进
-EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的期望改进
+EI_continue  = mean_j EI(f⋆; f_k + Δⱼ, h_Δ)              本路径继续一步的期望改进
+EI_restart   = mean_i EI(f⋆; mᵢ, h_m)                   任一路径重来的期望改进
 ```
 
 - `Δⱼ` 是**本路径**当前 stage 内的一步变化。stage = 距上次判决以来的若干步。
@@ -143,7 +143,7 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 - 两侧**都不假设样本服从单个高斯**：各自用样本本身做高斯核 KDE（一折一核），偏斜的 `Δf` 流也照原
   样读。带宽取稳健的 MAD 尺度而不是标准差，所以一条长尾顶不爆它。
 
-**池子是全路径共用一个，不是每条路径一份**：一次重启买到多少，是「抽样器 + 当前最优 B」的
+**池子是全路径共用一个，不是每条路径一份**：一次重启买到多少，是「抽样器 + 当前最优 `f⋆`」的
 全局属性，与哪条路径无关。共用池子用最多样本估计同一个全局核密度，方差最小；按路径切分只会
 用更短的样本估同一个量。
 
@@ -154,7 +154,7 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 的：两侧是同一种 scott_mad KDE，
 只有样本数相当，它们的带宽与核均值才在同一个精度上，`EI_restart` 与 `EI_continue` 才是可比的两个
 估计。若继续侧只读最近两三步，它会低估自身展布、把 `EI_continue` 压低，重启就会赢下证据并不支持
-的判决——这种偏差不会报错，只会让最终 B 更差。所以 window 是**推导出来的**，不是暴露给
+的判决——这种偏差不会报错，只会让最终的 `f⋆` 更差。所以 window 是**推导出来的**，不是暴露给
 调用方的旋钮。
 
 **不额外垫长度**：read 是 KDE 上的等权、一折一核，多折进来就是多一条证据、不多也不少；
@@ -167,7 +167,7 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 `M = 1` 时两侧同时落到各自的退化形式（stage 一折、池子一样本，MAD = 0 ⇒ `h = 0`），此时任何一条
 重复都赢不了 `EI_continue ≥ 0`，重启本就发不出来，所以也没有必要把窗口垫到 2。
 
-判决谓词：`EI_restart > EI_continue` 且 B 有限。这里的 B 是**全域**最优 `fun_raw`
+判决谓词：`EI_restart > EI_continue` 且 `f⋆` 有限。这里的 `f⋆` 是**全域**最优 `fun_raw`
 （所有有限样本、含不可行点），与 `f_k` 和池子里的 payoff 同口径；结果里报告的 `fun`/`x` 仍是
 可行域最优。池子里的 `+inf` 是**死起步**，不是被丢掉的值：它自己对改进的贡献恰好是 0，所以它作为
 同一个均值的零项进账——`EI_restart` 等于有限子集的 KDE 均值乘以「活着的起步占比」
@@ -176,7 +176,7 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 
 ### 2.4 n_paths=1 的退化
 
-`n_paths = 1` 时池子里只有一个样本 ⇒ 无展布 ⇒ `h = 0` ⇒ `EI_restart` 退化为 `max(B − r, 0)`，与继续侧
+`n_paths = 1` 时池子里只有一个样本 ⇒ 无展布 ⇒ `h = 0` ⇒ `EI_restart` 退化为 `max(f⋆ − r, 0)`，与继续侧
 同形，样本数也远不够打开判决 ⇒ **单路径永不重启**。这正是「把 n_paths 设成 1 就得到一条纯串行局部
 下降」的退化路径，不需要任何模式开关。
 
@@ -194,7 +194,7 @@ EI_restart   = mean_i EI(B; mᵢ, h_m)                    任一路径重来的�
 
 ### 3.2 每次迭代：探测半与步进半
 
-判决与步进同在一轮迭代里是刻意的：一次迭代只推进「一步」，判决读的是本轮自己的 B；被拒的探测
+判决与步进同在一轮迭代里是刻意的：一次迭代只推进「一步」，判决读的是本轮自己的 `f⋆`；被拒的探测
 跳过本轮步进，并在请求点抛出私有异常 `_BudgetExhausted`，径直 unwind 到最外层循环的 catch。
 
 重启的路径本轮只做探测、不提交步：一条路径一次迭代要么探测要么步进，不会两头都花预算。两半碰的
@@ -390,7 +390,7 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
 - 池子共享 / stage 独立 / 重启保留池子：`test_group_min_pool_is_shared_across_paths`、
   `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_group_min_pool`。
 - `n_paths = 1` 退化（无展布 ⇒ `h = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
-  `test_no_best_never_restarts_but_does_not_leave_the_gate_open` 覆盖 B 缺失；**没有端到端 n_paths=1 断言**
+  `test_no_best_never_restarts_but_does_not_leave_the_gate_open` 覆盖 `f⋆` 缺失；**没有端到端 n_paths=1 断言**
   ——搬走前可补一条（n_paths=1 跑满地平线，断言 `restarts == []`）。
 - 多抽 probe 只有单测覆盖：`test_probe_group_min_skips_nan`、
   `test_multi_draw_probe_is_refused_without_the_f_only_seam`、`test_the_gate_counts_g_batches_not_f_only_draws`。

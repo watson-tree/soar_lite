@@ -68,9 +68,9 @@ class EIRestartRule(RestartRule):
     improvement is exactly 0 - it enters the read as a zero term that dilutes the
     finite KDE by the alive fraction - while `nan` is no information and `-inf`
     is not read yet, so neither is counted or fitted.
-    The raw best B is a should_restart argument, not a field (the engine owns
-    B), and it is the raw minimum: unfiltered, like the group-mins in the pool and
-    like the `f_k` it is compared with.
+    The raw best `best_fun_raw` is a should_restart argument, not a field (the
+    engine owns it), and it is the raw minimum: unfiltered, like the group-mins
+    in the pool and like the `f_k` it is compared with.
     """
 
     def __init__(self) -> None:
@@ -252,11 +252,12 @@ class EIRestartRule(RestartRule):
 
 
 def _gaussian_ei(sigma: float, best_fun_raw: float, mu: float) -> float:
-    """Return the expected improvement over the raw best `B` for X ~ N(mu, sigma²).
+    """Return the expected improvement over the raw best for X ~ N(mu, sigma²).
 
-    EI = sigma·(z·Φ(z) + φ(z)) with z = (B - mu)/sigma; sigma = 0 degenerates
-    exactly to max(B - mu, 0). The scott_mad KDE on both sides decomposes into
-    one call per sample: EI_continue at mu = f_k + Δ_j and EI_restart at mu = r_i.
+    EI = sigma·(z·Φ(z) + φ(z)) with z = (best_fun_raw - mu)/sigma; sigma = 0
+    degenerates exactly to max(best_fun_raw - mu, 0). The scott_mad KDE on both
+    sides decomposes into one call per sample: EI_continue at mu = f_k + Δ_j and
+    EI_restart at mu = r_i.
     """
     if sigma == 0.0:
         return max(best_fun_raw - mu, 0.0)

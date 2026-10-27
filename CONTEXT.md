@@ -54,7 +54,7 @@ method's own stopping test (or its own trial budget) ends the enumeration, so
 or `give_up`.
 _Avoid_: line-search round (retired)
 
-**best (B)**:
+**best**:
 The run's running best, kept twice: `fun`/`x` is the best *feasible* point — the
 run's reported answer, and what `NPathResult` calls `fun`/`x` — while `fun_raw`
 is the best over every finite point served. Restart verdicts are asked against
