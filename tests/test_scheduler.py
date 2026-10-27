@@ -458,6 +458,82 @@ def test_feasible_only_best() -> None:
     assert min(rule.bs) < min(feasible_f_vals)
 
 
+def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
+    """A served feasible -inf is the answer, not a value to compare.
+
+    The objective has no floor above `floor`, and the prior spreads four paths
+    across the box, so the initialization probe serves one of them in that
+    region. Monotone descent cannot beat -inf, so spending the horizon after it
+    would be pure waste - and it used to be dropped from `fun` entirely
+    (`_argmin_finite` requires a finite value), which reported a larger value
+    than the run had already served.
+    """
+    floor = 0.7
+
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        f_vals = jnp.where(theta[:, 0] > floor, -jnp.inf, (theta[:, 0] - 0.2) ** 2.0)
+        return f_vals, 2.0 * (theta - 0.2), None
+
+    def sample(key: jnp.ndarray, n: int) -> jnp.ndarray:  # noqa: ARG001
+        return jnp.linspace(0.05, 0.95, n)[:, None]
+
+    res = n_path_schedule(
+        eval_f_g,
+        bounds=unit_bounds(),
+        n_paths=4,
+        max_iters=50,
+        sample=sample,
+        solver=HalfStep(),
+        restart_rule=NoRestartRule(),
+        key=jax.random.PRNGKey(0),
+    )
+
+    assert res.fun == -math.inf
+    assert res.status == "unbounded"
+    assert res.x[0] > floor  # the point that priced it, not a later one
+    assert res.n_iters == 0  # stopped inside the init probe: no iteration spent
+
+
+def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
+    """Only a feasible -inf is the answer; an infeasible one is just evidence.
+
+    Same floor, but the mask puts it outside the feasible set, so the -inf
+    points are served and must change nothing: the run keeps searching and
+    reports a finite feasible `fun`. Feasibility is what separates "an answer no
+    later trial can beat" from "a trial the caller cannot use", and it is the
+    reason the stop lives in the engine rather than in the restart rule, which
+    sees unfiltered group-min samples.
+    """
+    floor = 0.7
+    served: list[float] = []
+
+    def eval_f_g(
+        theta: jnp.ndarray,
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        f_vals = jnp.where(theta[:, 0] > floor, -jnp.inf, (theta[:, 0] - 0.2) ** 2.0)
+        served.extend(float(v) for v in f_vals)
+        return f_vals, 2.0 * (theta - 0.2), theta[:, 0] <= floor
+
+    def sample(key: jnp.ndarray, n: int) -> jnp.ndarray:  # noqa: ARG001
+        return jnp.linspace(0.05, 0.95, n)[:, None]
+
+    res = n_path_schedule(
+        eval_f_g,
+        bounds=unit_bounds(),
+        n_paths=4,
+        max_iters=20,
+        sample=sample,
+        solver=HalfStep(),
+        restart_rule=NoRestartRule(),
+        key=jax.random.PRNGKey(0),
+    )
+
+    assert any(v == -math.inf for v in served), "no -inf point was ever served"
+    assert res.status == "max_iters"
+    assert math.isfinite(res.fun)  # the answer stays on the feasible side
+    assert res.x[0] <= floor
+
+
 def test_nan_first_candidate_does_not_mask_batch_min() -> None:
     """A NaN probe ranked first must not swallow the batch's real best point.
 

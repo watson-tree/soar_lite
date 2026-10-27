@@ -282,7 +282,11 @@ False 之后就等下一个窗口再判，而不是每轮重问同一个问题�
 之前先查一次，不再为用不掉的预算问判决；循环头这一处问的是「要不要开这轮」，属于决策，不是传
 信号。迭代中途被拒则在请求点抛 `_BudgetExhausted` 并结束，该迭代不计入 `n_iters`：中间层
 （`probe_select`、`restart`、`step`）因此不必再检查返回值、也不必上下传任何标志。
-`status` 按 `max_iters` → `time_limit` → `budget_exhausted` 的顺序报第一个成立的闸。
+`status` 按 `max_iters` → `time_limit` → `budget_exhausted` 的顺序报第一个成立的闸。另一种停车是
+`unbounded`：某个 **feasible** 点把目标值打到 `-inf`，那里没有下界，任何后续试用都比不过它、任何一步也改不动它，所以该点直接成为答案（`fun = -inf`，`x` 就是它）并结束运行。这是引擎唯一自己能认出的停车条件，
+而且它仍然读 feasibility 掩码：不可行的 `-inf` 不改变任何东西（既不进 `fun`，也不进 `fun_raw`）。
+找到它的那一批已经服务并记账（`n_points`/`n_batches` 计入），但这一轮没跑完，因此和批被拒一样不入账
+`n_iters`。
 
 `budget_check` 只留给引擎看不见的预算（点数、墙钟、钱、外部早停策略）。它同样在批边界翻转，所以那类
 外部预算可能超跑不到一个批大小。它只在 g 批前被问：f-only 段不查，因此那一段的停车

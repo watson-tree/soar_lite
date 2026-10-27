@@ -69,7 +69,10 @@ The run's running best, kept twice: `fun`/`x` is the best *feasible* point — t
 run's reported answer, and what `NPathResult` calls `fun`/`x` — while `fun_raw`
 is the best over every finite point served. Restart verdicts are asked against
 `fun_raw`, because both sides of a verdict (`f_k`, the group-min pool) are
-unfiltered. The engine is the sole owner of both.
+unfiltered. The engine is the sole owner of both. A *feasible* `-inf` is not
+weighed but taken: the objective has no floor there, so it becomes `fun`/`x` and
+ends the run with `status` `unbounded`; a `nan`, a `+inf` or an infeasible `-inf`
+changes neither best.
 _Avoid_: incumbent (retired), best-so-far, current optimum
 
 **stall / stalled**:

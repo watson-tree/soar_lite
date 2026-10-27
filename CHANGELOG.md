@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A served *feasible* point whose value is `-inf` now ends the run: it becomes
+  the answer (`fun = -inf`, `x` is that point) and `status` reports the new
+  `"unbounded"`. No later trial can beat `-inf` and no step can improve on it,
+  so the horizon was being spent after the answer was already in hand - and
+  before this the point was dropped from `fun` entirely, leaving the run
+  reporting a larger value than one it had served. An infeasible `-inf` still
+  changes nothing: the mask is what separates "an answer no later trial can
+  beat" from "a trial the caller cannot use".
 - The restart verdict fires on a tie: `EI_restart >= EI_continue`, not `>`. When
   continuing promises nothing - a stalled path, a flat stage, a pool with no
   spread or of dead starts - both sides read 0, and a probe is then the only

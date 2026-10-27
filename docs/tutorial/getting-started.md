@@ -78,14 +78,16 @@ correspond:
 | Field | Meaning |
 | --- | --- |
 | `x` | argmin, in the coordinates you handed the engine |
-| `fun` | its value: the best over feasible finite points, `inf` if none |
+| `fun` | its value: the best over feasible points, `inf` if none, `-inf` if the objective has no floor |
 | `n_points` | points billed - the serial-cost count |
 | `n_batches` | batches billed, one per `eval_f_g` call - the parallel-cost count |
 | `n_iters` | engine iterations completed (iteration 0 is the initialization probe); one iteration may serve several batches |
-| `status` | `max_iters`, `time_limit` or `budget_exhausted` |
+| `status` | `max_iters`, `time_limit`, `budget_exhausted` or `unbounded` |
 
 There is no `success` or `message`: the engine has no convergence criterion of
-its own. Stopping is always a horizon or an extra gate.
+its own. It stops on a horizon, on an extra gate - or on `unbounded`, when a
+feasible point prices the objective at `-inf`, which is an answer in hand rather
+than a criterion the search converged to.
 
 ## 4. Turn the knobs you actually need
 

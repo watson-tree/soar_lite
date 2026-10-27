@@ -293,12 +293,14 @@ class RestartRule(Protocol):
 
 # --- engine: the n-path schedule ---
 
-NPathStatus: TypeAlias = Literal["budget_exhausted", "max_iters", "time_limit"]
-# Three names for the three gates that can end a run, in the order they are
-# checked: the iteration horizon, the wall-clock deadline, and the caller's
-# extra batch gate. A stalled flock has no fourth stop - every report still
-# advances a stage clock, so the verdicts keep coming until the horizon or the
-# deadline ends the run.
+NPathStatus: TypeAlias = Literal[
+    "max_iters", "time_limit", "budget_exhausted", "unbounded"
+]
+# Four names for four ways to end a run: the three gates, in the order they are
+# checked (iteration horizon, wall-clock deadline, the caller's extra batch
+# gate), plus the objective bottoming out at -inf. A stalled flock has no fifth
+# stop - every report still advances a stage clock, so the verdicts keep coming
+# until the horizon or the deadline ends the run.
 
 # The one way the engine sees the objective: x rows (M,d) inside `bounds` in,
 # (f (M,), grads_x (M,d), feas (M,)|None) out. Value and gradient come back
@@ -347,15 +349,16 @@ class NPathResult:
     reported nowhere.
 
     Two deliberate differences from `OptimizeResult`: `success`/`message` are
-    absent because the engine has no convergence criterion at all, and `fun` is
-    the best over *feasible* points only, so it is `inf` when nothing
-    feasible was ever served - the
-    trajectory still moves on the penalized objective, but B does not. scipy's `fun`
-    has no such filter.
+    absent because the engine has no convergence criterion of its own - the one
+    thing it watches for is an objective with no floor, which ends the run with
+    `status="unbounded"` - and `fun` is the best over *feasible* points only, so
+    it is `inf` when nothing feasible was ever served and `-inf` when a feasible
+    point priced the objective at `-inf` (the trajectory still moves on the
+    penalized objective, but B does not). scipy's `fun` has no such filter.
     """
 
     x: jnp.ndarray  # (d,) coords of the best point found
-    fun: float  # min over feasible finite recorded evals; inf if none yet
+    fun: float  # min over feasible recorded evals; inf if none, -inf if unbounded
     n_points: int  # points served (the serial-cost count)
     n_batches: int  # batches (evals) served (the parallel wall-clock count)
     n_iters: int  # completed iterations (the init probe is 0; not trials)
@@ -528,7 +531,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         An ``NPathResult`` with the run's end state:
 
         - ``x``: the argmin in the caller's coordinates
-        - ``fun``: the best value (min finite feasible eval; ``inf`` if none)
+        - ``fun``: the best value (min feasible eval; ``inf`` if none, ``-inf``
+          when the objective has no floor, which also ends the run)
         - ``n_points``: g points served (the serial-cost count)
         - ``n_batches``: g batches served (the parallel wall-clock count)
         - ``n_iters``: completed iterations (the init probe is iteration 0)
@@ -643,6 +647,12 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             # The iteration asked for a batch it could not afford and was cut
             # short: it did not finish, so it is not folded and not counted.
             break
+        except _OptimumReached:
+            # A served feasible point priced f at -inf. Nothing to unwind and
+            # nothing left to decide: the batch that found it was paid for and
+            # is counted, but the iteration did not finish, so it is not folded
+            # or ticked either.
+            break
         budget.tick()  # counted after the body: only finished iterations
 
     return NPathResult(
@@ -651,7 +661,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         n_points=budget.n_points,
         n_batches=budget.n_batches,
         n_iters=budget.n_iters,
-        status=budget.stop_status(),
+        status="unbounded" if best.unbounded else budget.stop_status(),
     )
 
 
@@ -693,6 +703,18 @@ class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
     (`_Evaluator.serve_f_g`), and caught by the loop. It carries
     nothing: the run's status is derived from the same queries, and an unserved
     batch is never charged, so they name the gate correctly.
+    """
+
+
+class _OptimumReached(Exception):  # noqa: N818 - a signal, not an error
+    """A served *feasible* point priced the objective at `-inf`.
+
+    Raised inside `_Best.observe`, the single funnel both seams pass through,
+    and caught by the loop. Unlike `_BudgetExhausted` it arrives after a batch
+    was served and charged (the batch that found the point, which was paid for)
+    and it leaves an answer behind instead of naming a gate: the run stops on
+    that point, so `fun` is `-inf` and `status` is `"unbounded"`. Nothing is
+    left to unwind - a probe raises before any point is placed or advanced.
     """
 
 
@@ -766,11 +788,15 @@ class _Budget:
 class _Best:
     """The two bests the run keeps: what it reports, and what a verdict reads.
 
-    `fun`/`x` are the answer: the minimum over feasible finite points served,
-    which is what the run reports. Defined over feasible designs only - with no
-    aux, every point is feasible - and over finite values only, so a NaN or inf
-    trial neither becomes B nor displaces one. It starts at inf: until something
-    feasible arrives there is no answer to report.
+    `fun`/`x` are the answer: the minimum over feasible points served, which is
+    what the run reports. Defined over feasible designs only - with no aux,
+    every point is feasible. A NaN or +inf trial neither becomes B nor
+    displaces one: it carries no value to compare. A feasible -inf is not an
+    improvement to weigh but the answer itself - the objective has no floor
+    there, so no later trial can beat it and no step can improve on it, which
+    is why it ends the run (`unbounded`) instead of entering a comparison. It
+    starts at inf: until something feasible arrives there is no answer to
+    report.
 
     `fun_raw` is the same minimum with the feasibility filter removed: every
     finite point served, feasible or not. A restart verdict is asked against it
@@ -785,6 +811,9 @@ class _Best:
     def __init__(self, d: int | None) -> None:
         self.fun = math.inf
         self.fun_raw = math.inf
+        # Set when a feasible point priced the objective at -inf: the run has an
+        # answer that no later trial can beat, so it stops on it.
+        self.unbounded = False
         # d is the sampler's business: when the box does not supply it, this is
         # an empty placeholder until the first served point fills it in.
         self.x = jnp.full(0 if d is None else d, math.nan)
@@ -792,13 +821,21 @@ class _Best:
     def observe(
         self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None
     ) -> None:
-        """Fold one served batch's finite values into both bests."""
+        """Fold one served batch's values into both bests, stopping on -inf."""
         j_raw = _argmin_finite(f_vals)
         if j_raw is not None and f_vals[j_raw] < self.fun_raw:
             self.fun_raw = f_vals[j_raw]
         # With no aux a batch has no feasibility mask and every point counts.
         ok_feas = [True] * len(f_vals) if feas is None else feas.tolist()
         candidates = [j for j, feasible in enumerate(ok_feas) if feasible]
+        # Ahead of the finite read, which skips it: a feasible -inf is the
+        # answer itself, not a value to compare, and the run ends on it here.
+        j_floor = next((j for j in candidates if f_vals[j] == -math.inf), None)
+        if j_floor is not None:
+            self.fun = -math.inf
+            self.x = x_batch[j_floor]
+            self.unbounded = True
+            raise _OptimumReached
         pos = _argmin_finite([f_vals[j] for j in candidates])
         if pos is None:  # nothing feasible served, or all of it non-finite
             return
