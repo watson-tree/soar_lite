@@ -152,22 +152,31 @@ EI_restart   = mean_i EI(f⋆; mᵢ, h_m)                   任一路径重来�
 
 ### 2.3 判决与节奏：让两侧样本数可比
 
-判决只在路径攒够一个 window 的 `Δf` 时问一次，问完就关掉这个 stage（下一个 `Δf` 开新 stage）。
-`window = M`，`M` 是池子里的**样本数**（池子多长就是多少：`+inf`、`nan`、`-inf` 也都是样本）。这个匹配是承重
-的：两侧是同一种 scott_mad KDE，
+判决只在路径攒够一个 window 的轮次时问一次，问完就关掉这个 stage（下一个 `Δf` 开新 stage）。
+`window = M + 1`，`M` 是池子里的**样本数**（池子多长就是多少：`+inf`、`nan`、`-inf` 也都是样本）；
+那个 `+ 1` 是 stage 开张的那一轮——它对继续路径是这次判决本身、对重启路径是那次探测——任何 stage
+都要花掉它却不折到样本。这个匹配是承重的：两侧是同一种 scott_mad KDE，
 只有样本数相当，它们的带宽与核均值才在同一个精度上，`EI_restart` 与 `EI_continue` 才是可比的两个
 估计。若继续侧只读最近两三步，它会低估自身展布、把 `EI_continue` 压低，重启就会赢下证据并不支持
 的判决——这种偏差不会报错，只会让最终的 `f⋆` 更差。所以 window 是**推导出来的**，不是暴露给
 调用方的旋钮。
 
+**两侧样本数必须相等，多出来的那一个在继续侧**：stage 开张的那一轮，继续路径折进一个样本、重启
+路径只做一次探测，所以继续路径到下一次判决时手里有 `M + 1` 个 `Δ`。读它的**最近 M 个**（丢掉最早
+那个）是让两侧数目对齐的动作，而不是额外等一轮：window 已经把开张那一轮算进去了，再等一轮才是
+白等。
+
 **不额外垫长度**：read 是 KDE 上的等权、一折一核，多折进来就是多一条证据、不多也不少；
-窗口不垫到 2（`M = 1` 的退化形式见下），`M = 0` 只会出现在还没探测过的空池子上，
-那条路径由冷启动直接放行、不会读到窗口。
+窗口不垫到 2（`M = 1` 的退化形式见下）。空池子的 window 是 1，但那条路径由冷启动直接放行、
+永远读不到它。
 停摆路径根本不读 stage：它的继续侧按定义为 0，所以判决退化成单侧 `EI_restart > 0`。到期只由一条
-**阶段钟**决定——它数的是迭代而不是折数：每次 `observe_continue`（移动的 Δ 或停摆的 `None`）都
-走一格，所以一条路径的判决轮次与它这一程怎么走来无关。中途停摆的路径因此保留它已经等过的轮数，
+**阶段钟**决定——它数的是轮次而不是折数：继续路径每次 `observe_continue`（移动的 Δ 或停摆的
+`None`）走一格，重启路径那一轮由规则自己在 `restart` 里记一格（引擎只给折过或停摆的路径记账，
+探测轮既没折也没停摆）。两条通道合起来保证每轮每条路径恰好走一格，所以一条路径的判决轮次与
+它这一程怎么走来无关。中途停摆的路径因此保留它已经等过的轮数，
 不会从停摆那一刻重新起算（否则它会比同 cohort 晚整整一个窗口才到期）；变的只是证据从全比较
-变成单侧。
+变成单侧。重启路径也一样：少了那一格，它每重启一次就把自己的下一程推后一轮、并与同 cohort
+永久错开（锁相）。
 `M = 1` 时两侧同时落到各自的退化形式（stage 一折、池子一样本，MAD = 0 ⇒ `h = 0`）：唯一的样本已是
 `f⋆`，所以 `EI_restart` 恒为 0；继续侧走平或停摆时也读 0，判决以 `0 ≥ 0` 平局收场、放行
 一次探测——这一次探测正是池子买到第二个样本的方式。窗口因此不需要垫到 2。
@@ -356,7 +365,7 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
 2. 单位不变（1.2 之 2），以及旋钮全无量纲（1.2 之 3）。
 3. 地板用 `max`，λ 只在 `Y < λ` 时生效（1.3）。
 4. 两相共用一条 `alpha` 网格，`needs_verdict` 与相位无关；`n_alpha = 1` 时两相都是无护栏整步（1.4）。
-5. 判决两侧样本数可比（`window = M`，空池取 1），池子全路径共享（2.3）。
+5. 判决两侧样本数可比（`window = M + 1`，继续侧读最近 M 个，空池取 1），池子全路径共享（2.3）。
 6. 单一 argmin 所有者：引擎决定谁赢，方法只通过 fold 得知（3.3）。
 7. 预算门控在批边界，不切分批次（3.5）。
 
@@ -407,15 +416,17 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
   就给它 31 个）、`test_nonfinite_start_waits_for_ei_instead_of_stepping`。
 - 单一 argmin 所有者：`test_diag_line_search_walks_the_grid_and_folds_the_argmin`、
   `test_diag_line_search_gives_up_when_no_sample_is_finite`。
-- 判决节奏与可比样本数：`test_window_is_the_defined_sample_count`、
+- 判决节奏与可比样本数：`test_window_is_the_pool_plus_its_opening_round`、
   `test_the_two_sides_read_the_same_samples_the_same_way`、
+  `test_the_continue_side_reads_only_the_newest_m_folds`、
   `test_verdict_is_due_once_per_window_and_closes_the_stage`。
 - 停摆是缺席不是值、`+inf` 是死起步：`test_a_stall_supplies_no_delta_and_counts_the_iteration`、
   `test_a_stall_clears_a_partial_stage_and_keeps_its_wait`、`test_a_nonfinite_delta_is_rejected_at_the_seam`、
-  `test_ei_restart_prices_inf_as_a_dead_start_and_skips_nan_and_neginf`、
   `test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window`。
-- 池子共享 / stage 独立 / 重启保留池子：`test_group_min_pool_is_shared_across_paths`、
-  `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_group_min_pool`。
+- 池子共享 / stage 独立 / 锁相 / 重启保留池子：`test_group_min_pool_is_shared_across_paths`、
+  `test_per_path_stage_is_independent`、`test_a_path_that_restarts_at_every_verdict_keeps_its_cohorts_rounds`
+  （重启路径的探测轮也算一格，否则它每重启一次就落后同 cohort 一轮）、
+  `test_restart_keeps_the_shared_group_min_pool`。
 - 平局也重启（买第二个样本）、`n_paths = 1` 的退化与纯下降出口：
   `test_a_zero_payoff_tie_restarts_to_buy_a_second_sample` 覆盖「两侧同读 0 ⇒ 放行一次探测」，
   `test_no_best_never_restarts_but_does_not_leave_the_gate_open` 覆盖 `f⋆` 缺失，
@@ -428,7 +439,7 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
 - EI 闭式：`test_normal_functions_match_known_values`、`test_ei_continue_degenerate_at_zero_bandwidth`、
   `test_ei_continue_is_a_mean_of_per_sample_ei`、`test_ei_restart_matches_kde_literal`、
   `test_ei_restart_is_a_mean_of_per_sample_ei`、`test_ei_restart_tail_below_all_observations`、
-  `test_ei_restart_prices_inf_as_a_dead_start_and_skips_nan_and_neginf`、`test_stage_read_is_a_kde_over_its_deltas`。
+  `test_ei_restart_prices_every_nonfinite_start_as_a_zero_term`、`test_stage_read_is_a_kde_over_its_deltas`。
 - **两条成本轴**：`test_reports_points_and_batches_separately`（`n_batches` 与 `n_paths` 无关；
   `n_points = n_batches × n_paths` 只在每个 g 批都是满 n_paths 批时成立，该测试正是这种全满批场景）。
 - 停车在闸门上：`test_budget_exhaustion_stops_everything`、

@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A restarted path now counts its probe round on its stage clock, so paths stay in
+  phase. The engine reports a round only to the paths that folded or stalled
+  (`None`); a restarted path did neither, so its clock used to stay at 0 while
+  its cohort ticked, and it opened its next stage one round late per restart -
+  a cumulative drift, not a fixed offset, that left a restarting flock's paths
+  expiring in ever more scattered rounds. The rule counts that round itself in
+  `restart`, where the stage is already its own business. The stage is now
+  `M + 1` rounds: `M` folds plus the round it opened in, which no stage folds a
+  sample in. The continue side reads the newest `M` of the `M + 1` folds a
+  continuing path holds, so both sides of the verdict still read the same count.
+  Runs whose paths restart at different rates now spend their horizon
+  differently - a semantics change, not a refactor.
 - A served *feasible* point whose value is `-inf` now ends the run: it becomes
   the answer (`fun = -inf`, `x` is that point) and `status` reports the new
   `"unbounded"`. No later trial can beat `-inf` and no step can improve on it,
@@ -49,7 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continuing promises nothing - a stalled path, a flat stage, a pool with no
   spread or of dead starts - both sides read 0, and a probe is then the only
   action that buys evidence. It cannot thrash: the verdict's window is the
-  pool's length, so every tie-restart appends a sample and pushes the
+  pool's length plus the round the stage opened in, so every tie-restart appends
+  a sample and pushes the
   next ask a window further out (interval 1, 2, 3, ...). The `n_paths=1`
   "never restarts" property was a consequence of the strict `>` and is gone;
   `NoRestartRule` is now the explicit way to ask for it.

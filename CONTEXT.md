@@ -83,10 +83,11 @@ did win had a non-finite gradient.
 Stalled is not dead: a stalled path can still be restarted by a later verdict.
 The engine reports it to the restart rule as `None` — absence, not a sample —
 so the rule reads no continuation from it. The iteration still counts: the rule
-keeps one stage clock per path that every report advances by one, moved or
-stalled, so a stall never postpones a verdict past its cohort's. A verdict ends
-the stage either way — a window is one stage, whatever the answer — so a stalled
-path with nothing to win is re-judged once per window, not every round.
+keeps one stage clock per path, advanced once a round either by a report
+(folded or stalled) or, for the path it is probing, by its own `restart` hook —
+so no path, moving, stalled or restarted, expires behind its cohort. A verdict
+ends the stage either way — a window is one stage, whatever the answer — so a
+stalled path with nothing to win is re-judged once per window, not every round.
 _Avoid_: paused, idle, dead
 
 ### Evaluation
@@ -196,13 +197,14 @@ restarting's; `EI_restart >= EI_continue` restarts the path. One sample each —
 one step for continuing, one probe for restarting — so the verdict is a decision
 about what to buy. The tie (`0 >= 0`) is a restart too: when continuing buys
 nothing, the probe is the only action that buys evidence, and it cannot thrash
-because the verdict's window is the pool's own size, so each re-probe pushes the
-next ask a window further out. Each side is modelled by a scott_mad KDE over its own
-samples (one Gaussian kernel per sample), so neither side assumes a single
-Gaussian. A stalled path supplies no continuation sample at all — absence, not
-a value — so its `EI_continue` is 0 and its verdict is one-sided; a moving path
-is only compared once it has folded the same number of steps the restart side
-already holds. The two sides are cost-matched in gradient count only when
+because the verdict's window is the pool's own size plus the round its stage
+opened in, so each re-probe pushes the next ask a window further out. Each side
+is modelled by a scott_mad KDE over its own samples (one Gaussian kernel per
+sample), so neither side assumes a single Gaussian. A stalled path supplies no
+continuation sample at all — absence, not a value — so its `EI_continue` is 0
+and its verdict is one-sided; a moving path
+is only compared once it holds as many steps as the restart side holds samples,
+keeping the newest M. The two sides are cost-matched in gradient count only when
 an f-only evaluator is supplied; without one the engine refuses
 `n_draws > 1`, so the un-seamed default stays at 1.
 _Avoid_: restart check, reset decision

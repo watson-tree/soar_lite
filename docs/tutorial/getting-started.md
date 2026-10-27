@@ -65,8 +65,8 @@ path stalls, its verdict comes due a window later, and restarting still prices
 better than continuing - a stalled path has no continuation evidence, so
 continuing is worth 0 - which means the path is re-probed with a fresh start and
 descends back to the same 3. The tail of the run idles because the window is the
-pool's own sample count: each probe grows it, so the remaining iterations cannot
-bring another verdict due. `n_batches` and `n_points` report that mix - the
+pool's own sample count plus the round the stage opened in: each probe grows it,
+so the remaining iterations cannot bring another verdict due. `n_batches` and `n_points` report that mix - the
 value+gradient passes actually served - which is why they, not `n_iters`, are
 the cost.
 

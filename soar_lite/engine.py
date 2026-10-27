@@ -1035,9 +1035,11 @@ class _Paths:
     - A path that restarted this iteration moved by its probe, so it does not
       also step, and its continue observation is skipped: its first Δ belongs
       to the next iteration, so the probe is never read back as a zero-length
-      step. `move` computes that list once per iteration and threads it to the
-      probe and to the complement both halves share - one fact at the top
-      instead of a stored flag that must be cleared each iteration.
+      step. Its stage clock is not skipped with it - the rule counts that round
+      in `restart`, because the round was spent even though no fold was. `move`
+      computes that list once per iteration and threads it to the probe and to
+      the complement both halves share - one fact at the top instead of a stored
+      flag that must be cleared each iteration.
     - An iteration decides on values and pays for gradients once: whatever the
       f-only seam left ungraded (probe starts and step winners alike) is bought
       in one batch before anything is placed, so a decision is never priced
@@ -1295,7 +1297,9 @@ class _Paths:
         the finite step Δ when it moved, `None` (a stall tick, no evidence) when
         it is stalled - so a stalled path's stage clock keeps pace with its live
         cohort and a fully stalled flock idles to the horizon instead of stalling
-        the verdict's cadence.
+        the verdict's cadence. The one round this loop cannot report is the
+        restarted path's probe round; it has no Δ and did not stall, so the rule
+        counts it itself (`restart`).
         """
         for i in cohort:
             if self.stalled[i]:
