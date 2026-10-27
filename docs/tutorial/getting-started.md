@@ -14,7 +14,7 @@ you both.
 | input `x` | `(M, d)` | `M` points, `d` coordinates, already inside the box |
 | output 1 | `(M,)` | f values |
 | output 2 | `(M, d)` | gradients `∂f/∂x` |
-| output 3 | `(M,)` or `None` | feasibility mask; `None` means all feasible |
+| output 3 | `(M,)` or `None` | feasibility mask: 0/1 (or booleans); `None` means all feasible |
 
 Constraints reach the engine by two independent routes:
 
@@ -23,7 +23,9 @@ Constraints reach the engine by two independent routes:
 - **The mask.** A point masked `False` is still served - its f value and gradient
   come back normally and are used - but it never becomes the best. So
   `result.fun` is a minimum over feasible points only, and is `inf` if nothing
-  feasible was ever served.
+  feasible was ever served. The mask is read as 0/1 and nothing else: only `0`
+  marks a point infeasible, so a signed margin (negative where violated) or a
+  `NaN` raises a `ValueError` instead of counting as feasible.
 
 ```python
 import jax.numpy as jnp

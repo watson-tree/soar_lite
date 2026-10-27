@@ -495,7 +495,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     Args:
         eval_f_g: the objective as one batched pass. Takes rows ``x`` of
             shape ``(M, d)`` and returns ``(f: (M,), g: (M, d), feas: (M,) |
-            None)`` - value, gradient and optional feasibility mask.
+            None)`` - value, gradient and optional feasibility mask. A mask
+            holds 0/1 (or booleans) and nothing else: only 0 marks a point
+            infeasible, so any other flag is refused rather than read as
+            truthiness.
         eval_f: the objective's value half alone, same ``x`` rows, returning
             ``(f: (M,), feas: (M,) | None)``. Both seams are named for what they
             return - ``eval_f_g`` hands back f and g together, ``eval_f`` f
@@ -822,12 +825,21 @@ class _Best:
     def observe(
         self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None
     ) -> None:
-        """Fold one served batch's values into both bests, stopping on -inf."""
+        """Fold one served batch's values into both bests, stopping on -inf.
+
+        Raises:
+            ValueError: If a feasibility mask holds anything but 0/1. Nothing
+                is folded in that case, so a batch's values are never added
+                under a mask that cannot be read.
+
+        """
+        # The mask is read first, and read as flags: it is the caller's claim, so
+        # a batch whose mask cannot be read is refused before either best moves.
+        # With no aux a batch has no mask and every point counts.
+        ok_feas = [True] * len(f_vals) if feas is None else _feas_flags(feas)
         j_raw = _argmin_finite(f_vals)
         if j_raw is not None and f_vals[j_raw] < self.fun_raw:
             self.fun_raw = f_vals[j_raw]
-        # With no aux a batch has no feasibility mask and every point counts.
-        ok_feas = [True] * len(f_vals) if feas is None else feas.tolist()
         candidates = [j for j, feasible in enumerate(ok_feas) if feasible]
         # Ahead of the finite read, which skips it: a feasible -inf is the
         # answer itself, not a value to compare, and the run ends on it here.
@@ -1449,3 +1461,21 @@ def _argmin_finite(values: list[float]) -> int | None:
         if math.isfinite(v) and v < best_v:
             best, best_v = j, v
     return best
+
+
+def _feas_flags(feas: jnp.ndarray) -> list[bool]:
+    """Read the caller's feasibility mask as flags, refusing anything but 0/1.
+
+    Only 0 marks an infeasible point, so the mask is read as a truthiness test
+    nowhere: a signed constraint margin arrives looking feasible on every point
+    it rules out, and a NaN arrives looking feasible too, both of them silently
+    promoting a point into the reported best. No cast repairs that (a NaN casts
+    to True), so the batch is refused rather than guessed at.
+    """
+    if not bool(jnp.all((feas == 0) | (feas == 1))):
+        msg = (
+            "the feas mask must hold 0/1 (or booleans) - only 0 marks an "
+            f"infeasible point, got {feas.tolist()}"
+        )
+        raise ValueError(msg)
+    return [bool(v) for v in feas.tolist()]

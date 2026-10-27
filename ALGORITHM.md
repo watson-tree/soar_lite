@@ -438,6 +438,12 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）。**�
   （赢家只在提交点才被看见梯度：非有限则不 `fold`、按 stalled 报 `None`）、
   `test_an_unjudged_winner_must_be_finite_to_be_committed`（不判定的赢家连 `f` 也到提交点才被看见：
   两半任一非有限都不 `fold`）。
+- 非有限事件表（一张表钉住所有局部裁决，`tests/test_nonfinite_matrix.py`）：把
+  {有限, `+inf`, `-inf`, `nan`} × {可行, 不可行, 无 mask} 摊成 `_Best` 的 9 行（含「可行 `-inf` 让
+  `fun_raw` 停在 `inf`」「不可行 `-inf` 什么都不改」两格），加上 `_argmin_finite` 的取值组合
+  （`nan` 排前面不被选中、`-inf` 不算更小的有限值、并列取首个、全非有限返回 `None`）、`feas` 掩码的
+  0/1 校验（`nan`、负裕度、`0.5` 一律 `ValueError`，且拒批时两格都不动）、以及「值好梯度坏」这一维
+  的两条端到端（起步与赢家）。它不重覆上面各条机制测试，而是把它们的裁决合成一张表。
 - 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
   `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
 - `stalled` 语义：`test_give_up_stalls_a_path`、

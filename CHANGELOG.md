@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tests/test_nonfinite_matrix.py`: the non-finite event matrix as one table.
+  `{finite, +inf, -inf, nan} × {feasible, infeasible, no mask}` becomes nine
+  rows against `_Best`; `_argmin_finite` gets its own value combinations (a NaN
+  ranked first is never the minimum, `-inf` is not a smaller finite value, a tie
+  keeps the first, nothing finite gives `None`); the feasibility mask gets its
+  0/1 rows; and the seventh dimension - a finite value with an unusable gradient
+  - gets two end-to-end rows (a half-dead start, a half-dead winner). The
+  mechanisms were each covered already where they meet a specific test; this
+  file states the whole table in one place, so a change to any one of the local
+  `isfinite` decisions has to keep every other one's rows true.
 - `NoRestartRule`: the explicit no-restart arm. It seeds the flock with the
   initialization probe and then never restarts, so a caller can ask for the
   pure multi-start descent (or the serial single chain) instead of depending on
@@ -27,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A feasibility mask is validated instead of being read as truthiness. Only `0`
+  (or `False`) marks a point infeasible, so a batch whose mask holds anything
+  else - a signed constraint margin, whose violated points are all negative, or
+  a `nan` - is now refused with a `ValueError` before either best absorbs it.
+  Before this every one of those flags counted as feasible: a mask of `nan` or
+  `-2.0` made a single served point at `f = 1.0` the reported answer even
+  though the caller had marked it out. No cast repairs it (a NaN casts to
+  `True`), and the mask is the one input that says which points the answer may
+  come from, so it is refused rather than guessed at.
 - The restart verdict no longer refuses to fire when no finite point has been
   served (`fun_raw` is `+inf`). It used to answer False until the horizon ended
   the run, which closed a loop the flock cannot leave on its own: recovering

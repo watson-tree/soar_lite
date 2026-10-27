@@ -129,7 +129,12 @@ _Avoid_: value oracle, cheap evaluator
 
 **feasibility mask**:
 The optional per-point boolean saying which served points may count toward the
-reported best (`fun`/`x`). `fun_raw` and the restart verdicts ignore it.
+reported best (`fun`/`x`). `fun_raw` and the restart verdicts ignore it. It is
+read as 0/1 and nothing else: only `0` (or `False`) marks a point infeasible, so
+a mask holding anything else - a signed constraint margin, whose violated points
+are all negative, or a `nan` - is refused with a `ValueError` instead of being
+read as truthiness, where every one of those flags would have counted as
+feasible and quietly promoted a point into the answer.
 _Avoid_: validity mask
 
 ### Local method
