@@ -64,7 +64,9 @@ _Avoid_: incumbent (retired), best-so-far, current optimum
 
 **stall / stalled**:
 A path that moved nowhere this iteration — it neither restarted nor committed a
-step: its local method signalled `give_up`, or its trials were exhausted.
+step: its local method signalled `give_up` (its own stopping test fired, or its
+trial budget ran out), it accepted with no finite sample to win, or the sample it
+did win had a non-finite gradient.
 Stalled is not dead: a stalled path can still be restarted by a later verdict.
 The engine reports it to the restart rule as `None` — absence, not a sample —
 so the rule reads no continuation from it. The iteration still counts: the rule
@@ -76,16 +78,9 @@ _Avoid_: paused, idle, dead
 
 ### Evaluation
 
-**eval** (verb, counted):
-One serve of the objective: a fused `evaluate_batch` pass, or a value-only
-`evaluate_f` pass when that seam is injected. A probe's draws are evals, and so
-is a step's trial. The engine's own stop does not count these: it counts
-iterations (`max_iters`). One eval returns one batch.
-_Avoid_: query, sample (when counting cost)
-
 **batch** (noun):
-The `(M, d)` points served by one eval. The engine composes one batch per
-eval from the next candidates of the active paths.
+The `(M, d)` points served by one fused `evaluate_batch` pass. The engine
+composes one batch per pass from the next candidates of the active paths.
 _Avoid_: group (that is the probe column, below), lot, chunk
 
 **point** (noun):
@@ -221,12 +216,12 @@ probe plus however many trials the method's own search serves, so
 actually billed. At least one of `max_iters`/`time_limit` must be given: a
 `budget_check` alone stops nothing, because a stalled iteration asks for no
 batch.
-_Avoid_: budget (in evals), cost estimate, time limit
+_Avoid_: eval budget, cost estimate, time limit
 
 **deadline (`time_limit`)**:
 The same stop in seconds, for callers whose per-iteration cost is too uneven to
 count iterations. Checked before each g batch (and at the loop head, like the
-horizon), so the over-run is under one g batch plus the one in-flight eval; only
+horizon), so the over-run is under one g batch plus the one call in flight; only
 an f-only prelude goes unchecked, so a seam run can over-run by that prelude.
 _Avoid_: budget, timeout (that is a per-call concern)
 
