@@ -21,6 +21,7 @@ import pytest
 
 from soar_lite.restart import (
     EIRestartRule,
+    NoRestartRule,
     _gaussian_ei,
     _normal_cdf,
     _normal_pdf,
@@ -251,15 +252,17 @@ def test_a_nonfinite_delta_is_rejected_at_the_seam() -> None:
             policy.observe_continue(0, bad)
 
 
-def test_an_empty_pool_is_the_cold_start_and_a_dead_pool_does_not_restart() -> None:
-    """An empty pool seeds the flock; a pool of dead starts never restarts it.
+def test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window() -> None:
+    """An empty pool seeds the flock; a dead pool ties and re-probes by window.
 
     The cold-start ask happens before any probe has run, and that ask is what
     triggers the initialization probe - so a rule must answer True while it
     holds no restart evidence at all. A pool that exists but is entirely `+inf`
-    (or `nan`) is the opposite: the probe ran and every start was dead, so
-    `EI_restart` prices 0 and a fully stalled flock idles instead of re-probing
-    every iteration.
+    (or `nan`) is not cold start: the probe ran and every start was dead, so
+    `EI_restart` prices 0. That 0 ties a stalled continue side, so the verdict
+    fires and spends one probe - the only action that can still buy evidence. It
+    cannot spin: the dead samples it appends grow the window, so the next ask on
+    the path comes a window later.
     """
     policy = EIRestartRule()
     assert policy.should_restart(0, math.inf, math.inf) is True  # no probe yet
@@ -268,9 +271,9 @@ def test_an_empty_pool_is_the_cold_start_and_a_dead_pool_does_not_restart() -> N
     assert policy._stage_window() == WINDOW  # dead starts are still defined samples
     for _ in range(WINDOW):  # the flock stalls out on the dead landscape
         policy.observe_continue(0, None)
-    assert policy.should_restart(0, 0.0, 0.0) is False  # EI_restart = 0: no re-probe
-    # A False verdict still closes the stage: one window, one verdict - so the
-    # clock is not left in the due band re-asking the same question every round.
+    assert policy.should_restart(0, 0.0, 0.0) is True  # 0 >= 0: buy a sample
+    # The verdict closes the stage whether it fired or not: one window, one
+    # verdict - so the clock is not left in the due band re-asking every round.
     assert policy.rounds[0] == 0
     assert policy.deltas.get(0, []) == []
     policy.observe_continue(0, None)
@@ -321,15 +324,43 @@ def test_worsening_flow_restarts_improving_flow_continues() -> None:
         assert policy.should_restart(0, f, 0.0) is False
 
 
-def test_no_restart_evidence_never_restarts() -> None:
-    """A pool with no spread means EI_restart = 0: no verdict can restart."""
+def test_a_zero_payoff_tie_restarts_to_buy_a_second_sample() -> None:
+    """Both sides read 0: the tie fires and the probe is the evidence bought.
+
+    A pool of copies has MAD 0 (`h = 0`) and its value is the best, so
+    `EI_restart = max(B - 0, 0) = 0`; a constant worsening stage also has MAD 0,
+    so `EI_continue = max(B - (f_k + Δ), 0) = 0` for `f_k + Δ >= B`. Neither side
+    can improve a verdict, but the probe's group-min is a real i.i.d. sample, so
+    the tie spends it instead of idling.
+    """
     policy = EIRestartRule()
     for _ in range(WINDOW):  # pool = 8 copies of 0.0: MAD = 0, so h = 0
         policy.observe_restart(0.0)
     assert policy._stage_window() == WINDOW
     for _ in range(WINDOW):
         policy.observe_continue(0, 0.5)
-    assert policy.should_restart(0, 0.0, 0.0) is False  # 0 > 0 is False
+    assert policy._restart_payoff(0.0) == 0.0
+    assert policy._continue_payoff(0, 0.0, 0.0) == 0.0
+    assert policy.should_restart(0, 0.0, 0.0) is True  # 0 >= 0 is True
+
+
+def test_no_restart_rule_seeds_once_then_never() -> None:
+    """`NoRestartRule` answers the seeding ask, then refuses every later one.
+
+    The first ask happens before any probe, so every path must hear True or the
+    flock never seeds. The flip lives in `observe_restart`, which the engine
+    calls after the probe: flipping it inside `should_restart` would seed only
+    the path asked first and leave the rest on their `inf` placeholders.
+    """
+    rule = NoRestartRule()
+    assert [rule.should_restart(i, math.inf, math.inf) for i in range(4)] == [True] * 4
+    for _ in range(4):  # the initialization probe reports one group-min per path
+        rule.observe_restart(0.5)
+    assert not any(rule.should_restart(i, 0.0, 0.0) for i in range(4))
+    rule.observe_continue(0, None)  # neither channel re-opens it
+    rule.observe_continue(0, 0.1)
+    rule.restart(0)
+    assert rule.should_restart(0, 0.0, 0.0) is False
 
 
 def test_no_best_never_restarts_but_does_not_leave_the_gate_open() -> None:

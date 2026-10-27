@@ -238,9 +238,11 @@ class RestartRule(Protocol):
         return True while it holds no restart evidence at all (an empty payoff
         pool), which is what triggers the initialization probe. An empty pool
         is the true cold start; a pool that exists but is entirely dead (every
-        start of it unusable) is evidence of a dead start and must not be
-        re-probed - and a fully stalled flock keeps asking, so a rule that
-        prices such a pool at 0 is what keeps it idling rather than probing.
+        start of it unusable) is not, so spending another probe on it is that
+        rule's own pricing of a tie. The default `EIRestartRule` reads a dead
+        pool at 0 against a stalled continue side and does re-probe - once per
+        window, and the window is the pool's own size, so its asks space
+        themselves out; `NoRestartRule` spends nothing after the seeding.
 
         B is the raw minimum (see the class docstring) and `f_k` is path i's
         current value in the same unfiltered terms.
@@ -426,11 +428,13 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     paths restart (by design). Probe-batch grads are reused for the selected
     starts: the probe gradients are reused, so a start costs no extra g pass. The rule's
     one shared group-min pool is cold-started with the n_paths init group-mins
-    (a real spread for n_paths >= 2); n_paths=1 yields a single sample -> h = 0 ->
-    degenerate EI_restart = 0 -> the single path never restarts. Every restart
-    event extends {r_i} with the event's group-mins for all paths at once (a
-    payoff is a property of the sampler, not of one path). A path whose method
-    gives up stalls until an EI verdict revives it.
+    (a real spread for n_paths >= 2); n_paths=1 prices every restart at exactly 0
+    (h = 0, and its one sample is the pool's own best), so the single path
+    restarts exactly when continuing promises nothing and never while it is
+    improving. Pass `NoRestartRule` for the explicit pure-descent arm. Every
+    restart event extends {r_i} with the event's group-mins for all paths at
+    once (a payoff is a property of the sampler, not of one path). A path whose
+    method gives up stalls until an EI verdict revives it.
 
     The verdict compares a probe against one continue sample. A probe spends
     n_draws draws, while the continue side's evidence is one Δf per

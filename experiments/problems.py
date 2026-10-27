@@ -28,9 +28,7 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", val=True)
 
-EvalFG: TypeAlias = Callable[
-    [jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, None]"
-]
+EvalFG: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, None]"]
 
 
 @dataclass(frozen=True)

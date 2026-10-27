@@ -55,9 +55,22 @@ from experiments.methods import (
     run_lbfgs,
     run_soar_lite,
 )
+from soar_lite import NoRestartRule
 
 HERE = Path(__file__).parent
 Runner: TypeAlias = Callable[..., Trace]
+
+
+def _serial(prob: problems.Problem, **kw: int) -> Trace:
+    """soar-lite n_paths=1 with no restart: the pure serial descent arm.
+
+    The serial arm is pinned to `NoRestartRule` instead of relying on a
+    one-sample pool never tying: a probe is a batched action, and this arm is
+    the one-batch-per-point reference the batched arms are compared against.
+    """
+    return run_soar_lite(prob, n_paths=1, restart_rule=NoRestartRule(), **kw)
+
+
 CurveEntry: TypeAlias = dict[str, list[float] | list[list[float | None]]]
 
 # Per-problem Adam learning rate, the grid-tuned optimum (see --lr-sweep).
@@ -88,7 +101,7 @@ INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
 SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
         "soar-lite n_paths=1",
-        lambda prob, **kw: run_soar_lite(prob, n_paths=1, **kw),
+        _serial,
         {"color": "C0", "lw": 2.0},
     ),
     (
@@ -120,7 +133,7 @@ MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     ),
     (
         "soar-lite n_paths=1",
-        lambda prob, **kw: run_soar_lite(prob, n_paths=1, **kw),
+        _serial,
         {"color": "C0", "lw": 1.2, "ls": "--"},
     ),
     (
@@ -223,7 +236,7 @@ def run_invariance(out_dir: Path, seeds: int, max_steps: int) -> None:
         (
             "soar-lite n_paths=1",
             "C0",
-            lambda p, **kw: run_soar_lite(p, n_paths=1, **kw),
+            _serial,
         ),
         ("Adam (same lr)", "C3", lambda p, **kw: run_adam(p, lr=lr, **kw)),
     ]

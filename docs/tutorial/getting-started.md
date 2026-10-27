@@ -58,13 +58,17 @@ print(result.x, result.fun, result.status)
 ```
 
 The status says only why the loop stopped, never that it converged: it is
-`max_iters` here because the run reached the horizon you gave it. The paths
-themselves had finished earlier - each one had already reached its own
-per-coordinate stopping test and was waiting for a restart verdict that never
-came due - so the last iterations served nothing and the run idled to the
-horizon. That is the trade a deterministic stop makes: the iteration count is
-yours, the work inside it is not. `n_batches` and `n_points` report what was
-actually billed (value+gradient passes).
+`max_iters` here because the run reached the horizon you gave it - and the
+horizon counts iterations, not work. The four paths converge within the first
+few iterations; most of what runs afterwards is the restart rule. A converged
+path stalls, its verdict comes due a window later, and restarting still prices
+better than continuing - a stalled path has no continuation evidence, so
+continuing is worth 0 - which means the path is re-probed with a fresh start and
+descends back to the same 3. The tail of the run idles because the window is the
+pool's own sample count: each probe grows it, so the remaining iterations cannot
+bring another verdict due. `n_batches` and `n_points` report that mix - the
+value+gradient passes actually served - which is why they, not `n_iters`, are
+the cost.
 
 ## 3. Read the result
 
@@ -105,8 +109,9 @@ Three gotchas worth knowing up front:
   its own gradient against a step's single one, so the engine refuses the depth
   unless you also supply the value-only `eval_f`; with it the probe computes
   one gradient, at its winners.
-- **`n_paths = 1` is the single-path baseline.** Same code, no restart
-  competition.
+- **`n_paths = 1` is the single-path baseline.** Same code, one path; pass
+  `restart_rule=NoRestartRule()` to pin it to a pure descent, since the default
+  rule still probes a chain whose continue side comes up empty.
 - **The horizon counts iterations, not work.** What one iteration costs is the
   method's business: it serves from zero batches (a fully stalled flock) up to a
   probe plus however many trials the method's own line search serves. So
@@ -165,7 +170,9 @@ To replace one outright, implement its protocol and pass the instance:
   for the points it keeps, and `fold` is where a step lands. `restart` is the
   only cold-start call, so it runs at initialization and after every restart.
 - **`RestartRule`** — the continue-versus-restart decision: `observe_continue`,
-  `observe_restart`, `should_restart`, `restart`.
+  `observe_restart`, `should_restart`, `restart`. The shipped pair is
+  `EIRestartRule` (the sample-based EI verdict) and `NoRestartRule` (nothing
+  after the initialization probe).
 
 Both protocols are documented in the [API Reference](../reference/api.md), which
 is the contract to code against.

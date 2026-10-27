@@ -176,9 +176,12 @@ _Avoid_: payoff pool, restart history, bandit arms
 
 **restart verdict**:
 The per-path comparison of continuing's expected improvement against
-restarting's; `EI_restart > EI_continue` restarts the path. One sample each —
+restarting's; `EI_restart >= EI_continue` restarts the path. One sample each —
 one step for continuing, one probe for restarting — so the verdict is a decision
-about what to buy. Each side is modelled by a scott_mad KDE over its own
+about what to buy. The tie (`0 >= 0`) is a restart too: when continuing buys
+nothing, the probe is the only action that buys evidence, and it cannot thrash
+because the verdict's window is the pool's own size, so each re-probe pushes the
+next ask a window further out. Each side is modelled by a scott_mad KDE over its own
 samples (one Gaussian kernel per sample), so neither side assumes a single
 Gaussian. A stalled path supplies no continuation sample at all — absence, not
 a value — so its `EI_continue` is 0 and its verdict is one-sided; a moving path

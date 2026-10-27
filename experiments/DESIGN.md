@@ -79,7 +79,8 @@ Five groups, one role each:
 
 Curves differ per panel; each curve has one role:
 
-- **Panel "preconditioning"** (groups 2+3, **P②**): `soar-lite n_paths=1`, `Adam`,
+- **Panel "preconditioning"** (groups 2+3, **P②**): `soar-lite n_paths=1` (pinned to
+  `NoRestartRule`), `Adam`,
   `L-BFGS-B` (ceiling *reference*, not a head-to-head baseline — full-memory +
   serial line search vs our per-coordinate + batched n_paths), plus `soar-lite n_paths=16`
   as a supplementary "what parallelism buys" curve.
@@ -92,8 +93,8 @@ L-BFGS-B appears only on the P② panels. Its role there is the *ceiling
 reference* — how close soar-lite's diagonal secant gets to a full-memory
 second-order method on smooth, convex landscape. That role does not exist on
 the P① panel: the question there is whether EI restart beats a *first-order,
-non-restarting single chain* (Adam; soar-lite n_paths=1 is the same method
-minus restart). L-BFGS-B is second-order and restart-free — on Ackley/Rastrigin
+non-restarting single chain* (Adam; soar-lite n_paths=1 with `NoRestartRule` is
+the same method minus restart). L-BFGS-B is second-order and restart-free — on Ackley/Rastrigin
 it would dive deterministically into the nearest local minimum and stay there
 at second-order precision, so its curve could only show "a second-order method
 also gets stuck", which discriminates nothing about restart. It is also serial
@@ -292,9 +293,14 @@ shipped on cost - `O(n ln n)`, ten lines, degenerating cleanly to `h = 0` - not
 because it was shown to beat SJ.
 
 The single-path curve is the degenerate corner, not the control: a pool of one
-sample gives no spread, so `h = 0` and `EI_restart = max(B - r, 0) = 0` exactly
-and the same rule never restarts. `n_paths=16` is the only configuration where
-the verdict is actually exercised.
+sample gives no spread, so `h = 0` and `EI_restart = max(B - r, 0) = 0` exactly,
+and the verdict then turns on whether the continue side also reads 0 - which a
+flat or stalled chain does. The panel pins that arm to `NoRestartRule` so the
+curve stays the pure serial descent it was measured as, instead of picking up a
+probe whenever the chain flattens; `n_paths=16` is the configuration where the
+verdict is actually exercised. The restart mechanism on its own is isolated by
+`test_restart_beats_pure_multistart_on_multimodal` (same starts, same budget,
+rule swapped), which no panel curve does.
 
 Resolved: B was the min over feasible points only (`inf` when none was served),
 while both verdict alternatives are free to sample infeasible points. The engine

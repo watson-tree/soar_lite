@@ -17,6 +17,44 @@ PHI14 = 0.6744897501960817
 SCOTT = (4.0 / 3.0) ** 0.2
 
 
+# --- restart rule: the no-restart arm ---
+class NoRestartRule(RestartRule):
+    """Never restart: one seeding probe, then every path descends on its own.
+
+    The degenerate opposite of `EIRestartRule`, for callers who want the pure
+    multi-start descent (or the serial single chain) as a baseline instead of
+    the EI rule's emergent behaviour. It implements the `RestartRule` contract
+    itself rather than subclassing `EIRestartRule`, because none of that rule's
+    pool/stage bookkeeping is ever read here.
+
+    The cold start is the one verdict it cannot refuse: the engine asks every
+    path before any probe has run, and a False there would never seed the flock.
+    So the first ask answers True, the probe fills the pool, and every ask after
+    it answers False. `_seeded` flips in `observe_restart` - which the engine
+    calls after the probe - never in `should_restart`, which it calls for all
+    paths before probing; flipping it in the query would seed only the first
+    path and leave the rest on their `inf` placeholders forever.
+    """
+
+    def __init__(self) -> None:
+        """Start unseeded: the engine's first ask is the seeding probe."""
+        self._seeded = False
+
+    def observe_continue(self, i: int, delta: float | None) -> None:
+        """No-op: this rule never weighs continuing against restarting."""
+
+    def observe_restart(self, group_min: float) -> None:  # noqa: ARG002
+        """Record that the seeding probe ran; every ask after it answers False."""
+        self._seeded = True
+
+    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
+        """Return True only for the cold start, which is how the flock seeds."""
+        return not self._seeded
+
+    def restart(self, i: int) -> None:
+        """No-op: there is no per-path evidence to reset."""
+
+
 # --- restart rule: EI_continue vs EI_restart ---
 class EIRestartRule(RestartRule):
     """Sample-based restarts: the paths estimate their own restart payoff.
@@ -125,12 +163,21 @@ class EIRestartRule(RestartRule):
         whatever it lived through - a path that stalls mid-stage keeps the wait it
         has already served instead of starting a second one.
 
-        A due stage is read against the engine's best: restart wins when
-        `EI_restart > EI_continue`, and a stalled stage is the same comparison at
+        A due stage is read against the engine's best: restart fires when
+        `EI_restart >= EI_continue`, and a stalled stage is the same comparison at
         the degenerate `EI_continue` - `_continue_payoff` returns 0.0 on the empty
         stage a stall leaves, so a stalled path is exactly "does restarting buy
         anything at all". One formula covers both shapes; the difference is what
         the continue side has to read.
+
+        The tie is the load-bearing half of that `>=`. Both sides read 0 when the
+        evidence is degenerate - a pool with no spread or of dead starts, a
+        continue side that lost ground or stalled - and continuing at 0 is worth
+        nothing, while a probe is always one real i.i.d. group-min. The tie is
+        therefore the price of buying the evidence neither side has. It cannot
+        thrash because the window is the pool's defined count: every tie probes,
+        every probe appends a sample, so the next ask on that path comes a window
+        later - the interval grows 1, 2, 3, ... and the probe rate falls to 0.
 
         **A verdict closes its stage** - `deltas` and the clock are cleared here,
         whichever way the comparison went. A window is one stage, so its end does
@@ -148,8 +195,9 @@ class EIRestartRule(RestartRule):
         empty group-min pool there is no restart evidence at all, so this returns
         True and the engine's first iteration probes every path. A pool that is
         non-empty but entirely non-finite is *not* cold start - the probe ran and
-        every start was dead - so an empty `group_mins` is the test, and a dead
-        pool simply prices the restart at 0 and never fires.
+        every start was dead - so an empty `group_mins` is the test; a dead pool
+        prices the restart at 0, which ties a stalled continue side and re-probes
+        once per window, each dead sample spacing the next ask further out.
         """
         if not self.group_mins:  # no probe has run: draw the initialization one
             return True
@@ -157,7 +205,7 @@ class EIRestartRule(RestartRule):
             return False
         restart = math.isfinite(best_fun_raw) and (
             self._restart_payoff(best_fun_raw)
-            > self._continue_payoff(i, f_k, best_fun_raw)
+            >= self._continue_payoff(i, f_k, best_fun_raw)
         )
         self.deltas[i] = []  # the stage is read; the next Δ or stall opens the next
         self.rounds[i] = 0
@@ -185,15 +233,18 @@ class EIRestartRule(RestartRule):
         "Defined" is the count the read is actually built on: a finite group-min
         and a `+inf` dead start both are samples (the dead start contributes 0),
         while `nan` (no information) and `-inf` (not read yet) are not. A dead
-        pool therefore still has a window - it is what keeps a fully stalled
-        flock idling on the same cadence instead of re-probing.
+        pool therefore still has a window, and that window is what spaces a
+        stalled flock's re-probes: each one adds a dead sample, so the next ask
+        on that path comes a window later.
 
         The only floor is 1, and it is not a prior: a window of zero samples has
         no centre to read (`_continue_payoff` returns 0.0 on an empty stage),
-        which is reachable only before any defined group-min exists. At M = 1
-        the read is its own degenerate branch - one fold has no spread (MAD = 0,
-        so h = 0), and a pool of one gives `EI_restart = max(B - group_min, 0) <= 0`,
-        so no restart can fire until a second group-min lands.
+        which is reachable only before any defined group-min exists. M = 1 is the
+        one-sample regime - one fold has no spread (MAD = 0, so h = 0), and a pool
+        of one prices `EI_restart = max(B - group_min, 0)`, which is 0 whenever
+        that sample is the best so far. Both sides then read 0 and the verdict
+        ties, so the path probes once; the probe is what buys the second sample,
+        and from M = 2 on the spread decides the verdict on its own.
 
         This method is the seam a rule variant moves (a capped window, a forced
         cadence for an experiment); the rule itself takes no knob, so its own

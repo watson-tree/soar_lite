@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `NoRestartRule`: the explicit no-restart arm. It seeds the flock with the
+  initialization probe and then never restarts, so a caller can ask for the
+  pure multi-start descent (or the serial single chain) instead of depending on
+  the EI rule's emergent behaviour on a one-sample pool.
 - `eval_f`: an optional value-only evaluator seam, the f-only sibling of
   `eval_f_g` (`(f, feas?)` out, no gradient). Supplying it makes the whole
   search read values: every probe draw and every step trial is served for its
@@ -23,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The restart verdict fires on a tie: `EI_restart >= EI_continue`, not `>`. When
+  continuing promises nothing - a stalled path, a flat stage, a pool with no
+  spread or of dead starts - both sides read 0, and a probe is then the only
+  action that buys evidence. It cannot thrash: the verdict's window is the
+  pool's defined count, so every tie-restart appends a sample and pushes the
+  next ask a window further out (interval 1, 2, 3, ...). The `n_paths=1`
+  "never restarts" property was a consequence of the strict `>` and is gone;
+  `NoRestartRule` is now the explicit way to ask for it.
 - `n_probe_evals` is now `n_draws`. The knob counts draws - batches of
   candidate points whose column minima become the starts - and one draw is the
   same unit whether the seam serves it fused or value-only, which "evals" (tied
@@ -55,8 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not support; scott_mad is chosen for its cost (O(n ln n), ten lines), not
   because it was shown to beat a direct-plug-in bandwidth end to end.
   Degenerate corners are unchanged: a stage or pool with no spread has
-  `h = 0`, so the read is exactly `max(B - x, 0)` and `n_paths=1` still never
-  restarts.
+  `h = 0`, so the read is exactly `max(B - x, 0)`.
 - A stalled path no longer fabricates a sample. `observe_continue` takes
   `delta: float | None`, and the engine reports a stall as `None` - absence, not
   a value - so folding an `inf` that had to be filtered back out at the read is

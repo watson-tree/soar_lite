@@ -21,6 +21,9 @@ Three pieces, three modules (`soar_lite/engine.py`, `soar_lite/solver.py`,
   off the path's own recent f changes and a pool of group-mins shared by every
   path. Each side is a scott_mad Gaussian-kernel KDE over its own samples,
   so neither assumes a single Gaussian; no surrogate model of `f` is fitted.
+- **`NoRestartRule`** — the same seam with the probes turned off after the
+  initialization one: a run is pure multi-start, or a plain serial chain at
+  `n_paths = 1`.
 - **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep: an
   iteration decides every move on values and buys the gradients it kept in one
   batch. Owns the box, the shared horizon, the restart verdicts and the stall

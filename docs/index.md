@@ -19,6 +19,9 @@ Three pieces, no dependencies beyond JAX and the standard library:
   restarting it, both read off the path's own recent f changes and a pool of
   group-mins. Each side is a scott_mad Gaussian-kernel KDE over its own
   samples, so neither assumes a single Gaussian.
+- **`NoRestartRule`** — the same seam with the probes turned off after the
+  initialization one: a run is pure multi-start, or a plain serial chain at
+  `n_paths = 1`.
 
 ## Install
 

@@ -32,3 +32,4 @@ Pass one by name to swap it, or implement the contract above to replace it.
 
 ::: soar_lite.DiagonalPreconditioner
 ::: soar_lite.EIRestartRule
+::: soar_lite.NoRestartRule

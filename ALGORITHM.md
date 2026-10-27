@@ -164,10 +164,15 @@ EI_restart   = mean_i EI(f⋆; mᵢ, h_m)                   任一路径重来�
 走一格，所以一条路径的判决轮次与它这一程怎么走来无关。中途停摆的路径因此保留它已经等过的轮数，
 不会从停摆那一刻重新起算（否则它会比同 cohort 晚整整一个窗口才到期）；变的只是证据从全比较
 变成单侧。
-`M = 1` 时两侧同时落到各自的退化形式（stage 一折、池子一样本，MAD = 0 ⇒ `h = 0`），此时任何一条
-重复都赢不了 `EI_continue ≥ 0`，重启本就发不出来，所以也没有必要把窗口垫到 2。
+`M = 1` 时两侧同时落到各自的退化形式（stage 一折、池子一样本，MAD = 0 ⇒ `h = 0`）：唯一的样本已是
+`f⋆`，所以 `EI_restart` 恒为 0；继续侧走平或停摆时也读 0，判决以 `0 ≥ 0` 平局收场、放行
+一次探测——这一次探测正是池子买到第二个样本的方式。窗口因此不需要垫到 2。
 
-判决谓词：`EI_restart > EI_continue` 且 `f⋆` 有限。这里的 `f⋆` 是**全域**最优 `fun_raw`
+判决谓词：`EI_restart ≥ EI_continue` 且 `f⋆` 有限。取等即平局也重启：两侧同为 0 意味着「继续
+买不到东西、重启也买不到」，而一次探测本身还是一条真实的 i.i.d. group-min，所以平局时探测是唯一
+能买到证据的动作。它不会空转：窗口就是池子的有定义样本数 M，每次平局重启都往池子追加一个样本，
+同一条路径的下一次问询因此推迟整整一个窗口，间隔按 1, 2, 3, … 增长，探测频率衰减到 0。这里的
+`f⋆` 是**全域**最优 `fun_raw`
 （所有有限样本、含不可行点），与 `f_k` 和池子里的 payoff 同口径；结果里报告的 `fun`/`x` 仍是
 可行域最优。池子里的 `+inf` 是**死起步**，不是被丢掉的值：它自己对改进的贡献恰好是 0，所以它作为
 同一个均值的零项进账——`EI_restart` 等于有限子集的 KDE 均值乘以「活着的起步占比」
@@ -176,9 +181,11 @@ EI_restart   = mean_i EI(f⋆; mᵢ, h_m)                   任一路径重来�
 
 ### 2.4 n_paths=1 的退化
 
-`n_paths = 1` 时池子里只有一个样本 ⇒ 无展布 ⇒ `h = 0` ⇒ `EI_restart` 退化为 `max(f⋆ − r, 0)`，与继续侧
-同形，样本数也远不够打开判决 ⇒ **单路径永不重启**。这正是「把 n_paths 设成 1 就得到一条纯串行局部
-下降」的退化路径，不需要任何模式开关。
+`n_paths = 1` 时池子里只有一个样本 ⇒ 无展布 ⇒ `h = 0` ⇒ `EI_restart` 退化为 `max(f⋆ − r, 0)`，而池子
+里的那个样本正是 `f⋆`（最优必不劣于唯一抽样），所以重启侧恒为 0。判决于是等价于「继续侧是否为
+0」：路径在改进时继续侧为正、单路径就一直下降；走平或停摆时平局、放行一次探测去补第二个样本。
+**要一条纯粹的串行局部下降、一次都不重启，传入 `NoRestartRule`**——纯串行不再依赖 `n_paths = 1`
+的偶然：多起点的纯下降实验（对比重启机制）也走同一个显式规则。
 
 ## 3. n_paths 路径引擎
 
@@ -386,12 +393,15 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
 - 停摆是缺席不是值、`+inf` 是死起步：`test_a_stall_supplies_no_delta_and_counts_the_iteration`、
   `test_a_stall_clears_a_partial_stage_and_keeps_its_wait`、`test_a_nonfinite_delta_is_rejected_at_the_seam`、
   `test_ei_restart_prices_inf_as_a_dead_start_and_skips_nan_and_neginf`、
-  `test_an_empty_pool_is_the_cold_start_and_a_dead_pool_does_not_restart`。
+  `test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window`。
 - 池子共享 / stage 独立 / 重启保留池子：`test_group_min_pool_is_shared_across_paths`、
   `test_per_path_stage_is_independent`、`test_restart_keeps_the_shared_group_min_pool`。
-- `n_paths = 1` 退化（无展布 ⇒ `h = 0` ⇒ 永不重启）：`test_no_restart_evidence_never_restarts` 覆盖闭式退化，
-  `test_no_best_never_restarts_but_does_not_leave_the_gate_open` 覆盖 `f⋆` 缺失；**没有端到端 n_paths=1 断言**
-  ——搬走前可补一条（n_paths=1 跑满地平线，断言 `restarts == []`）。
+- 平局也重启（买第二个样本）、`n_paths = 1` 的退化与纯下降出口：
+  `test_a_zero_payoff_tie_restarts_to_buy_a_second_sample` 覆盖「两侧同读 0 ⇒ 放行一次探测」，
+  `test_no_best_never_restarts_but_does_not_leave_the_gate_open` 覆盖 `f⋆` 缺失，
+  `test_no_restart_rule_seeds_once_then_never` 覆盖纯下降出口（`NoRestartRule` 只播种、之后永不再问），
+  `test_restart_beats_pure_multistart_on_multimodal` 与 `test_k_start_beats_single_path_on_multimodal`
+  则端到端地拿「同起点数、换规则」验证重启机制本身。
 - 多抽 probe 只有单测覆盖：`test_probe_group_min_skips_nan`、
   `test_multi_draw_probe_is_refused_without_the_f_only_seam`、`test_the_gate_counts_g_batches_not_f_only_draws`。
   实验按 `n_draws=1`、不接 seam 跑（`f_only` 不计费，接入会白送评估），所以图里没有这条路径。
@@ -422,7 +432,7 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
 
 - SOAR 是一个**全局–局部协同的优化框架**（文献含代理/集成模型与统计接受检验等成分）；本包不拟合
   任何 `f` 的模型、没有多保真，只有一个局部方法 + 一个重启判定。
-- 重启判据不是 SOAR 的统计接受检验，而是共享 group-min pool 上 `EI_restart > EI_continue` 的闭式比较
+- 重启判据不是 SOAR 的统计接受检验，而是共享 group-min pool 上 `EI_restart ≥ EI_continue` 的闭式比较
   （第 2.3 节）。
 - 局部方法默认是逐坐标 secant 幅值比预条件（第 1 节），一阶，无 Hessian、无曲率模型。
 

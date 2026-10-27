@@ -34,7 +34,7 @@ from soar_lite.engine import (
     _argmin_finite,
     n_path_schedule,
 )
-from soar_lite.restart import EIRestartRule
+from soar_lite.restart import EIRestartRule, NoRestartRule
 
 jax.config.update("jax_enable_x64", val=True)
 
@@ -234,6 +234,30 @@ def test_fun_is_true_min_over_history() -> None:
     assert res.fun < 1e-8
 
 
+_TWO_WELL_SIGMA = 0.04
+
+
+def _two_well_1d(theta: jnp.ndarray) -> jnp.ndarray:
+    """Two-well 1-D: global -8 @ θ=0.38, local -2 @ θ=0.62, saddle near 0.505."""
+    return -2.0 * jnp.exp(-(((theta - 0.62) / _TWO_WELL_SIGMA) ** 2)) - 8.0 * jnp.exp(
+        -(((theta - 0.38) / _TWO_WELL_SIGMA) ** 2)
+    )
+
+
+def _two_well_grad(theta: jnp.ndarray) -> jnp.ndarray:
+    """Return d/dθ of `_two_well_1d`."""
+    u_l, u_g = (theta - 0.62) / _TWO_WELL_SIGMA, (theta - 0.38) / _TWO_WELL_SIGMA
+    return (
+        4.0 * u_l * jnp.exp(-(u_l**2)) / _TWO_WELL_SIGMA
+        + 16.0 * u_g * jnp.exp(-(u_g**2)) / _TWO_WELL_SIGMA
+    )
+
+
+def _two_well(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Pointwise (f, ∇f) on the two-well landscape, θ (d,) -> f scalar."""
+    return _two_well_1d(theta[0]), _two_well_grad(theta)
+
+
 def test_k_start_beats_single_path_on_multimodal() -> None:
     """Equal eval budget: 16 starts strictly beat 1 start on a two-well 1-D.
 
@@ -241,36 +265,19 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     deep well is 4x deeper, so its basin reaches just past mid-domain).
     x0 ~ uniform(0,1) and the identity map makes θ = x, so the single
     path's fate depends on its pair-min start (min of 2 draws) relative
-    to the saddle.  Cold-start
-    evidence asymmetry: n_paths=1 feeds one group-min -> h = 0 -> degenerate
-    EI_restart = 0 -> the single path never restarts; n_paths=16 feeds a real
-    spread -> h > 0 -> stalled paths may probe their way to the
-    global well.
+    to the saddle. The single path is pinned to `NoRestartRule`, so it is the
+    pure-descent arm - one start, no probes - against 16 starts whose EI rule
+    may probe stalled paths into the global well. This test attributes the win
+    to the start count; `test_restart_beats_pure_multistart_on_multimodal`
+    attributes one to the rule alone, at a fixed start count.
     """
-    sigma_g, sigma_l = 0.04, 0.04
-
-    def f1d(theta: jnp.ndarray) -> jnp.ndarray:
-        return -2.0 * jnp.exp(-(((theta - 0.62) / sigma_l) ** 2)) - 8.0 * jnp.exp(
-            -(((theta - 0.38) / sigma_g) ** 2)
-        )
-
-    def grad1d(theta: jnp.ndarray) -> jnp.ndarray:
-        u_l, u_g = (theta - 0.62) / sigma_l, (theta - 0.38) / sigma_g
-        return (
-            4.0 * u_l * jnp.exp(-(u_l**2)) / sigma_l
-            + 16.0 * u_g * jnp.exp(-(u_g**2)) / sigma_g
-        )
-
     # independent literal grid check: global min is -8 (brute force)
     grid = jnp.linspace(0.05, 0.95, 901)
-    grid_min = float(jnp.min(jax.vmap(f1d)(grid)))
+    grid_min = float(jnp.min(jax.vmap(_two_well_1d)(grid)))
     assert abs(grid_min - (-8.0)) < 0.15
 
-    def pointwise(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-        return f1d(theta[0]), grad1d(theta)
-
     budget = 320
-    rec_k = Recorder(pointwise)
+    rec_k = Recorder(_two_well)
     res_k = n_path_schedule(
         rec_k,
         bounds=unit_bounds(),
@@ -280,7 +287,7 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
         solver=HalfStep(),
         key=jax.random.PRNGKey(2),
     )
-    rec_1 = Recorder(pointwise)
+    rec_1 = Recorder(_two_well)
     res_1 = n_path_schedule(
         rec_1,
         bounds=unit_bounds(),
@@ -288,6 +295,7 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
         max_iters=100,
         budget_check=rec_1.limit_check(budget),
         solver=HalfStep(),
+        restart_rule=NoRestartRule(),
         key=jax.random.PRNGKey(2),
     )
     # the single path must be trapped in the shallow well: replicate the
@@ -298,11 +306,51 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     k, k2 = jax.random.split(k)
     xa = float(jax.random.uniform(k1, (1, 1), minval=0.0, maxval=1.0)[0, 0])
     xb = float(jax.random.uniform(k2, (1, 1), minval=0.0, maxval=1.0)[0, 0])
-    x0_1 = xa if float(f1d(jnp.asarray(xa))) <= float(f1d(jnp.asarray(xb))) else xb
+    x0_1 = (
+        xa
+        if float(_two_well_1d(jnp.asarray(xa))) <= float(_two_well_1d(jnp.asarray(xb)))
+        else xb
+    )
     assert 0.505 < x0_1 < 1.0, f"single-path seed moved: x0={x0_1} (xa={xa}, xb={xb})"
     assert res_1.fun > -3.0, res_1.fun  # stuck near local well (-2)
     assert res_k.fun < -7.0, res_k.fun  # found the global well (-8)
     assert res_k.fun < res_1.fun  # strictly better, equal budget
+
+
+def test_restart_beats_pure_multistart_on_multimodal() -> None:
+    """Same starts, same budget, one rule swapped: restart is what escapes.
+
+    The arms share the key, the path count and the budget, so the init probe and
+    every step are identical up to the first restart - the only difference is
+    the rule. `NoRestartRule` pins the four shallow starts to the local well;
+    the EI rule spends its verdicts on probes, and a probe landing in the deep
+    basin turns the run around.
+    """
+    budget = 320
+    rec_pure = Recorder(_two_well)
+    res_pure = n_path_schedule(
+        rec_pure,
+        bounds=unit_bounds(),
+        n_paths=4,
+        max_iters=100,
+        budget_check=rec_pure.limit_check(budget),
+        solver=HalfStep(),
+        restart_rule=NoRestartRule(),
+        key=jax.random.PRNGKey(9),
+    )
+    rec_ei = Recorder(_two_well)
+    res_ei = n_path_schedule(
+        rec_ei,
+        bounds=unit_bounds(),
+        n_paths=4,
+        max_iters=100,
+        budget_check=rec_ei.limit_check(budget),
+        solver=HalfStep(),
+        key=jax.random.PRNGKey(9),
+    )
+    assert res_pure.fun > -3.0, res_pure.fun  # four shallow starts, all stuck
+    assert res_ei.fun < -7.0, res_ei.fun  # a probe reached the deep basin
+    assert res_ei.fun < res_pure.fun
 
 
 def test_projected_descent_reaches_wall_optimum() -> None:
@@ -324,7 +372,8 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     res = n_path_schedule(
         rec,
         bounds=unit_bounds(2),
-        n_paths=1,  # n_paths=1 -> h=0 -> never restart, pure projected descent
+        n_paths=1,
+        restart_rule=NoRestartRule(),  # pure projected descent, no probes
         max_iters=100,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
