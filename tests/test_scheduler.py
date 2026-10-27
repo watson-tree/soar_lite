@@ -35,6 +35,7 @@ from soar_lite.engine import (
     n_path_schedule,
 )
 from soar_lite.restart import EIRestartRule, NoRestartRule
+from soar_lite.solver import DiagonalPreconditioner
 
 jax.config.update("jax_enable_x64", val=True)
 
@@ -741,6 +742,51 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
     )
     # one point per live path per iteration, not two evals per step
     assert res.n_points == n_draws * n_paths + n_iterations, res.n_points
+
+
+def test_a_dead_initialization_probe_does_not_freeze_the_run() -> None:
+    """No finite best yet is a probe, not a closed gate.
+
+    One path, and the initialization group is the only dead one. The rule then
+    has nothing to compare, and a False there would leave the one path that
+    could re-draw blocked from asking: the run would idle to the horizon with
+    fun = inf and a status that says it ran out of iterations. So the due
+    verdict re-probes, the second draw is finite, and the path descends. The
+    NoRestartRule arm is the control - same objective, no re-probe, fun stays
+    inf - which is what makes the recovery the verdict's doing.
+    """
+    dead_group = 1
+
+    def make_evaluator() -> Callable[
+        [jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None]
+    ]:
+        calls = [0]
+
+        def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+            calls[0] += 1
+            if calls[0] <= dead_group:  # the initialization probe: nothing finite
+                nan = jnp.full((theta.shape[0],), jnp.nan)
+                return nan, jnp.full_like(theta, jnp.nan), None
+            d = theta - 0.7
+            return jnp.sum(d**2, axis=1), 2.0 * d, None
+
+        return eval_f_g
+
+    def run(rule: EIRestartRule | NoRestartRule) -> NPathResult:
+        return n_path_schedule(
+            make_evaluator(),
+            bounds=unit_bounds(),
+            n_paths=1,
+            max_iters=20,
+            solver=DiagonalPreconditioner(),
+            restart_rule=rule,
+            key=jax.random.PRNGKey(0),
+        )
+
+    revived = run(EIRestartRule())
+    assert math.isfinite(revived.fun), revived
+    # the control: the same dead start under a rule that never re-probes
+    assert run(NoRestartRule()).fun == math.inf
 
 
 def test_stalled_paths_wait_for_ei_then_restart() -> None:

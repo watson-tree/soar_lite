@@ -195,26 +195,34 @@ class EIRestartRule(RestartRule):
         next Δ or stall opens the next stage, so a path that never gets restarted
         is re-judged once per window - the same cadence a continuing path has.
 
-        With no best (B = inf, i.e. no finite point of any kind served yet) the
-        comparison is skipped - the verdict has nothing to compare against, and
-        the engine owns B - so it answers False and the stage still closes: a
-        flock whose every start is dead never re-probes, and its run ends on the
-        caller's horizon instead of on a verdict.
+        With no best (`best_fun_raw` = `+inf`: no finite point of any kind served
+        yet) there is nothing to weigh, and the same rule applies as at cold
+        start - a verdict with nothing to compare is a probe. It restarts (and
+        still closes the stage): the probe is the only action that can buy the
+        first finite sample, so answering False would leave the one path that
+        could re-draw blocked from asking, and a single unlucky initialization
+        draw - one all-dead probe group - would lock the run until the horizon.
+        The dead samples still count in the pool, so the window keeps growing and
+        the re-probing decays like any other probe, 1, 2, 3, ... rounds apart.
 
-        Cold start is the one verdict that is not the EI comparison: with an
+        Cold start is the other verdict that is not the EI comparison: with an
         empty group-min pool there is no restart evidence at all, so this returns
         True and the engine's first iteration probes every path. A pool that is
         non-empty but entirely non-finite is *not* cold start - the probe ran and
         every start was dead - so an empty `group_mins` is the test; a dead pool
         prices the restart at 0 whatever made it dead (`+inf`, `nan` or `-inf`),
         which ties a stalled continue side and re-probes once per window, each
-        dead sample spacing the next ask one round further out.
+        dead sample spacing the next ask one round further out. With no finite
+        best at all the branch above fires first, at that same cadence.
         """
         if not self.group_mins:  # no probe has run: draw the initialization one
             return True
         if self.rounds.get(i, 0) < self._stage_window():
             return False
-        restart = math.isfinite(best_fun_raw) and (
+        # Said outright rather than left to inf arithmetic: `_restart_payoff` and
+        # `_continue_payoff` both read inf here, and inf >= inf happens to be
+        # True today - a coincidence, not a decision.
+        restart = not math.isfinite(best_fun_raw) or (
             self._restart_payoff(best_fun_raw)
             >= self._continue_payoff(i, f_k, best_fun_raw)
         )

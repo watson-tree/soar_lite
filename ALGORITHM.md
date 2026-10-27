@@ -182,10 +182,13 @@ EI_restart   = mean_i EI(f⋆; mᵢ, h_m)                   任一路径重来�
 `f⋆`，所以 `EI_restart` 恒为 0；继续侧走平或停摆时也读 0，判决以 `0 ≥ 0` 平局收场、放行
 一次探测——这一次探测正是池子买到第二个样本的方式。窗口因此不需要垫到 2。
 
-判决谓词：`EI_restart ≥ EI_continue` 且 `f⋆` 有限。取等即平局也重启：两侧同为 0 意味着「继续
-买不到东西、重启也买不到」，而一次探测本身还是一条真实的 i.i.d. group-min，所以平局时探测是唯一
-能买到证据的动作。它不会空转：窗口就是池子长度 M，每次探测都往池子追加一个样本，同一条路径的
-下一次问询因此推迟整整一个窗口，间隔按 1, 2, 3, … 增长，探测频率衰减到 0。这里的
+判决谓词：`EI_restart ≥ EI_continue`；`f⋆` 非有限时不经比较、直接重启（见下）。取等即平局也重启：
+两侧同为 0 意味着「继续买不到东西、重启也买不到」，而一次探测本身还是一条真实的 i.i.d.
+group-min，所以平局时探测是唯一能买到证据的动作。它不会空转：窗口就是池子长度 M，每次探测都往
+池子追加一个样本，同一条路径的下一次问询因此推迟整整一个窗口，间隔按 1, 2, 3, … 增长，探测
+频率衰减到 0。`f⋆` 非有限（`+inf`：至今没服务过任何有限点）时没有可比的量，判决回到冷启动那条
+原则——**无法比较时，探测是唯一能买到证据的动作**——所以到期就重启：否则唯一能重新抽样的那条
+路径恰好被「要先有有限样本」这一步挡住，一次不走运的初始化探测就能把整个 run 锁到地平线。这里的
 `f⋆` 是**全域**最优 `fun_raw`
 （所有有限样本、含不可行点），与 `f_k` 和池子里的 payoff 同口径；结果里报告的 `fun`/`x` 仍是
 可行域最优。池子里的 `+inf`、`nan`、`-inf` 都是**零项**，不是被丢掉的值：它们对改进的贡献恰好是 0
@@ -278,7 +281,8 @@ f 的 2–5 倍），所以问题总是「这一侧要买几次 g」。两个旋
 `EI_restart >= 0`：`EI_restart` 本身非负，这条比较恒真，于是停摆路径在每个窗口到期时重探一次（2.3 的
 平局条款）。**到期即结阶段**：判决无论读成什么，`deltas` 与阶段钟都在判决点归零（一个窗口换一个阶段，
 阶段何时结束不看答案）；于是回 False 之后要再攒一个窗口才重问，而不是每轮重问同一个问题——既不是
-探测风暴，也不是每轮一次的空判。（真正停在原地空转的只有 `B` 非有限那一种，判决恒 False，见 3.6。）
+探测风暴，也不是每轮一次的空判。（停摆路径不存在「判决一直答 False」的停摆：到期要么平局要么没有
+可比的 `f⋆`，两者都重启；真正空转的情形见 3.6。）
 
 ### 3.5 停车是三闸门，记账只报告
 
@@ -316,13 +320,13 @@ f 的 2–5 倍），所以问题总是「这一侧要买几次 g」。两个旋
 所有路径都 stalled 时，这一轮不服务任何批，但每条路径仍然报一次 `None`（3.4），阶段钟照走。之后去
 哪里，看那条路径到期时有没有判决可给：
 
-- **`B` 有限、且规则到期就判（本包的 `EIRestartRule`）**：判决是单侧 `EI_restart >= 0`，恒真，所以它
-  每个窗口到期就重探一次、这一轮就有批可服务——空转只在窗口与窗口之间，不贯穿整段。重探的间隔随池子
-  变长（2.3），所以一停到底的羊群变成的是一串越来越稀的探测，不是探测风暴。
-- **没有可比的判决**：`B` 非有限时规则无从比较（`EIRestartRule` 直接答 False）；第三方规则也可能自己
-  永不让判决到期（窗口设得比地平线还长，`test_stalled_paths_wait_for_ei_then_restart` 的对照臂就是
-  这种）。两种情况下重启都不发生，引擎一路空转到 `max_iters`/`time_limit` 停（`status` 报 `max_iters`
-  或 `time_limit`）——这是引擎空转到地平线的唯一情形，也是本小节标题的后半句。
+- **到期就判（本包的 `EIRestartRule`）**：判决恒真——`f⋆` 有限时是单侧 `EI_restart >= 0`，
+  `f⋆` 非有限时直接重启（2.3），于是每个窗口到期就重探一次、这一轮就有批可服务：空转只在窗口与
+  窗口之间，不贯穿整段。重探的间隔随池子变长（2.3），所以一停到底的羊群变成的是一串越来越稀的
+  探测，不是探测风暴。实测（2 路径、`max_iters=40`、求值永远 NaN）：6 次探测、6 批，不是满额 40 批。
+- **永不让判决到期**：第三方规则可以把窗口设得比地平线还长（`test_stalled_paths_wait_for_ei_then_restart`
+  的对照臂就是这种），那样重启一次都不发生，引擎一路空转到 `max_iters`/`time_limit` 停（`status`
+  报 `max_iters` 或 `time_limit`）——这是引擎空转到地平线的唯一情形，也是本小节标题的后半句。
 
 没有引擎侧的早退：停车条件只依赖调用方给的数字，不依赖 `restart_rule` 的节奏，所以任何第三方规则都
 不会让循环永不结束。空转的账在 `n_batches` 上是零，在 `n_iters` 上是满额——这就是为什么 `max_iters`
@@ -437,7 +441,7 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）。**�
 - 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
   `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
 - `stalled` 语义：`test_give_up_stalls_a_path`、
-  `test_stalled_paths_wait_for_ei_then_restart`（有 `B` 时到期就重探；窗口设到地平线之外的对照臂
+  `test_stalled_paths_wait_for_ei_then_restart`（到期就重探；窗口设到地平线之外的对照臂
   则一路空转到 `max_iters`）、
   `test_a_step_serves_as_many_trials_as_the_method_asks_for`（引擎不设试用上限：方法要 31 个 trial
   就给它 31 个）、`test_nonfinite_start_waits_for_ei_instead_of_stepping`。
@@ -455,8 +459,11 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）。**�
   （重启路径的探测轮也算一格，否则它每重启一次就落后同 cohort 一轮）、
   `test_restart_keeps_the_shared_group_min_pool`。
 - 平局也重启（买第二个样本）、`n_paths = 1` 的退化与纯下降出口：
-  `test_a_zero_payoff_tie_restarts_to_buy_a_second_sample` 覆盖「两侧同读 0 ⇒ 放行一次探测」，
-  `test_no_best_never_restarts_but_does_not_leave_the_gate_open` 覆盖 `f⋆` 缺失，
+  `test_a_zero_payoff_tie_restarts_to_buy_a_second_sample` 覆盖「两侧同读 0 ⇒ 放行一次探测」,
+  `test_no_best_still_restarts_at_a_due_gate` 与 `test_no_best_waits_for_the_gate_before_reprobing`
+  覆盖 `f⋆` 缺失（到期即重探，不停在每轮），
+  `test_a_dead_initialization_probe_does_not_freeze_the_run` 端到端地验证这一条：同一条死起步，
+  换 `EIRestartRule` 能重新抽到有限点并收敛、换 `NoRestartRule` 则 `fun` 停在 `inf`，
   `test_no_restart_rule_seeds_once_then_never` 覆盖纯下降出口（`NoRestartRule` 只播种、之后永不再问），
   `test_restart_beats_pure_multistart_on_multimodal` 与 `test_k_start_beats_single_path_on_multimodal`
   则端到端地拿「同起点数、换规则」验证重启机制本身。

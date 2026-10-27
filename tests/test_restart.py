@@ -416,20 +416,36 @@ def test_no_restart_rule_seeds_once_then_never() -> None:
     assert rule.should_restart(0, 0.0, 0.0) is False
 
 
-def test_no_best_never_restarts_but_does_not_leave_the_gate_open() -> None:
-    """Cold start (best = inf) never restarts, even at a due gate.
+def test_no_best_still_restarts_at_a_due_gate() -> None:
+    """Cold start (best = inf) restarts, and the stage still closes.
 
-    The stage still closes: B is the engine's to write, and holding a full stage
-    open would stall the path's cadence behind a verdict that cannot be read.
+    A verdict with nothing to weigh is a probe: with no finite point served yet,
+    re-drawing is the only action that can produce one. Answering False here
+    would leave the one path that could re-draw blocked from asking, so a single
+    all-dead initialization group would freeze the run - the loop the flock
+    cannot leave on its own.
     """
     policy = EIRestartRule()
     grow_pool(policy)
-    for _ in range(STAGE):  # a full stage: the gate is due, the read is skipped
+    for _ in range(STAGE):  # a full stage: the gate is due
         policy.observe_continue(0, 0.5)
-    assert policy.should_restart(0, 0.0, math.inf) is False
-    assert policy.deltas.get(0, []) == []  # the read was skipped, the gate was not
+    assert policy.should_restart(0, 0.0, math.inf) is True
+    assert policy.deltas.get(0, []) == []  # the stage closed
     policy.observe_continue(0, 0.5)
     assert policy.deltas.get(0, []) == [0.5]  # a fresh stage is running
+
+
+def test_no_best_waits_for_the_gate_before_reprobing() -> None:
+    """No best does not mean every round: the stage clock still rules.
+
+    The window is the pool's sample count plus one, so the re-probe interval
+    grows as the pool does - the same anti-thrash argument the tie rests on.
+    """
+    policy = EIRestartRule()
+    grow_pool(policy)
+    for _ in range(STAGE - 1):
+        policy.observe_continue(0, 0.5)
+    assert policy.should_restart(0, 0.0, math.inf) is False  # one round early
 
 
 def test_group_min_pool_is_shared_across_paths() -> None:
@@ -445,8 +461,10 @@ def test_group_min_pool_is_shared_across_paths() -> None:
         policy.observe_restart(group_min)
     policy.observe_continue(1, 0.5)  # path 1 has its own continuation evidence
     assert policy._restart_payoff(0.0) == restart_payoff(0.0, [0.0, 2.0])
-    # ... and B = inf gates both paths off regardless of pooled evidence
-    assert policy.should_restart(1, 0.0, math.inf) is False
+    # ... and the pool is read the same way whatever the best is: no best is a
+    # probe (see test_no_best_still_restarts_at_a_due_gate), not a per-path gate.
+    assert policy.should_restart(1, 0.0, math.inf) is False  # not due yet
+    assert policy.should_restart(0, 0.0, math.inf) is False
 
 
 def test_per_path_stage_is_independent() -> None:

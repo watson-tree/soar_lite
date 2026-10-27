@@ -198,7 +198,10 @@ one step for continuing, one probe for restarting — so the verdict is a decisi
 about what to buy. The tie (`0 >= 0`) is a restart too: when continuing buys
 nothing, the probe is the only action that buys evidence, and it cannot thrash
 because the verdict's window is the pool's own size plus the round its stage
-opened in, so each re-probe pushes the next ask a window further out. Each side
+opened in, so each re-probe pushes the next ask a window further out. No finite
+best yet is a restart by the same argument: there is nothing to compare, and the
+one path that could re-draw must not be blocked from asking, so a single all-dead
+initialization probe cannot freeze the run. Each side
 is modelled by a scott_mad KDE over its own samples (one Gaussian kernel per
 sample), so neither side assumes a single Gaussian. A stalled path supplies no
 continuation sample at all — absence, not a value — so its `EI_continue` is 0

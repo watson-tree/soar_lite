@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The restart verdict no longer refuses to fire when no finite point has been
+  served (`fun_raw` is `+inf`). It used to answer False until the horizon ended
+  the run, which closed a loop the flock cannot leave on its own: recovering
+  needs a probe, a probe needs a due verdict, and the verdict needed a finite
+  best. One unlucky initialization group - every start dead - therefore froze
+  the run: measured on a single path with a dead first draw, 20 rounds spent 1
+  batch and returned `fun = inf` under `status = max_iters`. The verdict now
+  treats "nothing to compare" like the cold start it resembles - the probe is
+  the only action that buys the first finite sample - so it restarts at a due
+  gate, and the dead samples still grow the pool, so the re-probe interval keeps
+  growing (1, 2, 3, ...) as with every other probe. The same run now recovers
+  after four probes and returns `fun = 0.0`; an all-dead landscape spends 6 of 40
+  rounds probing instead of idling to the horizon.
 - A restarted path now counts its probe round on its stage clock, so paths stay in
   phase. The engine reports a round only to the paths that folded or stalled
   (`None`); a restarted path did neither, so its clock used to stay at 0 while
