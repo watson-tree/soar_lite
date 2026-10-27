@@ -46,7 +46,7 @@ not built on matched counts for exactly the paths whose verdict matters.
    `|finite| / (|finite| + |+inf|)`, a constant in `(0, 1]` whenever dead
    starts exist. This matches the ratified spec: "finite KDE × a constant < 1".
 
-3. **The continue seam keeps a conservative guard.** `observe_continue` raises
+3. **The continue seam keeps a conservative guard.** `observe_step` raises
    `ValueError` on a non-finite float (the only legal non-`None` continuation
    sample is finite); the restart seam accepts non-finite group-mins (they are
    legal values).
@@ -113,7 +113,7 @@ folds — but it is a timing change and depends on the deferral knob below.
 
 ### `soar_lite/engine.py`
 
-- `RestartRule.observe_continue`: signature `(self, i: int, delta: float | None)`;
+- `RestartRule.observe_step`: signature `(self, i: int, delta: float | None)`;
   docstring: `None` = "the path stalled this iteration, no Δ to fold"; a finite
   float is the one-step Δ; the rule ticks its stall clock on `None`, never spans
   a stall with a value.
@@ -127,7 +127,7 @@ folds — but it is a timing change and depends on the deferral knob below.
 ### `soar_lite/restart.py`
 
 - Fields: drop `pool_size`; add `stall_rounds: dict[int, int]`.
-- `observe_continue(i, delta: float | None)`:
+- `observe_step(i, delta: float | None)`:
   - `None` → `self.deltas[i] = []`; `stall_rounds[i] += 1`.
   - finite → append; `stall_rounds[i] = 0`.
   - other non-finite float → `raise ValueError` (guard, decision 3).
@@ -148,7 +148,7 @@ folds — but it is a timing change and depends on the deferral knob below.
 
 ### `tests/test_solver_seam.py`
 
-- Fake rule `observe_continue(self, i, delta: float | None)`.
+- Fake rule `observe_step(self, i, delta: float | None)`.
 
 ### Test flips
 
@@ -164,7 +164,7 @@ folds — but it is a timing change and depends on the deferral knob below.
   — drop the `pool_size == 0` line; the cold/dead distinction still rides on
   `not group_mins`.
 - `test_restart.py::test_nonfinite_delta_counts_towards_the_window_but_is_not_read`
-  — replace with a `None`-based test: `observe_continue(0, None)` leaves
+  — replace with a `None`-based test: `observe_step(0, None)` leaves
   `deltas` empty, ticks `stall_rounds`, gate fires at `stall_rounds >= window`,
   `_continue_payoff == 0.0`.
 
@@ -228,7 +228,7 @@ must advance the same clock a Δ would.
 `stall_rounds` is therefore replaced by `rounds` — iterations since the path's
 last verdict — and only that counter gates the verdict:
 
-- every `observe_continue` advances `rounds[i]` by one, whether it carried a
+- every `observe_step` advances `rounds[i]` by one, whether it carried a
   finite Δ or `None`;
 - a stalled stage still drops `deltas[i]` (continue = 0 by definition) and adds
   no sample, so the read is one-sided exactly as above;
@@ -296,3 +296,38 @@ Consequences:
   `test_an_empty_pool_is_the_cold_start_and_a_dead_pool_does_not_restart` pin
   the new cadence; `test_restart_keeps_the_shared_group_min_pool` pins that the
   event touches no state.
+
+## Amendment: the probe round reports like any round, so `restart` loses the clock
+
+The amendment above declared `restart` an event-only no-op. Phase-locking then
+added the probe round back as a *counted* round, and it landed the tick in
+`restart` (`rounds[i] = 1`): the engine reported a round only to the paths that
+folded or stalled, a re-probed path did neither, so the rule counted the round
+itself, and the stage became `M + 1` rounds (the newest-M slice absorbs the extra
+fold). That gave the one invariant two channels - `observe_step` for folds
+and stalls, `restart` for the probe round - and it left the docs lying: the
+amendment above says `restart` is a no-op, but a rule that honoured it fell one
+round late per restart, cumulatively.
+
+This change reunites the round on the one report channel. The engine now reports
+every path every iteration through `observe_step`: a fold arrives as its
+finite Δ, and a round that took no step arrives as `None` - a stall, a
+re-probed path's probe round, or the initialization itself. `restart` returns to
+the event-only no-op the amendment above described, but now the round is counted
+in `observe_step`, not assumed away. The probe's f stays the Δ anchor
+(`_place` sets `prev_f`), so the first Δ after a probe is the step that follows
+it - never `f - f = 0`.
+
+Consequences:
+
+- `observe_step(i, None)` now means "no step this round" (a stall, or a
+  re-probe's probe round); the `RestartRule` docstring and
+  `EIRestartRule.observe_step` say so. `EIRestartRule.restart` is an
+  event-only no-op again.
+- `_stage_window()`'s `+ 1` (the probe or verdict round a stage opens in) and
+  the newest-M slice of `_continue_payoff` are unchanged: they were never the
+  patch, only the window derivation.
+- `test_a_probes_iteration_is_not_read_back_as_a_zero_step` now pins that the
+  probe round reports `None` (not a zero Δ); the phase-locking test hand-enacts
+  `observe_step(i, None)`; `test_restart_keeps_the_shared_group_min_pool`
+  pins that the event leaves `rounds` untouched.

@@ -65,17 +65,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after four probes and returns `fun = 0.0`; an all-dead landscape spends 6 of 40
   rounds probing instead of idling to the horizon.
 - A restarted path now counts its probe round on its stage clock, so paths stay in
-  phase. The engine reports a round only to the paths that folded or stalled
-  (`None`); a restarted path did neither, so its clock used to stay at 0 while
-  its cohort ticked, and it opened its next stage one round late per restart -
-  a cumulative drift, not a fixed offset, that left a restarting flock's paths
-  expiring in ever more scattered rounds. The rule counts that round itself in
-  `restart`, where the stage is already its own business. The stage is now
-  `M + 1` rounds: `M` folds plus the round it opened in, which no stage folds a
-  sample in. The continue side reads the newest `M` of the `M + 1` folds a
-  continuing path holds, so both sides of the verdict still read the same count.
-  Runs whose paths restart at different rates now spend their horizon
-  differently - a semantics change, not a refactor.
+  phase. The engine reports every path every round on one continue channel: a
+  round that took no step - a stall, or a re-probe's probe round - arrives as
+  `None`. A restarted path's clock used to stay at 0 while its cohort ticked,
+  and it opened its next stage one round late per restart - a cumulative drift,
+  not a fixed offset, that left a restarting flock's paths expiring in ever more
+  scattered rounds. The stage is now `M + 1` rounds: `M` folds plus the round it
+  opened in, which no stage folds a sample in. The continue side reads the newest
+  `M` of the `M + 1` folds a continuing path holds, so both sides of the verdict
+  still read the same count. Runs whose paths restart at different rates now
+  spend their horizon differently - a semantics change, not a refactor.
 - A served *feasible* point whose value is `-inf` now ends the run: it becomes
   the answer (`fun = -inf`, `x` is that point) and `status` reports the new
   `"unbounded"`. No later trial can beat `-inf` and no step can improve on it,
@@ -136,7 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because it was shown to beat a direct-plug-in bandwidth end to end.
   Degenerate corners are unchanged: a stage or pool with no spread has
   `h = 0`, so the read is exactly `max(f⋆ - x, 0)`.
-- A stalled path no longer fabricates a sample. `observe_continue` takes
+- A stalled path no longer fabricates a sample. `observe_step` takes
   `delta: float | None`, and the engine reports a stall as `None` - absence, not
   a value - so folding an `inf` that had to be filtered back out at the read is
   gone. The continue side is then exactly the evidence the path has: a stalled

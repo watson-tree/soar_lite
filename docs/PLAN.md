@@ -39,7 +39,7 @@ The folder was renamed `light_multi_paths` → `soar_lite` and the venv rebuilt
 ## Restart-cost symmetry — f-only (landed); horizon=1 (landed)
 
 Not an ADR yet; the durable record of a decision + its in-progress refactor.
-The verdict's evidence (`observe_continue` Δ, `observe_restart` payoff, the
+The verdict's evidence (`observe_step` Δ, `observe_restart` payoff, the
 best) is f-only; `g` is needed only to propose the step direction (the
 start's `g`, free) and to fold the committed point's secant. Gradient-sweeping
 the losing points is pure waste. The moves:
@@ -118,7 +118,7 @@ restart is back in phase instantly (no out-of-phase clock). Replace with:
 - the fold, skipping just-restarted paths (their probe was this iteration's
   move, not a step, so their first fold is the next iteration's one-step Δ):
   `for i in range(n_paths): if i in just_restarted: continue; delta = inf if
-  stalled[i] else points[i].f - prev_f[i]; observe_continue(i, delta);
+  stalled[i] else points[i].f - prev_f[i]; observe_step(i, delta);
   prev_f[i] = points[i].f`
   (a later increment replaced the `inf` with `None` - see
   `docs/adr/0006-restart-rule-reads-stall-as-absence.md`)
@@ -130,7 +130,7 @@ restart is back in phase instantly (no out-of-phase clock). Replace with:
   *Budget: an iteration horizon* below.)
 
 Ripple (swept): `engine.py` (module doc, `n_path_schedule` doc, loop
-comments); `restart.py` (`observe_continue` / `samples_until_verdict` / class
+comments); `restart.py` (`observe_step` / `samples_until_verdict` / class
 docstrings — the "priced n_draws evals" wording is gone);
 `tests/test_solver_seam.py` (the horizon-count runs restated as one sample per
 iteration, `test_one_sample_per_iteration_at_every_probe_size`, and

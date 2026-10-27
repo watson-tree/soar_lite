@@ -173,7 +173,7 @@ To replace one outright, implement its protocol and pass the instance:
   trial's coords and value, not its gradient — the engine buys gradients only
   for the points it keeps, and `fold` is where a step lands. `restart` is the
   only cold-start call, so it runs at initialization and after every restart.
-- **`RestartRule`** — the continue-versus-restart decision: `observe_continue`,
+- **`RestartRule`** — the continue-versus-restart decision: `observe_step`,
   `observe_restart`, `should_restart`, `restart`. The shipped pair is
   `EIRestartRule` (the sample-based EI verdict) and `NoRestartRule` (nothing
   after the initialization probe).

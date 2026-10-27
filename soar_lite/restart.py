@@ -40,7 +40,7 @@ class NoRestartRule(RestartRule):
         """Start unseeded: the engine's first ask is the seeding probe."""
         self._seeded = False
 
-    def observe_continue(self, i: int, delta: float | None) -> None:
+    def observe_step(self, i: int, delta: float | None) -> None:
         """No-op: this rule never weighs continuing against restarting."""
 
     def observe_restart(self, group_min: float) -> None:  # noqa: ARG002
@@ -100,10 +100,11 @@ class EIRestartRule(RestartRule):
     is a draw from the sampler, the same quantity for all paths, so pooling every
     event estimates that single global payoff distribution with the smallest
     variance - a per-path subset would
-    estimate the same global value from a shorter sample. A stalled iteration
-    arrives as `None`, never as a value: it advances the path's stage clock and
-    the read sees no continuation sample, so a stall is never averaged into a
-    stage that spans it. In the pool every non-finite group-min is a zero term of
+    estimate the same global value from a shorter sample. A no-step round - a
+    stall, or a restarted path's probe round - arrives as `None`, never as a
+    value: it advances the path's stage clock and the read sees no continuation
+    sample, so neither is ever averaged into a stage that spans it. In the pool
+    every non-finite group-min is a zero term of
     the same mean, whose own improvement is exactly 0: a `+inf` is a dead start,
     and a `nan` or a `-inf` is an event outside the finite set that says as
     little about what a restart buys. All three dilute the finite KDE by the
@@ -120,29 +121,31 @@ class EIRestartRule(RestartRule):
         self.deltas: dict[int, list[float]] = {}  # per path: Δ since its last verdict
         self.rounds: dict[int, int] = {}  # per path: iterations since its last verdict
 
-    def observe_continue(self, i: int, delta: float | None) -> None:
-        """Fold path i's one-step change, or record a stall on its stage clock.
+    def observe_step(self, i: int, delta: float | None) -> None:
+        """Fold path i's step, or record a no-step round on its stage clock.
 
         Both shapes advance the path's stage clock by one iteration - one report
-        per iteration is the engine's contract - so a stage comes due on the same
-        round whatever mix of moves and stalls it took to get there. Only the
-        evidence differs.
+        per iteration is the engine's cadence - so a stage comes due on the same
+        round whatever mix of steps, stalls and probes it took to get there. Only
+        the evidence differs.
 
-        `None` is the engine's stall report, not a value: the path did not move
-        this iteration, so continuing bought nothing and its continue side is 0
-        by definition. The stage is dropped - there is no continuation left to
-        average - and the clock still counts the round. A finite Δ is the sample:
-        it joins the stage and counts the same one round.
+        `None` is the engine's no-step report, not a value: the path moved
+        nowhere this round (it stalled) or its move was a re-probe rather than a
+        step from the old point, so there is no new step to fold. A stall drops
+        what the stage held - there is no continuation left to average - while a
+        probe round finds the stage already dropped by the verdict; the clock
+        counts the round either way. A finite Δ is the step: it joins the stage
+        and counts the same one round.
 
-        A non-finite float is rejected: the engine spells a stall `None`, so an
-        `inf`/`nan` here is a caller that lost the distinction, and storing it
-        would put a value where absence belongs.
+        A non-finite float is rejected: the engine spells a no-step round `None`,
+        so an `inf`/`nan` here is a caller that lost the distinction, and storing
+        it would put a value where absence belongs.
         """
         if delta is None:
             self.deltas[i] = []
         else:
             if not math.isfinite(delta):
-                msg = f"a continue delta is finite or None (a stall), got {delta!r}"
+                msg = f"a step delta is finite or None (no step), got {delta!r}"
                 raise ValueError(msg)
             self.deltas.setdefault(i, []).append(delta)
         self.rounds[i] = self.rounds.get(i, 0) + 1
@@ -161,14 +164,16 @@ class EIRestartRule(RestartRule):
     def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:
         """Return True iff path i's verdict is due and restart beats continuing.
 
-        One clock, one comparison. The stage clock counts rounds, not folds: a
-        cohort path advances it by one per `observe_continue`, whether it moved
-        (a Δ) or stalled (`None`), and a restarted path is opened at 1 by this
-        rule's `restart` hook - the round it was probed in. Every path therefore
-        ticks exactly once per round and a stage is due on the same round as its
-        cohort whatever it lived through - a path that stalls mid-stage keeps the
-        wait it has already served instead of starting a second one, and a path
-        that restarts does not open its next stage a round behind.
+        One clock, one comparison. The stage clock counts rounds, not steps, and
+        `observe_step` is its one tick: a path advances by one per round,
+        whether it took a step (a Δ) or took none (`None` - a stall, or the probe
+        round of a re-probe). A restarted path is therefore reopened at 1 by the
+        `None` the engine reports for its probe round, not by a separate hook.
+        Every path ticks exactly once per round and a stage is due on the same
+        round as its cohort whatever it lived through - a path that stalls
+        mid-stage keeps the wait it has already served instead of starting a
+        second one, and a path that restarts does not open its next stage a round
+        behind.
 
         A due stage is read against the engine's best: restart fires when
         `EI_restart >= EI_continue`, and a stalled stage is the same comparison at
@@ -231,21 +236,16 @@ class EIRestartRule(RestartRule):
         return restart
 
     def restart(self, i: int) -> None:
-        """Open path i's fresh stage clock at the round it was probed in.
+        """Handle path i's restart event; the round is already counted.
 
-        The engine calls this for every path it re-probes (and at initialization),
-        in the same round the verdict fired in. The verdict already closed the
-        stage (`should_restart`), so there is no evidence to drop here - but the
-        round is not free either: the path spent it on its probe instead of a
-        fold, while its cohort spent the same round folding and was ticked for
-        it. Counting it here is what keeps every path on the same round as its
-        cohort instead of one round late per restart.
-
-        The clock is set, not incremented: the verdict that just ran left it at 0,
-        and this round is the new stage's first, so M further folds make the
-        stage M + 1 rounds - exactly `_stage_window()`.
+        The engine calls this for every path it re-probes (and at initialization).
+        The verdict already closed the stage (`should_restart`), and the probe
+        round itself arrives on the one report channel like every round - the
+        engine reports it as `observe_step(i, None)`, a no-step round - so
+        the clock is ticked there and there is nothing to count here. A rule that
+        resets per-path evidence at the event rather than at the verdict would
+        override this; this rule resets at the verdict, so the event is a no-op.
         """
-        self.rounds[i] = 1
 
     def _continue_payoff(self, i: int, f_k: float, best_fun_raw: float) -> float:
         """Return the expected improvement of path i continuing one more step.
@@ -323,8 +323,9 @@ class EIRestartRule(RestartRule):
         and no fold buys more than its weight.
 
         The `+ 1` is the round the stage opened in, which every stage spends
-        without folding - the restarted path on its probe (`restart`), the
-        continuing path on the verdict that closed the stage before. Every path
+        without folding - the restarted path on its probe (reported as a no-step
+        round), the continuing path on the verdict that closed the stage before.
+        Every path
         that opens a stage in round T is therefore due together in round T + M,
         each reading M samples (`_continue_payoff` keeps the newest M for exactly
         that reason). Without the `+ 1` the restarted path's stage would open one

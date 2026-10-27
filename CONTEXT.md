@@ -82,10 +82,11 @@ trial budget ran out), it accepted with no finite sample to win, or the sample i
 did win had a non-finite gradient.
 Stalled is not dead: a stalled path can still be restarted by a later verdict.
 The engine reports it to the restart rule as `None` — absence, not a sample —
-so the rule reads no continuation from it. The iteration still counts: the rule
-keeps one stage clock per path, advanced once a round either by a report
-(folded or stalled) or, for the path it is probing, by its own `restart` hook —
-so no path, moving, stalled or restarted, expires behind its cohort. A verdict
+so the rule reads no continuation from it. That same `None` is the report of any
+round that took no step: a stall, or a re-probed path's probe round. The
+iteration still counts: the rule keeps one stage clock per path, advanced once
+a round by that one report channel — so no path, moving, stalled or restarted,
+expires behind its cohort. A verdict
 ends the stage either way — a window is one stage, whatever the answer — so a
 stalled path with nothing to win is re-judged once per window, not every round.
 _Avoid_: paused, idle, dead

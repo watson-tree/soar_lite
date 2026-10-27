@@ -63,7 +63,7 @@ def continue_payoff(f_k: float, best_fun_raw: float, deltas: list[float]) -> flo
     for _ in deltas:
         policy.observe_restart(0.0)
     for delta in deltas:
-        policy.observe_continue(0, delta)
+        policy.observe_step(0, delta)
     return policy._continue_payoff(0, f_k, best_fun_raw)
 
 
@@ -192,7 +192,7 @@ def test_stage_read_is_a_kde_over_its_deltas() -> None:
     grow_pool(policy)  # window = 8
     deltas = [0.0, 2.0]
     for delta in deltas:
-        policy.observe_continue(0, delta)
+        policy.observe_step(0, delta)
     one_ruler = continue_payoff(-1.0, 0.0, deltas)
     assert close(policy._continue_payoff(0, -1.0, 0.0), one_ruler, 1e-15)
     assert policy.deltas.get(0, []) == deltas
@@ -211,7 +211,7 @@ def test_the_continue_side_reads_only_the_newest_m_folds() -> None:
     grow_pool(policy)  # M = WINDOW
     deltas = [0.1 * (k + 1) for k in range(WINDOW + 1)]  # one more than the pool
     for delta in deltas:
-        policy.observe_continue(0, delta)
+        policy.observe_step(0, delta)
     assert policy.deltas[0] == deltas  # all of them are held ...
     assert close(
         policy._continue_payoff(0, 0.0, 0.0),  # ... and the newest M are read
@@ -230,7 +230,7 @@ def test_the_two_sides_read_the_same_samples_the_same_way() -> None:
     policy = EIRestartRule()
     grow_pool(policy, 2)  # M = 2 = the stage's own length below
     for delta in (0.0, 2.0):
-        policy.observe_continue(0, delta)
+        policy.observe_step(0, delta)
     assert close(
         policy._continue_payoff(0, 0.0, 1.0),  # f_k + Δ = {0, 2} = the pool
         policy._restart_payoff(1.0),  # pool {0, 2}: same samples, same KDE
@@ -250,11 +250,11 @@ def test_a_stall_supplies_no_delta_and_counts_the_iteration() -> None:
     policy = EIRestartRule()
     grow_pool(policy)  # window = STAGE, h well defined
     for _ in range(STAGE - 1):
-        policy.observe_continue(0, None)
+        policy.observe_step(0, None)
     assert policy.deltas.get(0, []) == []
     assert policy.rounds[0] == STAGE - 1
     assert policy.should_restart(0, 0.0, 0.0) is False  # one round short of due
-    policy.observe_continue(0, None)
+    policy.observe_step(0, None)
     assert policy.should_restart(0, 0.0, 0.0) is True  # due: continue 0 < restart > 0
     assert policy._continue_payoff(0, 0.0, 0.0) == 0.0
     assert policy.rounds[0] == 0  # the verdict closed the stage, restart won or not
@@ -270,16 +270,16 @@ def test_a_stall_clears_a_partial_stage_and_keeps_its_wait() -> None:
     policy = EIRestartRule()
     grow_pool(policy)  # window = STAGE
     for _ in range(WINDOW - 3):
-        policy.observe_continue(0, 0.1)
-    policy.observe_continue(0, None)
+        policy.observe_step(0, 0.1)
+    policy.observe_step(0, None)
     assert policy.deltas.get(0, []) == []  # no continuation to average
     assert policy.rounds[0] == WINDOW - 2  # the stall served its round
     assert policy.should_restart(0, 0.0, 0.0) is False
     for _ in range(2):  # the stall plus these two: rounds reach M
-        policy.observe_continue(0, None)
+        policy.observe_step(0, None)
     assert policy.rounds[0] == WINDOW
     assert policy.should_restart(0, 0.0, 0.0) is False  # one short, as a mover would be
-    policy.observe_continue(0, None)
+    policy.observe_step(0, None)
     assert policy.should_restart(0, 0.0, 0.0) is True  # due on its cohort's round
 
 
@@ -288,7 +288,7 @@ def test_a_nonfinite_delta_is_rejected_at_the_seam() -> None:
     policy = EIRestartRule()
     for bad in (math.inf, math.nan, -math.inf):
         with pytest.raises(ValueError, match="finite"):
-            policy.observe_continue(0, bad)
+            policy.observe_step(0, bad)
 
 
 def test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window() -> None:
@@ -309,13 +309,13 @@ def test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window() -> None
         policy.observe_restart(math.inf)  # the probe ran; every start was dead
     assert policy._stage_window() == STAGE  # dead starts are samples too
     for _ in range(STAGE):  # the flock stalls out on the dead landscape
-        policy.observe_continue(0, None)
+        policy.observe_step(0, None)
     assert policy.should_restart(0, 0.0, 0.0) is True  # 0 >= 0: buy a sample
     # The verdict closes the stage whether it fired or not: one window, one
     # verdict - so the clock is not left in the due band re-asking every round.
     assert policy.rounds[0] == 0
     assert policy.deltas.get(0, []) == []
-    policy.observe_continue(0, None)
+    policy.observe_step(0, None)
     assert policy.should_restart(0, 0.0, 0.0) is False  # not due again until a window
 
     # The same holds for a pool of `nan`: the window is the pool's length, not
@@ -326,10 +326,10 @@ def test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window() -> None
     for _ in range(WINDOW):
         nan_pool.observe_restart(math.nan)
     for _ in range(STAGE):
-        nan_pool.observe_continue(0, None)
+        nan_pool.observe_step(0, None)
     assert nan_pool.should_restart(0, 0.0, 0.0) is True
     nan_pool.observe_restart(math.nan)  # the probe's own dead group-min
-    nan_pool.observe_continue(0, None)
+    nan_pool.observe_step(0, None)
     assert nan_pool._stage_window() == STAGE + 1
     assert nan_pool.should_restart(0, 0.0, 0.0) is False
 
@@ -345,12 +345,12 @@ def test_verdict_is_due_once_per_window_and_closes_the_stage() -> None:
     grow_pool(policy)  # window = STAGE
     for _ in range(2):  # the cadence must not drift over two full verdicts
         for step in range(1, STAGE + 1):
-            policy.observe_continue(0, 0.1)
+            policy.observe_step(0, 0.1)
             assert policy.should_restart(0, 0.0, 0.0) is (step == STAGE)
         assert policy.deltas[0] == []  # the stage's one read was taken
         assert policy.rounds[0] == 0  # ... and its clock starts over with it
     # A stage that only closed is not restarted by the rule itself: the engine
-    # restarts paths, not the rule, and `restart` only counts the probe round.
+    # restarts paths, not the rule, and the probe round reports as a no-step.
     assert policy.group_mins == [0.0, 2.0] * (WINDOW // 2)
 
 
@@ -365,7 +365,7 @@ def test_worsening_flow_restarts_improving_flow_continues() -> None:
     grow_pool(policy)
     f = 0.0
     for step in range(1, STAGE + 1):
-        policy.observe_continue(0, 0.1)  # every step worsens by +0.1
+        policy.observe_step(0, 0.1)  # every step worsens by +0.1
         f += 0.1
         assert policy.should_restart(0, f, 0.0) is (step == STAGE)
 
@@ -373,7 +373,7 @@ def test_worsening_flow_restarts_improving_flow_continues() -> None:
     grow_pool(policy)
     f = 0.0
     for _ in range(STAGE):
-        policy.observe_continue(0, -0.2)  # every step improves by 0.2
+        policy.observe_step(0, -0.2)  # every step improves by 0.2
         f -= 0.2
         assert policy.should_restart(0, f, 0.0) is False
 
@@ -392,7 +392,7 @@ def test_a_zero_payoff_tie_restarts_to_buy_a_second_sample() -> None:
         policy.observe_restart(0.0)
     assert policy._stage_window() == STAGE
     for _ in range(STAGE):
-        policy.observe_continue(0, 0.5)
+        policy.observe_step(0, 0.5)
     assert policy._restart_payoff(0.0) == 0.0
     assert policy._continue_payoff(0, 0.0, 0.0) == 0.0
     assert policy.should_restart(0, 0.0, 0.0) is True  # 0 >= 0 is True
@@ -411,8 +411,8 @@ def test_no_restart_rule_seeds_once_then_never() -> None:
     for _ in range(4):  # the initialization probe reports one group-min per path
         rule.observe_restart(0.5)
     assert not any(rule.should_restart(i, 0.0, 0.0) for i in range(4))
-    rule.observe_continue(0, None)  # neither channel re-opens it
-    rule.observe_continue(0, 0.1)
+    rule.observe_step(0, None)  # neither channel re-opens it
+    rule.observe_step(0, 0.1)
     rule.restart(0)
     assert rule.should_restart(0, 0.0, 0.0) is False
 
@@ -429,10 +429,10 @@ def test_no_best_still_restarts_at_a_due_gate() -> None:
     policy = EIRestartRule()
     grow_pool(policy)
     for _ in range(STAGE):  # a full stage: the gate is due
-        policy.observe_continue(0, 0.5)
+        policy.observe_step(0, 0.5)
     assert policy.should_restart(0, 0.0, math.inf) is True
     assert policy.deltas.get(0, []) == []  # the stage closed
-    policy.observe_continue(0, 0.5)
+    policy.observe_step(0, 0.5)
     assert policy.deltas.get(0, []) == [0.5]  # a fresh stage is running
 
 
@@ -445,7 +445,7 @@ def test_no_best_waits_for_the_gate_before_reprobing() -> None:
     policy = EIRestartRule()
     grow_pool(policy)
     for _ in range(STAGE - 1):
-        policy.observe_continue(0, 0.5)
+        policy.observe_step(0, 0.5)
     assert policy.should_restart(0, 0.0, math.inf) is False  # one round early
 
 
@@ -459,7 +459,7 @@ def test_group_min_pool_is_shared_across_paths() -> None:
     policy = EIRestartRule()
     for group_min in (0.0, 2.0):  # one restart event's group-mins
         policy.observe_restart(group_min)
-    policy.observe_continue(1, 0.5)  # path 1 has its own continuation evidence
+    policy.observe_step(1, 0.5)  # path 1 has its own continuation evidence
     assert policy._restart_payoff(0.0) == restart_payoff(0.0, [0.0, 2.0])
     # ... and the pool is read the same way whatever the best is: no best is a
     # probe (see test_no_best_still_restarts_at_a_due_gate), not a per-path gate.
@@ -471,14 +471,14 @@ def test_per_path_stage_is_independent() -> None:
     """Folds and closes are per path; only the group-min pool is shared."""
     policy = EIRestartRule()
     grow_pool(policy)  # window = STAGE
-    policy.observe_continue(0, 0.4)
-    policy.observe_continue(0, 0.6)
-    policy.observe_continue(1, -0.5)
+    policy.observe_step(0, 0.4)
+    policy.observe_step(0, 0.6)
+    policy.observe_step(1, -0.5)
     assert policy.deltas.get(0, []) == [0.4, 0.6]
     assert policy.deltas.get(1, []) == [-0.5]  # its own stage, its own fold
     for _ in range(WINDOW - 1):
-        policy.observe_continue(0, 0.1)
-    policy.observe_continue(1, -0.5)  # path 1 is two rounds in, not due
+        policy.observe_step(0, 0.1)
+    policy.observe_step(1, -0.5)  # path 1 is two rounds in, not due
     assert policy.rounds[0] == STAGE
     assert policy.rounds[1] == 2
     policy.should_restart(0, 0.0, 0.0)  # path 0 is due: its stage closes
@@ -492,11 +492,12 @@ def test_per_path_stage_is_independent() -> None:
 def test_a_path_that_restarts_at_every_verdict_keeps_its_cohorts_rounds() -> None:
     """Phase-locking: the probe round is a round, so no path drifts out of step.
 
-    The engine reports only the paths that folded or stalled (`_report`), and a
-    restarted path did neither - so the rule counts that round itself in
-    `restart`. Without it a restarted path opens its next stage a round late and
-    falls a further round behind at each restart, so a flock whose paths keep
-    restarting drifts out of phase instead of coming due together.
+    The engine reports every path every round on the one continue channel, and a
+    restarted path's probe round arrives as a no-step (`None`) - so the rule
+    counts that round exactly like a stall. Without it a restarted path opens its
+    next stage a round late and falls a further round behind at each restart, so
+    a flock whose paths keep restarting drifts out of phase instead of coming due
+    together.
 
     Two paths against one shared pool: path 0 always continues (its f keeps
     improving, so its read never loses to the pool's), path 1 always restarts
@@ -522,12 +523,12 @@ def test_a_path_that_restarts_at_every_verdict_keeps_its_cohorts_rounds() -> Non
             fired[i] = policy.should_restart(i, f[i], 0.0)
         for i in (0, 1):
             if fired[i]:
-                policy.restart(i)  # the engine probes: the rule counts the round
+                policy.observe_step(i, None)  # the probe round: a no-step round
                 policy.observe_restart(0.0)  # ... and the probe's group-min lands
                 f[i] = 0.0
             else:
                 delta = -0.2 if i == 0 else 0.1
-                policy.observe_continue(i, delta)
+                policy.observe_step(i, delta)
                 f[i] += delta
     assert len(due[1]) >= 3  # the restarting path really did restart, repeatedly
     assert due[0] == due[1]  # same rounds: no path falls behind
@@ -541,11 +542,11 @@ def test_restart_keeps_the_shared_group_min_pool() -> None:
     policy.observe_restart(0.0)
     policy.observe_restart(2.0)
     for _ in range(3):
-        policy.observe_continue(0, 0.1)
+        policy.observe_step(0, 0.1)
     policy.restart(0)
     assert policy.group_mins == [0.0, 2.0]
     assert policy.deltas.get(0, []) == [0.1] * 3  # resets at the verdict, not here
-    assert policy.rounds[0] == 1  # the probe round opens the next stage
+    assert policy.rounds[0] == 3  # the event is a no-op: the round was the report's
     assert policy._restart_payoff(1.0) == restart_payoff(1.0, [0.0, 2.0])
 
 

@@ -135,7 +135,7 @@ class RecordingRule:
         self.restarts: list[int] = []
         self.verdicts: list[int] = []
 
-    def observe_continue(self, i: int, delta: float | None) -> None:
+    def observe_step(self, i: int, delta: float | None) -> None:
         """Record one f change (or a stall tick, `None`) for path i."""
         self.deltas.append((i, delta))
 
@@ -228,7 +228,8 @@ def test_injected_rule_is_driven() -> None:
     # every path before any step; the one iteration the budget still buys steps.
     assert rule.verdicts == [0, 1] * (n_iterations + 1), rule.verdicts
     assert rule.restarts == [0, 1], rule.restarts  # the cold start is one too
-    assert [i for i, _delta in rule.deltas] == [0, 1] * n_iterations  # Δf per step
+    # One report per path per iteration: the probe round as `None`, then the Δ.
+    assert [i for i, _delta in rule.deltas] == [0, 1] * (n_iterations + 1)
     assert res.status == "max_iters"
 
 
@@ -429,11 +430,11 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
 
 
 def test_every_path_feeds_once_per_iteration() -> None:
-    """Pin that every path feeds observe_continue once per iteration.
+    """Pin that every path feeds observe_step once per iteration.
 
     Column 0 is non-finite in both init probe evals, so path 0 arrives
     stalled and never steps; the engine must still feed it one
-    `observe_continue(0, None)` per iteration, so its stage clock advances in
+    `observe_step(0, None)` per iteration, so its stage clock advances in
     lockstep with its advancing cohort instead of leading it by one verdict
     (the off-by-one a top-of-iteration stall count would cause). A continue
     sample is one step, so three iterations take three iterations.
@@ -464,15 +465,15 @@ def test_every_path_feeds_once_per_iteration() -> None:
     counts: dict[int, int] = {}
     for i, _delta in rule.deltas:
         counts[i] = counts.get(i, 0) + 1
-    assert counts == {0: 3, 1: 3}, counts
-    assert [d for i, d in rule.deltas if i == 0] == [None] * 3
+    assert counts == {0: 4, 1: 4}, counts  # probe round + three iterations
+    assert [d for i, d in rule.deltas if i == 0] == [None] * 4
 
 
 def test_a_probes_iteration_is_not_read_back_as_a_zero_step() -> None:
     """A path that probed folds nothing that iteration: no Δ = 0 is reported.
 
-    The probe's f becomes the Δ anchor and the probe's iteration is skipped, so
-    the first `observe_continue` for a path carries the step that follows its
+    The probe's f becomes the Δ anchor and the probe's round reports `None` (a
+    no-step round), so the first Δ for a path carries the step that follows its
     probe. Reading the probe back as `f - f = 0` would hand the rule a fake
     "nothing changed" sample on every restart and on the initialization itself.
     """
@@ -498,9 +499,12 @@ def test_a_probes_iteration_is_not_read_back_as_a_zero_step() -> None:
     )
     # StubSolver steps x -> x - 0.5·g = x - 5, which the box clips to 0, so every
     # step is a strict decrease and the probe's own f never reappears as a zero.
-    deltas = [d for _i, d in rule.deltas]
-    assert len(deltas) == k, rule.deltas  # one step each, after its probe
-    assert all(d is not None and d < 0.0 for d in deltas), deltas
+    for path in range(k):
+        seq = [d for i, d in rule.deltas if i == path]
+        assert len(seq) == 2, (path, rule.deltas)  # probe round, then one step
+        assert seq[0] is None, (path, seq)  # the probe round: no step
+        assert seq[1] is not None, (path, seq)  # the step, not read back as 0
+        assert seq[1] < 0.0, (path, seq)  # ... and it is a real decrease
     assert res.n_batches == PROBE_DRAWS + 1, res
 
 
@@ -533,7 +537,7 @@ def test_one_sample_per_iteration_at_every_probe_size() -> None:
         counts: dict[int, int] = {}
         for i, _delta in rule.deltas:
             counts[i] = counts.get(i, 0) + 1
-        assert counts == {0: 2, 1: 2}, (probe_evals, counts)
+        assert counts == {0: 3, 1: 3}, (probe_evals, counts)  # probe round + two steps
         assert res.status == "max_iters", (probe_evals, res)
 
 
@@ -816,7 +820,10 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
     )
     assert solver.verdicts == [0], solver.verdicts  # the trial was judged
     assert solver.folds == [], solver.folds  # but never committed
-    assert rule.deltas == [(0, None)], rule.deltas  # the stall, as absence
+    assert rule.deltas == [
+        (0, None),
+        (0, None),
+    ], rule.deltas  # probe round + stall, both absence
     assert res.status == "max_iters", res
 
 

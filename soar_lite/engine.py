@@ -221,7 +221,7 @@ class RestartRule(Protocol):
     different number whenever a batch carries a feasibility mask.
 
     The engine offers exactly two evidence channels, and the signatures say
-    which is which: `observe_continue(i, delta)` is per-path (what continuing
+    which is which: `observe_step(i, delta)` is per-path (what continuing
     bought *that* path), while `observe_restart(group_min)` carries **no path
     index** because a group-min is a property of the sampler and the best,
     not of any one path - every path pools the same history. Those two are the
@@ -235,24 +235,41 @@ class RestartRule(Protocol):
     rule can see; only the engine's call sites could.
 
     These methods are called by the engine on its own schedule - `should_restart`
-    once per path per iteration, `observe_continue` once per path per iteration,
-    and `observe_restart`/`restart` once per probe event (the initialization
-    probe included) - so they trust their arguments: `n_path_schedule`
-    validates the object once (that it carries this contract) at the entry, and
-    nothing here re-checks. The one exception is `observe_continue`'s `delta`:
-    a finite float or None (a stall) are the only two things the engine reports,
-    so a non-finite delta is a wiring error and a rule may reject it there
-    rather than fold it into its evidence.
+    once per path per iteration, `observe_step` once per path per iteration (a
+    path that took no step this round - it stalled, or was re-probed - reports
+    `None`), and `observe_restart`/`restart` once per probe event (the
+    initialization probe included) - so they trust their arguments:
+    `n_path_schedule` validates the object once (that it carries this contract)
+    at the entry, and nothing here re-checks. The one exception is
+    `observe_step`'s `delta`: a finite float or `None` (no step) are the only two
+    things the engine reports, so a non-finite delta is a wiring error and a rule
+    may reject it there rather than fold it into its evidence.
+
+    One call per path per iteration is a cadence a rule may count on, but need
+    not: `EIRestartRule` counts rounds so its verdict comes due on time, while a
+    rule that judges every round fresh never keeps a clock. The cadence is the
+    engine's; the clock is the rule's own.
     """
 
-    def observe_continue(self, i: int, delta: float | None) -> None:
-        """Fold path i's one-step value change into its continuation evidence.
+    def observe_step(self, i: int, delta: float | None) -> None:
+        """Fold path i's step this round into the continue side, or report none.
 
-        The sample is the engine's: one iteration's step, so this side is
-        priced in the step it just took. A stall arrives as `None` - absence,
-        not a value: the path did not move, so there is no Δ to fold and the
-        rule counts the iteration on the path's stage clock instead of storing a
-        sample that spans it.
+        Called exactly once per path per iteration. `delta` is that round's step
+        - the finite one-step value change between the previous point and the one
+        the path now holds - or `None` when the path took no step this round. A
+        step connects two consecutive points; a stall never reached the next
+        point, and a restart reached it by a fresh draw rather than by stepping
+        from the old one, so both break the chain and report `None`. `None` is
+        absence, not a value: the continue side held no new step this round.
+
+        One call per path per round is a cadence a rule may count on; whether it
+        counts is the rule's own business. A window-based rule (`EIRestartRule`)
+        advances its stage clock here - every round ticks, `None` included -
+        because its verdict is due after a fixed number of rounds. A rule that
+        judges each round fresh (a Δ-sequence rule) ignores the cadence and folds
+        only the finite deltas. The engine hands a finite float or `None`; a
+        non-finite float has nowhere to come from, so rejecting it marks a wiring
+        fault.
         """
         ...
 
@@ -286,13 +303,14 @@ class RestartRule(Protocol):
         ...
 
     def restart(self, i: int) -> None:
-        """Handle path i's restart event; the engine assumes no state is dropped.
+        """Handle path i's restart event; the round is already counted.
 
         Called for every path at initialization (right after its probe), and for
-        each path a restart re-probes. What a rule does here is its own choice:
-        resetting per-path evidence at the event is legal, and so is resetting it
-        at the verdict instead (then this is a no-op). The engine only guarantees
-        the event is reported, never that the rule's stage was still open.
+        each path a restart re-probes. The probe round itself arrives on the one
+        report channel like every round - `observe_step(i, None)` - so the
+        stage clock needs nothing here. What remains is the event: a rule may
+        reset per-path evidence it holds, at the event rather than at the verdict.
+        A rule that resets at the verdict (or holds none) no-ops.
         """
         ...
 
@@ -1058,13 +1076,13 @@ class _Paths:
     stated once here instead:
 
     - A path that restarted this iteration moved by its probe, so it does not
-      also step, and its continue observation is skipped: its first Δ belongs
-      to the next iteration, so the probe is never read back as a zero-length
-      step. Its stage clock is not skipped with it - the rule counts that round
-      in `restart`, because the round was spent even though no fold was. `move`
-      computes that list once per iteration and threads it to the probe and to
-      the complement both halves share - one fact at the top instead of a stored
-      flag that must be cleared each iteration.
+      also step, and its `observe_step` report is `None`: its first Δ belongs to
+      the next iteration, so the probe is never read back as a zero-length step.
+      Its stage clock is not skipped with it - the probe round is reported as
+      `None` like a stall, because the round was spent even though no step was.
+      `move` computes that list once per iteration and threads it to the probe
+      and to the complement both halves share - one fact at the top instead of a
+      stored flag that must be cleared each iteration.
     - An iteration decides on values and pays for gradients once: whatever the
       f-only seam left ungraded (probe starts and step winners alike) is bought
       in one batch before anything is placed, so a decision is never priced
@@ -1157,7 +1175,7 @@ class _Paths:
         wins = dict(zip(order, settled[len(starts) :], strict=True))
         self._place(restarts)
         self._advance(wins)
-        self._report(cohort)
+        self._report(cohort, restarted)
 
     def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
         """Run the cohort's trials: the method judges, the engine records winners.
@@ -1278,7 +1296,7 @@ class _Paths:
         for i, point in placed.items():
             self.points[i] = point
             self.solver.restart(i, point)
-            self.restart_rule.restart(i)  # report the event; its stage was its own
+            self.restart_rule.restart(i)  # the event; its round is the report's
             # Both halves gate the start, not just f: a finite f with a
             # non-finite gradient is proposed from (`-p.g`) and folded on
             # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
@@ -1310,30 +1328,32 @@ class _Paths:
             self.points[i] = best
             self.solver.fold(i, point, best)
 
-    def _report(self, cohort: list[int]) -> None:
-        """Fold one continue sample per cohort path, in cohort order.
+    def _report(self, cohort: list[int], restarted: list[int]) -> None:
+        """Fold one report per path per round, on the one continue channel.
 
-        A path that stalled this iteration is read back through `stalled` here,
-        so the observation rides the step's own exit state instead of an outside
-        reader reconstructing it. A restarted path is never in `cohort`: its probe
-        was this iteration's move, so its first Δ belongs to the next iteration
-        and its anchor stays at the probe's f rather than being read back as a
-        zero-length step. Each cohort path therefore reports exactly one sample -
-        the finite step Δ when it moved, `None` (a stall tick, no evidence) when
-        it is stalled - so a stalled path's stage clock keeps pace with its live
-        cohort and a fully stalled flock idles to the horizon instead of stalling
-        the verdict's cadence. The one round this loop cannot report is the
-        restarted path's probe round; it has no Δ and did not stall, so the rule
-        counts it itself (`restart`).
+        Every path reports exactly one observation per iteration, so the rule's
+        stage clock counts one round however the path spent it. A cohort path
+        reports the finite step Δ when it moved, or `None` when `stalled` says it
+        did not - read back through the step's own exit state rather than an
+        outside reader reconstructing it. A restarted path reports `None` for its
+        probe round: it took no step, its first Δ is the step after the probe,
+        and its anchor stays at the probe's f (`_place` set `prev_f`), so the
+        probe is never read back as a zero-length step. The round itself still
+        counts, which is what keeps a re-probed path due on the same round as its
+        cohort instead of one round late per restart.
         """
         for i in cohort:
             if self.stalled[i]:
-                # Absence, not a value: the rule counts the iteration, not a Δ.
-                self.restart_rule.observe_continue(i, None)
+                # Absence, not a value: the rule counts the round, not a Δ.
+                self.restart_rule.observe_step(i, None)
             else:
                 delta = self.points[i].f - self.prev_f[i]
-                self.restart_rule.observe_continue(i, delta)
+                self.restart_rule.observe_step(i, delta)
                 self.prev_f[i] = self.points[i].f
+        for i in restarted:
+            # The probe round took no step, but the round still ticks the
+            # path's clock: report it as a no-step round, exactly like a stall.
+            self.restart_rule.observe_step(i, None)
 
 
 def _check_seam(obj: object | None, proto: type, what: str) -> None:
