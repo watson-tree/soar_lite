@@ -57,7 +57,10 @@ class DiagonalPreconditioner(LocalSolver):
     own start f, so the test is monotone. Once that pair is in hand the default
     (n_alpha=1) accepts the full step unconditionally: no backoff, an
     overshoot is left to the next secant to correct (Zhang-Li is deliberately
-    dropped). With n_alpha >= 2 the step samples the alpha grid
+    dropped). A full step is committed exactly as proposed - ``needs_verdict``
+    answers False there, so the engine never asks for a ruling and its own gate
+    on the winner's value and gradient is the whole of the acceptance. With
+    n_alpha >= 2 the step samples the alpha grid
     {alpha0, alpha0·backtrack, alpha0·backtrack², …} along -d⊙g and
     takes the argmin, handing the win to the engine's per-step argmin cache and
     folding it through ``fold``.
@@ -169,6 +172,18 @@ class DiagonalPreconditioner(LocalSolver):
         self.y_ema[i] = jnp.zeros_like(p.g)
         self._reset_step(i)
 
+    def needs_verdict(self, i: int) -> bool:
+        """Rule per candidate in the warm-up and on an alpha grid; not on a full step.
+
+        The warm-up is a backtracking search (a rejected length is retried), and
+        an ``n_alpha >= 2`` grid compares samples, so both are ruled on: each
+        served value decides the next move. The default full step is not - it is
+        committed as proposed, and the engine's own gate on the winner's value
+        and gradient is the whole of its acceptance (a non-finite one stalls the
+        path instead of folding a nan into every later step).
+        """
+        return not self.has_secant[i] or self.n_alpha > 1
+
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
         """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - d⊙g."""
         if not self.has_secant[i]:
@@ -190,13 +205,15 @@ class DiagonalPreconditioner(LocalSolver):
         return p.x - self.alpha[i] * (d * p.g)
 
     def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
-        """Give up at a stationary point; otherwise accept (the warm-up may retry).
+        """Give up at a stationary point; otherwise rule the enumeration in progress.
 
-        Ruled on the served trial's coords `x` and value `f` alone: the engine
-        buys a trial's gradient only for the step's winner, so nothing here may
-        depend on one, and the winner's gradient is gated by the engine before it
-        folds. The stopping test reads ``p`` - the step's start, whose gradient a
-        path always has.
+        Only consulted for a path that answered True to ``needs_verdict`` - the
+        warm-up, or an ``n_alpha >= 2`` grid; a full step is committed without a
+        ruling. Ruled on the served trial's coords `x` and value `f` alone: the
+        engine buys a trial's gradient only for the step's winner, so nothing
+        here may depend on one, and the winner's gradient is gated by the engine
+        before it folds. The stopping test reads ``p`` - the step's start, whose
+        gradient a path always has.
         """
         # Checked on the *current* point, so a path that has just landed on a
         # stationary one gives up on the next iteration (costing that one trial's
@@ -248,25 +265,26 @@ class DiagonalPreconditioner(LocalSolver):
         self.saw_finite[i] = False
 
     def _step_verdict(self, i: int, f: float) -> Verdict:
-        """Judge a served post-warmup step on its value; never fold here.
+        """Judge one alpha-grid sample on its value; never fold here.
 
-        One alpha grid of ``n_alpha`` samples along the current -d⊙g step,
-        shrinking alpha by the warm-up backtrack constant each retry; the win
-        is handed to the engine on "accept", which commits its per-step argmin
-        and folds the winner through ``fold``. ``n_alpha = 1`` (the
-        default) is the no-line-search case in the same code: the single
-        sample is accepted if finite, else the path gives up.
+        Reached by the engine only with ``n_alpha >= 2``: a single-sample step
+        answers False to ``needs_verdict`` and is committed unruled, with the
+        engine's own finiteness gate standing in for the give-up below - the grid
+        code is the same one sample, so a direct call with ``n_alpha == 1`` still
+        rules that way. One grid
+        of ``n_alpha`` samples along the current -d⊙g step, shrinking alpha by the
+        warm-up backtrack constant each retry; the win is handed to the engine on
+        "accept", which commits its per-step argmin and folds the winner through
+        ``fold``.
 
         The ruling reads `f` alone: no sample's gradient is in hand, and the
         engine gates the winner's gradient before it folds, so a non-finite
         gradient stalls the path there instead of poisoning a secant here.
         Nothing non-finite may reach ``fold``: one inf folded into Y leaves
         den = inf forever, and that coordinate never steps again. A non-finite
-        value drops out of the candidate set: the sweep keeps shrinking alpha (a
-        real line search probes past a NaN), so n_alpha > 1 survives a bad early
-        sample; at n_alpha = 1 there is no next sample and a retry would
-        re-propose the identical point for the rest of the enumeration, so the
-        path gives up instead and a rule may revive it.
+        value drops out of the candidate set - the sweep keeps shrinking alpha,
+        a real line search probing past a NaN - and a grid with no finite sample
+        at all gives up, leaving the path to a restart rule.
         """
         if math.isfinite(f):
             self.saw_finite[i] = True

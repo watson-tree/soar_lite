@@ -214,15 +214,22 @@ EI_restart   = mean_i EI(f⋆; mᵢ, h_m)                   任一路径重来�
 
 判决两侧买的东西并不相等：一次探测花 `n_draws` 个批、算 `n_draws` 次梯度，而一步只算
 一次梯度（默认 `n_alpha=1`）。真正吃重的是**梯度次数**（g 约为 f 的 2–5 倍），所以只要接了 f-only
-求值器 `eval_f`，搜索期就**一律只读值**：探测的抽、步的每一个 trial 都只服务 f，判决也只听这些
-f（3.3），留到最后的点——每列的探测起点与每条路径步的赢家——在同一批里补 g，一次迭代一次梯度往返。
-多抽探测因此仍与一步成本对齐，单抽也不再有例外：延迟是接缝的性质，不是抽数的性质。接缝下多付的只有
+求值器 `eval_f`，搜索期就**只读需要读的值**：探测的抽与**要判定的**步的每个 trial 都只服务 f，判决
+也只听这些 f（3.3），留到最后的点——每列的探测起点、每条路径步的赢家——在同一批里补 g，一次迭代
+一次梯度往返。多抽探测因此仍与一步成本对齐，单抽也不再有例外：延迟是接缝的性质，不是抽数的性质。
+接缝下多付的只有
 f，而单抽连这份都不付——它没有组内可比的候选，起点不必先读值，随补 g 的那一批一起求 f 与 g（多抽才
 需要先把每抽的 f 读出来做 group-min，那次 f 随后被融合批重算，这是用便宜的一半换掉一次梯度往返）。
 没接 seam 时每个 trial 都是融合批（值与梯度一起送达），这条路径的计数与引入接缝前逐位相同。多抽
 （`n_draws > 1`）且没接 seam 则抛 `ValueError`——引擎看得见 `solver` 有 `n_alpha` 这个成员，
 看不见它的值，只能把「没接 seam ⇒ 单抽探测」当作保守代理；默认值因此是 1。剩下的只是便宜的 f 计数差
 （完整推导见 `docs/PLAN.md`）。
+
+一步只有在方法**要判定**时才读值：`needs_verdict(i)` 一次问清这条路径下一步是否逐候选判定——暖机
+回溯与 `n_alpha >= 2` 的步长网格答 True（每个样本决定下一次移动），默认的整步答 False（提交即所提）。
+答 False 的那一步与单抽探测走同一条延迟通道：引擎不为它服务 f，把提议当作待补点交给 `settle`，值与
+梯度在同一批里各求一次。所以「一步的 f 算一次还是两次」由方法的判定需求决定，不由接缝或抽数决定：
+有 `eval_f` 时，被判定的步付一份 f-only 读值再在融合批里重算同一个 f，不判定的步只付融合批那一次。
 
 探测点要能在优化里用，`f` 和 `g` **两半都得有限**才算数：`f` 有限但梯度非有限的起点会被 `propose`
 读取（`-p.g`）并进 `fold`（`best.g - p.g`），一个 NaN 就能把那个坐标的量级 EMA 永久毒死。这样的
@@ -237,8 +244,9 @@ f，而单抽连这份都不付——它没有组内可比的候选，起点不�
 方法的判定因此只收**坐标与值**（`verdict(i, p, x, f)`：`p` 是这一步的起点，`x` 是夹进 `bounds`
 后实际服务的那一点）：trial 的梯度刻意不在契约里，因为引擎只为赢家买 g，方法拿不到别的 trial 的
 梯度；需要 trial 梯度才能判决的方法不是这个引擎能驱动的对象。相应地，赢家的梯度是**在提交点才
-第一次被看见**的（`f` 先定，g 随收）：非有限的 `g` 就不提交、按 stalled 处理（与死抽同路），所以
-`fold` 是唯一的提交点，方法不会先被告知「落点」再被收回。
+第一次被看见**的（`f` 先定，g 随收）；不判定的步连 `f` 也是这时才第一次看见（3.2）。所以提交闸
+对**两半**都查：`f` 或 `g` 任一非有限就不提交、按 stalled 处理（与死抽同路）。这样 `fold` 是唯一的
+提交点，方法不会先被告知「落点」再被收回，非有限值也进不了规则的下一个 Δ 与 EI 的池子。
 
 ### 3.4 `stalled` 是唯一的路径状态
 
@@ -322,7 +330,7 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
 
 ## 6. 可换的实现选择 vs 不许破的不变式
 
-参考实现把接缝切成四块：局部方法（`restart/propose/verdict/fold`）、路径点与 verdict 类型、
+参考实现把接缝切成四块：局部方法（`restart/needs_verdict/propose/verdict/fold`）、路径点与 verdict 类型、
 批量目标 callable、重启规则；另外允许注入起点抽样器。**这些签名全是实现选择**，新项目可以：
 
 - 把局部方法写成纯函数 + 显式状态（不需要协议类）；
@@ -376,10 +384,13 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）；一
   同乘一个 g 批：形状是 `[(2,1),(2,1)]` 而不是两个宽 1 的批）、
   `test_multi_draw_probe_is_refused_without_the_f_only_seam`
   （不接 seam 时多抽必拒）、`test_the_gate_counts_g_batches_not_f_only_draws`（闸只数 g 批，f-only 抽
-  照样发生却不进账）。
+  照样发生却不进账）、`test_an_unjudged_step_never_buys_an_f_only_ruling`（不判定的步一次 f-only 读值
+  也不买：值与梯度同在一批里只求一次，计费与判定步相同）。
 - 起点要两半都有限：`test_a_non_finite_gradient_start_arrives_stalled`（`f` 有限、`g` 全 NaN 的
   group-min 不进线搜索，直接 stalled 等 EI）、`test_a_winner_with_no_usable_gradient_is_not_committed`
-  （赢家只在提交点才被看见梯度：非有限则不 `fold`、按 stalled 报 `None`）。
+  （赢家只在提交点才被看见梯度：非有限则不 `fold`、按 stalled 报 `None`）、
+  `test_an_unjudged_winner_must_be_finite_to_be_committed`（不判定的赢家连 `f` 也到提交点才被看见：
+  两半任一非有限都不 `fold`）。
 - 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
   `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
 - `stalled` 语义：`test_give_up_stalls_a_path`、`test_stalled_paths_wait_for_ei_then_restart`、

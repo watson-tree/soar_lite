@@ -41,7 +41,7 @@ _Avoid_: round (retired), epoch, iterations (as a name for the count)
 **step**:
 One move along a single path: propose → (trial)× → commit, or give_up. Each
 path takes at most one move per iteration — a step, or a restart's probe; a
-step consumes one or more trials.
+step consumes zero or more trials.
 _Avoid_: update, move
 
 **trial**:
@@ -51,8 +51,18 @@ only the winner's gradient is bought (see *settle*), so a method that needs one
 to rule is out of this engine's reach. There is no engine-side cap: the
 method's own stopping test (or its own trial budget) ends the enumeration, so
 `verdict` cannot keep answering `retry` — it must at some point return `accept`
-or `give_up`.
+or `give_up`. A step that needs no verdict (see *needs verdict*) serves none
+at all.
 _Avoid_: line-search round (retired)
+
+**needs verdict**:
+The method's declaration that its next step is decided candidate by candidate.
+True is the enumerated step: each *trial*'s value decides the next move. False
+is the committed step: the one proposal is taken as made, so the engine serves
+no value for it and the winner arrives with both halves owed (see *settle*),
+where the engine's own finiteness gate is the whole of its acceptance. Asked
+once per path per iteration.
+_Avoid_: max rounds, is non verdict
 
 **best**:
 The run's running best, kept twice: `fun`/`x` is the best *feasible* point — the
@@ -200,12 +210,13 @@ _Avoid_: accept, commit (as the name of this handoff)
 
 **settle**:
 The iteration's one g batch, and the only place a produced point becomes a
-graded one. Everything the f-only seam left unread or ungraded — a probe's
-starts and a step's winners — is bought here, after both halves have decided on
-values and before anything is placed. A point that already arrived with its
-gradient (a run without the seam, or a probe's fused start) is promoted as it
-stands: a pass that served both halves is never served twice. A run without the
-seam therefore serves nothing here — there is nothing pending.
+graded one. Everything left unread or ungraded — a probe's starts, an unjudged
+step's proposal, a judged step's winners — is bought here, after both halves
+have decided on values and before anything is placed. A point that already
+arrived with its gradient (a probe's fused start) is promoted as it stands: a
+pass that served both halves is never served twice. A judged step without the
+seam therefore serves nothing extra here; an unjudged step is pending in every
+run, and is served here exactly once.
 _Avoid_: commit batch, gradient round
 
 ### Cost model

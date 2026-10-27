@@ -72,6 +72,10 @@ class HalfStep:
         """Return half a steepest-descent step from p."""
         return p.x - 0.5 * p.g
 
+    def needs_verdict(self, i: int) -> bool:  # noqa: ARG002
+        """Rule every trial: the strict-decrease test is this method's acceptance."""
+        return True
+
     def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:  # noqa: ARG002
         """Accept a strict decrease; give up once the trial cap is spent."""
         if f < p.f:
@@ -761,6 +765,10 @@ def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
         def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
             self.calls[i] = self.calls.get(i, 0) + 1
             return p.x + p.g if self.calls[i] <= n_rejects else p.x - p.g
+
+        def needs_verdict(self, i: int) -> bool:  # noqa: ARG002
+            """Rule every trial: this stub's whole point is a long enumeration."""
+            return True
 
         def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:  # noqa: ARG002
             return "accept" if f < p.f else "retry"

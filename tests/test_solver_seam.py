@@ -13,6 +13,7 @@ Run with:
     uv run python -m tests.test_solver_seam
 """
 
+import math
 from collections.abc import Callable
 
 import jax
@@ -71,7 +72,7 @@ class StubSolver:
     """Accepts every trial on its first verdict, or gives up instead.
 
     Records the calls the engine makes, so the test can prove the engine drove
-    the injected method rather than its default `BBZhangHager`.
+    the injected method rather than its default `DiagonalPreconditioner`.
     """
 
     def __init__(self, *, give_up: bool = False) -> None:
@@ -89,6 +90,10 @@ class StubSolver:
         """Return a halved steepest-descent step from p."""
         return p.x - 0.5 * p.g
 
+    def needs_verdict(self, i: int) -> bool:  # noqa: ARG002
+        """Rule every trial: this stub's `give_up` policy needs a ruling to fire."""
+        return True
+
     def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:  # noqa: ARG002
         """Record the verdict: accept, or give up on the first trial."""
         self.verdicts.append(i)
@@ -97,6 +102,27 @@ class StubSolver:
     def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:  # noqa: ARG002
         """Record the folded committed step; this stub folds nothing."""
         self.folds.append(i)
+
+
+class UnjudgedSolver(StubSolver):
+    """A method whose step commits its one proposal unread: no verdict needed."""
+
+    def needs_verdict(self, i: int) -> bool:  # noqa: ARG002
+        """Never rule: every step is taken as proposed."""
+        return False
+
+
+class PushTo(UnjudgedSolver):
+    """Propose one fixed point, unruled, to place a chosen value under the gate."""
+
+    def __init__(self, x_star: float) -> None:
+        """Store the point every path proposes."""
+        super().__init__()
+        self.x_star = x_star
+
+    def propose(self, i: int, p: PathPoint) -> jnp.ndarray:  # noqa: ARG002
+        """Return the stored point, whatever the start."""
+        return jnp.full_like(p.x, self.x_star)
 
 
 class RecordingRule:
@@ -822,6 +848,88 @@ def test_a_non_finite_gradient_start_arrives_stalled() -> None:
     assert solver.verdicts == [], solver.verdicts
     assert solver.folds == [], solver.folds
     assert res.status == "max_iters", res
+
+
+def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
+    """A step that needs no verdict is served once, fused - as a probe start is.
+
+    The engine leaves both halves of an unjudged proposal owed, so `settle` buys
+    the value and its gradient together. A judged step pays for a value of its
+    own: the ruling is f-only, and the winner's gradient is bought again, fused,
+    in `settle`. Both lanes therefore bill the same fused batches; what the
+    unjudged one never pays is the f-only pass, which is the whole reason to
+    answer False.
+    """
+    k = 2
+
+    def run(solver: StubSolver) -> tuple[int, int, int]:
+        eval_f_g, _shapes = evaluator()
+        f_only_widths: list[int] = []
+
+        def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+            f_only_widths.append(int(x.shape[0]))
+            return jnp.sum((x - 0.25) ** 2, axis=-1), None
+
+        res = n_path_schedule(
+            eval_f_g,
+            eval_f=eval_f,
+            bounds=unit_bounds(),
+            n_paths=k,
+            max_iters=2,  # init probe + one step
+            solver=solver,
+            restart_rule=RecordingRule(),
+            key=jax.random.PRNGKey(7),
+        )
+        return sum(f_only_widths), res.n_batches, res.n_points
+
+    # The single-draw probe needs no ruling either, so iteration 0 is silent.
+    assert run(StubSolver()) == (k, 2, 2 * k)
+    assert run(UnjudgedSolver()) == (0, 2, 2 * k)
+
+
+def test_an_unjudged_winner_must_be_finite_to_be_committed() -> None:
+    """Unruled means the engine's own gate is the whole of the acceptance test.
+
+    A judged winner was ruled finite before it was kept; an unjudged one is first
+    seen in the batch that buys its gradient, so a non-finite half there must
+    stall the path rather than fold a nan into the rule's next Δ and the pool.
+    """
+
+    def make_eval(
+        bad: str | None,
+    ) -> Callable[..., tuple[jnp.ndarray, jnp.ndarray, None]]:
+        """Return an objective that turns `bad` non-finite past the init probe."""
+        served: list[int] = []
+
+        def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+            served.append(int(x.shape[0]))
+            later = len(served) > 1  # the init probe's settle is the first batch
+            n = int(x.shape[0])
+            f = jnp.full(n, math.nan) if bad == "f" and later else jnp.zeros(n)
+            g = jnp.zeros_like(x)
+            if bad == "g" and later:
+                g = jnp.full_like(x, math.nan)
+            return f, g, None
+
+        return eval_f_g
+
+    def run(bad: str | None) -> StubSolver:
+        solver = PushTo(0.5)
+        n_path_schedule(
+            make_eval(bad),
+            bounds=unit_bounds(),
+            n_paths=1,
+            max_iters=3,
+            solver=solver,
+            restart_rule=RecordingRule(),
+            key=jax.random.PRNGKey(3),
+        )
+        return solver
+
+    # Control: a finite value and gradient commit, so the gate is what stalls below.
+    assert run(None).folds == [0, 0]
+    assert run("f").folds == []
+    assert run("g").folds == []
 
 
 if __name__ == "__main__":

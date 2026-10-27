@@ -89,7 +89,11 @@ class LocalSolver(Protocol):
     The method owns the search: the direction, the step size, the acceptance
     test, **and how long the enumeration may run** - the engine loops until the
     method ends it, so ``verdict`` must reach "accept" or "give_up" on its own.
-    An enumerator with no bound of its own is a hang, not a slow run. All state
+    An enumerator with no bound of its own is a hang, not a slow run.
+    ``needs_verdict(i)`` is the other half of that ownership: a method that rules
+    on each candidate says True, one whose step always commits its single
+    proposal says False, and the engine then serves no value for a ruling it
+    would only rubber-stamp. All state
     is per path, lives inside the instance, and is opaque to the engine (the
     engine never reads it) - implementers index it by path i.
 
@@ -132,6 +136,22 @@ class LocalSolver(Protocol):
         """
         ...
 
+    def needs_verdict(self, i: int) -> bool:
+        """Report whether path i's next step is ruled on candidate by candidate.
+
+        Asked once per path per iteration, before ``propose``, and the answer
+        holds for that whole step. ``True`` is the enumerated kind: the engine
+        serves each trial for its value alone and asks ``verdict`` what to do
+        with it. ``False`` promises the step commits its one proposal unjudged -
+        the engine treats it like a single-draw probe, leaving both halves of
+        the point to `settle`, so its value is served once (fused, with the
+        gradient) instead of once for a ruling and again for the gradient. What
+        replaces the ruling is the engine's gate: a winner whose value or
+        gradient is not finite stalls the path instead of being committed, which
+        is the same gate a fresh probe start passes.
+        """
+        ...
+
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
         """Return path i's raw next candidate from its current point p."""
         ...
@@ -145,6 +165,9 @@ class LocalSolver(Protocol):
         whose ruling needs the trial's gradient cannot be driven by this engine;
         `p`'s gradient is always there, since a path only starts from a point
         with a usable one.
+
+        Only asked for a path that answered True to ``needs_verdict``, so a step
+        that commits its one proposal unjudged never reaches here.
 
         The return is an enumeration decision, not a verdict on the trial's
         quality: "retry" asks for another candidate (the method typically
@@ -1068,28 +1091,33 @@ class _Paths:
     def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
         """Run the cohort's trials: the method judges, the engine records winners.
 
-        The method proposes, the engine projects and serves, the method judges.
-        Trial passes run in lockstep over the still-rejecting subset, each served
-        whole or not at all (a budget failure stops globally). A path's point is
-        unchanged while it rejects, so the point handed to propose and verdict is
-        also the step's start point.
+        The cohort splits on ``needs_verdict``. A path that needs one has its
+        step enumerated: the method proposes, the engine projects and serves,
+        the method judges. Trial passes run in lockstep over the still-rejecting
+        subset, each served whole or not at all (a budget failure stops
+        globally). A path's point is unchanged while it rejects, so the point
+        handed to propose and verdict is also the step's start point. A path that
+        needs none commits its one proposal unread - the same deal a single-draw
+        probe start gets - so the value it would have been judged on is served
+        once, fused with its gradient, by the caller's `settle`.
 
         Returns the per-step argmin each accepting path won, keyed by path - still
-        waiting for `settle` when the seam served values only, which is what the
-        caller's one settle batch then covers. Nothing is committed here: a
-        path ends this iteration stalled exactly when its method found nothing to
-        win (its convergence test fired, or it accepted with no finite sample).
-        The cohort also holds paths that were already stalled: they run no trials
-        and emit no winner.
+        waiting for `settle` when the seam served values only (and always for the
+        unjudged lane), which is what the caller's one settle batch then covers.
+        Nothing is committed here: a path ends this iteration stalled exactly when
+        its method found nothing to win (its convergence test fired, or it
+        accepted with no finite sample). The cohort also holds paths that were
+        already stalled: they run no trials and emit no winner.
         """
         if not cohort:
             # Every path restarted this iteration: the cohort is empty.
             return {}
         lo, hi = self.clip
         # A path already stalled only reports its sample this iteration, so it
-        # stays out of the propose loop; `stalled` also gates the exit
-        # observation below without a second membership list.
-        rejecting = [i for i in cohort if not self.stalled[i]]
+        # stays out of both lanes; `stalled` also gates the exit observation
+        # below without a second membership list.
+        unjudged, rejecting = self._lanes(cohort)
+        won = self._propose_unjudged(unjudged) if unjudged else {}
         # Per-step argmin cache: "accept" commits the lowest-f finite trial served
         # this step (not the last served one), so a method can sweep a step-length
         # grid without re-evaluating its argmin. The engine is the sole owner of
@@ -1098,7 +1126,6 @@ class _Paths:
         # only the paths that actually won, so a path that gives up after a good
         # earlier trial commits nothing.
         best: dict[int, _Pending] = {}
-        won: dict[int, _Pending] = {}
         # No engine-side trial cap: how long a step's enumeration may run is the
         # method's own business (its convergence test, its own trial budget), and
         # `verdict` is where it says so. A cap here would be a second, invisible
@@ -1138,6 +1165,30 @@ class _Paths:
             rejecting = still_rejecting
         return won
 
+    def _lanes(self, cohort: list[int]) -> tuple[list[int], list[int]]:
+        """Split the cohort into its (unjudged, judged) lanes.
+
+        A stalled path joins neither: it proposes nothing this iteration and
+        emits no winner, it only reports its stall.
+        """
+        unjudged: list[int] = []
+        judged: list[int] = []
+        for i in cohort:
+            if not self.stalled[i]:
+                (judged if self.solver.needs_verdict(i) else unjudged).append(i)
+        return unjudged, judged
+
+    def _propose_unjudged(self, paths: list[int]) -> dict[int, _Pending]:
+        """Take each unjudged path's one proposal as its step's winner, unread.
+
+        Proposals are still clipped into the box: the engine owns that, and the
+        served point is the clipped one. Both halves are left owed, which is what
+        makes the iteration serve this point's value once rather than twice.
+        """
+        raw = jnp.stack([self.solver.propose(i, self.points[i]) for i in paths])
+        clipped = jnp.clip(raw, *self.clip)
+        return {i: _Pending(clipped[pos], None, None) for pos, i in enumerate(paths)}
+
     def _place(self, placed: dict[int, PathPoint]) -> None:
         """Place the given paths on their fresh probe starts (one restart event).
 
@@ -1175,10 +1226,13 @@ class _Paths:
         engine refuses here is refused before the method has been told anything.
         """
         for i, best in won.items():
-            if not _all_finite(best.g):
-                # The step is decided on f, so the winner's gradient is first seen
-                # here: an unusable one cannot become the next start (see
-                # `_place`), and the step is not committed at all.
+            if not (math.isfinite(best.f) and _all_finite(best.g)):
+                # A judged winner was ruled finite before it was kept, so this
+                # gate only ever bites the unjudged lane, whose value is first
+                # seen in the batch that bought its gradient. Either half unusable
+                # and the step is not committed at all: an unusable gradient
+                # cannot become the next start (see `_place`), and a non-finite
+                # value would poison the rule's next Δ.
                 self.stalled[i] = True
                 continue
             point = self.points[i]  # the step's start, for the fold's secant
