@@ -44,6 +44,19 @@ class PathPoint:
     f: float
     g: jnp.ndarray
 
+    @property
+    def usable(self) -> bool:
+        """Return whether this point may be committed as a path's point.
+
+        Both halves must be finite, because both are carried forward: a
+        non-finite f poisons the rule's next Δ, and a non-finite g is proposed
+        from (`-p.g`) and folded on (`best.g - p.g`), so one NaN there poisons
+        that coordinate's magnitude EMAs for the rest of the run. The f half is
+        asked first, so a dead value short-circuits before the device sync in
+        `_all_finite`.
+        """
+        return math.isfinite(self.f) and _all_finite(self.g)
+
 
 @dataclass(frozen=True)
 class _Pending:
@@ -298,7 +311,11 @@ class RestartRule(Protocol):
         themselves out; `NoRestartRule` spends nothing after the seeding.
 
         `f⋆` is the raw minimum (see the class docstring) and `f_k` is path i's
-        current value in the same unfiltered terms.
+        current value in the same unfiltered terms. A path with no current point
+        - its fresh start was refused as unusable - hands `nan`, and the same
+        refusal left its stage empty, so the continue side is the degenerate 0.0
+        a verdict reads as "does restarting buy anything at all"; only a rule
+        that ignores the empty stage ever sees this `f_k`.
         """
         ...
 
@@ -953,7 +970,7 @@ class _Evaluator:
         unread = defer_g and self._n_draws == 1
         groups = [self._sampler.batch(n_points) for _ in range(self._n_draws)]
         if unread:
-            return [_Pending(groups[0][j], None, None) for j in range(n_points)]
+            return self.pending_unread(groups[0])
         f_by_draw: list[list[float]] = []
         g_by_draw: list[jnp.ndarray] = []
         for x_cand in groups:
@@ -978,6 +995,18 @@ class _Evaluator:
         return [
             _Pending(groups[r][j], f_by_draw[r][j], g_by_draw[r][j]) for r, j in picks
         ]
+
+    def pending_unread(self, x_batch: jnp.ndarray) -> list[_Pending]:
+        """Return one unread point per row: both halves owed to `settle`.
+
+        The twin of `serve_trials` for a batch nothing has read yet: a
+        single-draw probe start has no group to compare, and an unjudged step
+        winner is committed as proposed, so each defers even its cheap f and
+        takes f and g from one fused pass. Owning this spelling here, beside
+        `settle`'s promotion, is what keeps `_Pending` construction in this
+        object instead of at the call sites.
+        """
+        return [_Pending(row, None, None) for row in x_batch]
 
     def serve_trials(self, x_batch: jnp.ndarray) -> list[_Pending]:
         """Serve one step's trial batch, as one produced candidate per row.
@@ -1092,9 +1121,8 @@ class _Paths:
       point. A stalled path does not step and reports `None` to the rule (a
       stall tick, no evidence), so its own stage clock keeps pace with its live
       cohort.
-    - A start gates on both halves: a finite f with a non-finite gradient is
-      proposed from (`-p.g`) and folded on (`best.g - p.g`), so one NaN in it
-      would poison that coordinate's magnitude EMAs for the rest of the run.
+    - A start or a winner is committed only when it is `usable` - finite in
+      both halves - one gate defined once on the point type.
     """
 
     def __init__(
@@ -1118,18 +1146,20 @@ class _Paths:
         # A path's point is one object, not three parallel lists: it is what
         # every seam call takes, and a step commits one path at a time (so a
         # list, whose item assignment is the commit, beats a stacked array). The
-        # placeholders are replaced by the initialization probe on iteration 0,
-        # before any path can step, so their empty coords and inf f are never
-        # served.
+        # placeholder says "no point has arrived": a usable probe start replaces
+        # it, an unusable one never becomes a point, and a stalled path never
+        # serves or compares it.
         self.points = [
-            PathPoint(jnp.zeros(0), math.inf, jnp.zeros(0)) for _ in range(n_paths)
+            PathPoint(jnp.zeros(0), math.nan, jnp.zeros(0)) for _ in range(n_paths)
         ]
         # Nothing has arrived yet, and a path that has not arrived is not
         # stalled: iteration 0 probes every path before the step filter reads it.
         self.stalled: list[bool] = [False] * n_paths
         # The continue side's sample is one step, so the Δ it reports is
         # points[i].f - prev_f[i]; a restart resets the anchor to the probe's f.
-        self.prev_f: list[float] = [math.inf] * n_paths
+        # `nan` because no anchor has arrived yet, and only a placed path reports
+        # a Δ - `_place` sets the anchor before that first Δ is read.
+        self.prev_f: list[float] = [math.nan] * n_paths
 
     def move(self, best_fun_raw: float) -> None:
         """Take one iteration's move for every path, then settle what it deferred.
@@ -1276,7 +1306,7 @@ class _Paths:
         """
         raw = jnp.stack([self.solver.propose(i, self.points[i]) for i in paths])
         clipped = jnp.clip(raw, *self.clip)
-        return {i: _Pending(clipped[pos], None, None) for pos, i in enumerate(paths)}
+        return dict(zip(paths, self.evaluator.pending_unread(clipped), strict=True))
 
     def _place(self, placed: dict[int, PathPoint]) -> None:
         """Place the given paths on their fresh probe starts (one restart event).
@@ -1285,24 +1315,24 @@ class _Paths:
         the method's per-path state resets to cold start, while that pool is kept
         (same sampler, new trajectories). The rule is told about the event and
         decides for itself what, if anything, it resets there - `EIRestartRule`
-        closed the stage at its verdict, so it has nothing left to drop. A path
-        whose fresh group-min has a non-finite f *or* gradient arrives stalled and
-        waits for the next EI verdict. The probe is this iteration's move for
-        every restarted path, finite or not, so none of them also steps.
+        closed the stage at its verdict, so it has nothing left to drop. A start
+        the engine cannot use is refused on the same `usable` gate `_advance`
+        applies to a winner: it is not placed, the solver is not seeded from it,
+        and the path waits, stalled, for the next EI verdict. Refusing rather than
+        placing it keeps `points[i]` meaning "where the path stands": an unusable
+        start never becomes one. The probe is this iteration's move for every
+        restarted path, usable or not, so none of them also steps.
         """
         if not placed:
             # No path restarted this iteration: nothing to place or reset.
             return
         for i, point in placed.items():
+            self.restart_rule.restart(i)  # the event: the path was re-probed
+            self.stalled[i] = not point.usable
+            if self.stalled[i]:
+                continue  # unusable: no point, no seed, no anchor (see `usable`)
             self.points[i] = point
             self.solver.restart(i, point)
-            self.restart_rule.restart(i)  # the event; its round is the report's
-            # Both halves gate the start, not just f: a finite f with a
-            # non-finite gradient is proposed from (`-p.g`) and folded on
-            # (`best.g - p.g`), so a single NaN in it poisons that coordinate's
-            # magnitude EMAs for the rest of the run. Its g is left as served -
-            # a stalled path never proposes, and a revival probes over it.
-            self.stalled[i] = not (math.isfinite(point.f) and _all_finite(point.g))
             self.prev_f[i] = point.f
         for point in placed.values():  # the event's group-mins extend the shared pool
             self.restart_rule.observe_restart(point.f)
@@ -1315,13 +1345,11 @@ class _Paths:
         engine refuses here is refused before the method has been told anything.
         """
         for i, best in won.items():
-            if not (math.isfinite(best.f) and _all_finite(best.g)):
-                # A judged winner was ruled finite before it was kept, so this
+            if not best.usable:
+                # A judged winner was ruled usable before it was kept, so this
                 # gate only ever bites the unjudged lane, whose value is first
-                # seen in the batch that bought its gradient. Either half unusable
-                # and the step is not committed at all: an unusable gradient
-                # cannot become the next start (see `_place`), and a non-finite
-                # value would poison the rule's next Δ.
+                # seen in the batch that bought its gradient. Same gate as
+                # `_place`: an unusable point never becomes a path's point.
                 self.stalled[i] = True
                 continue
             point = self.points[i]  # the step's start, for the fold's secant

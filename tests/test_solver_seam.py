@@ -206,6 +206,40 @@ def test_give_up_stalls_a_path() -> None:
     assert res.status == "max_iters"
 
 
+def test_an_unusable_start_is_refused_before_it_seeds_the_method() -> None:
+    """The place gate, seen from the method: a start it cannot use is not seed.
+
+    The one probe batch serves a finite value with a NaN gradient, so the start
+    is unusable. `_place` refuses it rather than placing it: no cold-start seed
+    reaches the method (`restart` is never called) and the path never steps, so
+    the run serves exactly that one batch. Seeding it would let the method
+    propose from `-p.g` on a point no path stands at.
+    """
+
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        d = x - 0.5
+        f = jnp.sum(d**2, axis=1)
+        g = (2.0 * d).at[:, 0].set(jnp.nan)  # the value is fine, the gradient is not
+        return f, g, None
+
+    solver = StubSolver()
+    res = n_path_schedule(
+        eval_f_g,
+        bounds=unit_bounds(),
+        budget_check=lambda: True,
+        n_paths=2,
+        max_iters=PROBE_DRAWS + 1,  # iteration 0 is the init probe
+        n_draws=PROBE_DRAWS,
+        solver=solver,
+        restart_rule=RecordingRule(),
+        key=jax.random.PRNGKey(3),
+    )
+    assert solver.inited == [], solver.inited  # an unusable start is never seed
+    assert solver.folds == [], solver.folds  # and never becomes a start
+    assert res.n_batches == 1, res.n_batches  # init probe only; nothing steps
+    assert res.status == "max_iters"
+
+
 def test_injected_rule_is_driven() -> None:
     """The engine feeds its one injected rule instance all the bookkeeping."""
     k = 2
