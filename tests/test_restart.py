@@ -1,7 +1,7 @@
 """Assert-style self-checks for the empirical EI restart policy.
 
 The rule takes no cadence knob: a path is read over a window that
-`_stage_window()` derives from the group-min pool's defined sample count, with a
+`_stage_window()` derives from the group-min pool's sample count, with a
 scott_mad KDE over that window's Δ on both sides. These tests therefore choose a
 window by growing a pool, and read the stage's evidence back off the rule.
 
@@ -117,52 +117,54 @@ def test_ei_restart_tail_below_all_observations() -> None:
     assert close(restart_payoff(1.0, [1.5, 2.0]), 0.005531593511968263, 1e-12)
 
 
-def test_ei_restart_prices_inf_as_a_dead_start_and_skips_nan_and_neginf() -> None:
-    """M=0 → 0; M=1 → h=0 degenerate; +inf is a 0-buy event; NaN/-inf not read."""
+def test_ei_restart_prices_every_nonfinite_start_as_a_zero_term() -> None:
+    """M=0 → 0; M=1 → h=0 degenerate; +inf, NaN and -inf all buy 0."""
     assert restart_payoff(1.0, []) == 0.0
     assert restart_payoff(3.0, [2.0]) == 1.0  # max(3 - 2, 0)
     assert restart_payoff(1.0, [2.0]) == 0.0  # max(1 - 2, 0)
-    # NaN is "no information": neither counted nor fitted.
-    assert close(restart_payoff(1.0, [0.0, 2.0, float("nan")]), KDE_LITERAL, 1e-9)
-    # +inf is a dead start: a legal 0-improvement event, so it dilutes the finite
-    # KDE by the alive fraction 2/3 instead of vanishing from the read (and it
-    # must not widen the bandwidth either, which is why h stays the finite one).
-    assert close(
-        restart_payoff(1.0, [float("inf"), 0.0, 2.0]),
-        KDE_LITERAL * 2.0 / 3.0,
-        1e-9,
-    )
+    # A non-finite sample says nothing about how much a restart buys, so it is the
+    # zero term of the same mean: the finite KDE diluted by the finite fraction
+    # 2/3, whichever shape it is - and it must not widen the bandwidth either,
+    # which is why h stays the finite one.
+    for zero_term in (float("inf"), float("nan"), float("-inf")):
+        assert close(
+            restart_payoff(1.0, [0.0, 2.0, zero_term]),
+            KDE_LITERAL * 2.0 / 3.0,
+            1e-9,
+        )
     # No finite start at all: the finite subset is empty, so the read is 0.
     assert restart_payoff(1.0, [float("inf"), float("inf"), 2.0]) == 0.0
     assert restart_payoff(1.0, [float("inf"), float("-inf")]) == 0.0
+    assert restart_payoff(1.0, [float("nan"), float("nan")]) == 0.0
 
 
-def test_window_is_the_defined_sample_count() -> None:
-    """The cadence follows the evidence: window = finite plus +inf, floor 1.
+def test_window_is_the_pool_length() -> None:
+    """The cadence follows the evidence: window = M, every sample, no floor.
 
     The two sides are worth about the same number of samples only when their
     counts match, so reading the path over exactly the pool's M is what stops
     the noisier side's own noise from deciding the verdict - and it is derived
     rather than injected, so no caller can ask for a window the pool cannot
-    back. A dead start is still a defined sample (it is the zero term of the
-    same mean), so it counts; `nan` is no information and does not. Nothing pads
-    M to 2: at M = 1 both reads collapse to their documented degenerate form (no
+    back. Every sample counts, whatever it was worth: the read is one mean over
+    the pool with the non-finite samples as its zero terms, so a `nan` or a
+    `-inf` spaces re-probes exactly like a `+inf` dead start. Nothing pads M to
+    2: at M = 1 both reads collapse to their documented degenerate form (no
     spread on either side), so a longer window would only delay a verdict that
     already cannot restart.
     """
     policy = EIRestartRule()
-    assert policy._stage_window() == 1  # empty pool: nothing to read, not a prior
+    assert policy._stage_window() == 0  # empty pool: cold start, never read
     policy.observe_restart(0.0)
     assert policy._stage_window() == 1  # M = 1: the degenerate read itself
     for m in range(2, 12):
         policy.observe_restart(0.0)
         assert policy._stage_window() == m  # M itself
-    policy.observe_restart(math.inf)  # a dead start is a defined sample: counted
-    assert len(policy.group_mins) == 12
+    policy.observe_restart(math.inf)  # a dead start is a sample like any other
     assert policy._stage_window() == 12
-    policy.observe_restart(math.nan)  # no information: not counted
-    assert len(policy.group_mins) == 13
-    assert policy._stage_window() == 12
+    policy.observe_restart(math.nan)  # no information, still a zero term
+    assert policy._stage_window() == 13
+    policy.observe_restart(-math.inf)
+    assert policy._stage_window() == 14
 
 
 def test_stage_read_is_a_kde_over_its_deltas() -> None:
@@ -268,7 +270,7 @@ def test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window() -> None
     assert policy.should_restart(0, math.inf, math.inf) is True  # no probe yet
     for _ in range(WINDOW):
         policy.observe_restart(math.inf)  # the probe ran; every start was dead
-    assert policy._stage_window() == WINDOW  # dead starts are still defined samples
+    assert policy._stage_window() == WINDOW  # dead starts are samples too
     for _ in range(WINDOW):  # the flock stalls out on the dead landscape
         policy.observe_continue(0, None)
     assert policy.should_restart(0, 0.0, 0.0) is True  # 0 >= 0: buy a sample
@@ -278,6 +280,20 @@ def test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window() -> None
     assert policy.deltas.get(0, []) == []
     policy.observe_continue(0, None)
     assert policy.should_restart(0, 0.0, 0.0) is False  # not due again until a window
+
+    # The same holds for a pool of `nan`: the window is the pool's length, not
+    # its finite count, so a pool that never reads a number still spaces its
+    # re-probes (it used to have a window of 1 and re-probe every round).
+    nan_pool = EIRestartRule()
+    for _ in range(WINDOW):
+        nan_pool.observe_restart(math.nan)
+    for _ in range(WINDOW):
+        nan_pool.observe_continue(0, None)
+    assert nan_pool.should_restart(0, 0.0, 0.0) is True
+    nan_pool.observe_restart(math.nan)  # the probe's own dead group-min
+    nan_pool.observe_continue(0, None)
+    assert nan_pool._stage_window() == WINDOW + 1
+    assert nan_pool.should_restart(0, 0.0, 0.0) is False
 
 
 def test_verdict_is_due_once_per_window_and_closes_the_stage() -> None:

@@ -78,7 +78,7 @@ class EIRestartRule(RestartRule):
     the evidence does not support. That bias never shows up as an error, only as
     a worse final value, so the rule **derives** the two counts instead of
     exposing a knob: the continue side is read over `_stage_window()` = the
-    pool's defined-sample count M, which is the most samples a verdict can have
+    pool's sample count M, which is the most samples a verdict can have
     in as many iterations as the restart side already has, and a caller cannot
     ask for a window its own pool cannot back. A stalled path reads no stage at
     all - its continue side is 0 by definition - so the two counts are only
@@ -102,10 +102,12 @@ class EIRestartRule(RestartRule):
     estimate the same global value from a shorter sample. A stalled iteration
     arrives as `None`, never as a value: it advances the path's stage clock and
     the read sees no continuation sample, so a stall is never averaged into a
-    stage that spans it. In the pool a `+inf` group-min is a dead start whose own
-    improvement is exactly 0 - it enters the read as a zero term that dilutes the
-    finite KDE by the alive fraction - while `nan` is no information and `-inf`
-    is not read yet, so neither is counted or fitted.
+    stage that spans it. In the pool every non-finite group-min is a zero term of
+    the same mean, whose own improvement is exactly 0: a `+inf` is a dead start,
+    and a `nan` or a `-inf` is an event outside the finite set that says as
+    little about what a restart buys. All three dilute the finite KDE by the
+    finite fraction |finite| / M instead of vanishing from the read, so the
+    restart side is always a mean over the same M samples the window is.
     The raw best `best_fun_raw` is a should_restart argument, not a field (the
     engine owns it), and it is the raw minimum: unfiltered, like the group-mins
     in the pool and like the `f_k` it is compared with.
@@ -147,10 +149,11 @@ class EIRestartRule(RestartRule):
     def observe_restart(self, group_min: float) -> None:
         """Append one restart event's group minimum to the shared group-min pool.
 
-        Every value is kept as served. A `+inf` is a dead start and a `nan` is a
-        start that was never a number - both are observations the read triages
-        (`_restart_payoff`), not errors to drop at the door; only the read knows
-        what each is worth.
+        Every value is kept as served. A `+inf` is a dead start, a `nan` is a
+        start that was never a number, and a `-inf` is a start below the finite
+        range - all three are observations the read triages (`_restart_payoff`)
+        as zero terms, not errors to drop at the door; only the read knows what
+        each is worth.
         """
         self.group_mins.append(group_min)
 
@@ -175,7 +178,7 @@ class EIRestartRule(RestartRule):
         continue side that lost ground or stalled - and continuing at 0 is worth
         nothing, while a probe is always one real i.i.d. group-min. The tie is
         therefore the price of buying the evidence neither side has. It cannot
-        thrash because the window is the pool's defined count: every tie probes,
+        thrash because the window is the pool's sample count: every tie probes,
         every probe appends a sample, so the next ask on that path comes a window
         later - the interval grows 1, 2, 3, ... and the probe rate falls to 0.
 
@@ -196,8 +199,9 @@ class EIRestartRule(RestartRule):
         True and the engine's first iteration probes every path. A pool that is
         non-empty but entirely non-finite is *not* cold start - the probe ran and
         every start was dead - so an empty `group_mins` is the test; a dead pool
-        prices the restart at 0, which ties a stalled continue side and re-probes
-        once per window, each dead sample spacing the next ask further out.
+        prices the restart at 0 whatever made it dead (`+inf`, `nan` or `-inf`),
+        which ties a stalled continue side and re-probes once per window, each
+        dead sample spacing the next ask one round further out.
         """
         if not self.group_mins:  # no probe has run: draw the initialization one
             return True
@@ -221,7 +225,7 @@ class EIRestartRule(RestartRule):
         """
 
     def _stage_window(self) -> int:
-        """Return how many iterations a path's stage spans: the pool's defined count.
+        """Return how many iterations a path's stage spans: the pool's sample count.
 
         Read fresh at each verdict rather than fixed per stage, because the pool
         only grows - samples are appended, never dropped or aged out - so `M` at
@@ -230,28 +234,28 @@ class EIRestartRule(RestartRule):
         weights every sample equally, so extra folds are extra evidence and no
         fold buys more than its weight.
 
-        "Defined" is the count the read is actually built on: a finite group-min
-        and a `+inf` dead start both are samples (the dead start contributes 0),
-        while `nan` (no information) and `-inf` (not read yet) are not. A dead
-        pool therefore still has a window, and that window is what spaces a
-        stalled flock's re-probes: each one adds a dead sample, so the next ask
-        on that path comes a window later.
+        Every pooled group-min is a sample, whatever it is worth: the read is one
+        mean over the whole pool and a non-finite sample is a zero term of it,
+        not a gap in it (`_restart_payoff`). That is what spaces a stalled
+        flock's re-probes, and it holds for any dead pool rather than only a
+        `+inf` one: each probe appends a sample, so the next ask on that path
+        comes a window further out - the interval grows 1, 2, 3, ... and the
+        probe rate falls to 0.
 
-        The only floor is 1, and it is not a prior: a window of zero samples has
-        no centre to read (`_continue_payoff` returns 0.0 on an empty stage),
-        which is reachable only before any defined group-min exists. M = 1 is the
-        one-sample regime - one fold has no spread (MAD = 0, so h = 0), and a pool
-        of one prices `EI_restart = max(B - group_min, 0)`, which is 0 whenever
-        that sample is the best so far. Both sides then read 0 and the verdict
-        ties, so the path probes once; the probe is what buys the second sample,
-        and from M = 2 on the spread decides the verdict on its own.
+        Zero is the empty pool, and only the empty pool: `should_restart`
+        answers cold start before this is read, so no verdict reads a window of
+        zero. M = 1 is the one-sample regime - one fold has no spread (MAD = 0,
+        so h = 0), and a pool of one prices `EI_restart = max(B - group_min, 0)`,
+        which is 0 whenever that sample is the best so far. Both sides then read
+        0 and the verdict ties, so the path probes once; the probe is what buys
+        the second sample, and from M = 2 on the spread decides the verdict on
+        its own.
 
         This method is the seam a rule variant moves (a capped window, a forced
         cadence for an experiment); the rule itself takes no knob, so its own
         cadence can only follow the evidence.
         """
-        n_defined = sum(1 for v in self.group_mins if math.isfinite(v) or v == math.inf)
-        return max(1, n_defined)
+        return len(self.group_mins)
 
     def _continue_payoff(self, i: int, f_k: float, best_fun_raw: float) -> float:
         """Return the expected improvement of path i continuing one more step.
@@ -277,29 +281,34 @@ class EIRestartRule(RestartRule):
     def _restart_payoff(self, best_fun_raw: float) -> float:
         """Return the expected improvement of any path restarting (global).
 
-        Two events share the pool. The finite group-mins are read as a scott_mad
-        KDE (one Gaussian kernel per sample), the bandwidth taken from the finite
-        subset alone so a dead start cannot widen it. A `+inf` group-min is a
-        dead start: a legal, informative observation whose own improvement is
-        exactly 0 - restarting onto it buys nothing - so it enters the mean as a
-        zero term. The read is therefore the finite mean scaled by the fraction of
-        starts that were alive, |finite| / (|finite| + |+inf|), a constant in
-        (0, 1] that can only lower the restart's price.
+        One mean over the whole pool, so the restart side reads the same number
+        of samples the window gives the continue side. The finite group-mins are
+        read as a scott_mad KDE (one Gaussian kernel per sample), the bandwidth
+        taken from the finite subset alone so a zero term cannot widen it. Every
+        other sample is a zero term of that same mean: a `+inf` is a dead start,
+        a legal observation whose own improvement is exactly 0, and a `nan` or a
+        `-inf` is an event outside the finite set - like `+inf` it says nothing
+        about how much a restart would buy, so it buys 0 as well. Nothing is
+        dropped from the denominator for being unreadable: the read is the
+        finite mean scaled by the finite fraction |finite| / M, a constant in
+        [0, 1] that can only lower the restart's price.
 
-        `nan` is not information and `-inf` is not read yet, so neither enters the
-        count or the KDE. M = 0 → 0.0 (no evidence); M = 1 (or a constant finite
-        pool) → h = 0 → degenerate max(B - group_min, 0).
+        Counting every sample is what keeps the two sides comparable: a pool of
+        no-ops would otherwise read as a smaller, sharper pool and outprice a
+        real stage.
+
+        An empty pool and a pool with no finite sample both read 0.0 - there is
+        no evidence for the mean to be positive about. M = 1 (or a constant
+        finite pool) → h = 0 → degenerate max(B - group_min, 0).
         """
         finite = [v for v in self.group_mins if math.isfinite(v)]
-        n_dead = sum(1 for v in self.group_mins if v == math.inf)
-        n_defined = len(finite) + n_dead
-        if n_defined == 0:
+        if not finite:
             return 0.0
-        h = _scott_mad_bandwidth(finite) if finite else 0.0
-        # A +inf sample is the zero term of this same mean: restarting onto it
-        # buys nothing, so it lowers the price without widening the bandwidth.
+        h = _scott_mad_bandwidth(finite)
+        # A non-finite sample is the zero term of this same mean: restarting onto
+        # it buys nothing, so it lowers the price without widening the bandwidth.
         total = sum(_gaussian_ei(h, best_fun_raw, group_min) for group_min in finite)
-        return total / n_defined
+        return total / len(self.group_mins)
 
 
 def _gaussian_ei(sigma: float, best_fun_raw: float, mu: float) -> float:

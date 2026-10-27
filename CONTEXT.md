@@ -184,9 +184,10 @@ _Avoid_: sample, payoff, reward, fitness
 The shared multiset of group-mins (one per draw group — n per probe event),
 measured rather than modelled.
 One pool serves every path. It is the sample the restart payoff is priced off,
-not a pool of payoffs. A `+inf` group-min is a dead start: a real sample whose
-own improvement is exactly 0, so it dilutes the finite read instead of being
-dropped, while `nan` is no information and `-inf` is not read.
+not a pool of payoffs. A `+inf` group-min is a dead start, and a `nan` or `-inf`
+is an event outside the finite set: all three contribute exactly 0 expected
+improvement, so they enter the payoff read as zero terms that dilute it instead
+of being dropped.
 _Avoid_: payoff pool, restart history, bandit arms
 
 **restart verdict**:

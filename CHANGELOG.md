@@ -35,11 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reporting a larger value than one it had served. An infeasible `-inf` still
   changes nothing: the mask is what separates "an answer no later trial can
   beat" from "a trial the caller cannot use".
+- The restart side reads *every* group-min in the pool, not only the finite ones
+  and the `+inf` dead starts: a `nan` or a `-inf` is now a zero term of the same
+  mean and counts in the denominator, so `EI_restart` is the finite KDE scaled
+  by `|finite| / M` with `M` the pool's length - the same `M` the continue side
+  is read over. Before this only a `+inf` was a zero term, so a flock whose
+  starts landed on a `nan` hole (or on `-inf`) had a window of 1 and re-probed
+  every round, forever: the "each dead sample pushes the next ask a window out"
+  spacing held for dead starts of one shape only. Where a run does serve `nan`s
+  this also lowers `EI_restart` by the dead fraction, so measured results on
+  such problems move - a semantics change, not a refactor.
 - The restart verdict fires on a tie: `EI_restart >= EI_continue`, not `>`. When
   continuing promises nothing - a stalled path, a flat stage, a pool with no
   spread or of dead starts - both sides read 0, and a probe is then the only
   action that buys evidence. It cannot thrash: the verdict's window is the
-  pool's defined count, so every tie-restart appends a sample and pushes the
+  pool's length, so every tie-restart appends a sample and pushes the
   next ask a window further out (interval 1, 2, 3, ...). The `n_paths=1`
   "never restarts" property was a consequence of the strict `>` and is gone;
   `NoRestartRule` is now the explicit way to ask for it.
