@@ -681,6 +681,28 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     )
 
 
+class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
+    """A batch was requested past a closed gate.
+
+    Raised only inside `n_path_schedule`, at the run's one charged site
+    (`_Evaluator.serve_f_g`), and caught by the loop. It carries
+    nothing: the run's status is derived from the same queries, and an unserved
+    batch is never charged, so they name the gate correctly.
+    """
+
+
+class _OptimumReached(Exception):  # noqa: N818 - a signal, not an error
+    """A served *feasible* point priced the objective at `-inf`.
+
+    Raised inside `_Best.observe`, the single funnel both seams pass through,
+    and caught by the loop. Unlike `_BudgetExhausted` it arrives after a batch
+    was served and charged (the batch that found the point, which was paid for)
+    and it leaves an answer behind instead of naming a gate: the run stops on
+    that point, so `fun` is `-inf` and `status` is `"unbounded"`. Nothing is
+    left to unwind - a probe raises before any point is placed or advanced.
+    """
+
+
 class _Sampler:
     """The run's one random source: the prior plus the draw's own d check.
 
@@ -710,28 +732,6 @@ class _Sampler:
                 )
                 raise ValueError(msg)
         return x_cand
-
-
-class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
-    """A batch was requested past a closed gate.
-
-    Raised only inside `n_path_schedule`, at the run's one charged site
-    (`_Evaluator.serve_f_g`), and caught by the loop. It carries
-    nothing: the run's status is derived from the same queries, and an unserved
-    batch is never charged, so they name the gate correctly.
-    """
-
-
-class _OptimumReached(Exception):  # noqa: N818 - a signal, not an error
-    """A served *feasible* point priced the objective at `-inf`.
-
-    Raised inside `_Best.observe`, the single funnel both seams pass through,
-    and caught by the loop. Unlike `_BudgetExhausted` it arrives after a batch
-    was served and charged (the batch that found the point, which was paid for)
-    and it leaves an answer behind instead of naming a gate: the run stops on
-    that point, so `fun` is `-inf` and `status` is `"unbounded"`. Nothing is
-    left to unwind - a probe raises before any point is placed or advanced.
-    """
 
 
 class _Budget:
