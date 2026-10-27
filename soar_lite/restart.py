@@ -195,9 +195,11 @@ class EIRestartRule(RestartRule):
         next Δ or stall opens the next stage, so a path that never gets restarted
         is re-judged once per window - the same cadence a continuing path has.
 
-        Both the comparison and the close are skipped while there is no best
-        (B = inf, i.e. no finite point of any kind served yet): the verdict has
-        nothing to compare against, and the engine owns B.
+        With no best (B = inf, i.e. no finite point of any kind served yet) the
+        comparison is skipped - the verdict has nothing to compare against, and
+        the engine owns B - so it answers False and the stage still closes: a
+        flock whose every start is dead never re-probes, and its run ends on the
+        caller's horizon instead of on a verdict.
 
         Cold start is the one verdict that is not the EI comparison: with an
         empty group-min pool there is no restart evidence at all, so this returns

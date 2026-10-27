@@ -217,14 +217,14 @@ unusable is refused before the method is told anything.
 _Avoid_: accept, commit (as the name of this handoff)
 
 **settle**:
-The iteration's one g batch, and the only place a produced point becomes a
-graded one. Everything left unread or ungraded — a probe's starts, an unjudged
-step's proposal, a judged step's winners — is bought here, after both halves
-have decided on values and before anything is placed. A point that already
-arrived with its gradient (a probe's fused start) is promoted as it stands: a
-pass that served both halves is never served twice. A judged step without the
-seam therefore serves nothing extra here; an unjudged step is pending in every
-run, and is served here exactly once.
+The iteration's one g batch on a run with the f-only seam, and the only place a
+produced point becomes a graded one. Everything left unread or ungraded — a
+probe's starts, an unjudged step's proposal, a judged step's winners — is bought
+here, after both halves have decided on values and before anything is placed. A
+point that already arrived with its gradient (a probe's fused start) is promoted
+as it stands: a pass that served both halves is never served twice. A judged
+step without the seam therefore serves nothing extra here; an unjudged step is
+pending in every run, and is served here exactly once.
 _Avoid_: commit batch, gradient round
 
 ### Cost model
