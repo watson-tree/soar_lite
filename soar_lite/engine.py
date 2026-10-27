@@ -6,8 +6,9 @@ This module is the seam (拍板) of soar_lite: it owns the two plugin contracts
 seams, and the `n_path_schedule` loop). The run's state lives in five private
 holders, one per state family: `_Sampler` (the draws), `_Evaluator` (the two
 seams and the one charged site), `_Paths` (the n-path state machine),
-`_Best` (B), and `_Budget` (the stop meter and work report). Concretes
-import *from* here, never the other way around at module level:
+`_Best` (the run's best, `f⋆`), and `_Budget` (the stop meter and work
+report). Concretes import *from* here, never the other way around at module
+level:
 
     soar_lite/
       engine.py   <- LocalSolver, RestartRule, PathPoint, Verdict, n_path_schedule
@@ -85,7 +86,7 @@ class LocalSolver(Protocol):
     """The search method the n-path engine drives (the engine's plugin point).
 
     The engine owns the schedule: row composition, projection, the shared
-    horizon, the n-path state machine (restart/step/stall), and the best B.
+    horizon, the n-path state machine (restart/step/stall), and the best `f⋆`.
     The method owns the search: the direction, the step size, the acceptance
     test, **and how long the enumeration may run** - the engine loops until the
     method ends it, so ``verdict`` must reach "accept" or "give_up" on its own.
@@ -208,9 +209,9 @@ class RestartRule(Protocol):
     lives inside it in dicts keyed by the path index, exactly as the method
     holds its `eta`/`reference`/`q`. The engine feeds the rule and asks for
     verdicts; the evidence lives inside the instance and the engine never reads
-    it. The raw best B arrives as a should_restart argument rather than as
-    stored state, so the engine stays the only writer of B and every verdict
-    reads the best of its own iteration. That B is the run's **raw**
+    it. The raw best `f⋆` arrives as a should_restart argument rather than as
+    stored state, so the engine stays the only writer of `f⋆` and every verdict
+    reads the best of its own iteration. That `f⋆` is the run's **raw**
     minimum - over every finite point served, feasible or not - because the
     rule's own evidence is unfiltered: `f_k` and the group-mins in its pool are
     raw values, and a probe group-min cannot be filtered by feasibility without
@@ -261,7 +262,7 @@ class RestartRule(Protocol):
         ...
 
     def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:
-        """Return True iff path i should restart from f_k with the raw best B.
+        """Return True iff path i should restart from f_k with the raw best `f⋆`.
 
         The engine asks this for every path on its first iteration, before any
         probe has run, and that ask is how the flock is seeded: a rule must
@@ -274,7 +275,7 @@ class RestartRule(Protocol):
         window, and the window is the pool's own size, so its asks space
         themselves out; `NoRestartRule` spends nothing after the seeding.
 
-        B is the raw minimum (see the class docstring) and `f_k` is path i's
+        `f⋆` is the raw minimum (see the class docstring) and `f_k` is path i's
         current value in the same unfiltered terms.
         """
         ...
@@ -354,7 +355,7 @@ class NPathResult:
     `status="unbounded"` - and `fun` is the best over *feasible* points only, so
     it is `inf` when nothing feasible was ever served and `-inf` when a feasible
     point priced the objective at `-inf` (the trajectory still moves on the
-    penalized objective, but B does not). scipy's `fun` has no such filter.
+    penalized objective, but `f⋆` does not). scipy's `fun` has no such filter.
     """
 
     x: jnp.ndarray  # (d,) coords of the best point found
@@ -406,7 +407,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
     The engine owns the schedule: it composes and clips the rows into
     `bounds`, serves each batch as one `eval_f_g` call, keeps the
-    n-path state machine, and owns the best B. The search itself is
+    n-path state machine, and owns the best `f⋆`. The search itself is
     injected: `solver` owns direction, step size and
     acceptance and keeps its per-path state in Python floats, and
     `restart_rule` is the engine's one rule instance (default
@@ -790,7 +791,7 @@ class _Best:
 
     `fun`/`x` are the answer: the minimum over feasible points served, which is
     what the run reports. Defined over feasible designs only - with no aux,
-    every point is feasible. A NaN or +inf trial neither becomes B nor
+    every point is feasible. A NaN or +inf trial neither becomes `f⋆` nor
     displaces one: it carries no value to compare. A feasible -inf is not an
     improvement to weigh but the answer itself - the objective has no floor
     there, so no later trial can beat it and no step can improve on it, which
@@ -799,13 +800,13 @@ class _Best:
     report.
 
     `fun_raw` is the same minimum with the feasibility filter removed: every
-    finite point served, feasible or not. A restart verdict is asked against it
-    rather than against `fun`, because the evidence on both sides of a verdict is
-    unfiltered - `f_k` is the path's own served value and each payoff in the
-    rule's pool is a probe group-min wherever the sampler landed, and a probe
-    cannot be filtered by feasibility without dropping the event. A filtered B
-    read against unfiltered evidence would put the two sides of one verdict on
-    different scales.
+    finite point served, feasible or not. This is `f⋆`, the value a restart
+    verdict is asked against rather than `fun`, because the evidence on both
+    sides of a verdict is unfiltered - `f_k` is the path's own served value and
+    each payoff in the rule's pool is a probe group-min wherever the sampler
+    landed, and a probe cannot be filtered by feasibility without dropping the
+    event. A filtered `f⋆` read against unfiltered evidence would put the two
+    sides of one verdict on different scales.
     """
 
     def __init__(self, d: int | None) -> None:

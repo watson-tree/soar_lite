@@ -255,7 +255,7 @@ class EIRestartRule(RestartRule):
         degenerate "continuing buys nothing" read (what a stalled path always
         has, since a stall drops its stage) - which leaves the verdict resting on
         the restart side's own evidence. One fold (or a constant stage) has MAD =
-        0, so h = 0 and the read is exactly max(B - (f_k + Δ), 0).
+        0, so h = 0 and the read is exactly max(f⋆ - (f_k + Δ), 0).
 
         Only the newest M Δ are read. A path whose verdict said continue holds M
         + 1 of them at its next verdict: the stage opened in the round it was
@@ -301,7 +301,7 @@ class EIRestartRule(RestartRule):
 
         An empty pool and a pool with no finite sample both read 0.0 - there is
         no evidence for the mean to be positive about. M = 1 (or a constant
-        finite pool) → h = 0 → degenerate max(B - group_min, 0).
+        finite pool) → h = 0 → degenerate max(f⋆ - group_min, 0).
         """
         finite = [v for v in self.group_mins if math.isfinite(v)]
         if not finite:
@@ -341,7 +341,7 @@ class EIRestartRule(RestartRule):
         The smallest window is 1 (an empty pool), and `should_restart` answers
         that as cold start before this is read. M = 1 is the one-sample regime -
         one fold has no spread (MAD = 0, so h = 0), and a pool of one prices
-        `EI_restart = max(B - group_min, 0)`, which is 0 whenever that sample is
+        `EI_restart = max(f⋆ - group_min, 0)`, which is 0 whenever that sample is
         the best so far. Both sides then read 0 and the verdict ties, so the path
         probes once; the probe is what buys the second sample, and from M = 2 on
         the spread decides the verdict on its own.

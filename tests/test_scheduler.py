@@ -391,7 +391,7 @@ class _RecordingBest(EIRestartRule):
     """An `EIRestartRule` that also logs the raw best each verdict is asked.
 
     Recording only: every decision is delegated, so the run is the default
-    rule's plus a log of what B it was handed.
+    rule's plus a log of what `f⋆` it was handed.
     """
 
     def __init__(self) -> None:
@@ -404,7 +404,7 @@ class _RecordingBest(EIRestartRule):
 
 
 def test_feasible_only_best() -> None:
-    """The reported B is the feasible min; the one a verdict reads is raw.
+    """The reported best (`fun`) is the feasible min; `f⋆` is raw.
 
     f = (θ-0.2)^2 has its global min at θ=0.2, which the feas mask marks
     infeasible (θ <= 0.5); the best feasible design is θ=0.5+ (f 0.09). The
@@ -453,8 +453,8 @@ def test_feasible_only_best() -> None:
     # the reported answer is the best feasible point, never the raw min
     assert res.fun == min(feasible_f_vals)
     assert res.x[0] > thr  # the reported best lies on the feasible side
-    # ... and the verdict reads the raw min: a B below every feasible value can
-    # only have come from an infeasible point.
+    # ... and the verdict reads the raw min: an `f⋆` below every feasible value
+    # can only have come from an infeasible point.
     assert rule.bs, "a verdict was never asked"
     assert min(rule.bs) < min(feasible_f_vals)
 
@@ -654,7 +654,7 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
     member), so the shared init group-min list carries an inf sample. Feeding
     it naively into the KDE blows the bandwidth and gives EI_restart = NaN, and
     `NaN > EI_continue` is False forever - no path would ever restart again
-    even though B is finite. The group-min pool proves the verdicts still fire:
+    even though `f⋆` is finite. The group-min pool proves the verdicts still fire:
     it is n_paths long after init and every restart event appends its own
     entries, so a run with verdicts grows past n_paths while the same run with
     the window pushed out of reach does not.
@@ -693,7 +693,7 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
 
     res_off, rule_off = seam_run(10**9)  # verdicts never due
     res_on, rule_on = seam_run(2)  # verdict once two samples land
-    assert res_off.fun == 1.0, res_off.fun  # B is finite, so EI_restart fits
+    assert res_off.fun == 1.0, res_off.fun  # `f⋆` is finite, so EI_restart fits
     assert res_on.fun == 1.0, res_on.fun
     assert len(rule_off.group_mins) == n_paths, rule_off.group_mins  # init only
     assert len(rule_on.group_mins) > n_paths, rule_on.group_mins  # restarts fired
@@ -792,13 +792,13 @@ def test_a_dead_initialization_probe_does_not_freeze_the_run() -> None:
 def test_stalled_paths_wait_for_ei_then_restart() -> None:
     """A method's own give-up stalls a path; only a due EI verdict revives it.
 
-    Init probes return f = x[0] (a real spread, so h > 0 and B stays
+    Init probes return f = x[0] (a real spread, so h > 0 and `f⋆` stays
     small); every later evaluation returns the same bad constant with a zero
     gradient, so the injected method rejects its trial cap and gives up. With
     window = 2 (the shortest stage that has a spread at all) and one sample per
     iteration, the stalled flock's second sample lands at iteration 2 and its
     verdict is due at iteration 3, with EI_continue = 0
-    (f_k >= B) and EI_restart > 0, so the flock is revived by a restart probe;
+    (f_k >= f⋆) and EI_restart > 0, so the flock is revived by a restart probe;
     with verdicts off (huge window) the very same run serves nothing after the
     stall. The two traces differ by exactly the restart
     events - this is the engine-level wiring (stall -> EI -> restart) the unit

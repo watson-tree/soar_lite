@@ -111,7 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not support; scott_mad is chosen for its cost (O(n ln n), ten lines), not
   because it was shown to beat a direct-plug-in bandwidth end to end.
   Degenerate corners are unchanged: a stage or pool with no spread has
-  `h = 0`, so the read is exactly `max(B - x, 0)`.
+  `h = 0`, so the read is exactly `max(f⋆ - x, 0)`.
 - A stalled path no longer fabricates a sample. `observe_continue` takes
   `delta: float | None`, and the engine reports a stall as `None` - absence, not
   a value - so folding an `inf` that had to be filtered back out at the read is

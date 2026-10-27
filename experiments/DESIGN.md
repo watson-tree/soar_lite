@@ -261,12 +261,12 @@ they have not been re-run since.
 Oscillator F20: `n_paths=1` reaches `7.7e-6`, `n_paths=16` `1.3e-4` (17x worse;
 the pre-refactor run already had the same direction, `4.4e-6` vs `1.6e-5`). The
 cause is the restart rule, not the width. With 16 paths the group-min pool holds
-16 i.i.d. start values (`lo 1.7`, `hi 39`) while the best is `B = 0.054`.
+16 i.i.d. start values (`lo 1.7`, `hi 39`) while the best is `f⋆ = 0.054`.
 That pool is a **mixture** - one draw per path - and the rule used to fold it
 into a single Gaussian (`mu_r 7.0`, `sigma_r 9.0`), which put
-`z = (B - mu_r)/sigma_r = -0.77` near the EI hump and priced one restart at
+`z = (f⋆ - mu_r)/sigma_r = -0.77` near the EI hump and priced one restart at
 `1.14`: a 20x improvement offered by an action whose entire observed history was
-30x worse than B. Fitting one Gaussian to a wide mix inflates the tail, so
+30x worse than `f⋆`. Fitting one Gaussian to a wide mix inflates the tail, so
 `EI_restart` stayed large precisely because n_paths is large. `EI_continue`
 meanwhile decays with the path's own stage (`3.2 -> 0.02` as it converges), and
 an iteration restarts a path or advances it, never both. Measured: 292 restarts
@@ -280,7 +280,7 @@ scott_mad KDE (one Gaussian kernel per sample,
 `h = 1.06 * MAD/Phi^-1(3/4) * n^-1/5`) instead of a single Gaussian each - the
 continue side's Δ stream is no more guaranteed Gaussian than the pool is.
 
-Measured on the estimator alone (one 8-draw pool, `B = 0.054`): the
+Measured on the estimator alone (one 8-draw pool, `f⋆ = 0.054`): the
 single-Gaussian fit prices `EI_restart` at `0.83` against the KDE's `0.30`, a
 2.8x inflated tail. That is the mechanism, with no run behind it.
 
@@ -296,7 +296,7 @@ shipped on cost - `O(n ln n)`, ten lines, degenerating cleanly to `h = 0` - not
 because it was shown to beat SJ.
 
 The single-path curve is the degenerate corner, not the control: a pool of one
-sample gives no spread, so `h = 0` and `EI_restart = max(B - r, 0) = 0` exactly,
+sample gives no spread, so `h = 0` and `EI_restart = max(f⋆ - r, 0) = 0` exactly,
 and the verdict then turns on whether the continue side also reads 0 - which a
 flat or stalled chain does. The panel pins that arm to `NoRestartRule` so the
 curve stays the pure serial descent it was measured as, instead of picking up a
@@ -305,11 +305,12 @@ verdict is actually exercised. The restart mechanism on its own is isolated by
 `test_restart_beats_pure_multistart_on_multimodal` (same starts, same budget,
 rule swapped), which no panel curve does.
 
-Resolved: B was the min over feasible points only (`inf` when none was served),
-while both verdict alternatives are free to sample infeasible points. The engine
+Resolved: the verdict's best used to be the min over feasible points only (`inf`
+when none was served), while both verdict alternatives are free to sample
+infeasible points. The engine
 now keeps two bests — `fun`/`x` (feasible, the reported answer) and `fun_raw`
 (every finite point) — and hands `fun_raw` to the verdict, so both sides of one
-comparison are unfiltered. Moving B was the only consistent direction: a probe
+comparison are unfiltered. Moving it was the only consistent direction: a probe
 group-min cannot be filtered by feasibility without dropping the restart event
 itself. No panel number moves, because every problem here is box-only (`feas` is
 `None`) and the two bests coincide.

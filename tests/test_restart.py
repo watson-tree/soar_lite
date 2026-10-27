@@ -36,7 +36,7 @@ WINDOW = 8
 # in - a probe for a restarted path, the closing verdict for a continuing one.
 STAGE = WINDOW + 1
 
-# The scott_mad KDE read of the pool {0, 2} against B = 1 (h = 1.36712).
+# The scott_mad KDE read of the pool {0, 2} against f⋆ = 1 (h = 1.36712).
 KDE_LITERAL = 0.6851344670507414
 
 
@@ -85,7 +85,7 @@ def test_normal_functions_match_known_values() -> None:
 
 
 def test_ei_continue_degenerate_at_zero_bandwidth() -> None:
-    """One fold (or a constant stage) gives h = 0: EI = max(B - (f_k + Δ), 0)."""
+    """One fold (or a constant stage) gives h = 0: EI = max(f⋆ - (f_k + Δ), 0)."""
     assert close(continue_payoff(1.0, 0.0, [-0.5]), 0.0, 1e-15)  # 0 - 0.5 < 0 → 0
     assert close(continue_payoff(-1.0, 0.0, [0.0]), 1.0, 1e-12)  # 0 - (-1) = 1
     assert close(continue_payoff(1.0, 0.5, [-2.0]), 1.5, 1e-12)  # 0.5 - (-1) = 1.5
@@ -95,7 +95,7 @@ def test_ei_continue_degenerate_at_zero_bandwidth() -> None:
 def test_ei_continue_is_a_mean_of_per_sample_ei() -> None:
     """The stage's read is the KDE mean of per-sample EI (independent literal).
 
-    Δ = {-0.5, 0.5}, f_k = 0.5, B = 0 give h ≈ 0.68356 and EI ≈ 0.14724 - the
+    Δ = {-0.5, 0.5}, f_k = 0.5, f⋆ = 0 give h ≈ 0.68356 and EI ≈ 0.14724 - the
     mean of _gaussian_ei at the two next-value centres {0.0, 1.0}.
     """
     assert close(continue_payoff(0.5, 0.0, [-0.5, 0.5]), 0.14724429770396302, 1e-9)
@@ -110,7 +110,7 @@ def test_ei_restart_is_a_mean_of_per_sample_ei() -> None:
     """The pool is a mixture, not one Gaussian: EI is the mean of per-sample EI.
 
     h = _scott_mad_bandwidth({0, 2}) and the read is the plain mean of
-    _gaussian_ei(h, B, r_i) - a single-Gaussian fit (0.3989 here) is the bug
+    _gaussian_ei(h, f⋆, r_i) - a single-Gaussian fit (0.3989 here) is the bug
     this replaced.
     """
     h = _scott_mad_bandwidth([0.0, 2.0])
@@ -120,7 +120,7 @@ def test_ei_restart_is_a_mean_of_per_sample_ei() -> None:
 
 
 def test_ei_restart_tail_below_all_observations() -> None:
-    """All r_i ≥ B, yet the KDE tail still gives EI_restart > 0 (regression).
+    """All r_i ≥ f⋆, yet the KDE tail still gives EI_restart > 0 (regression).
 
     An empirical positive-part is always 0 here; the kernel tail is not:
     [1.5, 2.0] → h ≈ 0.34178 → EI ≈ 5.531594e-3.
@@ -356,7 +356,7 @@ def test_verdict_is_due_once_per_window_and_closes_the_stage() -> None:
 def test_worsening_flow_restarts_improving_flow_continues() -> None:
     """Worsening Δ collapses EI_continue; the KDE restart tail still fires.
 
-    A constant Δ has MAD 0, so its read is the degenerate max(B - f_k - Δ, 0):
+    A constant Δ has MAD 0, so its read is the degenerate max(f⋆ - f_k - Δ, 0):
     a path that keeps losing ground is priced at 0 against the pool's 0.6851,
     while a path that keeps gaining is priced above it.
     """
@@ -381,8 +381,8 @@ def test_a_zero_payoff_tie_restarts_to_buy_a_second_sample() -> None:
     """Both sides read 0: the tie fires and the probe is the evidence bought.
 
     A pool of copies has MAD 0 (`h = 0`) and its value is the best, so
-    `EI_restart = max(B - 0, 0) = 0`; a constant worsening stage also has MAD 0,
-    so `EI_continue = max(B - (f_k + Δ), 0) = 0` for `f_k + Δ >= B`. Neither side
+    `EI_restart = max(f⋆ - 0, 0) = 0`; a constant worsening stage also has MAD 0,
+    so `EI_continue = max(f⋆ - (f_k + Δ), 0) = 0` for `f_k + Δ >= f⋆`. Neither side
     can improve a verdict, but the probe's group-min is a real i.i.d. sample, so
     the tie spends it instead of idling.
     """
