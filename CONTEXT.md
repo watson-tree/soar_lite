@@ -147,8 +147,10 @@ secant denominator vanishes (a flat but unconverged coordinate).
 _Avoid_: epsilon, addend, regularizer
 
 **warmup**:
-A path's first step, before any secant pair exists: an Armijo backtrack along
-`-g₀`. The only step that carries an acceptance guard.
+A path's first step, before any secant pair exists: one sample of the alpha grid
+along `-g₀`, committed as proposed under the default `n_alpha = 1`. It carries
+no acceptance guard of its own — the phase enters only the direction, never the
+ruling (see *needs verdict*).
 _Avoid_: initialization step
 
 **give_up**:

@@ -50,7 +50,7 @@ Five groups, one role each:
    the best-so-far vs nfev curves overlap in both unit systems, while Adam's
    separate (one system needs a different `α`). Exact per-step covariance
    (`x̃=c·x ⇒ d̃=c²d, Δx̃=c·Δx`) is real but holds only for the secant-based
-   steady state: the **Armijo warmup is by design not coordinate-invariant** (a
+   steady state: the **warmup step is by design not coordinate-invariant** (a
    scalar `α` applied uniformly across mixed-unit coords), so the first secant
    pair — and anything seeded by it — is not the transformed pair
    (`ALGORITHM.md` §1.4/§7). On the diagonal quadratic this self-corrects in
@@ -128,14 +128,17 @@ the rotated quadratic the full step is already the right length, and no scalar
 step rescaling helps.**
 
 - `n_alpha` (renamed from `ls_rounds` — a count, and "rounds" wrongly
-  suggested engine rounds) is the post-warm-up `alpha`-grid size: at
-  `n_alpha >= 2` it samples `alpha0 · backtrack^j` along `-d ⊙ g` and the
-  engine's per-step argmin commits the winner. `n_alpha=1` is inert (default).
+  suggested engine rounds) is the `alpha`-grid size, used by both phases: at
+  `n_alpha >= 2` it samples `alpha0 · backtrack^j` along the step's own
+  direction (`-g` in the warm-up, `-d ⊙ g` after) and the engine's per-step
+  argmin commits the winner. `n_alpha=1` is inert (default).
 - **Grid sweep** (300 batches, 3 seeds, rotated `cond=1e6` d=100): `n_alpha`
   larger is strictly worse — `n_paths=1` at `backtrack=0.5`:
-  `1285 → 4220 → 7382 → 12535`. `backtrack` only matters at `n_alpha=1`
-  (`1285 → 1056` at 0.1), which is the warm-up Armijo start — a different
-  first step (path shift), not a grid effect.
+  `1285 → 4220 → 7382 → 12535`. `backtrack` then also mattered at `n_alpha=1`
+  (`1285 → 1056` at 0.1) because it shrank the **warm-up Armijo** backtrack — a
+  different first step (path shift), not a grid effect. That sweep predates the
+  removal of the warm-up guard: with neither a guard nor a grid at `n_alpha=1`,
+  `backtrack` is now inert there and only sets the grid's spacing.
 - **`alpha0` damping** (the "small step along the wrong direction might pay"
   hypothesis, `alpha0 ∈ {0.125, 0.25, 0.5, 1.0, 2.0}`, `n_paths ∈ {1,16}`,
   rot+diag): damping is strictly worse on the rotated case
@@ -317,27 +320,38 @@ Ackley d=100 at 3000 batches: `n_paths=16` 19.47, Adam 19.57, `n_paths=1`
 19.78, against `f* = 0`. All three miss the funnel; 19.5-19.9 is what Ackley
 looks like outside it, and the 1% spread only says where each froze.
 `n_paths=1` is bit-flat from batch 781 on: the diagonal secant has nothing to
-act on where the gradient is a ~1e-8 radial term buried in cos-frequency noise,
-so Armijo keeps shrinking `alpha` until it commits a no-op step. That is the
-designed boundary of a first-order diagonal preconditioner, not a tuning
-failure — no saddle/vanishing-gradient handling is built in (a Zhang-Li power
+act on where the gradient is a ~1e-8 radial term buried in cos-frequency noise.
+That run predates the removal of the warm-up guard - it froze because Armijo
+kept shrinking `alpha` to a no-op step, and the same dead signal without the
+guard commits steps that go nowhere; the freeze is not re-measured here. Either
+way it is the designed boundary of a first-order diagonal preconditioner, not a
+tuning failure — no saddle/vanishing-gradient handling is built in (a Zhang-Li power
 iteration triggered on a small gradient norm was considered and rejected:
 multi-path sampling plus restart already cover that regime, so the extra
 complexity would buy nothing). `n_paths=16`'s 0.1 edge over Adam is brute-force
 best-of-16 starts, which is why a working restart-and-sample story is expected
 to show up rather than suspicious.
 
-### The unit-rescaling residual is exactly the warm-up
+### The unit-rescaling residual was exactly the warm-up guard
 
-Diag quadratic d=100, `x' = 10x`, zero retune: soar-lite lands at `3.3e-65` in
-19 points (base) and `1.6e-65` in 12 (rescaled); Adam goes `2.0e-63` vs
-`7.2e-5`, 58 orders apart. The panel claims outcome-level overlap, and it holds
-— 2x in f at a floor of machine zero, against 58 orders for a single-lr method.
-The 1.6x in points is fully explained and not noise: the warm-up step is
-`alpha0 * (-g)`, unpreconditioned, so under `x' = s x` its physical length
-scales as `1/s^2`, and the base system needs `ceil(log2(s^2)) = 7` more Armijo
-halvings. Measured: base is rejected 12 times, the rescaled system 5 — exactly
-7 apart — and after the first acceptance both need exactly 6 points to reach
-their floor. The visible horizontal shift is therefore a first-step artefact,
-not path-dependent optimization; removing it needs a scale-free warm-up, which
-the secant cannot provide before it has its first pair.
+Diag quadratic d=100, `x' = 10x`, zero retune, measured while the warm-up still
+carried an Armijo backtrack: soar-lite lands at `3.3e-65` in 19 points (base)
+and `1.6e-65` in 12 (rescaled); Adam goes `2.0e-63` vs `7.2e-5`, 58 orders
+apart. The panel claims outcome-level overlap, and it holds — 2x in f at a floor
+of machine zero, against 58 orders for a single-lr method. The 1.6x in points was
+fully explained and not noise: the warm-up step is `alpha0 * (-g)`,
+unpreconditioned, so under `x' = s x` its physical length scales as `1/s^2`, and
+the base system needed `ceil(log2(s^2)) = 7` more Armijo halvings. Measured then:
+base was rejected 12 times, the rescaled system 5 — exactly 7 apart — and after
+the first acceptance both needed exactly 6 points to reach their floor. The
+visible horizontal shift was therefore a first-step artefact, not path-dependent
+optimization.
+
+That artefact is structural rather than tuned away, so it is gone by
+construction now that the warm-up is a single unruled step: there is nothing to
+halt, and both systems take exactly one first step. What remains — and is not
+addressed — is the same scale dependence in the warm-up *direction*: `-g` is a
+gradient-type quantity, so the first step's physical length still scales as
+`1/s^2`; it simply stops being measured against the objective. Removing that
+needs a scale-free warm-up, which the secant cannot provide before it has its
+first pair.

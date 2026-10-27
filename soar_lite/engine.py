@@ -149,6 +149,13 @@ class LocalSolver(Protocol):
         replaces the ruling is the engine's gate: a winner whose value or
         gradient is not finite stalls the path instead of being committed, which
         is the same gate a fresh probe start passes.
+
+        The cost of ``True`` is the method's own, and it is the caller's to
+        weigh: absent the ``eval_f`` seam every served trial is a fused pass, so
+        a ruled step pays one gradient *per trial* where a committed one pays
+        one per step. The engine cannot absorb that - how many trials a step
+        runs is not its business - so a method that answers ``True`` for a
+        multi-trial step is choosing that billing.
         """
         ...
 

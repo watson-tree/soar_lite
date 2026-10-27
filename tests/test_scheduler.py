@@ -537,8 +537,8 @@ def test_probe_group_min_skips_nan() -> None:
     1.0e3, so every start must be its point from the finite draw - asserted per
     column against the recorded draws, since each path takes the group-min of
     its own column (no re-derivation of the engine's PRNG chain). Picking the
-    NaN draw's x would set that path's ZH reference to NaN: Armijo can never
-    accept against NaN, so the path would stall for the rest of the run. Running
+    NaN draw's x would set that path's ZH reference to NaN, and a NaN start never
+    recovers: the engine's finite gate stalls it for the rest of the run. Running
     the NaN draw first and last also kills an "always take the last draw"
     mis-implementation.
     """

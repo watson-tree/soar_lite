@@ -31,38 +31,44 @@ def close(
 # --- DiagonalPreconditioner ---
 
 
-def test_diag_warmup_is_a_monotone_backtracked_gradient_step() -> None:
-    """Init arms alpha = 1 along -g; a trial above the Armijo bound shrinks it."""
+def test_diag_warmup_is_one_unruled_gradient_step() -> None:
+    """The warm-up is the steady state's step: one sample along -g, no ruling."""
     solver = DiagonalPreconditioner()
     p = PathPoint(x=jnp.zeros(3), f=2.0, g=jnp.array([3.0, 0.0, 4.0]))
     solver.restart(0, p)
     assert not solver.has_secant[0]
+    assert not solver.needs_verdict(0)  # n_alpha=1: there is nothing to compare
     assert solver.alpha[0] == 1.0
     assert close(solver.propose(0, p), p.x + 1.0 * (-p.g), 1e-12)
-    # Monotone Armijo, not mere descent: the bound is f + c·gᵀ(-g) = 2 - 1e-4·25,
-    # so a trial that does improve on f = 2 but misses that bound must retry.
-    just_short = PathPoint(x=p.x - p.g, f=1.999, g=p.g)
-    assert solver.verdict(0, p, just_short.x, just_short.f) == "retry"
-    assert not solver.has_secant[0]
-    assert solver.alpha[0] == solver.backtrack
-    assert close(solver.propose(0, p), p.x + solver.backtrack * (-p.g), 1e-12)
-    accepted = PathPoint(x=p.x - solver.backtrack * p.g, f=1.0, g=p.g)
-    assert solver.verdict(0, p, accepted.x, accepted.f) == "accept"
-    solver.fold(0, p, accepted)
+    # Committed exactly as proposed: the engine never asks for a ruling, and the
+    # step's value need not beat the start's.
+    above = PathPoint(x=p.x - p.g, f=9.0, g=p.g)
+    solver.fold(0, p, above)
     assert solver.has_secant[0]
-    assert close(solver.s_ema[0], jnp.square(solver.backtrack * p.g), 1e-12)
+    assert close(solver.s_ema[0], jnp.square(-p.g), 1e-12)
 
 
-def test_diag_warmup_retries_a_nonfinite_trial() -> None:
-    """A non-finite warm-up trial backs off like any reject; it never folds."""
+def test_diag_warmup_is_ruled_when_the_grid_compares_samples() -> None:
+    """n_alpha >= 2 rules the warm-up like any step: the grid's argmin decides."""
+    solver = DiagonalPreconditioner(n_alpha=2)
+    p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
+    solver.restart(0, p)
+    assert solver.needs_verdict(0)
+    # No descent test any more: a sample worse than the start still advances the
+    # grid, because only the sibling comparison will decide the winner.
+    assert solver.verdict(0, p, p.x - p.g, 7.0) == "retry"
+    assert solver.alpha[0] == solver.backtrack
+    assert solver.verdict(0, p, p.x - solver.backtrack * p.g, 8.0) == "accept"
+
+
+def test_diag_warmup_grid_drops_a_nonfinite_sample() -> None:
+    """A non-finite warm-up sample is a retry; an all-non-finite grid gives up."""
     for bad in (math.nan, math.inf, -math.inf):
-        solver = DiagonalPreconditioner()
+        solver = DiagonalPreconditioner(n_alpha=2)
         p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
         solver.restart(0, p)
-        trial = PathPoint(x=p.x - p.g, f=bad, g=p.g)
-        assert solver.verdict(0, p, trial.x, trial.f) == "retry"
-        assert not solver.has_secant[0]
-        assert solver.alpha[0] == solver.backtrack
+        assert solver.verdict(0, p, p.x - p.g, bad) == "retry"
+        assert solver.verdict(0, p, p.x, bad) == "give_up"
 
 
 def _warm_up(
@@ -70,12 +76,17 @@ def _warm_up(
     p: PathPoint,
     quad: Callable[[jnp.ndarray], tuple[float, jnp.ndarray]],
 ) -> PathPoint:
-    """Drive the warm-up loop by hand for path 0: propose, evaluate, judge."""
+    """Drive the warm-up by hand for path 0 the way the engine does.
+
+    An unruled step is committed as proposed; a ruled one walks its alpha grid
+    until the method accepts.
+    """
     for _ in range(20):  # the loop bound is this helper's, not the engine's
         x = solver.propose(0, p)
         f, g = quad(x)
         trial = PathPoint(x=x, f=f, g=g)
-        if solver.verdict(0, p, trial.x, trial.f) == "accept":
+        ruled = solver.needs_verdict(0)
+        if not ruled or solver.verdict(0, p, trial.x, trial.f) == "accept":
             solver.fold(0, p, trial)
             return trial
     raise AssertionError  # 20 trials without an accepted warm-up step
@@ -94,12 +105,12 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     p = PathPoint(x=x0, f=f0, g=g0)
     solver = DiagonalPreconditioner(theta=0.0)
     solver.restart(0, p)
-    # alpha = 1 overshoots by a factor 25 (f = 215), so the loop walks alpha down
-    # to the first step that satisfies Armijo - the served step is the secant's.
+    # alpha = 1 overshoots by a factor 25 (f = 215) and is committed anyway:
+    # the secant is exact at any length on a quadratic, so the overshoot costs
+    # one point rather than a backtrack walk.
     trial = _warm_up(solver, p, quad)
-    # The warm-up Armijo walk ends with the step re-armed at a full step: the
-    # post-warmup proposal is x - d·g (alpha 1.0), and alpha only ever acts as
-    # the warm-up's local multiplier, so it reads 1.0 once warm-up is done.
+    # The warm-up ends re-armed at a full step: the next proposal is x - d·g
+    # (alpha 1.0), and alpha only ever acts as the alpha-grid's multiplier.
     assert solver.alpha[0] == 1.0
     assert solver.has_secant[0]
     # y = h·s ⇒ √(S/Y) = 1/h ⇒ Δx = -(1/h)·h·x₁ = -x₁, the Newton step.
@@ -166,19 +177,6 @@ def test_diag_gradient_floor_carries_a_flat_secant() -> None:
     assert float(jnp.vdot(step, g)) < 0.0  # d > 0 ⇒ always a descent direction
 
 
-def test_diag_armijo_c_is_a_knob() -> None:
-    """armijo_c gates the warm-up Armijo acceptance, not a hardcoded 1e-4."""
-    g = jnp.array([1.0, 0.0])
-    p = PathPoint(x=jnp.zeros(2), f=1.0, g=g)
-    trial = PathPoint(x=p.x - g, f=0.9, g=g)  # gtd = -‖g‖² = -1
-    default = DiagonalPreconditioner()
-    default.restart(0, p)
-    assert default.verdict(0, p, trial.x, trial.f) == "accept"  # 0.9 ≤ 1 - 1e-4
-    tight = DiagonalPreconditioner(armijo_c=0.5)
-    tight.restart(0, p)
-    assert tight.verdict(0, p, trial.x, trial.f) == "retry"  # 0.9 > 1 - 0.5
-
-
 def test_diag_floor_is_a_floor_not_an_addend() -> None:
     """Set den = max(Y, λ), not Y + λ: λ never deflates a curvature-dominated d.
 
@@ -194,7 +192,7 @@ def test_diag_floor_is_a_floor_not_an_addend() -> None:
     # g1 = g0/(1+√θ) puts the warm-up secant y = g0-g1 = √θ·g1 exactly on the
     # crossover Y = θ·g1² = λ (elementwise, in the mean-square spelling).
     g1 = g0 / (1.0 + math.sqrt(theta))
-    trial = PathPoint(x=p.x - g0, f=0.9, g=g1)  # Armijo: 0.9 ≤ 1 - 1e-4·‖g0‖²
+    trial = PathPoint(x=p.x - g0, f=0.9, g=g1)  # committed unruled; f is not read
     assert solver.verdict(0, p, trial.x, trial.f) == "accept"
     solver.fold(0, p, trial)
     lam = theta * jnp.square(g1)
@@ -213,7 +211,7 @@ def test_diag_decay_blends_later_secants() -> None:
     g0 = jnp.array([1.0, 2.0])
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=g0)
     solver.restart(0, p)
-    x1 = p.x - g0  # alpha = 1, accepted: f = 0.9 <= 1 - 1e-4·5
+    x1 = p.x - g0  # alpha = 1, the full step, committed unruled
     g1 = jnp.array([0.5, 1.0])
     first = PathPoint(x=x1, f=0.9, g=g1)
     assert solver.verdict(0, p, first.x, first.f) == "accept"
@@ -424,7 +422,6 @@ def test_diag_knobs_out_of_range_are_rejected() -> None:
         {"n_alpha": 0},
         {"alpha0": 0.0},
         {"backtrack": 1.0},
-        {"armijo_c": 0.0},
     ):
         assert next(iter(bad)) in rejects(**bad), bad
 

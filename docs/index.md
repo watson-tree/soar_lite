@@ -13,7 +13,8 @@ Three pieces, no dependencies beyond JAX and the standard library:
   verdicts and the stall state machine.
 - **`DiagonalPreconditioner`** — the default local method: a per-coordinate
   diagonal secant step `-d ⊙ g`, EMA-smoothed, with a gradient-norm floor and an
-  Armijo-guarded step grid. No matrix, no linear solve, no scalar learning rate.
+  optional alpha grid (`n_alpha`) whose argmin the engine commits. No matrix, no
+  linear solve, no scalar learning rate.
 - **`EIRestartRule`** — the default restart rule: compares the expected
   improvement of continuing a path against the expected improvement of
   restarting it, both read off the path's own recent f changes and a pool of

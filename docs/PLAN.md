@@ -225,9 +225,9 @@ Landed: **`max_ls` is retired.** It was an engine-side cap on a loop the solver
 owns - the same quantity as `n_alpha`, on the wrong side of the seam. The step
 loop is now `while rejecting`, with termination a stated contract (`verdict` must
 eventually return `accept` or `give_up`) instead of an engine failsafe;
-`DiagonalPreconditioner` terminates on its own (the post-warm-up grid is capped
-by `n_alpha`, and the warm-up's geometric shrink bottoms out at a zero-length
-step, which passes Armijo because `gtd = 0`). The migration bullet
+`DiagonalPreconditioner` terminates on its own (the alpha grid is capped by
+`n_alpha`, and at the default `n_alpha=1` the single proposal is committed, so a
+step never retries at all). The migration bullet
 above therefore no longer quotes an engine-side bound for one iteration's
 batches.
 

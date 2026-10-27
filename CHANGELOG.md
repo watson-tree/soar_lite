@@ -134,6 +134,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `budget_check` is unchanged as a per-batch gate but no longer a substitute for
   the horizon: a stalled iteration asks for no batch, so a gate alone cannot
   stop a spinning flock.
+- The warm-up is no longer a guarded step. The first step samples the same
+  `alpha` grid as every later one, along `-g` instead of `-d ⊙ g`, and under the
+  default `n_alpha=1` it commits one full step exactly as proposed.
+  `needs_verdict` is therefore phase-independent (`n_alpha > 1`), so a warm-up is
+  ruled only when the grid actually compares samples; otherwise the engine's own
+  finiteness gate is the whole of the acceptance. One mechanism now covers both
+  phases, and the unit-rescaling first-step artifact (a coordinate-scaled warm-up
+  needing `ceil(log2(s²))` extra halvings) disappears with the halvings. What is
+  given up is the automatic localization of the first secant pair: an overshoot
+  now stands until the next secant corrects it, `alpha0 < 1` damps it by hand,
+  or `n_alpha >= 2` re-localizes it.
 
 ### Removed
 
@@ -155,6 +166,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `all_stalled` status and its early exit: a fully stalled flock now idles to
   the horizon, ticking one stall report per path per iteration, instead of
   reading the rule's cadence to decide it can never be revived.
+- `armijo_c`, and the warm-up Armijo backtrack it gated. The guard protected the
+  objective's value, not the secant signal - on a quadratic `d = s/y` is exact at
+  any step length, so the backtrack walked a length down for nothing - and it was
+  the only reason one phase needed a mechanism the other did not. Passing
+  `armijo_c=` to `DiagonalPreconditioner` is now a `TypeError`; `n_alpha >= 2` is
+  the one way to localize a first step.
 
 ### Fixed
 

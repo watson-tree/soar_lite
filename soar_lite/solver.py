@@ -40,30 +40,32 @@ class DiagonalPreconditioner(LocalSolver):
     preconditioner", not "diagonal Newton": coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside
     |y_i| and makes d a biased estimator of 1/Hᵢᵢ.
 
-    Two phases per path. The warm-up (the first step) is a plain backtracking
-    line search along -g from the start length ``alpha0`` (default 1) - a
-    magnitude ratio needs one secant pair before it can estimate anything. The shrink
-    factor (``backtrack``) and the Armijo slope c (``armijo_c``) make the
-    backtracking's
-    own step-length sequence coordinate-free (alpha multiplies the direction,
-    and both constants are dimensionless), but the direction scales the wrong
-    way: a step must add a
-    length-like direction, while -g scales like a gradient (with 1/x under
-    x̃=cx), not like a length, so the warm-up step still carries the coordinate
-    scale. Nothing scalar can repair that; a length-like direction could
-    (physical spans, or a box-width scaling), which matters
-    only if the working box ever stops being [0,1]ᵈ - where the engine's clip
-    absorbs it today. Nothing nonmonotone is used: the reference is the step's
-    own start f, so the test is monotone. Once that pair is in hand the default
-    (n_alpha=1) accepts the full step unconditionally: no backoff, an
-    overshoot is left to the next secant to correct (Zhang-Li is deliberately
-    dropped). A full step is committed exactly as proposed - ``needs_verdict``
-    answers False there, so the engine never asks for a ruling and its own gate
-    on the winner's value and gradient is the whole of the acceptance. With
-    n_alpha >= 2 the step samples the alpha grid
-    {alpha0, alpha0·backtrack, alpha0·backtrack², …} along -d⊙g and
-    takes the argmin, handing the win to the engine's per-step argmin cache and
-    folding it through ``fold``.
+    Two phases per path, one step mechanic. Every step samples the alpha grid
+    {alpha0, alpha0·backtrack, alpha0·backtrack², …} along its own direction and
+    hands the win to the engine's per-step argmin, which ``fold`` records. The
+    phases differ only in the direction: the warm-up (the first step) has no
+    secant pair yet, so it descends along -g from the start length ``alpha0``
+    (default 1) - a magnitude ratio needs one secant pair before it can estimate
+    anything. The shrink factor (``backtrack``) makes the grid coordinate-free
+    (alpha multiplies the direction, and the constant is dimensionless), but the
+    direction scales the wrong way: a step must add a length-like direction,
+    while -g scales like a gradient (with 1/x under x̃=cx), not a length, so the
+    warm-up step still carries the coordinate scale. Nothing scalar can repair
+    that; a length-like direction could (physical spans, or a box-width
+    scaling), which matters only if the working box ever stops being [0,1]ᵈ -
+    where the engine's clip absorbs it today. Once that pair is in hand the
+    direction becomes -d⊙g, which needs no acceptance test at all (d ≥ 0 ⇒
+    descent), and the default (n_alpha=1) commits the full step
+    unconditionally: no backoff, an overshoot is left to the next secant to
+    correct (Zhang-Li is deliberately dropped). Nothing nonmonotone is used in
+    either phase, because neither phase tests monotonicity: a grid sample is
+    ruled against its siblings, never against the step's start.
+
+    ``needs_verdict`` is therefore phase-independent: it answers True exactly
+    when the grid has more than one sample to compare (n_alpha > 1). A
+    single-sample step - warm-up or steady - is committed as proposed, so the
+    engine never asks for a ruling and its own gate on the winner's value and
+    gradient is the whole of its acceptance.
 
     The stopping test is a gradient-norm test: ‖g‖ ≤ τ_rel·‖g_0‖ gives up, the
     engine's only way to report a path that is done. The norm (not the
@@ -93,23 +95,18 @@ class DiagonalPreconditioner(LocalSolver):
         tau_rel: float = 1e-6,  # gradient-norm stopping test vs ‖g_0‖
         moment: Literal["abs", "rms"] = "rms",  # mean ratio / mean-square ratio
         alpha0: float = 1.0,  # the full step's length, in units of the natural step
-        n_alpha: int = 1,  # alpha samples per step along -d⊙g; 1 = no line search
+        n_alpha: int = 1,  # alpha samples per step; 1 = no line search
         backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
-        armijo_c: float = 1e-4,  # warm-up Armijo sufficient-decrease slope
     ) -> None:
         """Store the knobs; per-path state is seeded by restart.
 
         ``alpha0`` is the step length every path is armed at (``_reset_step``),
-        in units of the natural step: -g in the warm-up, -d⊙g after - the
-        warm-up Armijo start, and the post-warmup full step (damping). It never
-        grows back on its own: the warm-up Armijo only shrinks below it, and
-        the grid only samples down from it. ``backtrack`` is one step-length
-        constant for the whole class: it is
-        the warm-up Armijo shrink AND the post-warmup alpha grid's spacing
-        (n_alpha >= 2). ``armijo_c`` is the warm-up Armijo sufficient-decrease
-        slope c (dimensionless): a trial above f + c·gᵀd is rejected and shrunk.
-        A knob outside its own range raises ValueError here, once per object;
-        nothing downstream re-checks it.
+        in units of the natural step: -g in the warm-up, -d⊙g after, and the
+        full step of both phases under the default ``n_alpha=1``. It never grows
+        back on its own: the alpha grid only samples down from it.
+        ``backtrack`` is that grid's spacing (``n_alpha >= 2``), one constant
+        for both phases. A knob outside its own range raises ValueError here,
+        once per object; nothing downstream re-checks it.
 
         Args:
             beta: EMA decay for the secant-magnitude smooth (window ≈ 1/(1-β)
@@ -122,11 +119,9 @@ class DiagonalPreconditioner(LocalSolver):
                 |y|) or ``"rms"`` (mean of s², y²).
             alpha0: step length every path is armed at; the full step's
                 length, > 0.
-            n_alpha: alpha samples per post-warmup step along ``-d⊙g``; 1 means
+            n_alpha: alpha samples per step along the step's direction; 1 means
                 no line search, >= 1.
-            backtrack: the warm-up Armijo shrink factor and the alpha-grid
-                spacing, in (0, 1).
-            armijo_c: the warm-up Armijo sufficient-decrease slope, in (0, 1).
+            backtrack: the alpha-grid spacing, in (0, 1).
 
         """
         for name, value, ok, want in (
@@ -137,7 +132,6 @@ class DiagonalPreconditioner(LocalSolver):
             ("alpha0", alpha0, alpha0 > 0.0, "> 0"),
             ("n_alpha", n_alpha, n_alpha >= 1, ">= 1"),
             ("backtrack", backtrack, 0.0 < backtrack < 1.0, "in (0, 1)"),
-            ("armijo_c", armijo_c, 0.0 < armijo_c < 1.0, "in (0, 1)"),
         ):
             if not ok:
                 msg = f"{name} must be {want}, got {value!r}"
@@ -149,7 +143,6 @@ class DiagonalPreconditioner(LocalSolver):
         self.alpha0 = alpha0
         self.n_alpha = n_alpha
         self.backtrack = backtrack
-        self.armijo_c = armijo_c
         self.alpha: dict[int, float] = {}  # per path: current step multiplier
         self.g0: dict[int, jnp.ndarray] = {}  # per path: the stopping test's anchor
         self.has_secant: dict[int, bool] = {}  # per path: first pair in hand?
@@ -172,17 +165,19 @@ class DiagonalPreconditioner(LocalSolver):
         self.y_ema[i] = jnp.zeros_like(p.g)
         self._reset_step(i)
 
-    def needs_verdict(self, i: int) -> bool:
-        """Rule per candidate in the warm-up and on an alpha grid; not on a full step.
+    def needs_verdict(self, i: int) -> bool:  # noqa: ARG002 - the seam's per-path shape
+        """Rule per candidate only when the alpha grid compares samples.
 
-        The warm-up is a backtracking search (a rejected length is retried), and
-        an ``n_alpha >= 2`` grid compares samples, so both are ruled on: each
-        served value decides the next move. The default full step is not - it is
-        committed as proposed, and the engine's own gate on the winner's value
-        and gradient is the whole of its acceptance (a non-finite one stalls the
-        path instead of folding a nan into every later step).
+        True exactly when ``n_alpha > 1``: the grid serves that many samples and
+        each served value decides whether to shrink and try again, so the engine
+        must ask for a ruling. The phase does not enter - an ``n_alpha >= 2``
+        warm-up is ruled on its grid like any steady step. The default
+        single-sample step is not ruled: it is committed as proposed, and the
+        engine's own gate on the winner's value and gradient is the whole of its
+        acceptance (a non-finite one stalls the path instead of folding a nan
+        into every later step).
         """
-        return not self.has_secant[i] or self.n_alpha > 1
+        return self.n_alpha > 1
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
         """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - d⊙g."""
@@ -204,15 +199,23 @@ class DiagonalPreconditioner(LocalSolver):
             d = jnp.sqrt(d)
         return p.x - self.alpha[i] * (d * p.g)
 
-    def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
-        """Give up at a stationary point; otherwise rule the enumeration in progress.
+    def verdict(
+        self,
+        i: int,
+        p: PathPoint,
+        x: jnp.ndarray,  # noqa: ARG002 - stays in the seam's trial shape
+        f: float,
+    ) -> Verdict:
+        """Give up at a stationary point; otherwise rule one alpha-grid sample.
 
-        Only consulted for a path that answered True to ``needs_verdict`` - the
-        warm-up, or an ``n_alpha >= 2`` grid; a full step is committed without a
-        ruling. Ruled on the served trial's coords `x` and value `f` alone: the
-        engine buys a trial's gradient only for the step's winner, so nothing
-        here may depend on one, and the winner's gradient is gated by the engine
-        before it folds. The stopping test reads ``p`` - the step's start, whose
+        Only consulted for a path that answered True to ``needs_verdict``, and
+        the phase does not enter: ``n_alpha > 1`` rules a warm-up grid and a
+        steady grid alike, while a single-sample step is committed without a
+        ruling. Only the served trial's value `f` is read - `x` stays in the
+        seam for methods that judge geometry, and this one does not. The engine
+        buys a trial's gradient only for the step's winner, so nothing here may
+        depend on one, and the winner's gradient is gated by the engine before
+        it folds. The stopping test reads ``p`` - the step's start, whose
         gradient a path always has.
         """
         # Checked on the *current* point, so a path that has just landed on a
@@ -222,20 +225,6 @@ class DiagonalPreconditioner(LocalSolver):
         # true only for a zero-gradient start.
         if bool(jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self.g0[i])):
             return "give_up"
-        if not self.has_secant[i]:
-            # Monotone Armijo on the served (projected) step, reference = the
-            # step's own start f; a reject shrinks alpha and retries. That loop
-            # ends by itself: once alpha has shrunk far enough the served trial
-            # rounds back to the start, so delta = 0, gtd = 0 and Armijo passes
-            # (committing a no-op step, which then arms a real one). -inf passes
-            # the `<=` below and would commit a non-objective, hence the
-            # finiteness gate too.
-            delta = x - p.x
-            gtd = jnp.vdot(p.g, delta).item()  # gᵀd for d = delta (delta carries alpha)
-            if not math.isfinite(f) or f > p.f + self.armijo_c * gtd:
-                self.alpha[i] *= self.backtrack
-                return "retry"
-            return "accept"
         return self._step_verdict(i, f)
 
     def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
@@ -267,13 +256,13 @@ class DiagonalPreconditioner(LocalSolver):
     def _step_verdict(self, i: int, f: float) -> Verdict:
         """Judge one alpha-grid sample on its value; never fold here.
 
-        Reached by the engine only with ``n_alpha >= 2``: a single-sample step
-        answers False to ``needs_verdict`` and is committed unruled, with the
-        engine's own finiteness gate standing in for the give-up below - the grid
-        code is the same one sample, so a direct call with ``n_alpha == 1`` still
-        rules that way. One grid
-        of ``n_alpha`` samples along the current -d⊙g step, shrinking alpha by the
-        warm-up backtrack constant each retry; the win is handed to the engine on
+        Reached by the engine only with ``n_alpha >= 2``, in either phase: a
+        single-sample step answers False to ``needs_verdict`` and is committed
+        unruled, with the engine's own finiteness gate standing in for the
+        give-up below - the grid code is the same one sample, so a direct call
+        with ``n_alpha == 1`` still rules that way. One grid
+        of ``n_alpha`` samples along the current step direction, shrinking alpha
+        by the grid's spacing each retry; the win is handed to the engine on
         "accept", which commits its per-step argmin and folds the winner through
         ``fold``.
 
