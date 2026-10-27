@@ -3,7 +3,7 @@
 The seam's contract is only proven by injection: a stub `LocalSolver` and a stub
 `RestartRule` are plugged into the engine, which must drive them instead of its
 defaults, and a foreign box (`bounds` as data) plus the caller's own x->θ map
-composed into `evaluate_batch` must be honoured too. These also pin the two
+composed into `eval_f_g` must be honoured too. These also pin the two
 documented zero-caller hooks — a method
 returning `"give_up"` and a run with no extra gate (`budget_check=None` ->
 `status == "max_iters"`, the horizon alone).
@@ -39,27 +39,27 @@ def evaluator() -> tuple[
     Callable[[jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None]],
     list[tuple[int, int]],
 ]:
-    """Return (evaluate_batch, recorded batch shapes)."""
+    """Return (eval_f_g, recorded batch shapes)."""
     shapes: list[tuple[int, int]] = []
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         shapes.append((int(x.shape[0]), int(x.shape[1])))
         f_vals, grads = jax.vmap(pointwise)(x)
         return f_vals, grads, None
 
-    return evaluate_batch, shapes
+    return eval_f_g, shapes
 
 
 def f_only(
-    evaluate_batch: Callable[[jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None]],
+    eval_f_g: Callable[[jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None]],
 ) -> Callable[[jnp.ndarray], tuple[jnp.ndarray, None]]:
     """Derive the f-only sibling, so a test needs one objective, not two."""
 
-    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
-        f_vals, _grads, feas = evaluate_batch(x)
+    def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        f_vals, _grads, feas = eval_f_g(x)
         return f_vals, feas
 
-    return evaluate_f
+    return eval_f
 
 
 def batches_below(shapes: list[tuple[int, int]], limit: int) -> Callable[[], bool]:
@@ -139,10 +139,10 @@ class AlwaysRestartRule(RecordingRule):
 def test_injected_solver_is_driven() -> None:
     """The engine calls the injected method, never its default."""
     k = 3
-    evaluate_batch, shapes = evaluator()
+    eval_f_g, shapes = evaluator()
     solver = StubSolver()
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
@@ -161,10 +161,10 @@ def test_injected_solver_is_driven() -> None:
 def test_give_up_stalls_a_path() -> None:
     """A "give_up" verdict stalls that path at once: no further trial for it."""
     k = 3
-    evaluate_batch, shapes = evaluator()
+    eval_f_g, shapes = evaluator()
     solver = StubSolver(give_up=True)
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
@@ -183,10 +183,10 @@ def test_give_up_stalls_a_path() -> None:
 def test_injected_rule_is_driven() -> None:
     """The engine feeds its one injected rule instance all the bookkeeping."""
     k = 2
-    evaluate_batch, _shapes = evaluator()
+    eval_f_g, _shapes = evaluator()
     rule = RecordingRule()
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
@@ -209,11 +209,11 @@ def test_injected_rule_is_driven() -> None:
 def test_rule_can_force_restarts() -> None:
     """A rule that always says restart re-probes every iteration, never steps."""
     k = 2
-    evaluate_batch, shapes = evaluator()
+    eval_f_g, shapes = evaluator()
     solver = StubSolver()
     rule = AlwaysRestartRule()
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
@@ -255,21 +255,21 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
         billed = 0  # g batches: the only billed calls
         drawn = 0  # f-only draws: served, never billed
 
-        def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             nonlocal billed
             billed += 1
             f_vals, grads = jax.vmap(pointwise)(x)
             return f_vals, grads, None
 
-        def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
             nonlocal drawn
             drawn += 1
             f_vals, _grads = jax.vmap(pointwise)(x)
             return f_vals, None
 
         res = n_path_schedule(
-            evaluate_batch,
-            evaluate_f=evaluate_f,
+            eval_f_g,
+            eval_f=eval_f,
             bounds=unit_bounds(),
             budget_check=lambda: billed < limit,
             n_paths=k,
@@ -295,9 +295,9 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
 def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
     """No gate passed at all (the keyword defaults to None): the horizon only."""
     k = 2
-    evaluate_batch, shapes = evaluator()
+    eval_f_g, shapes = evaluator()
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         n_paths=k,
         max_iters=PROBE_DRAWS + 3,  # the init probe plus three steps
@@ -315,13 +315,13 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
 
     The engine must sample and clip inside the box it was handed, and must never
     see the caller's parameterization (that map is composed into
-    `evaluate_batch`). Every trial here lands outside the box - the landscape's
+    `eval_f_g`). Every trial here lands outside the box - the landscape's
     minimizer x = 3 is not in it - so the clip is load-bearing, not incidental.
     """
     lo, hi = 1.0, 2.0
     served: list[float] = []
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         """Serve θ = x + 1, f = (θ - 4)²: the caller's map and landscape."""
         served.extend(float(v) for v in x[:, 0])
         theta = x + 1.0
@@ -329,7 +329,7 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
 
     bounds = jnp.stack([jnp.full(1, lo), jnp.full(1, hi)], axis=1)
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=bounds,
         budget_check=None,
         n_paths=2,
@@ -372,13 +372,13 @@ def test_a_box_uniform_sampler_reproduces_the_default_prior() -> None:
     ) -> tuple[list[jnp.ndarray], jnp.ndarray, float, int]:
         served: list[jnp.ndarray] = []
 
-        def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             served.append(x)
             f_vals, grads = jax.vmap(pointwise)(x)
             return f_vals, grads, None
 
         res = n_path_schedule(
-            evaluate_batch,
+            eval_f_g,
             bounds=box,
             sample=sample,
             budget_check=None,
@@ -415,7 +415,7 @@ def test_every_path_feeds_once_per_iteration() -> None:
     k = 2
     calls = [0]
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         calls[0] += 1
         f_vals = jnp.full((x.shape[0],), 1.0, dtype=x.dtype)
         if calls[0] <= PROBE_DRAWS:  # init probe evals: column 0 has no evidence
@@ -424,7 +424,7 @@ def test_every_path_feeds_once_per_iteration() -> None:
 
     rule = RecordingRule()
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
@@ -453,14 +453,14 @@ def test_a_probes_iteration_is_not_read_back_as_a_zero_step() -> None:
     k = 2
     rule = RecordingRule()
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         # A ramp: distinct points have distinct f values, so a reported Δ of 0
         # can only come from comparing a point with itself.
         f_vals = 10.0 * x[:, 0]
         return f_vals, jnp.full_like(x, 10.0), None
 
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         budget_check=lambda: True,
         n_paths=k,
@@ -490,12 +490,12 @@ def test_one_sample_per_iteration_at_every_probe_size() -> None:
     """
     k = 2
     for probe_evals in (1, 2, 3, 4):
-        evaluate_batch, _shapes = evaluator()
+        eval_f_g, _shapes = evaluator()
         rule = RecordingRule()
-        evaluate_f = None if probe_evals == 1 else f_only(evaluate_batch)
+        eval_f = None if probe_evals == 1 else f_only(eval_f_g)
         res = n_path_schedule(
-            evaluate_batch,
-            evaluate_f=evaluate_f,
+            eval_f_g,
+            eval_f=eval_f,
             bounds=unit_bounds(),
             n_paths=k,
             max_iters=3,  # init probe + two steps
@@ -521,9 +521,9 @@ def test_reports_points_and_batches_separately() -> None:
     """
 
     def run(k: int) -> tuple[int, int]:
-        evaluate_batch, _shapes = evaluator()
+        eval_f_g, _shapes = evaluator()
         res = n_path_schedule(
-            evaluate_batch,
+            eval_f_g,
             bounds=unit_bounds(),
             budget_check=lambda: True,
             n_paths=k,
@@ -545,18 +545,18 @@ def test_reports_points_and_batches_separately() -> None:
 
 
 def test_multi_draw_probe_is_refused_without_the_f_only_seam() -> None:
-    """n_draws > 1 needs evaluate_f: it would price g once per draw.
+    """n_draws > 1 needs eval_f: it would price g once per draw.
 
     The probe's cost asymmetry is in gradient counts, not batch counts - a step
     computes g once while an un-seamed multi-draw probe computes it once per
     draw - so the engine refuses the combination instead of silently overselling
     the probe side.
     """
-    evaluate_batch, _shapes = evaluator()
+    eval_f_g, _shapes = evaluator()
     refused: str | None = None
     try:
         n_path_schedule(
-            evaluate_batch,
+            eval_f_g,
             bounds=unit_bounds(),
             n_paths=2,
             n_draws=2,
@@ -566,8 +566,8 @@ def test_multi_draw_probe_is_refused_without_the_f_only_seam() -> None:
         )
     except ValueError as e:
         refused = str(e)
-    assert refused is not None, "n_draws=2 was accepted without evaluate_f"
-    assert "evaluate_f" in refused, refused
+    assert refused is not None, "n_draws=2 was accepted without eval_f"
+    assert "eval_f" in refused, refused
 
 
 def test_f_only_probe_computes_one_gradient_per_probe() -> None:
@@ -583,19 +583,19 @@ def test_f_only_probe_computes_one_gradient_per_probe() -> None:
     f_calls: list[jnp.ndarray] = []
     fused_calls: list[jnp.ndarray] = []
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         fused_calls.append(x)
         f_vals, grads = jax.vmap(pointwise)(x)
         return f_vals, grads, None
 
-    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+    def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
         f_calls.append(x)
         f_vals, _grads = jax.vmap(pointwise)(x)
         return f_vals, None
 
     res = n_path_schedule(
-        evaluate_batch,
-        evaluate_f=evaluate_f,
+        eval_f_g,
+        eval_f=eval_f,
         bounds=unit_bounds(),
         n_paths=k,
         n_draws=probe_evals,
@@ -619,7 +619,7 @@ def test_f_only_probe_computes_one_gradient_per_probe() -> None:
 
 
 def test_a_single_draw_probe_reads_its_start_at_the_gradient() -> None:
-    """One draw plus evaluate_f: the start is never read on its own.
+    """One draw plus eval_f: the start is never read on its own.
 
     Values are read early only to choose between candidates, and a single draw
     has no group to choose within - so the seam can leave the start unread. It
@@ -630,19 +630,19 @@ def test_a_single_draw_probe_reads_its_start_at_the_gradient() -> None:
     f_calls: list[int] = []
     fused_shapes: list[tuple[int, int]] = []
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         fused_shapes.append((int(x.shape[0]), int(x.shape[1])))
         f_vals, grads = jax.vmap(pointwise)(x)
         return f_vals, grads, None
 
-    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+    def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
         f_calls.append(int(x.shape[0]))
         f_vals, _grads = jax.vmap(pointwise)(x)
         return f_vals, None
 
     res = n_path_schedule(
-        evaluate_batch,
-        evaluate_f=evaluate_f,
+        eval_f_g,
+        eval_f=eval_f,
         bounds=unit_bounds(),
         n_paths=2,
         n_draws=1,
@@ -681,19 +681,19 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
             self.rounds += 1
             return "retry" if self.rounds == 1 else "accept"
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         f_vals, grads = jax.vmap(pointwise)(x)
         return f_vals, grads, None
 
-    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+    def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
         f_calls.append(int(x.shape[0]))
         f_vals, _grads = jax.vmap(pointwise)(x)
         return f_vals, None
 
     solver = OneRetry()
     res = n_path_schedule(
-        evaluate_batch,
-        evaluate_f=evaluate_f,
+        eval_f_g,
+        eval_f=eval_f,
         bounds=unit_bounds(),
         n_paths=k,
         max_iters=2,  # the init probe, then this one step
@@ -729,18 +729,18 @@ def test_one_gradient_batch_per_iteration() -> None:
             """Seed the pool cold, then keep restarting path 0 alone."""
             return not self.group_mins or i == 0
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         fused_shapes.append((int(x.shape[0]), int(x.shape[1])))
         f_vals, grads = jax.vmap(pointwise)(x)
         return f_vals, grads, None
 
-    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+    def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
         f_vals, _grads = jax.vmap(pointwise)(x)
         return f_vals, None
 
     res = n_path_schedule(
-        evaluate_batch,
-        evaluate_f=evaluate_f,
+        eval_f_g,
+        eval_f=eval_f,
         bounds=unit_bounds(),
         n_paths=k,
         max_iters=2,  # the cold start, then one mixed iteration
@@ -764,7 +764,7 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
     """
     fused = [0]
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         """Finite f always; the gradient is usable only for the probe's start."""
         fused[0] += 1
         f_vals, grads = jax.vmap(pointwise)(x)
@@ -772,15 +772,15 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
             grads = jnp.full_like(grads, jnp.nan)
         return f_vals, grads, None
 
-    def evaluate_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+    def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
         f_vals, _grads = jax.vmap(pointwise)(x)
         return f_vals, None
 
     solver = StubSolver()
     rule = RecordingRule()
     res = n_path_schedule(
-        evaluate_batch,
-        evaluate_f=evaluate_f,
+        eval_f_g,
+        eval_f=eval_f,
         bounds=unit_bounds(),
         n_paths=1,
         max_iters=2,  # the init probe, then this one step
@@ -804,13 +804,13 @@ def test_a_non_finite_gradient_start_arrives_stalled() -> None:
     stepping.
     """
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         f_vals, _grads = jax.vmap(pointwise)(x)
         return f_vals, jnp.full_like(x, jnp.nan), None
 
     solver = StubSolver()
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         n_paths=2,
         n_draws=1,

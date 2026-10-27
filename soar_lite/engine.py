@@ -272,7 +272,7 @@ NPathStatus: TypeAlias = Literal["budget_exhausted", "max_iters", "time_limit"]
 # (f (M,), grads_x (M,d), feas (M,)|None) out. Value and gradient come back
 # together on purpose - the caller's fused value_and_grad is one AD pass, and
 # the step's call sites want both at once (scipy's `jac=True` form, batched).
-BatchEvaluator: TypeAlias = Callable[
+EvalFG: TypeAlias = Callable[
     [jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]"
 ]
 
@@ -281,7 +281,7 @@ BatchEvaluator: TypeAlias = Callable[
 # included because probe group-min and step selection must still tell "finite
 # but infeasible" from viable, which f alone cannot. Opting in lets one probe
 # compute `g` once (at its winners) instead of once per draw.
-EvaluateF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | None]"]
+EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | None]"]
 
 # The search box in scipy's spelling (which `_box_bounds` normalizes): one
 # `(lb, ub)` pair per dim, a side of None or ±inf meaning unbounded. A `(d, 2)`
@@ -332,9 +332,9 @@ class NPathResult:
 
 def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # after the one positional seam: one name per dial beats a config object here)
-    evaluate_batch: BatchEvaluator,
+    eval_f_g: EvalFG,
     *,
-    evaluate_f: EvaluateF | None = None,
+    eval_f: EvalF | None = None,
     bounds: Bounds | None = None,  # scipy-style (lb, ub) pairs, a (d, 2) array, or None
     # The prior, injected: (key, n) -> (n, d) in the engine's own coordinates,
     # and the only authority on d. None -> i.i.d. uniform over a finite
@@ -342,7 +342,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # start to draw and is rejected below rather than guessed.
     sample: Sampler | None = None,
     n_paths: int = 16,  # number of paths advanced each iteration, the engine's width
-    n_draws: int = 1,  # draws per start; >1 needs evaluate_f
+    n_draws: int = 1,  # draws per start; >1 needs eval_f
     # The run's horizon, counted in iterations: the engine completes at most
     # max_iters iterations. An iteration is one move per path (a restart probe
     # or a step), not one eval, so this is a reproducible stop, not a cost or
@@ -370,7 +370,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     """Advance n_paths independent chains in x under one shared horizon.
 
     The engine owns the schedule: it composes and clips the rows into
-    `bounds`, serves each batch as one `evaluate_batch` call, keeps the
+    `bounds`, serves each batch as one `eval_f_g` call, keeps the
     n-path state machine, and owns the best B. The search itself is
     injected: `solver` owns direction, step size and
     acceptance and keeps its per-path state in Python floats, and
@@ -443,7 +443,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     So a stage of M iterations costs at most M evals (a stalled one serves no
     batch), but the batch count is not the cost
     that dominates: a probe computes g n_draws times while a step computes
-    it once, and g is the dearer half. So n_draws > 1 requires evaluate_f;
+    it once, and g is the dearer half. So n_draws > 1 requires eval_f;
     with it both sides compute g exactly once (the probe's f-only draws are not
     charged; only its winners' fused pass is), leaving only the cheap f-count to
     differ. That is why the default is 1.
@@ -455,13 +455,14 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     engine is their only caller.
 
     Args:
-        evaluate_batch: the objective as one batched pass. Takes rows ``x`` of
+        eval_f_g: the objective as one batched pass. Takes rows ``x`` of
             shape ``(M, d)`` and returns ``(f: (M,), g: (M, d), feas: (M,) |
             None)`` - value, gradient and optional feasibility mask.
-        evaluate_f: the objective's value half alone, same ``x`` rows, returning
-            ``(f: (M,), feas: (M,) | None)``. Named for its output where
-            ``evaluate_batch`` is named for its unit - the same seam at two
-            granularities. ``None`` means no f-only path at
+        eval_f: the objective's value half alone, same ``x`` rows, returning
+            ``(f: (M,), feas: (M,) | None)``. Both seams are named for what they
+            return - ``eval_f_g`` hands back f and g together, ``eval_f`` f
+            alone - so neither name leans on the unit it is called with.
+            ``None`` means no f-only path at
             all - the probe takes a gradient with each draw, which is why a
             depth above 1 is refused; supplying it lets a multi-draw probe
             compute ``g`` once, at its winners, instead of once per draw. The
@@ -474,7 +475,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             coordinates; ``None`` draws i.i.d. uniform over a finite ``bounds``.
         n_paths: number of paths advanced in lockstep each iteration.
         n_draws: probe group size - the draws per start. ``1`` (the
-            default) is one draw. Above 1 requires ``evaluate_f``: without it a
+            default) is one draw. Above 1 requires ``eval_f``: without it a
             probe would compute ``g`` once per draw against a step's single
             ``g``, and that gradient count - not the batch count - is the
             expensive half of the asymmetry the verdict prices.
@@ -505,12 +506,12 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             >>> import jax.numpy as jnp
             >>> from soar_lite import n_path_schedule
 
-            >>> def evaluate_batch(x):
+            >>> def eval_f_g(x):
             ...     g = 2.0 * (x - 3.0)
             ...     return (jnp.sum((x - 3.0) ** 2, axis=1), g, None)
 
             >>> result = n_path_schedule(
-            ...     evaluate_batch,
+            ...     eval_f_g,
             ...     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
             ...     n_paths=4,
             ...     max_iters=30,
@@ -528,7 +529,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         n_draws=n_draws,
         max_iters=max_iters,
         time_limit=time_limit,
-        evaluate_f=evaluate_f,
+        eval_f=eval_f,
         bounds=bounds,
     )
     # The seam check: presence, not signatures, and the two defaults, bound
@@ -578,8 +579,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     best = _Best(d_bounds)
 
     evaluator = _Evaluator(
-        evaluate_batch,
-        evaluate_f,
+        eval_f_g,
+        eval_f,
         sampler=sampler,
         budget=budget,
         best=best,
@@ -655,7 +656,7 @@ class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
     """A batch was requested past a closed gate.
 
     Raised only inside `n_path_schedule`, at the run's one charged site
-    (`_Evaluator.batch`), and caught by the loop. It carries
+    (`_Evaluator.serve_f_g`), and caught by the loop. It carries
     nothing: the run's status is derived from the same queries, and an unserved
     batch is never charged, so they name the gate correctly.
     """
@@ -777,19 +778,20 @@ class _Evaluator:
     """The run's evaluation seams, and what they charge and observe.
 
     Both halves share one rule, stated here once so no call site has to restate
-    it: a fused `_batch` is the run's only charged site (the gate is asked before
-    the charge, so a batch is served whole or not at all), and an `_f_only` call
-    is cheaper work that is not a budget event. Whichever half served a point
-    updates the best. `probe_select` and `settle` live here too: a probe is
-    draw-then-evaluate and its depth and deferral are properties of this seam,
-    not of a path, and `settle` is where an iteration's deferred gradients are
-    bought together, since this object owns both the seam and the charge.
+    it: a fused `_serve_f_g` is the run's only charged site (the gate is asked
+    before the charge, so a batch is served whole or not at all), and a
+    `_serve_f` call is cheaper work that is not a budget event. Whichever half
+    served a point updates the best. `probe_select` and `settle` live here too:
+    a probe is draw-then-evaluate and its depth and deferral are properties of
+    this seam, not of a path, and `settle` is where an iteration's deferred
+    gradients are bought together, since this object owns both the seam and the
+    charge.
     """
 
     def __init__(  # noqa: PLR0913 - the run's collaborators, assembled once
         self,
-        evaluate_batch: BatchEvaluator,
-        evaluate_f: EvaluateF | None,
+        eval_f_g: EvalFG,
+        eval_f: EvalF | None,
         *,
         # Keyword-only, in the order the caller builds them: the sampler first,
         # then the two objects it feeds, then the probe dial that is not one.
@@ -798,8 +800,8 @@ class _Evaluator:
         best: _Best,
         n_draws: int,
     ) -> None:
-        self._evaluate_batch = evaluate_batch
-        self._evaluate_f = evaluate_f
+        self._eval_f_g = eval_f_g
+        self._eval_f = eval_f
         self._sampler = sampler
         self._budget = budget
         self._best = best
@@ -816,7 +818,7 @@ class _Evaluator:
         verdict instead of stepping). Returns the n starts; raises
         `_BudgetExhausted` if a probe batch is unaffordable.
 
-        With `evaluate_f` the draws are f-only, so the starts come back with
+        With `eval_f` the draws are f-only, so the starts come back with
         their gradients still owed to the iteration's one `settle` batch, which
         grades them together with the step winners: a probe computes `g` once
         however deep it is. A single draw has no group-min to compute, so with
@@ -832,7 +834,7 @@ class _Evaluator:
         than d) can outgrow the fused batch's retained set, so the memory-neutral
         width is the one to keep.
         """
-        defer_g = self._evaluate_f is not None
+        defer_g = self._eval_f is not None
         # One draw is its own group: nothing to compare, so nothing to read.
         unread = defer_g and self._n_draws == 1
         groups = [self._sampler.batch(n) for _ in range(self._n_draws)]
@@ -842,9 +844,9 @@ class _Evaluator:
         g_by_draw: list[jnp.ndarray] = []
         for x_cand in groups:
             if defer_g:
-                f_by_draw.append(self._f_only(x_cand))
+                f_by_draw.append(self._serve_f(x_cand))
             else:
-                f_vals, g_batch = self._batch(x_cand)
+                f_vals, g_batch = self._serve_f_g(x_cand)
                 f_by_draw.append(f_vals)
                 g_by_draw.append(g_batch)
         # Finite-only group-min: a failed (non-finite) probe ranked before a
@@ -873,12 +875,12 @@ class _Evaluator:
         the step's argmin will keep it; `settle` then promotes the winner and
         buys nothing.
         """
-        if self._evaluate_f is not None:
+        if self._eval_f is not None:
             return [
                 _Pending(row, f, None)
-                for row, f in zip(x_batch, self._f_only(x_batch), strict=True)
+                for row, f in zip(x_batch, self._serve_f(x_batch), strict=True)
             ]
-        f_vals, g_batch = self._batch(x_batch)
+        f_vals, g_batch = self._serve_f_g(x_batch)
         return [
             _Pending(x_batch[pos], f_vals[pos], g_batch[pos])
             for pos in range(len(f_vals))
@@ -898,7 +900,7 @@ class _Evaluator:
         pending_idxs = [k for k, point in enumerate(decided) if point.g is None]
         settled: dict[int, PathPoint] = {}
         if pending_idxs:
-            f_vals, g_batch = self._batch(
+            f_vals, g_batch = self._serve_f_g(
                 jnp.stack([decided[k].x for k in pending_idxs])
             )
             settled = {
@@ -910,7 +912,7 @@ class _Evaluator:
             for k, point in enumerate(decided)
         ]
 
-    def _batch(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
+    def _serve_f_g(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
         """Serve one g batch, or raise `_BudgetExhausted` if it is unaffordable.
 
         The gate is asked before the charge, so a batch is served whole or not
@@ -924,14 +926,14 @@ class _Evaluator:
         if not self._budget.accept():
             raise _BudgetExhausted
         self._budget.charge(x_batch.shape[0])
-        f_batch, g_batch, feas = self._evaluate_batch(x_batch)
+        f_batch, g_batch, feas = self._eval_f_g(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
         f_vals = f_batch.tolist()
         self._best.observe(f_vals, x_batch, feas)
         return f_vals, g_batch
 
-    def _f_only(self, x_batch: jnp.ndarray) -> list[float]:
+    def _serve_f(self, x_batch: jnp.ndarray) -> list[float]:
         """Serve one f-only batch: no gate asked, no charge, same bookkeeping.
 
         A probe's extra draws and a step's rejected trials are the f half alone,
@@ -943,11 +945,11 @@ class _Evaluator:
         below is for the type checker (it cannot see their gates) and is
         unreachable at runtime.
         """
-        evaluate_f = self._evaluate_f
-        if evaluate_f is None:
-            msg = "_f_only requires evaluate_f"
+        eval_f = self._eval_f
+        if eval_f is None:
+            msg = "_serve_f requires eval_f"
             raise RuntimeError(msg)
-        f_batch, feas = evaluate_f(x_batch)
+        f_batch, feas = eval_f(x_batch)
         f_vals = f_batch.tolist()
         self._best.observe(f_vals, x_batch, feas)
         return f_vals
@@ -1223,7 +1225,7 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
     n_draws: int,
     max_iters: int | None,
     time_limit: float | None,
-    evaluate_f: EvaluateF | None,
+    eval_f: EvalF | None,
     bounds: Bounds | None,
 ) -> None:
     """Reject a run the engine cannot promise to finish or cannot price.
@@ -1252,16 +1254,16 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
         )
         raise ValueError(msg)
 
-    if evaluate_f is None and n_draws != 1:
+    if eval_f is None and n_draws != 1:
         # The verdict's expensive side is the gradient count, not the batch
         # count: a probe computes `g` once per draw, a continue step once. The
         # engine cannot see the solver's `n_alpha` (the seam checks presence,
         # not members), so the exact symmetry `n_alpha == n_draws` is out
         # of reach. This is the conservative proxy it can express.
         msg = (
-            f"n_draws={n_draws} without evaluate_f prices a probe "
+            f"n_draws={n_draws} without eval_f prices a probe "
             f"at {n_draws} gradients against one step's single gradient; "
-            "pass evaluate_f for multi-draw probes"
+            "pass eval_f for multi-draw probes"
         )
         raise ValueError(msg)
     _check_bounds(bounds)

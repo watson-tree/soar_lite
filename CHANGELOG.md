@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `evaluate_f`: an optional value-only evaluator seam, the f-only sibling of
-  `evaluate_batch` (`(f, feas?)` out, no gradient). Supplying it makes the whole
+- `eval_f`: an optional value-only evaluator seam, the f-only sibling of
+  `eval_f_g` (`(f, feas?)` out, no gradient). Supplying it makes the whole
   search read values: every probe draw and every step trial is served for its
   value alone, the method rules on that value, and the single g batch the
   iteration serves grades what it kept - the probe's starts and the step's
@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `n_probe_evals` is now `n_draws`. The knob counts draws - batches of
   candidate points whose column minima become the starts - and one draw is the
   same unit whether the seam serves it fused or value-only, which "evals" (tied
-  to one `evaluate_batch` call) no longer was. The default and the
-  `evaluate_f` requirement above one draw are unchanged.
+  to one `eval_f_g` call) no longer was. The default and the
+  `eval_f` requirement above one draw are unchanged.
 - The run's running best is `_Best` internally: `fun`/`x` is the reported answer
   and `fun_raw` is the barrier a verdict reads. Same numbers, named after what
   `NPathResult` reports instead of the optimizer jargon "incumbent"; the float
@@ -90,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `n_draws`-iteration horizon: the `_Horizon` clock was removed, and a
   restarted path skips sampling for the iteration its probe served.
   `n_draws` therefore defaults to `1`; a larger probe is only
-  cost-matched with the continue side through `evaluate_f` (see Added), and is
+  cost-matched with the continue side through `eval_f` (see Added), and is
   refused without it.
 - `pytest` is now a declared `dev` dependency and the canonical test runner
   (`uv run --no-sync python -m pytest -q`); CI installs from the lockfile with
@@ -114,7 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they stay on the axis that dominates. The trade: the gate and the deadline
   have a blind spot under one probe.
 - A single-draw probe defers its whole start, not just its gradient, as long as
-  `evaluate_f` is supplied: a draw with no group to compare has no value worth
+  `eval_f` is supplied: a draw with no group to compare has no value worth
   reading early, so the start travels to the iteration's one g batch unread and
   both halves arrive from that pass. Deferral is keyed on the seam, not on
   `n_draws`, and the cheap half it spends nothing of is the `f` a

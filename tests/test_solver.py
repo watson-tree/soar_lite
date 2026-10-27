@@ -298,12 +298,12 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
     h = jnp.array([2.0, 4.0])
     center = jnp.array([0.3, 0.4])
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         """Return value and gradient of f = ½Σhᵢ(xᵢ-cᵢ)², grad = h⊙(x-c)."""
         return jnp.sum(0.5 * h * (x - center) ** 2, axis=1), h * (x - center), None
 
     result = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         n_paths=1,
         max_iters=50,
@@ -382,12 +382,12 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
     h = jnp.array([2.0, 4.0])
     center = jnp.array([0.3, 0.4])
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         """Return value and gradient of f = ½Σhᵢ(xᵢ-cᵢ)², grad = h⊙(x-c)."""
         return jnp.sum(0.5 * h * (x - center) ** 2, axis=1), h * (x - center), None
 
     result = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         n_paths=1,
         max_iters=50,

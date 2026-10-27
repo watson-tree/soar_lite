@@ -21,8 +21,8 @@ Code against these to replace a piece; the engine calls them, never the reverse.
 
 ::: soar_lite.LocalSolver
 ::: soar_lite.RestartRule
-::: soar_lite.BatchEvaluator
-::: soar_lite.EvaluateF
+::: soar_lite.EvalFG
+::: soar_lite.EvalF
 ::: soar_lite.Sampler
 ::: soar_lite.Bounds
 

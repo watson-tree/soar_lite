@@ -2,13 +2,13 @@
 
 Seam (拍板): the engine consumes callables plus the box it searches
 
-    evaluate_batch(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
+    eval_f_g(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
     budget_check() -> bool
     bounds -> scipy-style (lb, ub) pairs | (d, 2) array | None (no box)
     sample(key, n) -> (n, d) engine starts; the sole authority on d
 
 The caller composes x->θ and the chain rule grad_x = grad_θ * dθ_dx(x) into
-evaluate_batch; the engine owns clip-to-bounds, and the prior is
+eval_f_g; the engine owns clip-to-bounds, and the prior is
 injected as `sample` - with `sample=None` it falls back to i.i.d. uniform over
 a finite `bounds` (the historical path, byte-identical), so an unbounded box
 without a sampler is a wiring error. Unbounded means a
@@ -97,7 +97,7 @@ class Recorder:
 
     def __call__(self, theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         """Assert the (M,d) batch shape, record it, and vmap the pointwise fn."""
-        assert theta.ndim == 2, f"evaluate_batch expects (M,d) batch, got {theta.shape}"
+        assert theta.ndim == 2, f"eval_f_g expects (M,d) batch, got {theta.shape}"
         self.batch_shapes.append((int(theta.shape[0]), int(theta.shape[1])))
         f_vals, grads = jax.vmap(self.pointwise)(theta)
         self.all_f_vals.extend(float(v) for v in f_vals)
@@ -119,7 +119,7 @@ class Recorder:
 
 
 def test_batch_shape_and_point_counting() -> None:
-    """evaluate_batch receives (n_paths,d) batches; each point counts exactly 1 eval.
+    """eval_f_g receives (n_paths,d) batches; each point counts exactly 1 eval.
 
     reported evals == points the seam actually served.
     """
@@ -366,7 +366,7 @@ def test_feasible_only_best() -> None:
     all_feas: list[bool] = []
     evals = 0
 
-    def evaluate_batch(
+    def eval_f_g(
         theta: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         nonlocal evals
@@ -382,7 +382,7 @@ def test_feasible_only_best() -> None:
 
     rule = _RecordingBest()
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         n_paths=4,
         max_iters=100,
@@ -415,7 +415,7 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
     """
     served = [0]
 
-    def evaluate_batch(
+    def eval_f_g(
         theta: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         served[0] += int(theta.shape[0])
@@ -425,7 +425,7 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
         return f_vals, jnp.zeros_like(theta), jnp.ones(theta.shape[0], dtype=bool)
 
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         n_paths=2,
         max_iters=5,
@@ -443,7 +443,7 @@ def run_probe_pass_with_nan_draw(nan_draw: int) -> None:
     draws: list[jnp.ndarray] = []
     winners: list[jnp.ndarray] = []
 
-    def evaluate_f(theta: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+    def eval_f(theta: jnp.ndarray) -> tuple[jnp.ndarray, None]:
         draws.append(theta)
         # The finite draw only has to be finite and distinguishable; it is made
         # clearly worse than the real objective below so the winners' re-served
@@ -451,14 +451,14 @@ def run_probe_pass_with_nan_draw(nan_draw: int) -> None:
         value = jnp.nan if len(draws) == nan_draw else 1.0e3
         return jnp.full((theta.shape[0],), value, dtype=theta.dtype), None
 
-    def evaluate_batch(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         winners.append(theta)
         d = theta - 0.7
         return jnp.sum(d**4 + d**2, axis=1), 4.0 * d**3 + 2.0 * d, None
 
     res = n_path_schedule(
-        evaluate_batch,
-        evaluate_f=evaluate_f,
+        eval_f_g,
+        eval_f=eval_f,
         bounds=unit_bounds(),
         n_paths=n_paths,
         # group-min needs two draws to skip between; this test pins the skip,
@@ -539,7 +539,7 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
     def seam_run(window: int) -> tuple[NPathResult, ForcedWindow]:
         calls = [0]
 
-        def evaluate_batch(
+        def eval_f_g(
             theta: jnp.ndarray,
         ) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             calls[0] += 1
@@ -551,7 +551,7 @@ def test_probe_inf_group_min_does_not_silence_restarts() -> None:
 
         rule = ForcedWindow(window)
         res = n_path_schedule(
-            evaluate_batch,
+            eval_f_g,
             bounds=unit_bounds(),
             n_paths=n_paths,
             max_iters=max_iters,
@@ -586,7 +586,7 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
     served = [0]
     calls = [0]
 
-    def evaluate_batch(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         calls[0] += 1
         served[0] += int(theta.shape[0])
         # Column 1 needs a real objective: on a flat field it burns the method's
@@ -600,7 +600,7 @@ def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
         return f_vals, grads, None
 
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=unit_bounds(),
         n_paths=n_paths,
         n_draws=n_draws,
@@ -643,7 +643,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
         shapes: list[tuple[int, int]] = []
         evals = [0]
 
-        def evaluate_batch(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             shapes.append((int(theta.shape[0]), int(theta.shape[1])))
             evals[0] += int(theta.shape[0])
             if len(shapes) <= n_draws:  # init probe evals: real objective
@@ -655,7 +655,7 @@ def test_stalled_paths_wait_for_ei_then_restart() -> None:
             )
 
         res = n_path_schedule(
-            evaluate_batch,
+            eval_f_g,
             bounds=unit_bounds(),
             n_paths=n_paths,
             n_draws=n_draws,
@@ -867,7 +867,7 @@ def test_an_injected_sampler_searches_outside_the_old_box() -> None:
     """
     seen: list[float] = []  # max |x| per served batch
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         seen.append(float(jnp.max(jnp.abs(x))))
         return jnp.sum((x - 3.0) ** 2, axis=-1), 2.0 * (x - 3.0), None
 
@@ -875,7 +875,7 @@ def test_an_injected_sampler_searches_outside_the_old_box() -> None:
         return jax.random.logistic(sub, (n, 1)) + 3.0  # starts near the well
 
     res = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=[(None, None)],
         sample=sample,
         budget_check=lambda: True,

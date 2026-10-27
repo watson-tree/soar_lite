@@ -60,7 +60,7 @@ recorded golden numbers that would encode this repository's history.
 ## Scope
 
 This package is the optimizer only. The evaluation budget it consumes is the
-caller's business: `evaluate_batch` takes a batch of points and returns f values,
+caller's business: `eval_f_g` takes a batch of points and returns f values,
 gradients and an optional feasibility mask, so the same engine drives a scalar
 objective, a batched one, or a penalized transform of a constrained problem. The
 envelope (working-space reparameterization, the penalty schedule, submission and

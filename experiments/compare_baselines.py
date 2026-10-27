@@ -425,8 +425,8 @@ def _rescale(prob: problems.Problem, scale: float) -> problems.Problem:
     """
     bounds = prob.bounds * scale
 
-    def evaluate_batch(xp: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        f, g, _ = prob.evaluate_batch(xp / scale)
+    def eval_f_g(xp: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        f, g, _ = prob.eval_f_g(xp / scale)
         return f, g / scale, None
 
     x_star = prob.x_star * scale if prob.x_star is not None else None
@@ -434,7 +434,7 @@ def _rescale(prob: problems.Problem, scale: float) -> problems.Problem:
         name=f"{prob.name}@x{scale:g}",
         d=prob.d,
         bounds=bounds,
-        evaluate_batch=evaluate_batch,
+        eval_f_g=eval_f_g,
         f_star=prob.f_star,
         description=f"{prob.description} (x' = {scale:g} x)",
         x_star=x_star,

@@ -2,7 +2,7 @@
 
 Every problem exposes the engine's seam directly:
 
-    evaluate_batch(x: (M, d)) -> (f: (M,), grad: (M, d), feas: None)
+    eval_f_g(x: (M, d)) -> (f: (M,), grad: (M, d), feas: None)
 
 ``feas`` is always ``None``: the box is the only constraint and the engine
 clips into it, so every served point counts toward the best. Each problem
@@ -28,7 +28,7 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", val=True)
 
-BatchEvaluator: TypeAlias = Callable[
+EvalFG: TypeAlias = Callable[
     [jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, None]"
 ]
 
@@ -40,14 +40,14 @@ class Problem:
     name: str
     d: int
     bounds: jnp.ndarray  # (d, 2): one (lb, ub) row per coordinate
-    evaluate_batch: BatchEvaluator
+    eval_f_g: EvalFG
     f_star: float
     description: str
     x_star: jnp.ndarray | None = None  # a known global minimiser, for checks
 
     def eval_point(self, x: jnp.ndarray) -> tuple[float, jnp.ndarray]:
         """Value and gradient at a single point (a batch of one, squeezed)."""
-        f, g, _ = self.evaluate_batch(x[None, :])
+        f, g, _ = self.eval_f_g(x[None, :])
         return float(f[0]), g[0]
 
 
@@ -56,15 +56,15 @@ def _box(d: int, lo: float, hi: float) -> jnp.ndarray:
     return jnp.stack([jnp.full((d,), lo), jnp.full((d,), hi)], axis=1)
 
 
-def _jit_pointwise(fn: Callable[[jnp.ndarray], jnp.ndarray]) -> BatchEvaluator:
+def _jit_pointwise(fn: Callable[[jnp.ndarray], jnp.ndarray]) -> EvalFG:
     """Lift a pointwise value fn to the batched seam via value_and_grad + vmap."""
 
     @jax.jit  # pyright: ignore[reportUnknownMemberType] - jax stubs are partial
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         f, g = jax.vmap(jax.value_and_grad(fn))(x)
         return f, g, None
 
-    return evaluate_batch
+    return eval_f_g
 
 
 # --- the smooth panel: preconditioning on scale and conditioning --------------
@@ -87,7 +87,7 @@ def diag_quadratic(d: int = 100, cond: float = 1e4) -> Problem:
         name=f"diag_quad_d{d}_cond{cond:g}",
         d=d,
         bounds=_box(d, -1.0, 1.0),
-        evaluate_batch=_jit_pointwise(fn),
+        eval_f_g=_jit_pointwise(fn),
         f_star=0.0,
         description=f"axis-aligned quadratic, diagonal Hessian, cond={cond:g}",
         x_star=jnp.zeros(d),
@@ -112,7 +112,7 @@ def rotated_quadratic(d: int = 100, cond: float = 1e6, seed: int = 1) -> Problem
         name=f"rot_quad_d{d}_cond{cond:g}",
         d=d,
         bounds=_box(d, -1.0, 1.0),
-        evaluate_batch=_jit_pointwise(fn),
+        eval_f_g=_jit_pointwise(fn),
         f_star=0.0,
         description=f"rotated quadratic, dense Hessian, cond={cond:g}",
         x_star=jnp.zeros(d),
@@ -139,7 +139,7 @@ def ackley(d: int = 100) -> Problem:
         name=f"ackley_d{d}",
         d=d,
         bounds=_box(d, -32.768, 32.768),
-        evaluate_batch=_jit_pointwise(fn),
+        eval_f_g=_jit_pointwise(fn),
         f_star=0.0,
         description="Ackley funnel with many local minima",
         x_star=jnp.zeros(d),
@@ -156,7 +156,7 @@ def rastrigin(d: int = 100) -> Problem:
         name=f"rastrigin_d{d}",
         d=d,
         bounds=_box(d, -5.12, 5.12),
-        evaluate_batch=_jit_pointwise(fn),
+        eval_f_g=_jit_pointwise(fn),
         f_star=0.0,
         description="Rastrigin lattice of local minima",
         x_star=jnp.zeros(d),
@@ -244,7 +244,7 @@ def oscillator_chain(
         name=f"oscillator_n{n}_F{n_freqs}",
         d=3 * n,
         bounds=bounds,
-        evaluate_batch=_jit_pointwise(fn),
+        eval_f_g=_jit_pointwise(fn),
         f_star=0.0,
         description=f"vibration-isolation chain, {n} masses, d={3 * n}, mixed units",
         x_star=theta_star,

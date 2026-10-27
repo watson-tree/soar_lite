@@ -33,13 +33,13 @@ import jax.numpy as jnp
 from soar_lite import n_path_schedule
 
 
-def evaluate_batch(x):
+def eval_f_g(x):
     """(M, d) points in; (M,) f values, (M, d) gradients, (M,)|None mask out."""
     return jnp.sum((x - 3.0) ** 2, axis=1), 2.0 * (x - 3.0), None
 
 
 result = n_path_schedule(
-    evaluate_batch,
+    eval_f_g,
     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
     n_paths=4,
     max_iters=30,

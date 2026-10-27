@@ -45,21 +45,21 @@ start's `g`, free) and to fold the committed point's secant. Gradient-sweeping
 the losing points is pure waste. The moves:
 
 - **f-only evaluation (opt-in, landed).** A keyword-only
-  `evaluate_f: EvaluateF | None = None` seam: points in, `(f, feas?)` out. The
+  `eval_f: EvalF | None = None` seam: points in, `(f, feas?)` out. The
   mask is required, not a nicety: probe group-min and step-selection must still
   tell "finite but infeasible" from viable, and f alone cannot. `None` means no
   f-only path at all - the probe takes a gradient with each draw - which is why
-  a depth above one is refused (next bullet). `evaluate_batch` stays the one
+  a depth above one is refused (next bullet). `eval_f_g` stays the one
   positional argument (sealed).
 - **Multi-draw probes are f-only-only (gate + default).** The engine cannot see
   the solver's `n_alpha` (the seam checks presence, not members), so it cannot
   enforce the true symmetry `n_alpha == n_draws`; its conservative proxy
-  is the **g-count**: without `evaluate_f`, a probe computes `g` `n_draws`
+  is the **g-count**: without `eval_f`, a probe computes `g` `n_draws`
   times while one continue step computes `g` once (default `n_alpha=1`), so the
   expensive term diverges `n_draws:1` — the f-count barely matters (g ≈
-  2–5× f). With `evaluate_f`, both sides compute `g` exactly once (the rest is
+  2–5× f). With `eval_f`, both sides compute `g` exactly once (the rest is
   f-only), collapsing that asymmetry and leaving only the cheap f-count to
-  match. So `evaluate_f is None and n_draws != 1`
+  match. So `eval_f is None and n_draws != 1`
   raises `ValueError` at entry, and the default becomes `n_draws = 1`.
   Deferral is keyed on the seam, not on depth: with the f-only evaluator every
   point the search rules on is read for its value and graded afterwards, in the
@@ -69,8 +69,8 @@ the losing points is pure waste. The moves:
   buys its g.
   Consequences: under that default a group-min is a single fresh draw, not
   a min-of-n group-min — the "pinned 2 (empirical)" advice in the docstring
-  moves to "2 iff you also pass `evaluate_f`", and the Phase A–D numbers were
-  measured at 2. With `evaluate_f`,
+  moves to "2 iff you also pass `eval_f`", and the Phase A–D numbers were
+  measured at 2. With `eval_f`,
   `n_alpha != n_draws` is the cheap, bounded (f-only) asymmetry that is
   accepted, not banned.
 - **The step is ruled on values, one g batch grades what it kept (landed).**
@@ -142,19 +142,19 @@ superseded), `docs/tutorial/getting-started.md`.
 **Landed in the working tree (uncommitted):** engine, restart, tests, and every
 listed doc are swept; 68 tests green, ruff and pyright clean. The default
 `n_draws` was flipped 2 → 1 in the `_Horizon` deletion (`0ffe135`); the
-`evaluate_f` seam and its gate follow in the next commit. Shape the seam took:
-`n_path_schedule(..., evaluate_f=...)` is keyword-only and optional, a probe
+`eval_f` seam and its gate follow in the next commit. Shape the seam took:
+`n_path_schedule(..., eval_f=...)` is keyword-only and optional, a probe
 serves one value-only draw per evaluation and then one fused batch at the
 per-column winners (so a probe serves `n_draws` uncharged f-only draws
 plus one billed fused batch and one `g` - none of the former at
 `n_draws = 1`), the draws
 stay exactly `n` wide rather than widening to `n_draws × n`, and
-`evaluate_f is None and n_draws != 1` raises `ValueError` at entry.
+`eval_f is None and n_draws != 1` raises `ValueError` at entry.
 
 Caveat to record, not erase: after horizon→1 the verdict compares one probe
-against one step, and the load-bearing cost is g-count — without `evaluate_f`
+against one step, and the load-bearing cost is g-count — without `eval_f`
 the non-f-only world is g-symmetric only at `n_draws = n_alpha` (default
-1 = 1, which the gate enforces); with `evaluate_f` both sides compute g once
+1 = 1, which the gate enforces); with `eval_f` both sides compute g once
 and the only residual is the cheap f-count `n_alpha != n_draws`, plus a
 genuine Wolfe/curvature solver that reads the trial's own g (bounded by its own
 enumeration). Don't claim the verdict is exactly unbiased in those residual cases.

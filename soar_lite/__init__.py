@@ -13,9 +13,9 @@ meant to.
 """
 
 from soar_lite.engine import (
-    BatchEvaluator,
     Bounds,
-    EvaluateF,
+    EvalF,
+    EvalFG,
     LocalSolver,
     NPathResult,
     NPathStatus,
@@ -29,11 +29,11 @@ from soar_lite.restart import EIRestartRule
 from soar_lite.solver import DiagonalPreconditioner
 
 __all__ = [
-    "BatchEvaluator",
     "Bounds",
     "DiagonalPreconditioner",
     "EIRestartRule",
-    "EvaluateF",
+    "EvalF",
+    "EvalFG",
     "LocalSolver",
     "NPathResult",
     "NPathStatus",

@@ -72,9 +72,9 @@ def run_soar_lite(
     n_batches = 0
     best = math.inf
 
-    def evaluate_batch(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         nonlocal n_points, n_batches, best
-        f, g, _ = problem.evaluate_batch(x)
+        f, g, _ = problem.eval_f_g(x)
         n_batches += 1
         n_points += int(x.shape[0])
         for v in f.tolist():
@@ -86,7 +86,7 @@ def run_soar_lite(
         return f, g, None
 
     result = n_path_schedule(
-        evaluate_batch,
+        eval_f_g,
         bounds=problem.bounds,
         n_paths=n_paths,
         max_iters=max_steps,
@@ -111,7 +111,7 @@ def run_adam(problem: Problem, *, max_steps: int, seed: int, lr: float) -> Trace
 
     def body(carry: Carry, _t: jnp.ndarray) -> tuple[Carry, jnp.ndarray]:
         x, opt_state, best = carry
-        f, g, _ = problem.evaluate_batch(x[None, :])
+        f, g, _ = problem.eval_f_g(x[None, :])
         updates, opt_state = opt.update(g[0], opt_state)
         x = jnp.clip(jnp.asarray(optax.apply_updates(x, updates)), lo, hi)
         fval = jnp.where(jnp.isfinite(f[0]), f[0], jnp.inf)
@@ -150,7 +150,7 @@ def run_lbfgs(problem: Problem, *, max_steps: int, seed: int) -> Trace:
 
     def fun(x: np.ndarray) -> tuple[float, np.ndarray]:
         nonlocal n_points, best
-        f, g, _ = problem.evaluate_batch(jnp.asarray(x)[None, :])
+        f, g, _ = problem.eval_f_g(jnp.asarray(x)[None, :])
         fval = float(f[0])
         n_points += 1
         if math.isfinite(fval) and fval < best:

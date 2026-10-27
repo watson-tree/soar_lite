@@ -29,7 +29,7 @@ Constraints reach the engine by two independent routes:
 import jax.numpy as jnp
 
 
-def evaluate_batch(x):
+def eval_f_g(x):
     f_vals = jnp.sum((x - 3.0) ** 2, axis=1)
     grad = 2.0 * (x - 3.0)
     return f_vals, grad, None
@@ -37,10 +37,10 @@ def evaluate_batch(x):
 
 ## 2. Run it
 
-`evaluate_batch` is the only positional argument. Everything else is a keyword,
+`eval_f_g` is the only positional argument. Everything else is a keyword,
 and three of them are conditionally required: the engine draws its starts from a
 uniform prior over a finite `bounds`, so an unbounded or absent box needs your
-own `sample=`; a probe deeper than one draw needs an `evaluate_f=`; and a run
+own `sample=`; a probe deeper than one draw needs an `eval_f=`; and a run
 needs a horizon, `max_iters` or `time_limit`. Each is refused by `ValueError`
 rather than guessed.
 
@@ -48,7 +48,7 @@ rather than guessed.
 from soar_lite import n_path_schedule
 
 result = n_path_schedule(
-    evaluate_batch,
+    eval_f_g,
     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
     n_paths=4,
     max_iters=30,
@@ -76,7 +76,7 @@ correspond:
 | `x` | argmin, in the coordinates you handed the engine |
 | `fun` | its value: the best over feasible finite points, `inf` if none |
 | `n_points` | points billed - the serial-cost count |
-| `n_batches` | batches billed, one per `evaluate_batch` call - the parallel-cost count |
+| `n_batches` | batches billed, one per `eval_f_g` call - the parallel-cost count |
 | `n_iters` | engine iterations completed (iteration 0 is the initialization probe); one iteration may serve several batches |
 | `status` | `max_iters`, `time_limit` or `budget_exhausted` |
 
@@ -91,7 +91,7 @@ its own. Stopping is always a horizon or an extra gate.
 | `n_paths` | engine width: paths advanced in lockstep each iteration (default 16) |
 | `max_iters` | the horizon, counted in iterations (iteration 0 is the init probe); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | a wall-clock horizon in seconds, for when an iteration's cost is too uneven to budget in iterations |
-| `n_draws` | probe depth: draws per start (default 1); above 1 requires `evaluate_f` |
+| `n_draws` | probe depth: draws per start (default 1); above 1 requires `eval_f` |
 | `sample` | your own prior `(key, n) -> (n, d)`; required when the box is unbounded |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |
@@ -101,9 +101,9 @@ Three gotchas worth knowing up front:
 - **Unbounded boxes need a sampler.** With `bounds=None` or infinite sides there
   is no uniform prior to draw starts from, so pass `sample=`; the engine rejects
   the run rather than guessing.
-- **A probe depth above one needs `evaluate_f`.** Each extra draw would compute
+- **A probe depth above one needs `eval_f`.** Each extra draw would compute
   its own gradient against a step's single one, so the engine refuses the depth
-  unless you also supply the value-only `evaluate_f`; with it the probe computes
+  unless you also supply the value-only `eval_f`; with it the probe computes
   one gradient, at its winners.
 - **`n_paths = 1` is the single-path baseline.** Same code, no restart
   competition.
@@ -127,7 +127,7 @@ on whether your objective is really parallel:
   barely grows as the batch widens, up to the device's parallel limit. Set
   `n_paths` to that limit and measure progress in `n_batches`: it is very nearly
   your wall-clock. Wider paths are then almost free, so raising `n_paths` (and
-  `n_draws` with it, which needs `evaluate_f`) shrinks the spread of the
+  `n_draws` with it, which needs `eval_f`) shrinks the spread of the
   best and buys a larger
   improvement for the same number of batches.
 - **On a CPU.** Batches run mostly serially, so the sampling work per point is
@@ -148,7 +148,7 @@ Both defaults are bound lazily, so you replace either one by name:
 from soar_lite import DiagonalPreconditioner, EIRestartRule, n_path_schedule
 
 result = n_path_schedule(
-    evaluate_batch,
+    eval_f_g,
     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
     max_iters=30,
     solver=DiagonalPreconditioner(n_alpha=4, backtrack=0.5),

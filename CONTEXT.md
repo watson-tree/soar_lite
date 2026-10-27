@@ -79,7 +79,7 @@ _Avoid_: paused, idle, dead
 ### Evaluation
 
 **batch** (noun):
-The `(M, d)` points served by one fused `evaluate_batch` pass. The engine
+The `(M, d)` points served by one fused `eval_f_g` pass. The engine
 composes one batch per pass from the next candidates of the active paths.
 _Avoid_: group (that is the probe column, below), lot, chunk
 
@@ -101,13 +101,13 @@ engine records. Distinct from the *cost model* (`n_points`/`n_batches`), which
 counts work.
 _Avoid_: loss, cost, fitness
 
-**evaluate_batch** (批量求值函数):
-The caller's per-batch callable (type `BatchEvaluator`): points in,
+**eval_f_g** (批量求值函数):
+The caller's per-batch callable (type `EvalFG`): points in,
 `(f, gradient, feas?)` out. The seam to the objective's values and
 gradients; the engine is blind to it otherwise.
 _Avoid_: oracle, evaluator, black box
 
-**evaluate_f** (可选的值求值器, type `EvaluateF`):
+**eval_f** (可选的值求值器, type `EvalF`):
 The optional value-only sibling: points in, `(f, feas?)` out, no gradient.
 It exists so a multi-draw probe can pay for `g` once, at its winners, instead
 of once per draw. Without it the engine refuses a probe deeper than one draw.
