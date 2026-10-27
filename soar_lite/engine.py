@@ -96,7 +96,9 @@ class LocalSolver(Protocol):
     proposal says False, and the engine then serves no value for a ruling it
     would only rubber-stamp. All state
     is per path, lives inside the instance, and is opaque to the engine (the
-    engine never reads it) - implementers index it by path i.
+    engine never reads it) - implementers index it by path i. Attributes are
+    public so an instance can be inspected and subclassed, not because the
+    engine may write them: the engine only hands them to the methods below.
 
     One engine step, for every path i that steps this iteration: propose(i, p)
     is called repeatedly. p is the path's current point, unchanged for the whole
@@ -237,7 +239,10 @@ class RestartRule(Protocol):
     and `observe_restart`/`restart` once per probe event (the initialization
     probe included) - so they trust their arguments: `n_path_schedule`
     validates the object once (that it carries this contract) at the entry, and
-    nothing here re-checks.
+    nothing here re-checks. The one exception is `observe_continue`'s `delta`:
+    a finite float or None (a stall) are the only two things the engine reports,
+    so a non-finite delta is a wiring error and a rule may reject it there
+    rather than fold it into its evidence.
     """
 
     def observe_continue(self, i: int, delta: float | None) -> None:
@@ -324,10 +329,10 @@ EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | Non
 # at all is spelled `Bounds | None` at the call site (then d is the sampler's).
 Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
 
-# The one way the engine draws a start: (key, n) -> (n, d) points in the
-# engine's own coordinates. It is the only authority on d, which is what makes
-# an unbounded search well-posed - the engine has no x0 of its own to fall back
-# on, so `sample=None` is only defined over a finite box.
+# The one way the engine draws a start: (key, n_points) -> (n_points, d) points
+# in the engine's own coordinates. It is the only authority on d, which is what
+# makes an unbounded search well-posed - the engine has no x0 of its own to fall
+# back on, so `sample=None` is only defined over a finite box.
 Sampler: TypeAlias = Callable[[jnp.ndarray, int], jnp.ndarray]
 
 
@@ -372,10 +377,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     *,
     eval_f: EvalF | None = None,
     bounds: Bounds | None = None,  # scipy-style (lb, ub) pairs, a (d, 2) array, or None
-    # The prior, injected: (key, n) -> (n, d) in the engine's own coordinates,
-    # and the only authority on d. None -> i.i.d. uniform over a finite
-    # `bounds` (the historical path); an unbounded or absent box then has no
-    # start to draw and is rejected below rather than guessed.
+    # The prior, injected: (key, n_points) -> (n_points, d) in the engine's own
+    # coordinates, and the only authority on d. None -> i.i.d. uniform over a
+    # finite `bounds`; an unbounded or absent box then has no start to draw and
+    # is rejected below rather than guessed.
     sample: Sampler | None = None,
     n_paths: int = 16,  # number of paths advanced each iteration, the engine's width
     n_draws: int = 1,  # draws per start; >1 needs eval_f
@@ -446,15 +451,16 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     with aux, only points whose feas mask is True update it. The trajectory
     itself still moves on the penalized objective.
 
-    Selection events (init, restart) never descend blind: each event with n
-    starts to fill (n = n_paths at init, n = N restarting paths on a restart) draws
-    n_draws batches of n points (pool = n_draws * n).
-    Each draw samples n i.i.d. points from the injected sampler (`sample`,
+    Selection events (init, restart) never descend blind: each event draws
+    n_draws batches of n_points points (pool = n_draws * n_points) to fill its
+    starts (n_points = n_paths at init, n_points = the number of restarting
+    paths on a restart).
+    Each draw samples n_points i.i.d. points from the injected sampler (`sample`,
     default uniform over a finite `bounds`: the rule's payoff statistic below
     is defined against that sampler, so a different prior is injected rather
     than reparameterized into the box),
-    so the n column-wise groups across draws
-    are already random groups, and each group's min becomes one start - n
+    so the n_points column-wise groups across draws
+    are already random groups, and each group's min becomes one start - n_points
     starts whose values are honest samples of the "min of n_draws random
     points" distribution (at the default n_draws = 1 a group is a single
     draw and that point is the start; more draws buy a fuller min-of-k and need
@@ -512,8 +518,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             ``n_points`` counts each winner once.
         bounds: the search box, scipy-style: one ``(lb, ub)`` pair per dim, a
             ``(d, 2)`` array, or ``None`` for no box. ``None``/±inf = unbounded.
-        sample: the injected prior ``(key, n) -> (n, d)`` in the engine's own
-            coordinates; ``None`` draws i.i.d. uniform over a finite ``bounds``.
+        sample: the injected prior ``(key, n_points) -> (n_points, d)`` in the
+            engine's own coordinates; ``None`` draws i.i.d. uniform over a
+            finite ``bounds``.
         n_paths: number of paths advanced in lockstep each iteration.
         n_draws: probe group size - the draws per start. ``1`` (the
             default) is one draw. Above 1 requires ``eval_f``: without it a
@@ -571,7 +578,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         n_draws=n_draws,
         max_iters=max_iters,
         time_limit=time_limit,
+        eval_f_g=eval_f_g,
         eval_f=eval_f,
+        sample=sample,
+        budget_check=budget_check,
         bounds=bounds,
     )
     # The seam check: presence, not signatures, and the two defaults, bound
@@ -605,9 +615,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             raise ValueError(msg)
         lo_f, hi_f = box
 
-        def default_sample(sub: jnp.ndarray, n: int) -> jnp.ndarray:
-            """Default prior: n i.i.d. uniform points over the finite box."""
-            return jax.random.uniform(sub, (n, lo_f.shape[0]), minval=lo_f, maxval=hi_f)
+        def default_sample(sub: jnp.ndarray, n_points: int) -> jnp.ndarray:
+            """Default prior: n_points i.i.d. uniform points over the finite box."""
+            return jax.random.uniform(
+                sub, (n_points, lo_f.shape[0]), minval=lo_f, maxval=hi_f
+            )
 
         draw: Sampler = default_sample
     else:
@@ -683,10 +695,10 @@ class _Sampler:
         self._key = key
         self._checked = False
 
-    def batch(self, n: int) -> jnp.ndarray:
-        """Draw n candidate points; the sampler's d is validated on first draw."""
+    def batch(self, n_points: int) -> jnp.ndarray:
+        """Draw n_points candidates; the sampler's d is validated on first draw."""
         self._key, sub = jax.random.split(self._key)
-        x_cand = self._draw(sub, n)
+        x_cand = self._draw(sub, n_points)
         if not self._checked:
             # d is a property of the callable, constant for the run: one check
             # after the first draw suffices.
@@ -891,15 +903,15 @@ class _Evaluator:
         self._best = best
         self._n_draws = n_draws
 
-    def probe_select(self, n: int) -> list[_Pending]:
-        """Draw n_draws batches of n points, return n group-min starts.
+    def probe_select(self, n_points: int) -> list[_Pending]:
+        """Draw n_draws batches of n_points, return n_points group-min starts.
 
-        Each draw is one (n,d) batch sized exactly n, and every draw comes
-        from the same sampler, so the fixed column j across draws is already a
-        random group of n_draws points; each group's min becomes one
+        Each draw is one (n_points,d) batch sized exactly n_points, and every
+        draw comes from the same sampler, so the fixed column j across draws is
+        already a random group of n_draws points; each group's min becomes one
         start, its value doubling as an {r_i} sample (a group with no finite
         member keeps its draw-0 point and arrives stalled - it waits for an EI
-        verdict instead of stepping). Returns the n starts; raises
+        verdict instead of stepping). Returns the n_points starts; raises
         `_BudgetExhausted` if a probe batch is unaffordable.
 
         With `eval_f` the draws are f-only, so the starts come back with
@@ -912,8 +924,8 @@ class _Evaluator:
         group does). Without the seam each draw is fused, so the starts come
         back already carrying their gradients and `settle` promotes them without
         buying anything: a pass that served both halves is never served twice.
-        Both paths keep the batch width at
-        exactly n: widening the f-only draw would multiply the peak activations,
+        Both paths keep the batch width at exactly n_points: widening the f-only
+        draw would multiply the peak activations,
         and a value built through a wide intermediate (a residual vector longer
         than d) can outgrow the fused batch's retained set, so the memory-neutral
         width is the one to keep.
@@ -921,9 +933,9 @@ class _Evaluator:
         defer_g = self._eval_f is not None
         # One draw is its own group: nothing to compare, so nothing to read.
         unread = defer_g and self._n_draws == 1
-        groups = [self._sampler.batch(n) for _ in range(self._n_draws)]
+        groups = [self._sampler.batch(n_points) for _ in range(self._n_draws)]
         if unread:
-            return [_Pending(groups[0][j], None, None) for j in range(n)]
+            return [_Pending(groups[0][j], None, None) for j in range(n_points)]
         f_by_draw: list[list[float]] = []
         g_by_draw: list[jnp.ndarray] = []
         for x_cand in groups:
@@ -937,7 +949,7 @@ class _Evaluator:
         # real one would be selected as the start, poisoning that path's local
         # method state for the rest of the run.
         picks: list[tuple[int, int]] = []
-        for j in range(n):
+        for j in range(n_points):
             best = _argmin_finite([f_by_draw[r][j] for r in range(self._n_draws)])
             # Whole group non-finite: keep draw 0 rather than invent a point.
             # Its f is non-finite, so init/restart stalls this path on arrival
@@ -1042,8 +1054,8 @@ class _Evaluator:
 class _Paths:
     """The n-path state machine: one point, one anchor and one stall flag per path.
 
-    The invariants that four sites of the loop used to carry implicitly, stated
-    once here instead:
+    The invariants that the loop's four sites would otherwise carry implicitly,
+    stated once here instead:
 
     - A path that restarted this iteration moved by its probe, so it does not
       also step, and its continue observation is skipped: its first Δ belongs
@@ -1344,10 +1356,13 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
     n_draws: int,
     max_iters: int | None,
     time_limit: float | None,
+    eval_f_g: EvalFG,
     eval_f: EvalF | None,
+    sample: Sampler | None,
+    budget_check: Callable[[], bool] | None,
     bounds: Bounds | None,
 ) -> None:
-    """Reject a run the engine cannot promise to finish or cannot price.
+    """Reject a run the engine cannot finish, cannot price, or cannot call.
 
     The caller's own inputs are checked here, once per run - the only place a
     human hands this engine something. Nothing below re-checks them.
@@ -1385,6 +1400,21 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
             "pass eval_f for multi-draw probes"
         )
         raise ValueError(msg)
+
+    # Presence of the callables, not their signatures. Without this a mistyped
+    # seam reaches the first batch and fails there as `'int' object is not
+    # callable`, a symptom a frame away from the argument that caused it.
+    if not callable(eval_f_g):
+        msg = f"eval_f_g must be callable, got {type(eval_f_g).__name__}"
+        raise TypeError(msg)
+    for what, fn in (
+        ("eval_f", eval_f),
+        ("sample", sample),
+        ("budget_check", budget_check),
+    ):
+        if fn is not None and not callable(fn):
+            msg = f"{what} must be callable or None, got {type(fn).__name__}"
+            raise TypeError(msg)
     _check_bounds(bounds)
 
 

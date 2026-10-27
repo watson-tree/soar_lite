@@ -81,7 +81,7 @@ All in `experiments/` (gitignored — regenerated, not source):
 
 ## Reproducibility contract
 
-- **Fixed seeds**: `range(seeds)` from 0; every runner takes the seed, and JAX
+- **Fixed seeds**: `range(n_seeds)` from 0; every runner takes the seed, and JAX
   uses it for the start point and every stochastic step. Same lock + same seed
   ⇒ same number.
 - **Zero knobs on soar-lite**: its two start lengths / grid sizes ship inert

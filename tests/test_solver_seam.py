@@ -267,9 +267,9 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
     """Probes are billed, so a restart storm cannot serve past the gate.
 
     The expensive event in the engine is the restart probe, and the deepest
-    accounting bug this engine had was that the probes were never charged: a
-    rule that restarts every iteration would then have served far more batches
-    than the caller allowed. What is charged now is the fused value+gradient
+    accounting hazard is a probe that is never charged: a rule that restarts
+    every iteration would then have served far more batches than the caller
+    allowed. What is charged now is the fused value+gradient
     pass - the half that dominates - and a probe's extra f-only draws are
     cheaper work that is neither billed nor gated. A storm is still bounded,
     because every probe pays exactly one charged batch.
@@ -509,9 +509,9 @@ def test_one_sample_per_iteration_at_every_probe_size() -> None:
 
     The continue side's sample is one step, so it does not depend on
     n_draws: after the init probe, M iterations of budget buy exactly M
-    samples per path. This is what changed when the horizon clock went away - a
-    sample used to span n_draws iterations, so the same budget bought
-    fewer of them. Sizes above 1 take the f-only seam, whose single extra batch
+    samples per path. The counting unit is the sample, not the iteration: one
+    sample is one step whatever n_draws is, so the budget buys M of them at any
+    probe size. Sizes above 1 take the f-only seam, whose single extra batch
     for the winners is all the probe's depth costs in the batch count.
     """
     k = 2

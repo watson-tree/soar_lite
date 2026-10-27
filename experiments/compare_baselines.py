@@ -150,7 +150,7 @@ PANELS: dict[str, list[tuple[str, Runner, dict[str, object]]]] = {
 }
 
 
-def run_lr_sweep(out: Path, seeds: int, max_steps: int) -> None:
+def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
     """Plot best-so-far vs Adam lr, one curve per problem (appendix panel).
 
     Shows the optimal lr drifting across problems and a wrong lr costing many
@@ -171,7 +171,7 @@ def run_lr_sweep(out: Path, seeds: int, max_steps: int) -> None:
                 np.mean(
                     [
                         run_adam(prob, max_steps=max_steps, seed=s, lr=lr).fun
-                        for s in range(seeds)
+                        for s in range(n_seeds)
                     ]
                 )
             )
@@ -223,7 +223,7 @@ def plot_group_from_json(group: str, out_dir: Path) -> None:
         )
 
 
-def run_invariance(out_dir: Path, seeds: int, max_steps: int) -> None:
+def run_invariance(out_dir: Path, n_seeds: int, max_steps: int) -> None:
     """Draw panel 5: one physics in two unit systems, zero retune.
 
     soar-lite's per-coordinate secant should overlap (outcome-level), Adam's
@@ -243,7 +243,7 @@ def run_invariance(out_dir: Path, seeds: int, max_steps: int) -> None:
     fig, ax = plt.subplots(figsize=(6.4, 4.6))
     for label, color, runner in methods:
         for prob, ls, tag in ((base, "-", "base"), (scaled, "--", "x10")):
-            traces = [runner(prob, max_steps=max_steps, seed=s) for s in range(seeds)]
+            traces = [runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)]
             # Seeds stop at different point counts (diag converges in tens of
             # points), so raw trace arrays ragged -- resample onto one
             # log-spaced grid, exactly as the other panels do.
@@ -286,7 +286,7 @@ def run_invariance(out_dir: Path, seeds: int, max_steps: int) -> None:
 
 
 def run_panel(
-    group: str, seeds: int, max_steps: int
+    group: str, n_seeds: int, max_steps: int
 ) -> tuple[dict[str, dict[str, CurveEntry]], dict[str, str]]:
     """Run every problem in ``group`` across every method and seed."""
     methods = PANELS[group]
@@ -296,7 +296,7 @@ def run_panel(
         labels[prob.name] = prob.description
         curves[prob.name] = {}
         traces = {
-            label: [runner(prob, max_steps=max_steps, seed=s) for s in range(seeds)]
+            label: [runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)]
             for label, runner, _ in methods
         }
         for label, _, _ in methods:
@@ -382,7 +382,7 @@ def plot(
 def _resample(traces: list[Trace], grid: np.ndarray, axis: str) -> np.ndarray:
     """Resample every seed's best-so-far onto ``grid``.
 
-    Returns a ``(seeds, len(grid))`` array with NaN where a seed has no data
+    Returns a ``(n_seeds, len(grid))`` array with NaN where a seed has no data
     (before its first batch and after it stops). Callers aggregate over the
     seed axis so each aggregation (median, quartiles) lives in one place.
 
@@ -474,7 +474,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.lr_sweep:
-        run_lr_sweep(HERE / "results_lr_sweep.png", seeds=2, max_steps=args.max_steps)
+        run_lr_sweep(HERE / "results_lr_sweep.png", n_seeds=2, max_steps=args.max_steps)
         return
 
     if args.plot_only:
@@ -488,15 +488,15 @@ def main() -> None:
         return
 
     groups = ["smooth"] if args.quick else args.groups.split(",")
-    seeds = 2 if args.quick else args.seeds
+    n_seeds = 2 if args.quick else args.seeds
     max_steps = 300 if args.quick else args.max_steps
 
     for group in groups:
         if group == "invariance":
-            run_invariance(HERE, seeds, max_steps)
+            run_invariance(HERE, n_seeds, max_steps)
             continue
-        print(f"[{group}] seeds={seeds} max_steps={max_steps}")
-        curves, labels = run_panel(group, seeds, max_steps)
+        print(f"[{group}] seeds={n_seeds} max_steps={max_steps}")
+        curves, labels = run_panel(group, n_seeds, max_steps)
         star = {p.name: p.f_star for p in problems.build(group)}
         for axis in ("points", "batches"):
             plot(
@@ -511,7 +511,7 @@ def main() -> None:
                 {
                     "meta": {
                         "group": group,
-                        "seeds": seeds,
+                        "seeds": n_seeds,
                         "max_steps": max_steps,
                         "f_star": star,
                         "labels": labels,

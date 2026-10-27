@@ -320,7 +320,8 @@ def test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window() -> None
 
     # The same holds for a pool of `nan`: the window is the pool's length, not
     # its finite count, so a pool that never reads a number still spaces its
-    # re-probes (it used to have a window of 1 and re-probe every round).
+    # re-probes (a window of the finite count would be 1 here, re-probing every
+    # round).
     nan_pool = EIRestartRule()
     for _ in range(WINDOW):
         nan_pool.observe_restart(math.nan)
@@ -453,8 +454,7 @@ def test_group_min_pool_is_shared_across_paths() -> None:
 
     Path 1 never observed a restart itself, yet the event's group-mins are
     visible to its verdict - that is what makes EI_restart one global quantity
-    instead of n_paths noisy per-path estimates of the same thing (the
-    pre-refactor defect).
+    instead of n_paths noisy per-path estimates of the same thing.
     """
     policy = EIRestartRule()
     for group_min in (0.0, 2.0):  # one restart event's group-mins

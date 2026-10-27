@@ -5,14 +5,13 @@ Seam (拍板): the engine consumes callables plus the box it searches
     eval_f_g(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
     budget_check() -> bool
     bounds -> scipy-style (lb, ub) pairs | (d, 2) array | None (no box)
-    sample(key, n) -> (n, d) engine starts; the sole authority on d
+    sample(key, n_points) -> (n_points, d) engine starts; the sole authority on d
 
 The caller composes x->θ and the chain rule grad_x = grad_θ * dθ_dx(x) into
 eval_f_g; the engine owns clip-to-bounds, and the prior is
 injected as `sample` - with `sample=None` it falls back to i.i.d. uniform over
-a finite `bounds` (the historical path, byte-identical), so an unbounded box
-without a sampler is a wiring error. Unbounded means a
-`None`/±inf side, and `clip` is then the identity.
+a finite `bounds`, so an unbounded box without a sampler is a wiring error.
+Unbounded means a `None`/±inf side, and `clip` is then the identity.
 `test_solver_seam.py`'s evaluator is that composed form.
 """
 
@@ -465,9 +464,8 @@ def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
     The objective has no floor above `floor`, and the prior spreads four paths
     across the box, so the initialization probe serves one of them in that
     region. Monotone descent cannot beat -inf, so spending the horizon after it
-    would be pure waste - and it used to be dropped from `fun` entirely
-    (`_argmin_finite` requires a finite value), which reported a larger value
-    than the run had already served.
+    would be pure waste - and dropping it from `fun` (`_argmin_finite` requires
+    a finite value) would report a larger value than the run had already served.
     """
     floor = 0.7
 
@@ -614,7 +612,7 @@ def test_probe_group_min_skips_nan() -> None:
     1.0e3, so every start must be its point from the finite draw - asserted per
     column against the recorded draws, since each path takes the group-min of
     its own column (no re-derivation of the engine's PRNG chain). Picking the
-    NaN draw's x would set that path's ZH reference to NaN, and a NaN start never
+    NaN draw's x would set that path's anchor to NaN, and a NaN start never
     recovers: the engine's finite gate stalls it for the rest of the run. Running
     the NaN draw first and last also kills an "always take the last draw"
     mis-implementation.
@@ -916,12 +914,12 @@ def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
 
 
 def test_bounds_spellings_are_the_same_box() -> None:
-    """scipy-style pairs and the historical (d, 2) array run byte-identically.
+    """scipy-style pairs and the (d, 2) array run byte-identically.
 
     One key stream, one draw sequence: if the two spellings normalized
     differently, the probes would land elsewhere and every recorded f would
-    differ. This is also what pins the new entry to the historical engine
-    (the (d, 2) array is what the caller passed then).
+    differ. This is also what pins both spellings to one normalization: the
+    (d, 2) array and the pair list are the same box.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -1099,6 +1097,37 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
         assert next(iter(bad)) in rejects(**bad), bad
     # no horizon at all is refused too, and the message names both ways to stop
     assert "max_iters" in rejects()
+
+
+def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
+    """A mistyped seam fails where it is passed, naming that argument.
+
+    Same gate as the two Protocol objects, at the other end: without it a wrong
+    callable reaches the first batch and fails there as `'int' object is not
+    callable`, a symptom a frame away from the argument that caused it.
+    """
+
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        return jnp.sum(theta**2, axis=1), 2.0 * theta, None
+
+    def rejects(first: object, **knobs: object) -> str:
+        try:
+            # the dial under test is deliberately out of contract
+            n_path_schedule(
+                first,  # pyright: ignore[reportArgumentType]
+                bounds=[(0.0, 1.0)],
+                max_iters=1,
+                **knobs,  # pyright: ignore[reportArgumentType]
+            )
+        except TypeError as e:
+            return str(e)
+        msg = f"accepted: {first!r} {knobs}"
+        raise AssertionError(msg)
+
+    assert "eval_f_g must be callable" in rejects(42)
+    assert "eval_f must be callable" in rejects(eval_f_g, eval_f=7)
+    assert "sample must be callable" in rejects(eval_f_g, sample=3)
+    assert "budget_check must be callable" in rejects(eval_f_g, budget_check=0)
 
 
 def test_malformed_bounds_are_rejected_at_the_entry() -> None:

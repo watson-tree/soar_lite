@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The seams are checked for being callable, not only the two Protocol objects.
+  `eval_f_g`, `eval_f`, `sample` and `budget_check` are refused with a
+  `TypeError` naming the argument before any batch is served; before this a
+  mistyped dial reached the first batch and failed there as `'int' object is
+  not callable`, a symptom one frame away from the argument that caused it.
 - A feasibility mask is validated instead of being read as truthiness. Only `0`
   (or `False`) marks a point infeasible, so a batch whose mask holds anything
   else - a signed constraint margin, whose violated points are all negative, or

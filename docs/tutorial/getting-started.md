@@ -100,7 +100,7 @@ than a criterion the search converged to.
 | `max_iters` | the horizon, counted in iterations (iteration 0 is the init probe); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | a wall-clock horizon in seconds, for when an iteration's cost is too uneven to budget in iterations |
 | `n_draws` | probe depth: draws per start (default 1); above 1 requires `eval_f` |
-| `sample` | your own prior `(key, n) -> (n, d)`; required when the box is unbounded |
+| `sample` | your own prior `(key, n_points) -> (n_points, d)`; required when the box is unbounded |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |
 

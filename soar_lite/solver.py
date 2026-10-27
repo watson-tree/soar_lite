@@ -33,8 +33,8 @@ class DiagonalPreconditioner(LocalSolver):
     g ≠ 0) still gets a finite step; a truly converged coordinate is caught by
     the stopping test below instead. The floor joins via ``max``, not ``+``:
     λ is a pure guard on Y → 0, never a deflation of a curvature-dominated
-    coordinate (the additive spelling shrinks every d by √(Y/(Y+λ)), measured
-    as dead weight in the unbounded-space probe — the max-floor arm).
+    coordinate (the additive spelling shrinks every d by √(Y/(Y+λ)), so `max`
+    is the arm that leaves a curvature-dominated coordinate undeformed).
     d ≥ 0 by construction, so -d⊙g is always a
     descent direction and needs no acceptance test. Named "diagonal
     preconditioner", not "diagonal Newton": coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside
