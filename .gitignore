@@ -6,6 +6,9 @@ build/
 dist/
 site/
 
+# Local scratch / working notes (never committed)
+.scratch/
+
 # Virtual environments
 .venv/
 venv/
