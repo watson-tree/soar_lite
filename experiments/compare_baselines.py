@@ -3,7 +3,7 @@
 Two panels per method family, following the design in `DESIGN.md`:
 
 * smooth + headline (preconditioning proposition): soar-lite n_paths=1
-  (NoRestart), n_paths=16 (NoRestart), n_paths=16 (EIRestart), Adam,
+  (NoRestart), n_paths=16 (NoRestart), n_paths=16 (StallRestart), Adam,
   L-BFGS-B (ceiling reference);
 * multimodal (escape proposition): the same three soar-lite arms, Adam.
 
@@ -61,7 +61,7 @@ from experiments.methods import (
     run_lbfgs,
     run_soar_lite,
 )
-from soar_lite import EIRestartRule, NoRestartRule
+from soar_lite import NoRestartRule, StallRestartRule
 
 HERE = Path(__file__).parent
 Runner: TypeAlias = Callable[..., Trace]
@@ -88,13 +88,13 @@ def _parallel_no_restart(prob: problems.Problem, **kw: int) -> Trace:
 
 
 def _parallel_restart(prob: problems.Problem, **kw: int) -> Trace:
-    """soar-lite n_paths=16 with the sample-based EI restart rule.
+    """soar-lite n_paths=16 with the stall restart rule.
 
     Passed explicitly rather than leaning on the engine default, so the panel
     states which rule it measured; paired with `_parallel_no_restart` it
     isolates restart at fixed width.
     """
-    return run_soar_lite(prob, n_paths=16, restart_rule=EIRestartRule(), **kw)
+    return run_soar_lite(prob, n_paths=16, restart_rule=StallRestartRule(), **kw)
 
 
 CurveEntry: TypeAlias = dict[str, list[float] | list[list[float | None]]]
@@ -127,7 +127,7 @@ INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
 # them is exactly the restart effect.
 LABEL_SERIAL = "soar-lite n_paths=1 (NoRestart)"
 LABEL_PARALLEL = "soar-lite n_paths=16 (NoRestart)"
-LABEL_PARALLEL_RESTART = "soar-lite n_paths=16 (EIRestart)"
+LABEL_PARALLEL_RESTART = "soar-lite n_paths=16 (StallRestart)"
 
 # Method roster per problem family: (label, runner, style kwargs).
 SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [

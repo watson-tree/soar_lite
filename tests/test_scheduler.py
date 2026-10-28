@@ -1,16 +1,20 @@
 """n-path scheduler self-checks.
 
-Seam (拍板): the engine consumes callables plus the box it searches
+Seam (拍板): the engine consumes the flock, callables, and the box it searches
 
     eval_f_g(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
     budget_check() -> bool
     bounds -> scipy-style (lb, ub) pairs | (d, 2) array | None (no box)
-    sample(key, n_points) -> (n_points, d) engine starts; the sole authority on d
+    x0 (n_paths, d) -> the flock; the sole authority on n_paths and d
+    global_model(key, n_points) -> (n_points, d) restart points; not consulted
+        unless a restart rule fires
 
 The caller composes x->θ and the chain rule grad_x = grad_θ * dθ_dx(x) into
-eval_f_g; the engine owns clip-to-bounds, and the prior is
-injected as `sample` - with `sample=None` it falls back to i.i.d. uniform over
-a finite `bounds`, so an unbounded box without a sampler is a wiring error.
+eval_f_g; the engine owns clip-to-bounds, and the flock is the caller's - with
+the arguments in the order a run reads them: `x0` first, then the rule that
+decides when to leave a point and the model that decides where to go. With
+`global_model=None` the engine falls back to i.i.d. uniform over a finite
+`bounds`, so an unbounded box (or none) without a model is a wiring error.
 Unbounded means a `None`/±inf side, and `clip` is then the identity.
 `test_solver_seam.py`'s evaluator is that composed form.
 """
@@ -33,7 +37,7 @@ from soar_lite.engine import (
     _argmin_finite,
     n_path_schedule,
 )
-from soar_lite.restart import EIRestartRule, NoRestartRule
+from soar_lite.restart import NoRestartRule, StallRestartRule
 from soar_lite.solver import DiagonalPreconditioner
 
 jax.config.update("jax_enable_x64", val=True)
@@ -44,6 +48,18 @@ Pointwise: TypeAlias = Callable[[jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray]]
 def unit_bounds(d: int = 1) -> jnp.ndarray:
     """Return the engine's box in working coords: x ∈ [0,1]^d."""
     return jnp.stack([jnp.zeros(d), jnp.ones(d)], axis=1)
+
+
+def flock(n_paths: int, d: int = 1) -> jnp.ndarray:
+    """Return `n_paths` deterministic starting points inside [0,1]^d.
+
+    Spread evenly and off the walls rather than drawn: these are the engine's
+    tests, so the starts must not depend on a PRNG the caller now owns, and an
+    interior row keeps a steepest-descent step from being pinned at a face
+    before the test has said anything.
+    """
+    row = jnp.linspace(0.0, 1.0, n_paths + 2)[1:-1]
+    return jnp.repeat(row[:, None], d, axis=1)
 
 
 class HalfStep:
@@ -139,8 +155,8 @@ def test_batch_shape_and_point_counting() -> None:
     rec = Recorder(quartic)
     res = n_path_schedule(
         rec,
+        x0=flock(4),
         bounds=unit_bounds(),
-        n_paths=4,
         max_iters=50,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
@@ -153,7 +169,10 @@ def test_batch_shape_and_point_counting() -> None:
     # own trial cap bounds one iteration), so it stays far below the eval
     # count and never passes the horizon.
     assert 0 < res.n_iters <= 50
-    assert res.n_points >= res.n_iters * 4  # a batch serves at least the n_paths points
+    # With no rule firing, a path serves at most one g point per iteration, and
+    # every g batch serves at least one: the two counts bracket each other.
+    assert res.n_points <= res.n_iters * 4, (res.n_points, res.n_iters)
+    assert res.n_batches <= res.n_points, (res.n_batches, res.n_points)
     # batched concurrency: at least one call served >1 point at once
     assert any(m > 1 for (m, _d) in rec.batch_shapes), rec.batch_shapes
     # all batches carry the same width d
@@ -169,8 +188,8 @@ def test_budget_exhaustion_stops_everything() -> None:
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
+        x0=flock(8),
         bounds=unit_bounds(),
-        n_paths=8,
         max_iters=100,
         budget_check=rec.limit_check(30),
         solver=HalfStep(),
@@ -185,8 +204,8 @@ def test_budget_exhaustion_stops_everything() -> None:
     rec0 = Recorder(quad)
     res0 = n_path_schedule(
         rec0,
+        x0=flock(4),
         bounds=unit_bounds(),
-        n_paths=4,
         max_iters=100,
         budget_check=rec0.limit_check(0),
         solver=HalfStep(),
@@ -196,19 +215,19 @@ def test_budget_exhaustion_stops_everything() -> None:
     assert res0.n_iters == 0  # never got past the first gate check
     assert res0.status == "budget_exhausted"
 
-    # Budget for the init probe only: iteration 0 completes, so the flock is
-    # seeded and n_iters is 1 - a refused first step is distinguishable from a
-    # refused probe (n_iters = 0 above).
+    # Budget for iteration 0 only: it completes, so the flock is placed and
+    # n_iters is 1 - a refused first step is distinguishable from a refused
+    # start (n_iters = 0 above).
     rec1 = Recorder(quad)
     res1 = n_path_schedule(
         rec1,
+        x0=flock(4),
         bounds=unit_bounds(),
-        n_paths=4,
         max_iters=1,
         solver=HalfStep(),
         key=jax.random.PRNGKey(3),
     )
-    assert res1.n_points == 4  # the probe served every path
+    assert res1.n_points == 4  # iteration 0 served every path
     assert res1.n_iters == 1
     assert res1.status == "max_iters"
 
@@ -225,8 +244,8 @@ def test_fun_is_true_min_over_history() -> None:
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
+        x0=flock(4),
         bounds=unit_bounds(),
-        n_paths=4,
         max_iters=50,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
@@ -265,15 +284,12 @@ def _two_well(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
 def test_k_start_beats_single_path_on_multimodal() -> None:
     """Equal eval budget: 16 starts strictly beat 1 start on a two-well 1-D.
 
-    Global well -8 @ θ=0.38, local well -2 @ θ=0.62, saddle ~ 0.505 (the
-    deep well is 4x deeper, so its basin reaches just past mid-domain).
-    x0 ~ uniform(0,1) and the identity map makes θ = x, so the single
-    path's fate depends on its pair-min start (min of 2 draws) relative
-    to the saddle. The single path is pinned to `NoRestartRule`, so it is the
-    pure-descent arm - one start, no probes - against 16 starts whose EI rule
-    may probe stalled paths into the global well. This test attributes the win
-    to the start count; `test_restart_beats_pure_multistart_on_multimodal`
-    attributes one to the rule alone, at a fixed start count.
+    Global well -8 @ θ=0.38, local well -2 @ θ=0.62, saddle ~ 0.505 (the deep
+    well is 4x deeper, so its basin reaches just past mid-domain). The identity
+    map makes θ = x, so the single path is placed in the shallow well and the
+    sixteen are spread across the box; both arms run the shipped method and are
+    pinned to `NoRestartRule`, so the only difference is the start count. What a
+    rule adds on top of width is the next test's subject.
     """
     # independent literal grid check: global min is -8 (brute force)
     grid = jnp.linspace(0.05, 0.95, 901)
@@ -284,77 +300,64 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     rec_k = Recorder(_two_well)
     res_k = n_path_schedule(
         rec_k,
+        x0=flock(16),
         bounds=unit_bounds(),
-        n_paths=16,
         max_iters=100,
         budget_check=rec_k.limit_check(budget),
-        solver=HalfStep(),
+        solver=DiagonalPreconditioner(),
+        restart_rule=NoRestartRule(),
         key=jax.random.PRNGKey(2),
     )
     rec_1 = Recorder(_two_well)
     res_1 = n_path_schedule(
         rec_1,
+        x0=jnp.array([[0.62]]),  # planted in the shallow well
         bounds=unit_bounds(),
-        n_paths=1,
         max_iters=100,
         budget_check=rec_1.limit_check(budget),
-        solver=HalfStep(),
+        solver=DiagonalPreconditioner(),
         restart_rule=NoRestartRule(),
         key=jax.random.PRNGKey(2),
     )
-    # the single path must be trapped in the shallow well: replicate the
-    # engine's n_paths=1 init key chain (split -> probe eval 1, split -> eval 2)
-    # and verify the pair-min start lands in the shallow basin (x > 0.505)
-    k = jax.random.PRNGKey(2)
-    k, k1 = jax.random.split(k)
-    k, k2 = jax.random.split(k)
-    xa = float(jax.random.uniform(k1, (1, 1), minval=0.0, maxval=1.0)[0, 0])
-    xb = float(jax.random.uniform(k2, (1, 1), minval=0.0, maxval=1.0)[0, 0])
-    x0_1 = (
-        xa
-        if float(_two_well_1d(jnp.asarray(xa))) <= float(_two_well_1d(jnp.asarray(xb)))
-        else xb
-    )
-    assert 0.505 < x0_1 < 1.0, f"single-path seed moved: x0={x0_1} (xa={xa}, xb={xb})"
     assert res_1.fun > -3.0, res_1.fun  # stuck near local well (-2)
     assert res_k.fun < -7.0, res_k.fun  # found the global well (-8)
     assert res_k.fun < res_1.fun  # strictly better, equal budget
 
 
-def test_restart_beats_pure_multistart_on_multimodal() -> None:
-    """Same starts, same budget, one rule swapped: restart is what escapes.
+def test_the_stall_rule_escapes_a_shallow_basin() -> None:
+    """Same starts, same budget, one rule swapped: the rule is what escapes.
 
-    The arms share the key, the path count and the budget, so the init probe and
-    every step are identical up to the first restart - the only difference is
-    the rule. `NoRestartRule` pins the four shallow starts to the local well;
-    the EI rule spends its verdicts on probes, and a probe landing in the deep
-    basin turns the run around.
+    Four starts planted in the shallow well (-2 @ θ=0.62) and the same method in
+    both arms, so every step is identical until the first verdict. The frozen
+    flock descends to the bottom of the well it was given and idles there; the
+    stall rule reads a converged path as no progress, fires once its window is
+    full, and the engine's default global model re-draws it - some draw lands in
+    the deep basin (-8 @ θ=0.38). Both runs end on the budget, not the horizon,
+    so the comparison is equal work.
     """
     budget = 320
-    rec_pure = Recorder(_two_well)
-    res_pure = n_path_schedule(
-        rec_pure,
-        bounds=unit_bounds(),
-        n_paths=4,
-        max_iters=100,
-        budget_check=rec_pure.limit_check(budget),
-        solver=HalfStep(),
-        restart_rule=NoRestartRule(),
-        key=jax.random.PRNGKey(9),
-    )
-    rec_ei = Recorder(_two_well)
-    res_ei = n_path_schedule(
-        rec_ei,
-        bounds=unit_bounds(),
-        n_paths=4,
-        max_iters=100,
-        budget_check=rec_ei.limit_check(budget),
-        solver=HalfStep(),
-        key=jax.random.PRNGKey(9),
-    )
-    assert res_pure.fun > -3.0, res_pure.fun  # four shallow starts, all stuck
-    assert res_ei.fun < -7.0, res_ei.fun  # a probe reached the deep basin
-    assert res_ei.fun < res_pure.fun
+    x0_shallow = jnp.array([[0.60], [0.64], [0.58], [0.66]])
+
+    def run(rule: NoRestartRule | StallRestartRule) -> NPathResult:
+        rec = Recorder(_two_well)
+        return n_path_schedule(
+            rec,
+            x0=x0_shallow,
+            bounds=unit_bounds(),
+            max_iters=100,
+            budget_check=rec.limit_check(budget),
+            solver=DiagonalPreconditioner(),
+            restart_rule=rule,
+            key=jax.random.PRNGKey(9),
+        )
+
+    frozen = run(NoRestartRule())
+    revived = run(StallRestartRule(window=10))
+    assert frozen.status == "budget_exhausted", frozen
+    assert revived.status == "budget_exhausted", revived
+    assert frozen.fun > -3.0, frozen.fun  # four shallow starts, all stuck
+    assert revived.fun < -7.0, revived.fun  # a re-draw reached the deep basin
+    assert revived.fun < frozen.fun
 
 
 def test_projected_descent_reaches_wall_optimum() -> None:
@@ -375,9 +378,9 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     rec = Recorder(wall_quad)
     res = n_path_schedule(
         rec,
+        x0=flock(1, 2),
         bounds=unit_bounds(2),
-        n_paths=1,
-        restart_rule=NoRestartRule(),  # pure projected descent, no probes
+        restart_rule=NoRestartRule(),  # pure projected descent, no restarts
         max_iters=100,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
@@ -386,20 +389,25 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     assert res.fun < 0.4, res.fun  # must slide near (1, 0), f=0.25
 
 
-class _RecordingBest(EIRestartRule):
-    """An `EIRestartRule` that also logs the raw best each verdict is asked.
+class _RecordingBest:
+    """A rule that logs the raw best each verdict is handed, and never fires.
 
-    Recording only: every decision is delegated, so the run is the default
-    rule's plus a log of what `f⋆` it was handed.
+    Recording only: the run is `NoRestartRule`'s plus a log of what `f⋆` each
+    verdict read, which is how the engine's reporting can be told apart from its
+    trajectory.
     """
 
     def __init__(self) -> None:
-        super().__init__()
+        """Start with an empty log."""
         self.bs: list[float] = []
 
-    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:
+    def observe_step(self, i: int, delta: float | None) -> None:
+        """No-op: the log is of verdicts, not of steps."""
+
+    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
+        """Log the raw best the verdict reads, then keep the path."""
         self.bs.append(best_fun_raw)
-        return super().should_restart(i, f_k, best_fun_raw)
+        return False
 
 
 def test_feasible_only_best() -> None:
@@ -436,8 +444,8 @@ def test_feasible_only_best() -> None:
     rule = _RecordingBest()
     res = n_path_schedule(
         eval_f_g,
+        x0=flock(4),
         bounds=unit_bounds(),
-        n_paths=4,
         max_iters=100,
         budget_check=budget_check,
         solver=HalfStep(),
@@ -461,11 +469,11 @@ def test_feasible_only_best() -> None:
 def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
     """A served feasible -inf is the answer, not a value to compare.
 
-    The objective has no floor above `floor`, and the prior spreads four paths
-    across the box, so the initialization probe serves one of them in that
-    region. Monotone descent cannot beat -inf, so spending the horizon after it
-    would be pure waste - and dropping it from `fun` (`_argmin_finite` requires
-    a finite value) would report a larger value than the run had already served.
+    The objective has no floor above `floor`, and the four starts spread across
+    the box, so iteration 0 serves one of them in that region. Monotone descent
+    cannot beat -inf, so spending the horizon after it would be pure waste - and
+    dropping it from `fun` (`_argmin_finite` requires a finite value) would
+    report a larger value than the run had already served.
     """
     floor = 0.7
 
@@ -473,15 +481,11 @@ def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
         f_vals = jnp.where(theta[:, 0] > floor, -jnp.inf, (theta[:, 0] - 0.2) ** 2.0)
         return f_vals, 2.0 * (theta - 0.2), None
 
-    def sample(key: jnp.ndarray, n: int) -> jnp.ndarray:  # noqa: ARG001
-        return jnp.linspace(0.05, 0.95, n)[:, None]
-
     res = n_path_schedule(
         eval_f_g,
+        x0=jnp.linspace(0.05, 0.95, 4)[:, None],
         bounds=unit_bounds(),
-        n_paths=4,
         max_iters=50,
-        sample=sample,
         solver=HalfStep(),
         restart_rule=NoRestartRule(),
         key=jax.random.PRNGKey(0),
@@ -490,7 +494,7 @@ def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
     assert res.fun == -math.inf
     assert res.status == "unbounded"
     assert res.x[0] > floor  # the point that priced it, not a later one
-    assert res.n_iters == 0  # stopped inside the init probe: no iteration spent
+    assert res.n_iters == 0  # stopped inside iteration 0: none completed
 
 
 def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
@@ -513,15 +517,11 @@ def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
         served.extend(float(v) for v in f_vals)
         return f_vals, 2.0 * (theta - 0.2), theta[:, 0] <= floor
 
-    def sample(key: jnp.ndarray, n: int) -> jnp.ndarray:  # noqa: ARG001
-        return jnp.linspace(0.05, 0.95, n)[:, None]
-
     res = n_path_schedule(
         eval_f_g,
+        x0=jnp.linspace(0.05, 0.95, 4)[:, None],
         bounds=unit_bounds(),
-        n_paths=4,
         max_iters=20,
-        sample=sample,
         solver=HalfStep(),
         restart_rule=NoRestartRule(),
         key=jax.random.PRNGKey(0),
@@ -534,12 +534,12 @@ def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
 
 
 def test_nan_first_candidate_does_not_mask_batch_min() -> None:
-    """A NaN probe ranked first must not swallow the batch's real best point.
+    """A NaN-ranked start must not swallow the batch's real best point.
 
-    The init probe serves [NaN, 0.01] (both feasible), so the engine must
-    report best_f == 0.01. `min(candidates, key=f_vals_list.__getitem__)`
-    kept the NaN (NaN < x is False): the batch's real minimum — and its x —
-    was discarded and best_f stayed inf.
+    Iteration 0 serves [NaN, 0.01] (both feasible), so the engine must report
+    best_f == 0.01. `min(candidates, key=f_vals_list.__getitem__)` kept the NaN
+    (NaN < x is False): the batch's real minimum - and its x - was discarded and
+    best_f stayed inf.
     """
     served = [0]
 
@@ -554,8 +554,8 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
 
     res = n_path_schedule(
         eval_f_g,
+        x0=flock(2),
         bounds=unit_bounds(),
-        n_paths=2,
         max_iters=5,
         budget_check=lambda: served[0] < 40,
         solver=HalfStep(),
@@ -565,195 +565,61 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
     assert bool(jnp.isfinite(res.x[0])), res.x
 
 
-def run_probe_pass_with_nan_draw(nan_draw: int) -> None:
-    """One n_paths=2 init pass serving NaN for the whole f-only draw `nan_draw`."""
-    n_paths = 2
-    draws: list[jnp.ndarray] = []
-    winners: list[jnp.ndarray] = []
-
-    def eval_f(theta: jnp.ndarray) -> tuple[jnp.ndarray, None]:
-        draws.append(theta)
-        # The finite draw only has to be finite and distinguishable; it is made
-        # clearly worse than the real objective below so the winners' re-served
-        # value reads as an improvement rather than a worsening.
-        value = jnp.nan if len(draws) == nan_draw else 1.0e3
-        return jnp.full((theta.shape[0],), value, dtype=theta.dtype), None
-
-    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        winners.append(theta)
-        d = theta - 0.7
-        return jnp.sum(d**4 + d**2, axis=1), 4.0 * d**3 + 2.0 * d, None
-
-    res = n_path_schedule(
-        eval_f_g,
-        eval_f=eval_f,
-        bounds=unit_bounds(),
-        n_paths=n_paths,
-        # group-min needs two draws to skip between; this test pins the skip,
-        # not the default, so it states the probe size it assumes.
-        n_draws=2,
-        max_iters=2,  # the 3-batch probe, then one step
-        solver=HalfStep(),
-        key=jax.random.PRNGKey(7),
-    )
-    assert winners, "the engine never served the probe's winners"
-    assert res.status == "max_iters", (nan_draw, res.status)  # no NaN stall
-    finite_draw = draws[1] if nan_draw == 1 else draws[0]
-    for j in range(n_paths):
-        assert jnp.allclose(winners[0][j], finite_draw[j]), (
-            f"nan_draw={nan_draw}: start {j} is not the finite draw's point"
-        )
-
-
-def test_probe_group_min_skips_nan() -> None:
-    """A NaN probe draw must not win the group-min: starts stay finite.
-
-    One whole f-only draw serves NaN for every point while the other serves
-    1.0e3, so every start must be its point from the finite draw - asserted per
-    column against the recorded draws, since each path takes the group-min of
-    its own column (no re-derivation of the engine's PRNG chain). Picking the
-    NaN draw's x would set that path's anchor to NaN, and a NaN start never
-    recovers: the engine's finite gate stalls it for the rest of the run. Running
-    the NaN draw first and last also kills an "always take the last draw"
-    mis-implementation.
-    """
-    run_probe_pass_with_nan_draw(1)
-    run_probe_pass_with_nan_draw(2)
-    # helper contract: skip non-finite, None when nothing is finite
+def test_the_best_skips_nonfinite_values() -> None:
+    """`_argmin_finite` is how `fun` ignores the non-finite points it served."""
     assert _argmin_finite([2.0, 1.0]) == 1
     assert _argmin_finite([math.nan, 0.01, math.inf]) == 1
     assert _argmin_finite([math.nan, math.inf]) is None
 
 
-class ForcedWindow(EIRestartRule):
-    """The delivery rule with its verdict window pinned (a test/arm knob).
+def test_a_dead_path_serves_nothing_after_its_start() -> None:
+    """A start whose served values are non-finite stalls on arrival.
 
-    The rule derives its own window from the group-min pool, so a test
-    that wants a literal cadence for an engine run states it here: it stays the
-    same estimator and the same gate, only the length is forced. The delivery
-    rule has no such parameter - a fixed cadence is a variant of it, not a knob
-    on it.
+    It has no anchor to descend from, so it must not burn budget sitting there:
+    under `NoRestartRule` a dead row is served once, in iteration 0's fused
+    batch, and never again, while the live row costs exactly one point per
+    iteration.
     """
-
-    def __init__(self, window: int) -> None:
-        """Pin every path's stage to `window` samples."""
-        super().__init__()
-        self._window = window
-
-    def _stage_window(self) -> int:
-        """Return the pinned window (the pool's size is not consulted)."""
-        return self._window
-
-
-def test_probe_inf_group_min_does_not_silence_restarts() -> None:
-    """An all-+inf probe group must not disable every restart in the flock.
-
-    Column 0 is +inf in both init probe evals (a group with no finite
-    member), so the shared init group-min list carries an inf sample. Feeding
-    it naively into the KDE blows the bandwidth and gives EI_restart = NaN, and
-    `NaN > EI_continue` is False forever - no path would ever restart again
-    even though `f⋆` is finite. The group-min pool proves the verdicts still fire:
-    it is n_paths long after init and every restart event appends its own
-    entries, so a run with verdicts grows past n_paths while the same run with
-    the window pushed out of reach does not.
-    """
-    n_paths = 3
-    # The flat field makes every step a rejecting line search, so one iteration
-    # burns the method's whole trial cap; the horizon only has to carry init plus
-    # the iterations the verdicts need to come due.
-    max_iters = 6
-    init_f_vals = jnp.array([jnp.inf, 1.0, 3.0])  # row 0 = column 0 = dead
-
-    def seam_run(window: int) -> tuple[NPathResult, ForcedWindow]:
-        calls = [0]
-
-        def eval_f_g(
-            theta: jnp.ndarray,
-        ) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-            calls[0] += 1
-            if calls[0] <= 2:  # init probe evals: shared cold-start evidence
-                f_vals = init_f_vals
-            else:  # everything afterwards is finite and flat (Δ = 0, so h = 0)
-                f_vals = jnp.full((theta.shape[0],), 1.0, dtype=theta.dtype)
-            return f_vals, jnp.zeros_like(theta), None
-
-        rule = ForcedWindow(window)
-        res = n_path_schedule(
-            eval_f_g,
-            bounds=unit_bounds(),
-            n_paths=n_paths,
-            max_iters=max_iters,
-            solver=HalfStep(),
-            restart_rule=rule,
-            key=jax.random.PRNGKey(0),
-        )
-        return res, rule
-
-    res_off, rule_off = seam_run(10**9)  # verdicts never due
-    res_on, rule_on = seam_run(2)  # verdict once two samples land
-    assert res_off.fun == 1.0, res_off.fun  # `f⋆` is finite, so EI_restart fits
-    assert res_on.fun == 1.0, res_on.fun
-    assert len(rule_off.group_mins) == n_paths, rule_off.group_mins  # init only
-    assert len(rule_on.group_mins) > n_paths, rule_on.group_mins  # restarts fired
-
-
-def test_nonfinite_start_waits_for_ei_instead_of_stepping() -> None:
-    """A start whose whole probe group is non-finite is stalled on arrival.
-
-    It has no finite reference to descend from, so it must not burn budget
-    while waiting for an EI verdict: with verdicts effectively off (huge
-    window) exactly one eval per step is served after the two init
-    iterations - the live path only.
-    """
-    n_paths = 2
-    # the horizon counts iterations, and iteration 0 is the init probe, so it is
-    # that one plus the three trial iterations this test counts
-    n_draws = 1
-    n_iterations = 3
-    max_iters = n_draws + n_iterations
-    served = [0]
-    calls = [0]
+    n_paths, n_iterations = 2, 3
+    widths: list[int] = []
 
     def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        calls[0] += 1
-        served[0] += int(theta.shape[0])
-        # Column 1 needs a real objective: on a flat field it burns the method's
-        # trial cap per step instead of committing one, and the per-step accounting
-        # this test pins would measure the line search, not the stall.
+        widths.append(int(theta.shape[0]))
         d = theta - 0.7
         f_vals = jnp.sum(d**4 + d**2, axis=1)
         grads = 4.0 * d**3 + 2.0 * d
-        if calls[0] <= n_draws:  # the init probe: column 0 gets no evidence
-            f_vals = f_vals.at[0].set(jnp.inf)
-        return f_vals, grads, None
+        dead = jnp.arange(theta.shape[0]) == 0  # row 0 never comes back finite
+        return (
+            jnp.where(dead, jnp.inf, f_vals),
+            jnp.where(dead[:, None], jnp.nan, grads),
+            None,
+        )
 
     res = n_path_schedule(
         eval_f_g,
+        x0=flock(n_paths),
         bounds=unit_bounds(),
-        n_paths=n_paths,
-        n_draws=n_draws,
-        max_iters=max_iters,
-        budget_check=lambda: served[0] < 60,
+        max_iters=n_iterations + 1,
+        budget_check=lambda: len(widths) < 100,
         solver=HalfStep(),
-        restart_rule=ForcedWindow(10**9),
+        restart_rule=NoRestartRule(),
         key=jax.random.PRNGKey(0),
     )
-    # one point per live path per iteration, not two evals per step
-    assert res.n_points == n_draws * n_paths + n_iterations, res.n_points
+    assert res.n_iters == n_iterations + 1, res
+    assert widths[0] == n_paths, widths  # iteration 0 serves the whole flock
+    assert all(w == 1 for w in widths[1:]), widths  # then the live path alone
 
 
-def test_a_dead_initialization_probe_does_not_freeze_the_run() -> None:
-    """No finite best yet is a probe, not a closed gate.
+def test_a_dead_start_is_redrawn_by_a_restart() -> None:
+    """A rule that fires on a dead path recovers it; a frozen flock cannot.
 
-    One path, and the initialization group is the only dead one. The rule then
-    has nothing to compare, and a False there would leave the one path that
-    could re-draw blocked from asking: the run would idle to the horizon with
-    fun = inf and a status that says it ran out of iterations. So the due
-    verdict re-probes, the second draw is finite, and the path descends. The
-    NoRestartRule arm is the control - same objective, no re-probe, fun stays
-    inf - which is what makes the recovery the verdict's doing.
+    The dead row is dead only in iteration 0, so the path recovers as soon as it
+    is given a new start: `StallRestartRule` reads the stalls as no progress,
+    fires once its window is full, the engine draws the start from the default
+    global model (uniform over the box) and the path descends. `NoRestartRule`
+    is the control on the same objective - same dead start, no re-draw, fun
+    stays inf - which is what makes the recovery the verdict's doing.
     """
-    dead_group = 1
 
     def make_evaluator() -> Callable[
         [jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None]
@@ -762,7 +628,7 @@ def test_a_dead_initialization_probe_does_not_freeze_the_run() -> None:
 
         def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             calls[0] += 1
-            if calls[0] <= dead_group:  # the initialization probe: nothing finite
+            if calls[0] == 1:  # iteration 0's batch: nothing finite
                 nan = jnp.full((theta.shape[0],), jnp.nan)
                 return nan, jnp.full_like(theta, jnp.nan), None
             d = theta - 0.7
@@ -770,97 +636,20 @@ def test_a_dead_initialization_probe_does_not_freeze_the_run() -> None:
 
         return eval_f_g
 
-    def run(rule: EIRestartRule | NoRestartRule) -> NPathResult:
+    def run(rule: NoRestartRule | StallRestartRule) -> NPathResult:
         return n_path_schedule(
             make_evaluator(),
+            x0=flock(1),
             bounds=unit_bounds(),
-            n_paths=1,
             max_iters=20,
             solver=DiagonalPreconditioner(),
             restart_rule=rule,
             key=jax.random.PRNGKey(0),
         )
 
-    revived = run(EIRestartRule())
+    revived = run(StallRestartRule(window=2))
     assert math.isfinite(revived.fun), revived
-    # the control: the same dead start under a rule that never re-probes
     assert run(NoRestartRule()).fun == math.inf
-
-
-def test_stalled_paths_wait_for_ei_then_restart() -> None:
-    """A method's own give-up stalls a path; only a due EI verdict revives it.
-
-    Init probes return f = x[0] (a real spread, so h > 0 and `f⋆` stays
-    small); every later evaluation returns the same bad constant with a zero
-    gradient, so the injected method rejects its trial cap and gives up. With
-    window = 2 (the shortest stage that has a spread at all) and one sample per
-    iteration, the stalled flock's second sample lands at iteration 2 and its
-    verdict is due at iteration 3, with EI_continue = 0
-    (f_k >= f⋆) and EI_restart > 0, so the flock is revived by a restart probe;
-    with verdicts off (huge window) the very same run serves nothing after the
-    stall. The two traces differ by exactly the restart
-    events - this is the engine-level wiring (stall -> EI -> restart) the unit
-    tests of _ei_restart/EI_continue cannot cover. The huge-period arm also pins
-    what the horizon costs: a flock that is entirely stalled serves nothing, so
-    the remaining iterations idle - one inf sample per path each - until the
-    horizon ends the run. That idle tail is the price of a stop that does not
-    depend on a rule's cadence.
-    """
-    n_paths, trial_cap, n_draws = 4, 3, 1
-    # Iterations: the init probe, the rejecting iteration that stalls the flock,
-    # one idle iteration while the verdict comes due, then the restart probe.
-    max_iters = 4
-    bad = 10.0
-
-    def seam_run(window: int) -> tuple[list[tuple[int, int]], int, NPathResult]:
-        shapes: list[tuple[int, int]] = []
-        evals = [0]
-
-        def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-            shapes.append((int(theta.shape[0]), int(theta.shape[1])))
-            evals[0] += int(theta.shape[0])
-            if len(shapes) <= n_draws:  # init probe evals: real objective
-                return theta[:, 0], jnp.ones_like(theta), None
-            return (
-                jnp.full((theta.shape[0],), bad, dtype=theta.dtype),
-                jnp.zeros_like(theta),
-                None,
-            )
-
-        res = n_path_schedule(
-            eval_f_g,
-            bounds=unit_bounds(),
-            n_paths=n_paths,
-            n_draws=n_draws,
-            max_iters=max_iters,
-            # the horizon ends both runs
-            budget_check=lambda: evals[0] < 10**6,
-            solver=HalfStep(trial_cap=trial_cap),
-            restart_rule=ForcedWindow(window),
-            key=jax.random.PRNGKey(8),
-        )
-        return shapes, evals[0], res
-
-    shapes_off, evals_off, res_off = seam_run(10**9)  # verdicts never due
-    shapes_on, evals_on, res_on = seam_run(2)  # verdict once two samples land
-    # without verdicts: init + trial_cap rejecting trials per path, then nothing
-    pre = n_draws + trial_cap
-    assert len(shapes_off) == pre, shapes_off
-    assert evals_off == (n_draws + trial_cap) * n_paths
-    # The idle iteration serves no eval, then a restart probe of every path.
-    # The tail is left as an inequality on purpose - what the revived
-    # paths do after the probe (accept, or burn their own trial cap again on the
-    # same flat field) is the injected method's business.
-    assert len(shapes_on) - pre >= n_draws, shapes_on  # served after the stall
-    assert all(m == n_paths for m, _d in shapes_on), shapes_on  # no shrinking batches
-    assert evals_on == len(shapes_on) * n_paths > evals_off
-    # The horizon ends both arms. A stalled flock idles rather than stopping at
-    # the stall - every path still folds one inf sample per iteration, so n_iters is
-    # the horizon itself, and the stalled arm serves nothing more.
-    assert res_off.status == "max_iters", res_off  # not "budget_exhausted"
-    assert res_on.status == "max_iters", res_on  # a due verdict keeps it alive
-    assert res_off.n_iters == max_iters, res_off
-    assert res_on.n_iters == max_iters, res_on
 
 
 def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
@@ -902,13 +691,13 @@ def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
+        x0=flock(1),  # one path: a single batch per trial keeps the count exact
         bounds=unit_bounds(),
-        n_paths=1,  # one path: a single batch per trial keeps the count exact
-        max_iters=2,  # the init probe, then this one step
+        max_iters=2,  # iteration 0 places x0, then this one step
         solver=Patient(),
         key=jax.random.PRNGKey(11),
     )
-    assert len(rec.batch_shapes) == 1 + n_rejects + 1, rec.batch_shapes  # init + trials
+    assert len(rec.batch_shapes) == 1 + n_rejects + 1, rec.batch_shapes  # x0 + trials
     assert res.n_iters == 2, res
     assert rec.all_f_vals[-1] < rec.all_f_vals[0], rec.all_f_vals  # it committed
 
@@ -916,10 +705,10 @@ def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
 def test_bounds_spellings_are_the_same_box() -> None:
     """scipy-style pairs and the (d, 2) array run byte-identically.
 
-    One key stream, one draw sequence: if the two spellings normalized
-    differently, the probes would land elsewhere and every recorded f would
-    differ. This is also what pins both spellings to one normalization: the
-    (d, 2) array and the pair list are the same box.
+    One key stream, one flock: if the two spellings normalized differently, the
+    clips would land elsewhere and every recorded f would differ. This is also
+    what pins both spellings to one normalization: the (d, 2) array and the pair
+    list are the same box.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -931,9 +720,9 @@ def test_bounds_spellings_are_the_same_box() -> None:
         rec = Recorder(quad)
         res = n_path_schedule(
             rec,
+            x0=flock(4, 2),
             bounds=bounds,
             budget_check=rec.limit_check(80),
-            n_paths=4,
             max_iters=10,
             solver=HalfStep(),
             key=jax.random.PRNGKey(3),
@@ -946,13 +735,15 @@ def test_bounds_spellings_are_the_same_box() -> None:
     assert fun_pairs == fun_arr
 
 
-def test_unbounded_or_absent_box_needs_an_injected_sampler() -> None:
-    """sample=None can only draw a finite box; anything else is a wiring error.
+def test_unbounded_or_absent_box_needs_a_global_model() -> None:
+    """global_model=None can only draw a finite box; anything else is an error.
 
     An unbounded side has no distribution to draw from unless the caller brings
     one, so the engine refuses instead of inventing a box (or a d) of its own.
     One-sided is the quiet case: half the box still exists, so the run would
     silently be a different algorithm than the one the caller thinks it wired.
+    The check is eager - a model that is never asked is still required, because
+    the rule can change without the box changing.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -963,8 +754,8 @@ def test_unbounded_or_absent_box_needs_an_injected_sampler() -> None:
         try:
             n_path_schedule(
                 rec,
+                x0=flock(2),
                 bounds=bounds,
-                n_paths=2,
                 max_iters=1,
                 solver=HalfStep(),
                 key=jax.random.PRNGKey(0),
@@ -972,13 +763,13 @@ def test_unbounded_or_absent_box_needs_an_injected_sampler() -> None:
         except ValueError:
             pass
         else:  # pragma: no cover - the raise is the assertion
-            msg = f"no sampler, yet {bounds} was accepted"
+            msg = f"no global model, yet {bounds} was accepted"
             raise AssertionError(msg)
         assert rec.evals == 0  # rejected before any point was served
 
 
-def test_the_sampler_is_the_only_authority_on_d() -> None:
-    """A bare None box + a sampler is a well-posed run: d is whatever it draws.
+def test_the_flock_is_the_only_authority_on_d() -> None:
+    """A bare None box + a flock is a well-posed run: d is the flock's width.
 
     `bounds=None` and an all-unbounded pair list are the same box (∓inf), so
     they must also be the same run.
@@ -987,16 +778,16 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum((theta - 0.7) ** 2), 2.0 * (theta - 0.7)
 
-    def sample(sub: jnp.ndarray, n: int) -> jnp.ndarray:
+    def draw(sub: jnp.ndarray, n: int) -> jnp.ndarray:
         return jax.random.logistic(sub, (n, 3))
 
     rec_none = Recorder(quad)
     res = n_path_schedule(
         rec_none,
+        x0=draw(jax.random.PRNGKey(4), 2),
         bounds=None,
-        sample=sample,
+        global_model=draw,
         budget_check=rec_none.limit_check(60),
-        n_paths=2,
         max_iters=3,
         solver=HalfStep(),
         key=jax.random.PRNGKey(4),
@@ -1007,23 +798,23 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
     rec_pairs = Recorder(quad)
     n_path_schedule(
         rec_pairs,
+        x0=draw(jax.random.PRNGKey(4), 2),
         bounds=[(None, None)] * 3,
-        sample=sample,
+        global_model=draw,
         budget_check=rec_pairs.limit_check(60),
-        n_paths=2,
         max_iters=3,
         solver=HalfStep(),
         key=jax.random.PRNGKey(4),
     )
     assert rec_pairs.all_f_vals == rec_none.all_f_vals
 
-    # a box and a sampler that disagree on d is the wiring bug this catches
+    # a flock and a box that disagree on d is the wiring bug this catches
     try:
         n_path_schedule(
             Recorder(quad),
+            x0=flock(2, 3),
             bounds=unit_bounds(2),
-            sample=sample,
-            n_paths=2,
+            global_model=draw,
             max_iters=1,
             solver=HalfStep(),
             key=jax.random.PRNGKey(4),
@@ -1031,11 +822,11 @@ def test_the_sampler_is_the_only_authority_on_d() -> None:
     except ValueError:
         pass
     else:  # pragma: no cover - the raise is the assertion
-        msg = "a d=3 sampler was accepted against a d=2 box"
+        msg = "a d=3 flock was accepted against a d=2 box"
         raise AssertionError(msg)
 
 
-def test_an_injected_sampler_searches_outside_the_old_box() -> None:
+def test_an_unbounded_box_is_really_unbounded() -> None:
     """Unbounded means unbounded: a minimizer outside [0,1] is reached.
 
     θ* = 3.0 sits outside that box, so a clipped finite-box run could never
@@ -1048,15 +839,15 @@ def test_an_injected_sampler_searches_outside_the_old_box() -> None:
         seen.append(float(jnp.max(jnp.abs(x))))
         return jnp.sum((x - 3.0) ** 2, axis=-1), 2.0 * (x - 3.0), None
 
-    def sample(sub: jnp.ndarray, n: int) -> jnp.ndarray:
+    def draw(sub: jnp.ndarray, n: int) -> jnp.ndarray:
         return jax.random.logistic(sub, (n, 1)) + 3.0  # starts near the well
 
     res = n_path_schedule(
         eval_f_g,
+        x0=draw(jax.random.PRNGKey(5), 4),
         bounds=[(None, None)],
-        sample=sample,
+        global_model=draw,
         budget_check=lambda: True,
-        n_paths=4,
         max_iters=40,
         solver=HalfStep(),
         key=jax.random.PRNGKey(5),
@@ -1076,11 +867,12 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum(theta**2), 2.0 * theta
 
-    def rejects(**knobs: int) -> str:
+    def rejects(**knobs: float) -> str:
         try:
             # the knob under test is deliberately out of contract
             n_path_schedule(
                 Recorder(quad),
+                x0=flock(1),
                 bounds=[(0.0, 1.0)],
                 **knobs,  # pyright: ignore[reportArgumentType]
             )
@@ -1089,14 +881,36 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
         msg = f"accepted: {knobs}"
         raise AssertionError(msg)
 
-    for bad in (
-        {"n_paths": 0},
-        {"n_draws": 0},
-        {"max_iters": -1},
-    ):
-        assert next(iter(bad)) in rejects(**bad), bad
+    assert "max_iters" in rejects(max_iters=-1)
+    assert "time_limit" in rejects(time_limit=0.0)
     # no horizon at all is refused too, and the message names both ways to stop
     assert "max_iters" in rejects()
+
+
+def test_a_malformed_flock_is_rejected_at_the_entry() -> None:
+    """The flock is validated where it is handed over, not at the first clip.
+
+    Four defects, one place: not a batch, no paths, no dims, and a non-finite
+    start. The fifth is the box agreement - d is the flock's second axis, so a
+    flock that disagrees with the box is the wiring bug, not a run to guess at.
+    """
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    def rejects(x0: jnp.ndarray) -> str:
+        try:
+            n_path_schedule(Recorder(quad), x0=x0, bounds=[(0.0, 1.0)], max_iters=1)
+        except ValueError as e:
+            return str(e)
+        msg = f"accepted: {x0!r}"
+        raise AssertionError(msg)
+
+    assert "x0 must be a (n_paths, d) array" in rejects(jnp.zeros(3))
+    assert "at least one point" in rejects(jnp.zeros((0, 1)))
+    assert "at least one dim" in rejects(jnp.zeros((2, 0)))
+    assert "x0 must be finite" in rejects(jnp.array([[0.0], [jnp.nan]]))
+    assert "d=2" in rejects(flock(2, 2))  # the box is d=1
 
 
 def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
@@ -1115,6 +929,7 @@ def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
             # the dial under test is deliberately out of contract
             n_path_schedule(
                 first,  # pyright: ignore[reportArgumentType]
+                x0=flock(1),
                 bounds=[(0.0, 1.0)],
                 max_iters=1,
                 **knobs,  # pyright: ignore[reportArgumentType]
@@ -1126,7 +941,7 @@ def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
 
     assert "eval_f_g must be callable" in rejects(42)
     assert "eval_f must be callable" in rejects(eval_f_g, eval_f=7)
-    assert "sample must be callable" in rejects(eval_f_g, sample=3)
+    assert "global_model must be callable or None" in rejects(eval_f_g, global_model=3)
     assert "budget_check must be callable" in rejects(eval_f_g, budget_check=0)
 
 
@@ -1143,7 +958,7 @@ def test_malformed_bounds_are_rejected_at_the_entry() -> None:
 
     def rejects(bounds: jnp.ndarray | list[tuple[float | None, float | None]]) -> str:
         try:
-            n_path_schedule(Recorder(quad), bounds=bounds, max_iters=1)
+            n_path_schedule(Recorder(quad), x0=flock(1), bounds=bounds, max_iters=1)
         except ValueError as e:
             return str(e)
         msg = f"accepted: {bounds!r}"
@@ -1169,6 +984,7 @@ def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
             # the knob under test is deliberately out of contract
             n_path_schedule(
                 Recorder(quad),
+                x0=flock(1),
                 bounds=[(0.0, 1.0)],
                 max_iters=1,
                 **knobs,  # pyright: ignore[reportArgumentType]

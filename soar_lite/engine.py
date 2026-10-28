@@ -2,26 +2,26 @@
 
 This module is the seam (拍板) of soar_lite: it owns the two plugin contracts
 (`LocalSolver` and `RestartRule`), the data the plugins exchange (`PathPoint`,
-`Verdict`), and the shared plumbing (`NPathResult`, the box/prior/evaluator
-seams, and the `n_path_schedule` loop). The run's state lives in five private
-holders, one per state family: `_Sampler` (the draws), `_Evaluator` (the two
-seams and the one charged site), `_Paths` (the n-path state machine),
-`_Best` (the run's best, `f⋆`), and `_Budget` (the stop meter and work
-report). Concretes import *from* here, never the other way around at module
-level:
+`Verdict`), and the shared plumbing (`NPathResult`, the box/global-model and
+evaluator seams, and the `n_path_schedule` loop). The run's state lives in five
+private holders, one per state family: `_GlobalModel` (the restart-point
+source), `_Evaluator` (the two evaluation seams and the one charged site),
+`_Paths` (the n-path state machine), `_Best` (the run's best, `f⋆`), and
+`_Budget` (the stop meter and work report). Concretes import *from* here, never
+the other way around at module level:
 
     soar_lite/
       engine.py   <- LocalSolver, RestartRule, PathPoint, Verdict, n_path_schedule
       solver.py   <- DiagonalPreconditioner (implements LocalSolver)
-      restart.py  <- EIRestartRule (implements RestartRule)
+      restart.py  <- NoRestartRule, StallRestartRule (implement RestartRule)
 
 Dependency direction: plugins depend on engine types; the engine binds its two
 defaults lazily inside `n_path_schedule` (keeps the module graph acyclic and
 `__init__` importable in any order). The engine is first-order (value-and-
-gradient), coordinate-free, and owns the paths, the box, the shared horizon,
-the clip-to-bounds and the EI restart cadence; the local solver owns only
-direction/step size/acceptance and the restart rule only the continue-vs-
-restart decision.
+gradient), coordinate-free, and owns the flock, the box, the shared horizon, the
+clip-to-bounds and the restart cadence; the local solver owns only
+direction/step size/acceptance, the restart rule only the continue-vs-restart
+verdict, and the global model only where a restart lands.
 """
 
 import math
@@ -70,8 +70,8 @@ class _Pending:
 
     The two halves never disagree in one direction: a fused pass serves both,
     and a point that was never read serves neither, so `g is not None` implies
-    `f is not None`. Only `f` alone may be missing - a single-draw probe has no
-    group to compare and can leave its start unread for `settle` to fill.
+    `f is not None`. Only `f` alone may be missing - a step's trial is served
+    for its value alone while its gradient waits for `settle` to buy it.
     """
 
     x: jnp.ndarray
@@ -159,12 +159,11 @@ class LocalSolver(Protocol):
         holds for that whole step. ``True`` is the enumerated kind: the engine
         serves each trial for its value alone and asks ``verdict`` what to do
         with it. ``False`` promises the step commits its one proposal unjudged -
-        the engine treats it like a single-draw probe, leaving both halves of
-        the point to `settle`, so its value is served once (fused, with the
-        gradient) instead of once for a ruling and again for the gradient. What
-        replaces the ruling is the engine's gate: a winner whose value or
-        gradient is not finite stalls the path instead of being committed, which
-        is the same gate a fresh probe start passes.
+        the engine leaves both halves of the point to `settle`, so its value is
+        served once (fused, with the gradient) instead of once for a ruling and
+        again for the gradient. What replaces the ruling is the engine's gate: a
+        winner whose value or gradient is not finite stalls the path instead of
+        being committed, which is the same gate a fresh restart start passes.
 
         The cost of ``True`` is the method's own, and it is the caller's to
         weigh: absent the ``eval_f`` seam every served trial is a fused pass, so
@@ -220,114 +219,72 @@ class LocalSolver(Protocol):
 class RestartRule(Protocol):
     """The engine's restart decision module (its second plugin point).
 
-    One instance for the whole engine (like LocalSolver), so the per-path state
+    The rule answers exactly one question - *when* does a path restart - and
+    answers it from evidence the engine owns, never from a coordinate. Where a
+    restart lands is the `global_model`'s business (the engine asks it for the
+    points), so a rule never sees, draws or proposes a point: a restart is two
+    seams, and this one is the verdict.
+
+    One instance serves the whole run (like LocalSolver), so the per-path state
     lives inside it in dicts keyed by the path index, exactly as the method
-    holds its `eta`/`reference`/`q`. The engine feeds the rule and asks for
-    verdicts; the evidence lives inside the instance and the engine never reads
-    it. The raw best `f⋆` arrives as a should_restart argument rather than as
-    stored state, so the engine stays the only writer of `f⋆` and every verdict
-    reads the best of its own iteration. That `f⋆` is the run's **raw**
-    minimum - over every finite point served, feasible or not - because the
-    rule's own evidence is unfiltered: `f_k` and the group-mins in its pool are
-    raw values, and a probe group-min cannot be filtered by feasibility without
-    dropping the event. The feasible minimum the run reports as `fun` is a
+    holds its own. The engine feeds the rule and asks for verdicts; the evidence
+    lives inside the instance and the engine never reads it. The raw best `f⋆`
+    arrives as a should_restart argument rather than as stored state, so the
+    engine stays the only writer of `f⋆` and every verdict reads the best of its
+    own iteration. That `f⋆` is the run's **raw** minimum - over every finite
+    point served, feasible or not - because the continue side it is compared
+    with (`f_k`) is raw too; the feasible minimum the run reports as `fun` is a
     different number whenever a batch carries a feasibility mask.
 
-    The engine offers exactly two evidence channels, and the signatures say
-    which is which: `observe_step(i, delta)` is per-path (what continuing
-    bought *that* path), while `observe_restart(group_min)` carries **no path
-    index** because a group-min is a property of the sampler and the best,
-    not of any one path - every path pools the same history. Those two are the
-    two alternatives the verdict compares, and they are the scalar facts the
-    engine owns; a rule needing more (point geometry, a surrogate over the
-    whole sample history) is an engine variant, not a RestartRule.
+    Two methods are the whole contract. `observe_step` is the per-path continue
+    side: what moving this round bought that path, or `None` when it moved
+    nowhere. `should_restart` is the verdict. There is deliberately no channel
+    for a restart itself: the round a path spends being placed on a fresh point
+    is not a step, so the engine does not report it. A rule is therefore never
+    told about its own restarts, which is what lets `StallRestartRule` read
+    consecutive `None`s as consecutive stalls without mistaking its restarts for
+    them.
 
-    These four methods are a **lower bound** on the engine's call surface - what
-    any rule must accept to be pluggable - not a claim that two scalars are all
-    a restart decision could ever use. A wider interface would not widen what a
-    rule can see; only the engine's call sites could.
-
-    These methods are called by the engine on its own schedule - `should_restart`
-    once per path per iteration, `observe_step` once per path per iteration (a
-    path that took no step this round - it stalled, or was re-probed - reports
-    `None`), and `observe_restart`/`restart` once per probe event (the
-    initialization probe included) - so they trust their arguments:
-    `n_path_schedule` validates the object once (that it carries this contract)
-    at the entry, and nothing here re-checks. The one exception is
-    `observe_step`'s `delta`: a finite float or `None` (no step) are the only two
-    things the engine reports, so a non-finite delta is a wiring error and a rule
-    may reject it there rather than fold it into its evidence.
-
-    One call per path per iteration is a cadence a rule may count on, but need
-    not: `EIRestartRule` counts rounds so its verdict comes due on time, while a
-    rule that judges every round fresh never keeps a clock. The cadence is the
-    engine's; the clock is the rule's own.
+    These methods are called by the engine on its own schedule -
+    `should_restart` once per path per iteration, before that iteration's move,
+    and `observe_step` once per path per iteration the path spent stepping or
+    stalling - so they trust their arguments: `n_path_schedule` validates the
+    object once (that it carries this contract) at the entry, and nothing here
+    re-checks. The one exception is `observe_step`'s `delta`: a finite float or
+    `None` (no step) are the only two things the engine reports, so a
+    non-finite delta is a wiring error a rule may reject there rather than fold
+    into its evidence.
     """
 
     def observe_step(self, i: int, delta: float | None) -> None:
         """Fold path i's step this round into the continue side, or report none.
 
-        Called exactly once per path per iteration. `delta` is that round's step
-        - the finite one-step value change between the previous point and the one
-        the path now holds - or `None` when the path took no step this round. A
-        step connects two consecutive points; a stall never reached the next
-        point, and a restart reached it by a fresh draw rather than by stepping
-        from the old one, so both break the chain and report `None`. `None` is
-        absence, not a value: the continue side held no new step this round.
+        Called once per path per iteration that the path spent stepping or
+        stalling. A path placed on a fresh point this round is not reported at
+        all - that round is the restart's, not a step's (see the class
+        docstring).
 
-        One call per path per round is a cadence a rule may count on; whether it
-        counts is the rule's own business. A window-based rule (`EIRestartRule`)
-        advances its stage clock here - every round ticks, `None` included -
-        because its verdict is due after a fixed number of rounds. A rule that
-        judges each round fresh (a Δ-sequence rule) ignores the cadence and folds
-        only the finite deltas. The engine hands a finite float or `None`; a
-        non-finite float has nowhere to come from, so rejecting it marks a wiring
-        fault.
-        """
-        ...
-
-    def observe_restart(self, group_min: float) -> None:
-        """Fold in the group-min a fresh restart start achieved.
-
-        The engine draws each restart start as the min of one probe group
-        (`n_draws` i.i.d. points), so `group_min` is that group's min - a
-        real sample of "what a restart buys". The history is pooled across paths
-        (hence no path index); a rule that ignores the payoff no-ops.
+        `delta` is the finite one-step value change between the point the path
+        held and the one it now holds, or `None` when the path took no step at
+        all: its method gave up, or its fresh start or its winner was not a
+        usable point. `None` is absence, not a value - the continue side held no
+        new step this round.
         """
         ...
 
     def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:
-        """Return True iff path i should restart from f_k with the raw best `f⋆`.
+        """Return True iff path i should be restarted from f_k with raw best `f⋆`.
 
-        The engine asks this for every path on its first iteration, before any
-        probe has run, and that ask is how the flock is seeded: a rule must
-        return True while it holds no restart evidence at all (an empty payoff
-        pool), which is what triggers the initialization probe. An empty pool
-        is the true cold start; a pool that exists but is entirely dead (every
-        start of it unusable) is not, so spending another probe on it is that
-        rule's own pricing of a tie. The default `EIRestartRule` reads a dead
-        pool at 0 against a stalled continue side and does re-probe - once per
-        window, and the window is the pool's own size, so its asks space
-        themselves out; `NoRestartRule` spends nothing after the seeding.
+        Asked for every path before the iteration's move, iteration 0 included:
+        `x0` has been placed by then, so there is no cold start for a rule to
+        special-case - a path that could not be placed is stalled, and its stall
+        arrives on `observe_step`.
 
         `f⋆` is the raw minimum (see the class docstring) and `f_k` is path i's
         current value in the same unfiltered terms. A path with no current point
-        - its fresh start was refused as unusable - hands `nan`, and the same
-        refusal left its stage empty, so the continue side is the degenerate 0.0
-        a verdict reads as "does restarting buy anything at all"; only a rule
-        that ignores the empty stage ever sees this `f_k`.
-        """
-        ...
-
-    def restart(self, i: int) -> None:
-        """Handle path i's restart event; the round is already counted.
-
-        Called for every path at initialization (right after its probe), and for
-        each path a restart re-probes. The probe round itself arrives on the one
-        report channel like every round - `observe_step(i, None)` - so the
-        stage clock needs nothing here. What remains is the event: a rule may
-        reset per-path evidence it holds, at the event rather than at the verdict.
-        A rule that resets at the verdict (or holds none) no-ops.
+        - its initial point was refused as unusable - hands `nan`; a rule that
+        restarts on absence reads that case, and a rule that weighs values sees
+        only paths that have one.
         """
         ...
 
@@ -353,22 +310,26 @@ EvalFG: TypeAlias = Callable[
 
 # The f-only sibling, for a caller that also holds a value function without the
 # fused gradient. Same x rows in, (f (M,), feas (M,)|None) out - feasibility
-# included because probe group-min and step selection must still tell "finite
-# but infeasible" from viable, which f alone cannot. Opting in lets one probe
-# compute `g` once (at its winners) instead of once per draw.
+# included because step selection must still tell "finite but infeasible" from
+# viable, which f alone cannot. Opting in lets a judged step serve its trials
+# for their values alone and buy gradients only for its winners, in one batch.
 EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | None]"]
 
 # The search box in scipy's spelling (which `_box_bounds` normalizes): one
 # `(lb, ub)` pair per dim, a side of None or ±inf meaning unbounded. A `(d, 2)`
 # array is the same data row-wise, for the callers that already hold one. No box
-# at all is spelled `Bounds | None` at the call site (then d is the sampler's).
+# at all is spelled `Bounds | None` at the call site (then the flock's own d is
+# the only dimension the engine knows).
 Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
 
-# The one way the engine draws a start: (key, n_points) -> (n_points, d) points
-# in the engine's own coordinates. It is the only authority on d, which is what
-# makes an unbounded search well-posed - the engine has no x0 of its own to fall
-# back on, so `sample=None` is only defined over a finite box.
-Sampler: TypeAlias = Callable[[jnp.ndarray, int], jnp.ndarray]
+# The restart-point source - SOAR's *global model*: (key, n_points) ->
+# (n_points, d) points in the engine's own coordinates. The engine asks it only
+# when a restart fires, so it never seeds the run (`x0` does), and it is the
+# only authority on where a restart lands. `None` means i.i.d. uniform over a
+# finite `bounds`, the model-free default; an injected one may be anything that
+# proposes points (a surrogate maximising expected improvement - the SOAR
+# reading - a quasi-random grid, or a cached list).
+GlobalModel: TypeAlias = Callable[[jnp.ndarray, int], jnp.ndarray]
 
 
 @dataclass
@@ -378,14 +339,15 @@ class NPathResult:
     Field names follow `scipy.optimize.OptimizeResult` where the concepts
     correspond: `x` is the argmin in the coordinates the engine was handed
     (the caller's coords), `fun` is its objective value, and `n_iters` counts
-    completed engine iterations: the initialization probe is iteration 0, and
-    one iteration may serve several batches (restart probes plus up to the
-    per-step trial cap), so `n_iters` is not a batch count. It is spelled
+    completed engine iterations: iteration 0 places the caller's initial points,
+    and one iteration may serve several batches (a restart's fresh starts plus
+    up to the method's own per-step trial count), so `n_iters` is not a batch
+    count. It is spelled
     `n_iters` rather than scipy's `nit` to sit beside the two work counts.
     Work is reported on two axes instead of scipy's single `nfev`: `n_points` is the
     g points served (the serial-cost number) and `n_batches` the g batches served
     (the parallel wall-clock number); they are different numbers and never mix.
-    Only fused value+gradient passes are charged, so a probe's f-only draws
+    Only fused value+gradient passes are charged, so a step's f-only trials
     appear in neither: the axis that dominates is exact, the cheap half is
     reported nowhere.
 
@@ -402,7 +364,7 @@ class NPathResult:
     fun: float  # min over feasible recorded evals; inf if none, -inf if unbounded
     n_points: int  # points served (the serial-cost count)
     n_batches: int  # batches (evals) served (the parallel wall-clock count)
-    n_iters: int  # completed iterations (the init probe is 0; not trials)
+    n_iters: int  # completed iterations (iteration 0 places x0; not trials)
     status: NPathStatus
 
 
@@ -410,21 +372,22 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # after the one positional seam: one name per dial beats a config object here)
     eval_f_g: EvalFG,
     *,
+    # The flock, and the only statement of the run's width and dimension: one
+    # starting point per path, in the engine's own coordinates.
+    x0: jnp.ndarray,
     eval_f: EvalF | None = None,
     bounds: Bounds | None = None,  # scipy-style (lb, ub) pairs, a (d, 2) array, or None
-    # The prior, injected: (key, n_points) -> (n_points, d) in the engine's own
-    # coordinates, and the only authority on d. None -> i.i.d. uniform over a
-    # finite `bounds`; an unbounded or absent box then has no start to draw and
+    # Where a restart lands: (key, n_points) -> (n_points, d) in the engine's
+    # coordinates, asked only when a rule fires. None -> i.i.d. uniform over a
+    # finite `bounds`; an unbounded or absent box then has nowhere to draw and
     # is rejected below rather than guessed.
-    sample: Sampler | None = None,
-    n_paths: int = 16,  # number of paths advanced each iteration, the engine's width
-    n_draws: int = 1,  # draws per start; >1 needs eval_f
+    global_model: GlobalModel | None = None,
     # The run's horizon, counted in iterations: the engine completes at most
-    # max_iters iterations. An iteration is one move per path (a restart probe
-    # or a step), not one eval, so this is a reproducible stop, not a cost or
-    # wall-clock proxy - one iteration may serve from zero batches (a stalled
-    # one) up to a probe plus however many trials the method's own search
-    # serves. None leaves the horizon to `time_limit`.
+    # max_iters iterations. An iteration is one move per path (iteration 0
+    # places `x0` instead), not one eval, so this is a reproducible stop, not a
+    # cost or wall-clock proxy - one iteration may serve from zero batches (a
+    # stalled one) up to a restart's starts plus however many trials the
+    # method's own search serves. None leaves the horizon to `time_limit`.
     max_iters: int | None = None,
     # A wall-clock deadline in seconds, for the caller who budgets time rather
     # than iterations. None means none. A run needs a horizon: at least one of
@@ -433,108 +396,80 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # Keyword-only and defaulted, like scipy's `callback`: an extra gate for a
     # budget the engine cannot see (points, dollars, an external clock). It is
     # one of `_Budget.stop`'s three inputs, asked at the loop head every
-    # iteration and again before each g batch (the f-only draws never ask it).
+    # iteration and again before each g batch (the f-only trials never ask it).
     # None means "no extra gate". It is additional, never a horizon: a gate
     # that advances only on served batches spins forever under a stalled flock,
     # and the engine cannot see which kind this is, so a horizon is required.
     budget_check: Callable[[], bool] | None = None,
     # The two plugins, adjacent: the search method and the restart decision.
     solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
-    restart_rule: RestartRule | None = None,  # None -> EIRestartRule, the default rule
-    # The random source, last and optional (optax's `key` placement): None means
-    # the fixed default PRNGKey(0), so an unseeded call still runs.
+    restart_rule: RestartRule | None = None,  # None -> NoRestartRule (frozen)
+    # The random source of the restart points, last and optional (optax's `key`
+    # placement): None means the fixed default PRNGKey(0), so an unseeded call
+    # still runs.
     key: jnp.ndarray | None = None,
 ) -> NPathResult:
-    """Advance n_paths independent chains in x under one shared horizon.
+    """Advance a flock of chains in x from the caller's initial points.
 
-    The engine owns the schedule: it composes and clips the rows into
-    `bounds`, serves each batch as one `eval_f_g` call, keeps the
-    n-path state machine, and owns the best `f⋆`. The search itself is
-    injected: `solver` owns direction, step size and
-    acceptance and keeps its per-path state in Python floats, and
-    `restart_rule` is the engine's one rule instance (default
-    `EIRestartRule()`, which owns its own knob defaults). `bounds` is data,
-    not an injected object (scipy's spelling: a `(lb, ub)` pair per dim,
-    `None`/±inf = unbounded) and `sample` is the injected prior: the engine
-    clips into the box and draws its starts from the sampler, and knows
-    nothing about any map from these coordinates to the caller's physical
-    ones. With no sampler the prior is i.i.d. uniform over a finite `bounds`,
-    which is then also the sole source of d; an unbounded box (or none) needs
-    `sample`, because the engine has no x0 of its own. `key` seeds every draw
-    (starts, restart probes); None means the fixed default PRNGKey(0), so an
-    unseeded call still runs, deterministically. Work is billed on two axes,
-    never mixed, and only the fused value+gradient pass is charged: f-only
-    draws and rejected trials are billed nowhere. `n_points` is the g points
-    served (probe starts and trial winners, one each), the serial-cost number;
+    The engine owns the schedule: it places `x0`, composes and clips every
+    proposal into `bounds`, serves each batch as one `eval_f_g` call, keeps the
+    n-path state machine, and owns the best `f⋆`. Three things are injected.
+    `solver` owns direction, step size and acceptance, and keeps its per-path
+    state in Python floats. `restart_rule` decides **when** a path restarts,
+    from the evidence the engine forwards (each path's step deltas and the raw
+    best). `global_model` supplies **where** a restart lands: the engine asks it
+    for one point per restarting path, clips them into the box and places them.
+    Splitting a restart into those two seams is the point - a rule that never
+    restarts (`NoRestartRule`, the default) needs no model at all, and a model
+    that proposes points (a surrogate maximising expected improvement, an
+    out-of-tree adapter) never touches the verdict.
+
+    `x0` is the flock: shape ``(n_paths, d)``, one starting point per path, so
+    `n_paths` and `d` are its shape rather than separate knobs. Iteration 0
+    serves it as one fused batch and places every path on its row; a row whose
+    served value or gradient comes back non-finite stalls that path on arrival
+    instead of being placed. With `global_model=None` the engine draws restart
+    points i.i.d. uniform over a finite `bounds`, which is then also the only
+    source it has - an unbounded box (or none) needs an injected model, because
+    the engine has no distribution of its own to draw from. `key` seeds those
+    draws; None means the fixed default PRNGKey(0), so an unseeded call still
+    runs, deterministically.
+
+    `bounds` is data, not an injected object (scipy's spelling: a `(lb, ub)`
+    pair per dim, `None`/±inf = unbounded); the engine clips into it and knows
+    nothing about any map from these coordinates to the caller's physical ones.
+
+    Work is billed on two axes, never mixed, and only the fused
+    value+gradient pass is charged: f-only trials and rejected trial batches are
+    billed nowhere. `n_points` is the g points served (the initial points, each
+    restart start, and each trial winner - one each), the serial-cost number;
     `n_batches` is the g batches (one per fused pass), the parallel wall-clock
     number. They are reports, not caps. The run's own stop is the horizon: at
     most `max_iters` iterations (status "max_iters"), or, if `time_limit` is
     given, the wall-clock deadline (status "time_limit"); at least one of the
     two must be passed. Iterations are the unit on purpose - an iteration is one
-    move per path, so the same number reproduces on any machine and does not
-    change when the probe depth or the f-only seam changes the per-iteration
-    batch count. It is not a cost bound: one iteration serves from zero batches
-    (a fully stalled one) up to a probe plus however many trials the method's
-    own search serves, so migrating a batch budget to `max_iters` can multiply
-    the work done by that
+    move per path (iteration 0 places `x0` instead), so the same number
+    reproduces on any machine and does not change when the method's per-step
+    trial count changes the per-iteration batch count. It is not a cost bound:
+    one iteration serves from zero batches (a fully stalled one) up to a
+    restart's starts plus however many trials the method's own search serves, so
+    migrating a batch budget to `max_iters` can multiply the work done by that
     per-iteration spread. budget_check() is the caller's extra stop - one of the
     three inputs the run's one query (`_Budget.stop`) asks, at the loop head
     every iteration and again before each g batch - for a budget the engine
     cannot see; a False verdict stops all paths globally (status
     "budget_exhausted"), and None means no extra gate; that external budget may
     over-run by <M points (the gate flips only between its asks).
-    fun is the true min over every feasible
-    recorded eval with a finite value - every served point when the seam
-    reports no aux;
-    with aux, only points whose feas mask is True update it. The trajectory
-    itself still moves on the penalized objective.
+    fun is the true min over every feasible recorded eval with a finite value -
+    every served point when the seam reports no aux; with aux, only points whose
+    feas mask is True update it. The trajectory itself still moves on the
+    penalized objective.
 
-    Selection events (init, restart) never descend blind: each event draws
-    n_draws batches of n_points points (pool = n_draws * n_points) to fill its
-    starts (n_points = n_paths at init, n_points = the number of restarting
-    paths on a restart).
-    Each draw samples n_points i.i.d. points from the injected sampler (`sample`,
-    default uniform over a finite `bounds`: the rule's payoff statistic below
-    is defined against that sampler, so a different prior is injected rather
-    than reparameterized into the box),
-    so the n_points column-wise groups across draws
-    are already random groups, and each group's min becomes one start - n_points
-    starts whose values are honest samples of the "min of n_draws random
-    points" distribution (at the default n_draws = 1 a group is a single
-    draw and that point is the start; more draws buy a fuller min-of-k and need
-    the f-only seam), identical for init and restart regardless of how many
-    paths restart (by design). Probe-batch grads are reused for the selected
-    starts: the probe gradients are reused, so a start costs no extra g pass. The rule's
-    one shared group-min pool is cold-started with the n_paths init group-mins
-    (a real spread for n_paths >= 2); n_paths=1 prices every restart at exactly 0
-    (h = 0, and its one sample is the pool's own best), so the single path
-    restarts exactly when continuing promises nothing and never while it is
-    improving. Pass `NoRestartRule` for the explicit pure-descent arm. Every
-    restart event extends {r_i} with the event's group-mins for all paths at
-    once (a payoff is a property of the sampler, not of one path). A path whose
-    method gives up stalls until an EI verdict revives it.
-
-    The verdict compares a probe against one continue sample. A probe spends
-    n_draws draws, while the continue side's evidence is one Δf per
-    iteration - the step it just took - non-overlapping, each path on its own
-    clock (a restart opens a new stage, and the first iteration after a restart
-    is skipped so the probe is not read back as a step's Δ). A stalled iteration
-    reports `None` - no Δ to fold, so the read has no continuation sample from it -
-    rather than a Δ that spans the stall; it still advances that path's stage
-    clock, so a stall cannot postpone a verdict past its cohort's.
-    So a stage of M iterations costs at most M evals (a stalled one serves no
-    batch), but the batch count is not the cost
-    that dominates: a probe computes g n_draws times while a step computes
-    it once, and g is the dearer half. So n_draws > 1 requires eval_f;
-    with it both sides compute g exactly once (the probe's f-only draws are not
-    charged; only its winners' fused pass is), leaving only the cheap f-count to
-    differ. That is why the default is 1.
-
-    The caller's inputs are validated here, once per run: knob ranges and the
-    box's own shape/ordering raise ValueError, and a seam object that does not
-    carry its contract's methods raises TypeError. The seam methods
-    themselves trust the engine - they run per path per iteration, and the
-    engine is their only caller.
+    The caller's inputs are validated here, once per run: knob ranges, the
+    box's own shape/ordering, and `x0`'s shape and finiteness raise ValueError,
+    and a seam object that does not carry its contract's methods raises
+    TypeError. The seam methods themselves trust the engine - they run per path
+    per iteration, and the engine is their only caller.
 
     Args:
         eval_f_g: the objective as one batched pass. Takes rows ``x`` of
@@ -543,40 +478,35 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             holds 0/1 (or booleans) and nothing else: only 0 marks a point
             infeasible, so any other flag is refused rather than read as
             truthiness.
+        x0: the flock's initial points, shape ``(n_paths, d)``, in the engine's
+            own coordinates. Its shape is the run's width and dimension, so
+            there is no separate ``n_paths`` knob; a non-finite entry is refused
+            at the entry rather than left to stall a path.
         eval_f: the objective's value half alone, same ``x`` rows, returning
             ``(f: (M,), feas: (M,) | None)``. Both seams are named for what they
             return - ``eval_f_g`` hands back f and g together, ``eval_f`` f
             alone - so neither name leans on the unit it is called with.
-            ``None`` means no f-only path at
-            all - the probe takes a gradient with each draw, which is why a
-            depth above 1 is refused; supplying it lets a multi-draw probe
-            compute ``g`` once, at its winners, instead of once per draw. The
-            winners are served twice (f-only, then fused), but only the fused
-            pass is charged: an f-only draw is not a budget event, so
-            ``n_points`` counts each winner once.
+            ``None`` means no f-only path at all: every served trial takes its
+            gradient in the same fused pass. Supplying it lets a judged step
+            serve its trials for their values alone and buy gradients only for
+            its winners, in one batch.
         bounds: the search box, scipy-style: one ``(lb, ub)`` pair per dim, a
             ``(d, 2)`` array, or ``None`` for no box. ``None``/±inf = unbounded.
-        sample: the injected prior ``(key, n_points) -> (n_points, d)`` in the
-            engine's own coordinates; ``None`` draws i.i.d. uniform over a
-            finite ``bounds``.
-        n_paths: number of paths advanced in lockstep each iteration.
-        n_draws: probe group size - the draws per start. ``1`` (the
-            default) is one draw. Above 1 requires ``eval_f``: without it a
-            probe would compute ``g`` once per draw against a step's single
-            ``g``, and that gradient count - not the batch count - is the
-            expensive half of the asymmetry the verdict prices.
+        global_model: the restart-point source ``(key, n_points) -> (n_points,
+            d)`` in the engine's own coordinates, asked only when a restart
+            fires; ``None`` draws i.i.d. uniform over a finite ``bounds``.
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
         budget_check: an extra gate for a budget the engine cannot see; one of
             the three inputs the run's one stop query asks, at the loop head
-            every iteration and again before each g batch, never inside a
-            probe's f-only draws. Additional, not a horizon (``None`` means
-            none).
+            every iteration and again before each g batch, never inside a step's
+            f-only trials. Additional, not a horizon (``None`` means none).
         solver: the local method (``None`` binds ``DiagonalPreconditioner``).
-        restart_rule: the restart decision (``None`` binds ``EIRestartRule``).
-        key: the PRNG seed; ``None`` uses the fixed default so unseeded runs
-            are deterministic.
+        restart_rule: the restart decision (``None`` binds ``NoRestartRule``,
+            the frozen flock that never re-seeds).
+        key: the PRNG seed of the restart draws; ``None`` uses the fixed default
+            so unseeded runs are deterministic.
 
     Returns:
         An ``NPathResult`` with the run's end state:
@@ -586,7 +516,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
           when the objective has no floor, which also ends the run)
         - ``n_points``: g points served (the serial-cost count)
         - ``n_batches``: g batches served (the parallel wall-clock count)
-        - ``n_iters``: completed iterations (the init probe is iteration 0)
+        - ``n_iters``: completed iterations (iteration 0 places ``x0``)
         - ``status``: why the run stopped
 
     Example:
@@ -601,8 +531,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
             >>> result = n_path_schedule(
             ...     eval_f_g,
+            ...     x0=jnp.array([[-1.0, -1.0], [1.0, 1.0], [-4.0, 4.0], [4.0, -4.0]]),
             ...     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
-            ...     n_paths=4,
             ...     max_iters=30,
             ... )
 
@@ -614,20 +544,19 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
     """
     _validate_run(
-        n_paths=n_paths,
-        n_draws=n_draws,
+        x0=x0,
         max_iters=max_iters,
         time_limit=time_limit,
         eval_f_g=eval_f_g,
         eval_f=eval_f,
-        sample=sample,
+        global_model=global_model,
         budget_check=budget_check,
         bounds=bounds,
     )
     # The seam check: presence, not signatures, and the two defaults, bound
-    # lazily - solver and restart import the engine's types, so importing them
-    # at module scope would form a cycle. Kept with the knob checks above and
-    # apart from the build below: none of it needs a sample or a box.
+    # lazily - solver and the restart rules import the engine's types, so
+    # importing them at module scope would form a cycle. Kept with the knob
+    # checks above and apart from the build below.
     _check_seam(solver, LocalSolver, "solver")
     _check_seam(restart_rule, RestartRule, "restart_rule")
     if solver is None:
@@ -635,58 +564,53 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
         solver = DiagonalPreconditioner()
     if restart_rule is None:
-        from soar_lite.restart import EIRestartRule  # noqa: PLC0415
+        from soar_lite.restart import NoRestartRule  # noqa: PLC0415
 
-        restart_rule = EIRestartRule()
+        restart_rule = NoRestartRule()
 
     box = _box_bounds(bounds)
-    d_bounds: int | None = None if box is None else box[0].shape[0]
     clip = box if box is not None else (-math.inf, math.inf)
-    if sample is None:
-        # The sample=None contract: a finite box is the only prior the engine
-        # can synthesize, so an unbounded side (or no box at all) is a wiring
-        # error, not a run to guess our way out of.
+    # The flock is clipped once, here: the box is the engine's and every point a
+    # path holds is inside it, so a caller's out-of-box start is brought in
+    # rather than searched from outside. d is then x0's second axis - the run's
+    # one statement of dimension - and `_Best`/`_GlobalModel` are told it.
+    flock = jnp.clip(jnp.asarray(x0), *clip)
+    d = flock.shape[1]
+    if global_model is None:
+        # The global_model=None contract: a finite box is the only distribution
+        # the engine can synthesize, so an unbounded side (or no box at all) is
+        # a wiring error, not a run to guess our way out of.
         if box is None or not _finite_box(box):
             msg = (
-                "an unbounded or absent box needs `sample`: the engine draws "
-                "its starts from the sampler, and with sample=None it can only "
-                "draw a finite box"
+                "an unbounded or absent box needs `global_model`: the engine "
+                "draws its restart points from the model, and with "
+                "global_model=None it can only draw a finite box"
             )
             raise ValueError(msg)
         lo_f, hi_f = box
 
-        def default_sample(sub: jnp.ndarray, n_points: int) -> jnp.ndarray:
-            """Default prior: n_points i.i.d. uniform points over the finite box."""
+        def default_global_model(sub: jnp.ndarray, n_points: int) -> jnp.ndarray:
+            """Default source: n_points i.i.d. uniform points over the finite box."""
             return jax.random.uniform(
                 sub, (n_points, lo_f.shape[0]), minval=lo_f, maxval=hi_f
             )
 
-        draw: Sampler = default_sample
+        propose: GlobalModel = default_global_model
     else:
-        draw = sample
+        propose = global_model
     # The random source: an explicit key wins, otherwise the fixed default, so
-    # an unseeded call still runs (deterministically). The sampler owns the
-    # draw's own d check - its d is a property of the callable, not of the
-    # draw, so a box mismatch is validated once, on the first draw.
-    sampler = _Sampler(draw, d_bounds, jax.random.PRNGKey(0) if key is None else key)
+    # an unseeded call still runs (deterministically). The model owns the draw's
+    # own d check - its d is a property of the callable, not of the draw, so a
+    # mismatch with the flock's d is validated once, on the first restart.
+    model = _GlobalModel(propose, d, jax.random.PRNGKey(0) if key is None else key)
     budget = _Budget(max_iters, time_limit, budget_check)
-    best = _Best(d_bounds)
+    best = _Best(d)
 
-    evaluator = _Evaluator(
-        eval_f_g,
-        eval_f,
-        sampler=sampler,
-        budget=budget,
-        best=best,
-        n_draws=n_draws,
-    )
+    evaluator = _Evaluator(eval_f_g, eval_f, budget=budget, best=best)
     # Last, because it takes the resolved seams and their collaborators: the
     # state machine drives them rather than receiving them per call.
-    paths = _Paths(n_paths, clip, evaluator, solver, restart_rule)
+    paths = _Paths(flock, clip, evaluator, solver, restart_rule, model)
 
-    # Iteration 0 is the initialization probe: the first pass sees no probe
-    # evidence, so every rule's verdict is "restart" and the flock is seeded
-    # through the same restart path a later restart uses.
     status: NPathStatus | None = None
     while True:
         # The run's one stop query names its reason, asked before a new iteration
@@ -696,10 +620,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         if status is not None:
             break
         try:
-            # The iteration reads the best, decides which paths restart,
-            # decides every move on values, then buys the gradients those
-            # decisions need in one batch. A refused batch raises
-            # `_BudgetExhausted` here, before anything is placed.
+            # Iteration 0 places the flock; every later iteration reads the
+            # best, decides which paths restart, decides every move on values,
+            # then buys the gradients those decisions need in one batch. A
+            # refused batch raises `_BudgetExhausted` here, before anything is
+            # placed.
             paths.move(best.fun_raw)
         except _BudgetExhausted as exc:
             # The iteration asked for a batch it could not afford and was cut
@@ -750,36 +675,36 @@ class _OptimumReached(Exception):  # noqa: N818 - a signal, not an error
     was served and charged (the batch that found the point, which was paid for)
     and it leaves an answer behind instead of naming a gate: the run stops on
     that point, so `fun` is `-inf` and `status` is `"unbounded"`. Nothing is
-    left to unwind - a probe raises before any point is placed or advanced.
+    left to unwind - a batch raises before any point is placed or advanced.
     """
 
 
-class _Sampler:
-    """The run's one random source: the prior plus the draw's own d check.
+class _GlobalModel:
+    """The run's restart-point source, and the draw's own d check.
 
-    Holds the splitting key and the invariant that the sampler's d is a
-    property of the callable, not of the draw, so a box mismatch is a wiring
-    bug caught once rather than on every probe draw.
+    Holds the splitting key and the invariant that the model's d is a property
+    of the callable, not of the draw, so a mismatch with the flock's d is a
+    wiring bug caught once rather than on every restart.
     """
 
-    def __init__(self, draw: Sampler, d_bounds: int | None, key: jnp.ndarray) -> None:
-        self._draw = draw
-        self._d_bounds = d_bounds
+    def __init__(self, propose: GlobalModel, d: int, key: jnp.ndarray) -> None:
+        self._propose = propose
+        self._d = d
         self._key = key
         self._checked = False
 
-    def batch(self, n_points: int) -> jnp.ndarray:
-        """Draw n_points candidates; the sampler's d is validated on first draw."""
+    def points(self, n_points: int) -> jnp.ndarray:
+        """Ask for n_points restart points; the model's d is validated once."""
         self._key, sub = jax.random.split(self._key)
-        x_cand = self._draw(sub, n_points)
+        x_cand = self._propose(sub, n_points)
         if not self._checked:
             # d is a property of the callable, constant for the run: one check
             # after the first draw suffices.
             self._checked = True
-            if self._d_bounds is not None and x_cand.shape[1] != self._d_bounds:
+            if x_cand.shape[1] != self._d:
                 msg = (
-                    f"the sampler drew d={x_cand.shape[1]} but bounds has "
-                    f"d={self._d_bounds}"
+                    f"the global model proposed d={x_cand.shape[1]} but the "
+                    f"flock has d={self._d}"
                 )
                 raise ValueError(msg)
         return x_cand
@@ -801,9 +726,9 @@ class _Budget:
     (one per fused value+gradient pass, the parallel wall-clock number) and the
     points they covered (the serial-cost number). What is charged is the one
     gradient pass an iteration buys for the points it decided on, so a rejected
-    trial and a probe's extra draws are cheaper work that is charged nowhere and
-    the report stays the honest bill on the axis that dominates. The refusal is a
-    signal (`_BudgetExhausted`),
+    trial is cheaper work that is charged nowhere and the report stays the
+    honest bill on the axis that dominates. The refusal is a signal
+    (`_BudgetExhausted`),
     never a flag stored here, and a gate that only tightens (a counter, a clock)
     needs no latching: the run ends on the first thing it refuses.
     """
@@ -871,26 +796,23 @@ class _Best:
     is why it ends the run (`unbounded`) instead of entering a comparison. It
     starts at inf: until something feasible arrives there is no answer to
     report.
-
     `fun_raw` is the same minimum with the feasibility filter removed: every
     finite point served, feasible or not. This is `f⋆`, the value a restart
-    verdict is asked against rather than `fun`, because the evidence on both
-    sides of a verdict is unfiltered - `f_k` is the path's own served value and
-    each payoff in the rule's pool is a probe group-min wherever the sampler
-    landed, and a probe cannot be filtered by feasibility without dropping the
-    event. A filtered `f⋆` read against unfiltered evidence would put the two
-    sides of one verdict on different scales.
+    verdict is asked against rather than `fun`, because the continue side is
+    unfiltered too - `f_k` is the path's own served value wherever the path
+    stands. A filtered `f⋆` read against that would put the two sides of one
+    verdict on different scales.
     """
 
-    def __init__(self, d: int | None) -> None:
+    def __init__(self, d: int) -> None:
         self.fun = math.inf
         self.fun_raw = math.inf
         # Set when a feasible point priced the objective at -inf: the run has an
         # answer that no later trial can beat, so it stops on it.
         self.unbounded = False
-        # d is the sampler's business: when the box does not supply it, this is
-        # an empty placeholder until the first served point fills it in.
-        self.x = jnp.full(0 if d is None else d, math.nan)
+        # d is the flock's business (it is `x0`'s second axis), so the
+        # placeholder is already the right shape.
+        self.x = jnp.full(d, math.nan)
 
     def observe(
         self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None
@@ -935,99 +857,47 @@ class _Evaluator:
     it: a fused `_serve_f_g` is the run's only charged site (the gate is asked
     before the charge, so a batch is served whole or not at all), and a
     `_serve_f` call is cheaper work that is not a budget event. Whichever half
-    served a point updates the best. `probe_select` and `settle` live here too:
-    a probe is draw-then-evaluate and its depth and deferral are properties of
-    this seam, not of a path, and `settle` is where an iteration's deferred
-    gradients are bought together, since this object owns both the seam and the
-    charge.
+    served a point updates the best. `seed_points` and `settle` live here too:
+    iteration 0 serves the caller's `x0` through this seam, and `settle` is
+    where an iteration's deferred gradients are bought together, since this
+    object owns both the seam and the charge.
     """
 
-    def __init__(  # noqa: PLR0913 - the run's collaborators, assembled once
+    def __init__(
         self,
         eval_f_g: EvalFG,
         eval_f: EvalF | None,
         *,
-        # Keyword-only, in the order the caller builds them: the sampler first,
-        # then the two objects it feeds, then the probe dial that is not one.
-        sampler: _Sampler,
         budget: _Budget,
         best: _Best,
-        n_draws: int,
     ) -> None:
         self._eval_f_g = eval_f_g
         self._eval_f = eval_f
-        self._sampler = sampler
         self._budget = budget
         self._best = best
-        self._n_draws = n_draws
 
-    def probe_select(self, n_points: int) -> list[_Pending]:
-        """Draw n_draws batches of n_points, return n_points group-min starts.
+    def seed_points(self, x0: jnp.ndarray) -> list[PathPoint]:
+        """Serve the flock as one fused batch, graded on arrival.
 
-        Each draw is one (n_points,d) batch sized exactly n_points, and every
-        draw comes from the same sampler, so the fixed column j across draws is
-        already a random group of n_draws points; each group's min becomes one
-        start, its value doubling as an {r_i} sample (a group with no finite
-        member keeps its draw-0 point and arrives stalled - it waits for an EI
-        verdict instead of stepping). Returns the n_points starts; raises
-        `_BudgetExhausted` if a probe batch is unaffordable.
-
-        With `eval_f` the draws are f-only, so the starts come back with
-        their gradients still owed to the iteration's one `settle` batch, which
-        grades them together with the step winners: a probe computes `g` once
-        however deep it is. A single draw has no group-min to compute, so with
-        the seam its value can wait too - the start goes to `settle` unread and
-        comes back with f and g from one pass, the cheapest deferral the seam
-        allows (a non-finite value there stalls the path exactly as a failed
-        group does). Without the seam each draw is fused, so the starts come
-        back already carrying their gradients and `settle` promotes them without
-        buying anything: a pass that served both halves is never served twice.
-        Both paths keep the batch width at exactly n_points: widening the f-only
-        draw would multiply the peak activations,
-        and a value built through a wide intermediate (a residual vector longer
-        than d) can outgrow the fused batch's retained set, so the memory-neutral
-        width is the one to keep.
+        Iteration 0 has nothing deferred: the starts are the run's first points,
+        so there is no earlier point to compare them with and no reason to
+        serve them for values alone. The whole flock is one batch, so a wide
+        flock costs one pass.
         """
-        defer_g = self._eval_f is not None
-        # One draw is its own group: nothing to compare, so nothing to read.
-        unread = defer_g and self._n_draws == 1
-        groups = [self._sampler.batch(n_points) for _ in range(self._n_draws)]
-        if unread:
-            return self.pending_unread(groups[0])
-        f_by_draw: list[list[float]] = []
-        g_by_draw: list[jnp.ndarray] = []
-        for x_cand in groups:
-            if defer_g:
-                f_by_draw.append(self._serve_f(x_cand))
-            else:
-                f_vals, g_batch = self._serve_f_g(x_cand)
-                f_by_draw.append(f_vals)
-                g_by_draw.append(g_batch)
-        # Finite-only group-min: a failed (non-finite) probe ranked before a
-        # real one would be selected as the start, poisoning that path's local
-        # method state for the rest of the run.
-        picks: list[tuple[int, int]] = []
-        for j in range(n_points):
-            best = _argmin_finite([f_by_draw[r][j] for r in range(self._n_draws)])
-            # Whole group non-finite: keep draw 0 rather than invent a point.
-            # Its f is non-finite, so init/restart stalls this path on arrival
-            # and only an EI verdict revives it.
-            picks.append((0 if best is None else best, j))
-        if defer_g:
-            return [_Pending(groups[r][j], f_by_draw[r][j], None) for r, j in picks]
+        f_vals, g_batch = self._serve_f_g(x0)
         return [
-            _Pending(groups[r][j], f_by_draw[r][j], g_by_draw[r][j]) for r, j in picks
+            PathPoint(x0[pos], f_vals[pos], g_batch[pos]) for pos in range(len(f_vals))
         ]
 
     def pending_unread(self, x_batch: jnp.ndarray) -> list[_Pending]:
         """Return one unread point per row: both halves owed to `settle`.
 
-        The twin of `serve_trials` for a batch nothing has read yet: a
-        single-draw probe start has no group to compare, and an unjudged step
-        winner is committed as proposed, so each defers even its cheap f and
-        takes f and g from one fused pass. Owning this spelling here, beside
-        `settle`'s promotion, is what keeps `_Pending` construction in this
-        object instead of at the call sites.
+        The twin of `serve_trials` for a batch nothing has read yet: a restart
+        start has no values to compare, and an unjudged step winner is committed
+        as proposed, so each defers even its cheap f and takes f and g from one
+        fused pass. Owning this spelling here, beside `settle`'s promotion, is
+        what keeps `_Pending` construction in this object instead of at the call
+        sites.
         """
         return [_Pending(row, None, None) for row in x_batch]
 
@@ -1059,7 +929,7 @@ class _Evaluator:
         iteration costs one gradient pass however many moves it deferred - its
         restart starts plus its step winners - instead of one pass per trial. A
         point that already carries its gradient (every point on a run without the
-        seam, and a probe's fused start) is promoted as it stands, so a run that
+        seam) is promoted as it stands, so a run that
         owes nothing buys nothing and the counters do not move. Returns the same
         points, in the same order, all graded.
         """
@@ -1084,10 +954,11 @@ class _Evaluator:
         The stop query is asked at this batch altitude before the charge, so a
         batch is served whole or not at all - no partial prefix of a batch is
         ever evaluated - and the counters only ever hold g batches that were
-        served. This is the run's only charged site: a probe's extra draws are
-        f-only and cheaper, and are not budget events. The refusal is a signal,
-        not a state: it carries its reason straight to the run's one catch, so
-        no intermediate frame has to check it. Returns (f_vals, g_batch).
+        served. This is the run's only charged site: a step's rejected trials
+        are f-only and cheaper, and are not budget events. The refusal is a
+        signal, not a state: it carries its reason straight to the run's one
+        catch, so no intermediate frame has to check it. Returns (f_vals,
+        g_batch).
         """
         reason = self._budget.stop()
         if reason is not None:
@@ -1103,14 +974,13 @@ class _Evaluator:
     def _serve_f(self, x_batch: jnp.ndarray) -> list[float]:
         """Serve one f-only batch: no gate asked, no charge, same bookkeeping.
 
-        A probe's extra draws and a step's rejected trials are the f half alone,
-        which is the cheap half, so they are not budget events: the stop query
-        is not asked and the counters do not move. The winners' fused pass still
-        is one, and both call sites are entered only after the loop head's stop
-        query cleared the iteration, so the f-only blind spot stays under one
-        probe and one step. Only `probe_select` and `serve_trials` call this;
-        the None-check below is for the type checker (it cannot see they are
-        f-only) and is unreachable at runtime.
+        A step's rejected trials are the f half alone, which is the cheap half,
+        so they are not budget events: the stop query is not asked and the
+        counters do not move. The winners' fused pass still is one, and the call
+        site is entered only after the loop head's stop query cleared the
+        iteration, so the f-only blind spot stays under one step. Only
+        `serve_trials` calls this; the None-check below is for the type checker
+        (it cannot see the caller is f-only) and is unreachable at runtime.
         """
         eval_f = self._eval_f
         if eval_f is None:
@@ -1128,16 +998,16 @@ class _Paths:
     The invariants that the loop's four sites would otherwise carry implicitly,
     stated once here instead:
 
-    - A path that restarted this iteration moved by its probe, so it does not
-      also step, and its `observe_step` report is `None`: its first Δ belongs to
-      the next iteration, so the probe is never read back as a zero-length step.
-      Its stage clock is not skipped with it - the probe round is reported as
-      `None` like a stall, because the round was spent even though no step was.
-      `move` computes that list once per iteration and threads it to the probe
-      and to the complement both halves share - one fact at the top instead of a
-      stored flag that must be cleared each iteration.
+    - A path that restarted this iteration moved by its fresh start, so it does
+      not also step, and it reports nothing to the rule at all: its first Δ
+      belongs to the next iteration, so the restart is never read back as a
+      zero-length step. `move` computes the restarted list once per iteration
+      and threads it to `_restart_starts` and to the complement both halves
+      share - one fact at the top instead of a stored flag that must be cleared
+      each iteration.
     - An iteration decides on values and pays for gradients once: whatever the
-      f-only seam left ungraded (probe starts and step winners alike) is bought
+      f-only seam left ungraded (restart starts and step winners alike) is
+      bought
       in one batch before anything is placed, so a decision is never priced
       before it is made.
     - A path is stalled when it did not move at all this iteration - its method
@@ -1149,54 +1019,64 @@ class _Paths:
       both halves - one gate defined once on the point type.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917 - the run's collaborators, built once
         self,
-        n_paths: int,
+        x0: jnp.ndarray,
         clip: tuple[jnp.ndarray | float, jnp.ndarray | float],
         evaluator: _Evaluator,
         solver: LocalSolver,
         restart_rule: RestartRule,
+        global_model: _GlobalModel,
     ) -> None:
-        self.n_paths = n_paths
+        self.n_paths = int(x0.shape[0])
+        # The flock as handed in (the entry already clipped it): iteration 0
+        # places it, and that is the only use it gets - a later restart asks the
+        # global model instead, so the caller's starts are consumed once.
+        self.x0 = x0
+        self._seed_pending = True
         # Constant for the whole run, so it belongs beside the shape rather than
         # in `move`'s signature: every proposal below is clipped into this box.
         self.clip = clip
-        # The three collaborators this state machine drives. Held rather than
+        # The four collaborators this state machine drives. Held rather than
         # handed in per call: every method below uses at least one of them, and
         # a step would otherwise thread them only to pass them straight back.
         self.evaluator = evaluator
         self.solver = solver
         self.restart_rule = restart_rule
+        self.global_model = global_model
         # A path's point is one object, not three parallel lists: it is what
         # every seam call takes, and a step commits one path at a time (so a
         # list, whose item assignment is the commit, beats a stacked array). The
-        # placeholder says "no point has arrived": a usable probe start replaces
-        # it, an unusable one never becomes a point, and a stalled path never
-        # serves or compares it.
+        # placeholder says "no point has arrived": a usable restart start
+        # replaces it, an unusable one never becomes a point, and a stalled path
+        # never serves or compares it.
         self.points = [
-            PathPoint(jnp.zeros(0), math.nan, jnp.zeros(0)) for _ in range(n_paths)
+            PathPoint(jnp.zeros(0), math.nan, jnp.zeros(0)) for _ in range(self.n_paths)
         ]
         # Nothing has arrived yet, and a path that has not arrived is not
-        # stalled: iteration 0 probes every path before the step filter reads it.
-        self.stalled: list[bool] = [False] * n_paths
+        # stalled: iteration 0 places the flock before anything reads the flag.
+        self.stalled: list[bool] = [False] * self.n_paths
         # The continue side's sample is one step, so the Δ it reports is
-        # points[i].f - prev_f[i]; a restart resets the anchor to the probe's f.
-        # `nan` because no anchor has arrived yet, and only a placed path reports
-        # a Δ - `_place` sets the anchor before that first Δ is read.
-        self.prev_f: list[float] = [math.nan] * n_paths
+        # points[i].f - prev_f[i]; a restart resets the anchor to the fresh
+        # start's f. `nan` because no anchor has arrived yet, and only a placed
+        # path reports a Δ - `_place` sets the anchor before that first Δ is read.
+        self.prev_f: list[float] = [math.nan] * self.n_paths
 
     def move(self, best_fun_raw: float) -> None:
         """Take one iteration's move for every path, then settle what it deferred.
 
-        The restart decision comes first, against the best the caller holds:
-        a path whose rule fires is probed fresh instead of stepped this
+        Iteration 0 is the exception and returns early: the caller's flock is
+        placed, and nothing has a step to take yet.
+
+        The restart decision comes first, against the best the caller holds: a
+        path whose rule fires is given a fresh start instead of stepping this
         iteration. Both halves then decide where a path goes from values alone
-        when the f-only seam is present - the restarted paths by their probe, the
-        cohort by its trials - and the gradients those decisions need are then
-        bought together, in one batch (`settle`), so an iteration costs one
-        gradient pass however many moves it deferred. What is not deferred is
-        served fused and reaches `settle` already graded: every point of a run
-        without the seam.
+        when the f-only seam is present - the restarted paths by the global
+        model's proposal, the cohort by its trials - and the gradients those
+        decisions need are then bought together, in one batch (`settle`), so an
+        iteration costs one gradient pass however many moves it deferred. What
+        is not deferred is served fused and reaches `settle` already graded:
+        every point of a run without the seam.
 
         The two halves touch disjoint paths - a restarted path is in neither -
         and every call into a collaborator here is per path, so deciding all
@@ -1207,6 +1087,9 @@ class _Paths:
         judges against, not the best point's reported value, which is why it
         arrives already unwrapped.
         """
+        if self._seed_pending:
+            self._seed()
+            return
         restarted = [
             i
             for i in range(self.n_paths)
@@ -1216,7 +1099,7 @@ class _Paths:
         # path proposes nothing but still reports a stall this iteration, so its
         # own stage clock keeps pace with its live cohort.
         cohort = [i for i in range(self.n_paths) if i not in restarted]
-        starts = self.evaluator.probe_select(len(restarted)) if restarted else []
+        starts = self._restart_starts(len(restarted)) if restarted else []
         won = self._decide(cohort)
         # One batch: restart starts first, then the winners in path order. A
         # refusal (`_BudgetExhausted`) cuts the iteration short with nothing
@@ -1229,7 +1112,37 @@ class _Paths:
         wins = dict(zip(order, settled[len(starts) :], strict=True))
         self._place(restarts)
         self._advance(wins)
-        self._report(cohort, restarted)
+        self._report(cohort)
+
+    def _seed(self) -> None:
+        """Place every path on its row of the flock (iteration 0, one batch).
+
+        The flock is the caller's answer to "where does the run start", so it is
+        served once, fused, and never asked for again: a restart asks the global
+        model instead. A row the engine cannot use is not placed - it stalls the
+        path on the same `usable` gate `_place` and `_advance` apply - so
+        `points[i]` keeps meaning "where the path stands".
+        """
+        self._seed_pending = False
+        for i, point in enumerate(self.evaluator.seed_points(self.x0)):
+            self.stalled[i] = not point.usable
+            if self.stalled[i]:
+                continue
+            self.points[i] = point
+            self.solver.restart(i, point)
+            self.prev_f[i] = point.f
+
+    def _restart_starts(self, n_points: int) -> list[_Pending]:
+        """Ask the global model for n_points fresh starts, clipped into the box.
+
+        Ask, clip, place: the model proposes in the engine's own coordinates but
+        knows nothing of the box, so the clip is the engine's (the same one every
+        step proposal passes). Both halves stay owed - a start has nothing to be
+        judged on - so `settle` buys them in the same batch as the step winners,
+        which is what keeps a restart from costing its own gradient pass.
+        """
+        x_cand = jnp.clip(self.global_model.points(n_points), *self.clip)
+        return self.evaluator.pending_unread(x_cand)
 
     def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
         """Run the cohort's trials: the method judges, the engine records winners.
@@ -1240,8 +1153,8 @@ class _Paths:
         subset, each served whole or not at all (a budget failure stops
         globally). A path's point is unchanged while it rejects, so the point
         handed to propose and verdict is also the step's start point. A path that
-        needs none commits its one proposal unread - the same deal a single-draw
-        probe start gets - so the value it would have been judged on is served
+        needs none commits its one proposal unread - the same deal a restart
+        start gets - so the value it would have been judged on is served
         once, fused with its gradient, by the caller's `settle`.
 
         Returns the per-step argmin each accepting path won, keyed by path - still
@@ -1333,33 +1246,23 @@ class _Paths:
         return dict(zip(paths, self.evaluator.pending_unread(clipped), strict=True))
 
     def _place(self, placed: dict[int, PathPoint]) -> None:
-        """Place the given paths on their fresh probe starts (one restart event).
+        """Place the given paths on their fresh starts (one restart event).
 
-        The event's group-min list extends the rule's one shared group-min pool;
-        the method's per-path state resets to cold start, while that pool is kept
-        (same sampler, new trajectories). The rule is told about the event and
-        decides for itself what, if anything, it resets there - `EIRestartRule`
-        closed the stage at its verdict, so it has nothing left to drop. A start
-        the engine cannot use is refused on the same `usable` gate `_advance`
-        applies to a winner: it is not placed, the solver is not seeded from it,
-        and the path waits, stalled, for the next EI verdict. Refusing rather than
-        placing it keeps `points[i]` meaning "where the path stands": an unusable
-        start never becomes one. The probe is this iteration's move for every
-        restarted path, usable or not, so none of them also steps.
+        The method's per-path state resets to cold start. A start the engine
+        cannot use is refused on the same `usable` gate `_advance` applies to a
+        winner: it is not placed, the solver is not seeded from it, and the path
+        waits, stalled, for its rule to fire again. Refusing rather than placing
+        it keeps `points[i]` meaning "where the path stands": an unusable start
+        never becomes one. The start is this iteration's move for every restarted
+        path, usable or not, so none of them also steps.
         """
-        if not placed:
-            # No path restarted this iteration: nothing to place or reset.
-            return
         for i, point in placed.items():
-            self.restart_rule.restart(i)  # the event: the path was re-probed
             self.stalled[i] = not point.usable
             if self.stalled[i]:
                 continue  # unusable: no point, no seed, no anchor (see `usable`)
             self.points[i] = point
             self.solver.restart(i, point)
             self.prev_f[i] = point.f
-        for point in placed.values():  # the event's group-mins extend the shared pool
-            self.restart_rule.observe_restart(point.f)
 
     def _advance(self, won: dict[int, PathPoint]) -> None:
         """Commit each accepted winner as its path's next point, then fold it.
@@ -1380,19 +1283,19 @@ class _Paths:
             self.points[i] = best
             self.solver.fold(i, point, best)
 
-    def _report(self, cohort: list[int], restarted: list[int]) -> None:
+    def _report(self, cohort: list[int]) -> None:
         """Fold one report per path per round, on the one continue channel.
 
-        Every path reports exactly one observation per iteration, so the rule's
-        stage clock counts one round however the path spent it. A cohort path
-        reports the finite step Δ when it moved, or `None` when `stalled` says it
-        did not - read back through the step's own exit state rather than an
-        outside reader reconstructing it. A restarted path reports `None` for its
-        probe round: it took no step, its first Δ is the step after the probe,
-        and its anchor stays at the probe's f (`_place` set `prev_f`), so the
-        probe is never read back as a zero-length step. The round itself still
-        counts, which is what keeps a re-probed path due on the same round as its
-        cohort instead of one round late per restart.
+        Every non-restarting path reports exactly one observation per iteration,
+        so the rule's stage clock counts one round however the path spent it. A
+        cohort path reports the finite step Δ when it moved, or `None` when
+        `stalled` says it did not - read back through the step's own exit state
+        rather than an outside reader reconstructing it. A restarted path reports
+        nothing at all: it took no step this round, and its anchor is already the
+        fresh start's f (`_place` set `prev_f`), so the restart is never read back
+        as a zero-length step. That silence is why the channel is
+        one-directional - a rule is not told about its own restarts, so it cannot
+        mistake one for a stall.
         """
         for i in cohort:
             if self.stalled[i]:
@@ -1402,10 +1305,6 @@ class _Paths:
                 delta = self.points[i].f - self.prev_f[i]
                 self.restart_rule.observe_step(i, delta)
                 self.prev_f[i] = self.points[i].f
-        for i in restarted:
-            # The probe round took no step, but the round still ticks the
-            # path's clock: report it as a no-step round, exactly like a stall.
-            self.restart_rule.observe_step(i, None)
 
 
 def _check_seam(obj: object | None, proto: type, what: str) -> None:
@@ -1424,13 +1323,12 @@ def _check_seam(obj: object | None, proto: type, what: str) -> None:
 
 def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
     *,
-    n_paths: int,
-    n_draws: int,
+    x0: jnp.ndarray,
     max_iters: int | None,
     time_limit: float | None,
     eval_f_g: EvalFG,
     eval_f: EvalF | None,
-    sample: Sampler | None,
+    global_model: GlobalModel | None,
     budget_check: Callable[[], bool] | None,
     bounds: Bounds | None,
 ) -> None:
@@ -1439,13 +1337,6 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
     The caller's own inputs are checked here, once per run - the only place a
     human hands this engine something. Nothing below re-checks them.
     """
-    for name, value, low in (
-        ("n_paths", n_paths, 1),
-        ("n_draws", n_draws, 1),
-    ):
-        if value < low:
-            msg = f"{name} must be >= {low}, got {value}"
-            raise ValueError(msg)
     if max_iters is not None and max_iters < 0:
         msg = f"max_iters must be >= 0, got {max_iters}"
         raise ValueError(msg)
@@ -1462,19 +1353,6 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
         )
         raise ValueError(msg)
 
-    if eval_f is None and n_draws != 1:
-        # The verdict's expensive side is the gradient count, not the batch
-        # count: a probe computes `g` once per draw, a continue step once. The
-        # engine cannot see the solver's `n_alpha` (the seam checks presence,
-        # not members), so the exact symmetry `n_alpha == n_draws` is out
-        # of reach. This is the conservative proxy it can express.
-        msg = (
-            f"n_draws={n_draws} without eval_f prices a probe "
-            f"at {n_draws} gradients against one step's single gradient; "
-            "pass eval_f for multi-draw probes"
-        )
-        raise ValueError(msg)
-
     # Presence of the callables, not their signatures. Without this a mistyped
     # seam reaches the first batch and fails there as `'int' object is not
     # callable`, a symptom a frame away from the argument that caused it.
@@ -1483,13 +1361,40 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
         raise TypeError(msg)
     for what, fn in (
         ("eval_f", eval_f),
-        ("sample", sample),
+        ("global_model", global_model),
         ("budget_check", budget_check),
     ):
         if fn is not None and not callable(fn):
             msg = f"{what} must be callable or None, got {type(fn).__name__}"
             raise TypeError(msg)
     _check_bounds(bounds)
+    _check_flock(x0, bounds)
+
+
+def _check_flock(x0: jnp.ndarray, bounds: Bounds | None) -> None:
+    """Reject a flock the engine cannot place, or that disagrees with the box.
+
+    The flock is the run's only statement of n_paths and d, so a malformed one
+    would surface a frame later as a box or batch-shape mismatch. A non-finite
+    row is refused rather than left to stall a path: a coordinate is not an
+    objective that went non-finite, and no clip or proposal can repair it.
+    """
+    flock = jnp.asarray(x0)
+    if flock.ndim != 2:
+        msg = f"x0 must be a (n_paths, d) array, got shape {flock.shape}"
+        raise ValueError(msg)
+    if flock.shape[0] < 1 or flock.shape[1] < 1:
+        msg = f"x0 needs at least one point of at least one dim, got {flock.shape}"
+        raise ValueError(msg)
+    if not _all_finite(flock):
+        msg = "x0 must be finite: a non-finite starting point cannot be placed"
+        raise ValueError(msg)
+    # The two statements of d have to agree before either is used: x0's second
+    # axis and the box's width.
+    box = _box_bounds(bounds)
+    if box is not None and box[0].shape[0] != flock.shape[1]:
+        msg = f"x0 has d={flock.shape[1]} but bounds has d={box[0].shape[0]}"
+        raise ValueError(msg)
 
 
 def _check_bounds(bounds: Bounds | None) -> None:

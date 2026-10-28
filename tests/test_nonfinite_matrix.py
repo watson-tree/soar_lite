@@ -138,7 +138,7 @@ def test_a_half_dead_start_stalls_the_path_but_its_value_still_reports() -> None
 
     Every start has a finite value and a NaN in the first gradient component.
     Nothing may be proposed from such a point, so the path never steps - and
-    with `NoRestartRule` nothing re-probes it either - yet its value is a value
+    with `NoRestartRule` nothing re-draws it either - yet its value is a value
     the run served, so it is the answer. The two halves are gated on different
     questions and are allowed to disagree: the report is about the value, the
     stall is about what can be done next.
@@ -154,8 +154,8 @@ def test_a_half_dead_start_stalls_the_path_but_its_value_still_reports() -> None
 
     res = n_path_schedule(
         eval_f_g,
+        x0=jnp.array([[0.5]]),
         bounds=unit_bounds(),
-        n_paths=1,
         max_iters=10,
         restart_rule=NoRestartRule(),
         key=jax.random.PRNGKey(0),
@@ -171,7 +171,7 @@ def test_a_half_dead_start_stalls_the_path_but_its_value_still_reports() -> None
 def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
     """The same dimension one lane over: the value wins, the gradient refuses it.
 
-    The initialization probe hands back usable gradients; every later batch has a
+    The flock hands back usable gradients; every later batch has a
     finite value and a NaN first component. The value is the best served so far
     and is allowed to enter the report, but the point is never committed as the
     path's next start - the batch is the run's last. With the gate missing, the
@@ -190,13 +190,13 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
 
     res = n_path_schedule(
         eval_f_g,
+        x0=jnp.array([[0.5]]),
         bounds=unit_bounds(),
-        n_paths=1,
         max_iters=10,
         restart_rule=NoRestartRule(),
         key=jax.random.PRNGKey(0),
     )
 
-    assert res.n_batches == 2, res.n_batches  # init + the one refused step
+    assert res.n_batches == 2, res.n_batches  # the flock + the one refused step
     assert res.status == "max_iters"
     assert math.isfinite(float(res.fun))

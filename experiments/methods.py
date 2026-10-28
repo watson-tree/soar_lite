@@ -11,8 +11,8 @@ Every driver returns a :class:`Trace` - best-so-far against both cost axes:
   free, which is why the points axis is read off the same runs.
 
 All single-chain drivers start from one uniform draw over the box; soar-lite
-keeps the engine's own init (min of two probes, two points, both counted), so
-no method gets a start it did not pay for.
+draws its n_paths starts the same way - uniformly over the box, in the driver -
+so no method gets a start it did not pay for.
 """
 
 import math
@@ -69,9 +69,14 @@ def run_soar_lite(
     engine requires - deliberately non-binding, so it never ends the run first.
 
     ``restart_rule`` is the rule instance to run; ``None`` keeps the engine's
-    default, the sample-based `EIRestartRule`. The n_paths=1 arms pass
-    `NoRestartRule` so their single chain is the pure serial descent, which is
-    what the panels compare a batched run against.
+    default, `NoRestartRule` (the frozen flock). The n_paths=1 arms pass it
+    explicitly so their single chain is the pure serial descent, which is what
+    the panels compare a batched run against.
+
+    The flock is drawn here, uniformly over the box, so the experiment's
+    distribution is the caller's: the engine only ever places the points it is
+    handed. The key is split once, so the flock and the restart draws do not
+    share a stream.
     """
     trace = Trace()
     n_points = 0
@@ -91,15 +96,22 @@ def run_soar_lite(
         trace.best.append(best)
         return f, g, None
 
+    key, sub = jax.random.split(jax.random.PRNGKey(seed))
+    x0 = jax.random.uniform(
+        sub,
+        (n_paths, problem.d),
+        minval=problem.bounds[:, 0],
+        maxval=problem.bounds[:, 1],
+    )
     result = n_path_schedule(
         eval_f_g,
+        x0=x0,
         bounds=problem.bounds,
-        n_paths=n_paths,
         max_iters=max_steps,
         budget_check=lambda: n_batches < max_steps,
         solver=DiagonalPreconditioner(),
         restart_rule=restart_rule,
-        key=jax.random.PRNGKey(seed),
+        key=key,
     )
     trace.fun = float(result.fun)
     return trace
