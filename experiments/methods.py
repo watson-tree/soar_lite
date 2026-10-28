@@ -138,7 +138,7 @@ def run_adam(problem: Problem, *, max_steps: int, seed: int, lr: float) -> Trace
         return (x, opt_state, best), best
 
     _, bests = jax.lax.scan(
-        body, (x0, state, jnp.asarray(jnp.inf)), jnp.arange(1, max_steps + 1)
+        body, (x0, state, jnp.asarray(jnp.inf)), jnp.arange(1, max_steps + 1),
     )
     values = np.asarray(bests.tolist(), dtype=float)
     grid = np.arange(1, max_steps + 1)

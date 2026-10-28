@@ -263,7 +263,7 @@ _TWO_WELL_SIGMA = 0.04
 def _two_well_1d(theta: jnp.ndarray) -> jnp.ndarray:
     """Two-well 1-D: global -8 @ θ=0.38, local -2 @ θ=0.62, saddle near 0.505."""
     return -2.0 * jnp.exp(-(((theta - 0.62) / _TWO_WELL_SIGMA) ** 2)) - 8.0 * jnp.exp(
-        -(((theta - 0.38) / _TWO_WELL_SIGMA) ** 2)
+        -(((theta - 0.38) / _TWO_WELL_SIGMA) ** 2),
     )
 
 
@@ -372,7 +372,7 @@ def test_projected_descent_reaches_wall_optimum() -> None:
 
     def wall_quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return (theta[0] - 1.5) ** 2 + theta[1] ** 2, jnp.array(
-            [2.0 * (theta[0] - 1.5), 2.0 * theta[1]]
+            [2.0 * (theta[0] - 1.5), 2.0 * theta[1]],
         )
 
     rec = Recorder(wall_quad)
@@ -622,7 +622,7 @@ def test_a_dead_start_is_redrawn_by_a_restart() -> None:
     """
 
     def make_evaluator() -> Callable[
-        [jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None]
+        [jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None],
     ]:
         calls = [0]
 

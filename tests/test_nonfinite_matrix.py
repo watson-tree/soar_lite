@@ -71,7 +71,7 @@ def unit_bounds(d: int = 1) -> jnp.ndarray:
     ],
 )
 def test_best_counts_a_value_only_when_it_is_feasible_and_finite(
-    f: float, fun: float, fun_raw: float, *, feasible: bool | None, ends_run: bool
+    f: float, fun: float, fun_raw: float, *, feasible: bool | None, ends_run: bool,
 ) -> None:
     """One served point, every row of the table, against one fresh `_Best`."""
     best = _Best(1)
@@ -127,7 +127,7 @@ def test_a_mask_flag_that_is_not_zero_or_one_is_refused(flag: float) -> None:
     ],
 )
 def test_argmin_finite_never_returns_a_non_finite_candidate(
-    values: list[float], expected: int | None
+    values: list[float], expected: int | None,
 ) -> None:
     """The finite-only argmin, which both bests and the feasible read sit on."""
     assert _argmin_finite(values) == expected

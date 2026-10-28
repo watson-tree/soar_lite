@@ -199,13 +199,13 @@ def oscillator_chain(
     key_m, key_k, key_c = jax.random.split(jax.random.PRNGKey(seed), 3)
     n = n_masses
     m_star = jnp.exp(
-        jax.random.uniform(key_m, (n,), minval=jnp.log(0.5), maxval=jnp.log(5.0))
+        jax.random.uniform(key_m, (n,), minval=jnp.log(0.5), maxval=jnp.log(5.0)),
     )
     k_star = jnp.exp(
-        jax.random.uniform(key_k, (n,), minval=jnp.log(1e2), maxval=jnp.log(1e5))
+        jax.random.uniform(key_k, (n,), minval=jnp.log(1e2), maxval=jnp.log(1e5)),
     )
     c_star = jnp.exp(
-        jax.random.uniform(key_c, (n,), minval=jnp.log(1.0), maxval=jnp.log(1e2))
+        jax.random.uniform(key_c, (n,), minval=jnp.log(1.0), maxval=jnp.log(1e2)),
     )
     theta_star = jnp.concatenate([m_star, k_star, c_star])
     omega = jnp.logspace(math.log10(omega_lo), math.log10(omega_hi), n_freqs)

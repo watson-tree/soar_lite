@@ -292,7 +292,7 @@ class RestartRule(Protocol):
 # --- engine: the n-path schedule ---
 
 NPathStatus: TypeAlias = Literal[
-    "max_iters", "time_limit", "budget_exhausted", "unbounded"
+    "max_iters", "time_limit", "budget_exhausted", "unbounded",
 ]
 # Four names for four ways to end a run: the three gates, in the order they are
 # checked (iteration horizon, wall-clock deadline, the caller's extra batch
@@ -305,7 +305,7 @@ NPathStatus: TypeAlias = Literal[
 # together on purpose - the caller's fused value_and_grad is one AD pass, and
 # the step's call sites want both at once (scipy's `jac=True` form, batched).
 EvalFG: TypeAlias = Callable[
-    [jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]"
+    [jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]",
 ]
 
 # The f-only sibling, for a caller that also holds a value function without the
@@ -592,7 +592,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         def default_global_model(sub: jnp.ndarray, n_points: int) -> jnp.ndarray:
             """Default source: n_points i.i.d. uniform points over the finite box."""
             return jax.random.uniform(
-                sub, (n_points, lo_f.shape[0]), minval=lo_f, maxval=hi_f
+                sub, (n_points, lo_f.shape[0]), minval=lo_f, maxval=hi_f,
             )
 
         propose: GlobalModel = default_global_model
@@ -815,7 +815,7 @@ class _Best:
         self.x = jnp.full(d, math.nan)
 
     def observe(
-        self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None
+        self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None,
     ) -> None:
         """Fold one served batch's values into both bests, stopping on -inf.
 
@@ -937,7 +937,7 @@ class _Evaluator:
         settled: dict[int, PathPoint] = {}
         if pending_idxs:
             f_vals, g_batch = self._serve_f_g(
-                jnp.stack([decided[k].x for k in pending_idxs])
+                jnp.stack([decided[k].x for k in pending_idxs]),
             )
             settled = {
                 k: PathPoint(decided[k].x, f_vals[pos], g_batch[pos])

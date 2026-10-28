@@ -53,15 +53,15 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-  "COM812", "ISC001",
-  "T201",
-  "PLR2004",              # 数值容差是测试的一部分
   "CPY001",               # 版权头是仪式，LICENSE 已覆盖
   "D203", "D213",         # 与 D211/D212 互斥，显式写明让位的一侧
+  "PLR2004",              # 形状/容差比对字面量，命名常量只会加噪音
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]     # assert 是 pytest 的写法
+# print 是实验脚本的输出，也是 __main__ 自检的退路；库代码里不允许
+"experiments/**" = ["T201"]
+"tests/**" = ["S101", "T201"]
 
 [tool.pyright]
 venvPath = "."

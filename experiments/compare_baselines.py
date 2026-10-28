@@ -206,7 +206,7 @@ def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
     lr_grid = [1e-4, 1e-3, 1e-2, 1e-1, 2e-1, 5e-1, 1.0, 2.0]
     probs = problems.build("all")
     fig, axes = plt.subplots(
-        1, len(probs), figsize=(6.4 * len(probs), 4.6), squeeze=False
+        1, len(probs), figsize=(6.4 * len(probs), 4.6), squeeze=False,
     )
     for ax, prob in zip(axes[0], probs, strict=True):
         fins = [
@@ -215,8 +215,8 @@ def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
                     [
                         run_adam(prob, max_steps=max_steps, seed=s, lr=lr).fun
                         for s in range(n_seeds)
-                    ]
-                )
+                    ],
+                ),
             )
             for lr in lr_grid
         ]
@@ -239,7 +239,7 @@ def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
         ax.grid(alpha=0.25, which="both")
     fig.suptitle(
         "Adam lr sensitivity - C0 diamond = panel pick (grid argmin); "
-        "rot & oscillator still falling at lr=2.0 (edge); rastrigin flat < 1e-1"
+        "rot & oscillator still falling at lr=2.0 (edge); rastrigin flat < 1e-1",
     )
     fig.tight_layout()
     fig.savefig(out, dpi=150)
@@ -317,7 +317,7 @@ def run_invariance(out_dir: Path, n_seeds: int, max_steps: int) -> None:
     ax.set_xlabel("objective points served")
     ax.set_ylabel("best-so-far (median [Q1, Q3] over seeds)")
     ax.set_title(
-        f"unit rescaling x' = {INVARIANCE_SCALE:g}x, no retune (Adam lr={lr:g})"
+        f"unit rescaling x' = {INVARIANCE_SCALE:g}x, no retune (Adam lr={lr:g})",
     )
     ax.legend(fontsize=8)
     ax.grid(alpha=0.25, which="both")
@@ -329,7 +329,7 @@ def run_invariance(out_dir: Path, n_seeds: int, max_steps: int) -> None:
 
 
 def run_panel(
-    group: str, n_seeds: int, max_steps: int
+    group: str, n_seeds: int, max_steps: int,
 ) -> tuple[dict[str, dict[str, CurveEntry]], dict[str, str]]:
     """Run every problem in ``group`` across every method and seed."""
     methods = PANELS[group]
@@ -389,7 +389,7 @@ def plot(
     methods = PANELS[group]
     names = list(curves)
     fig, axes = plt.subplots(
-        1, len(names), figsize=(6.4 * len(names), 4.6), squeeze=False
+        1, len(names), figsize=(6.4 * len(names), 4.6), squeeze=False,
     )
     for ax, name in zip(axes[0], names, strict=True):
         for label, _, style in methods:
@@ -409,7 +409,7 @@ def plot(
         ax.set_yscale("log")
         ax.set_xscale("log")
         ax.set_xlabel(
-            "objective points served" if axis == "points" else "batches served"
+            "objective points served" if axis == "points" else "batches served",
         )
         ax.set_ylabel("best-so-far (median [Q1, Q3] over seeds)")
         ax.set_title(f"{name}\n{labels[name]}", fontsize=9)
@@ -503,11 +503,11 @@ def main() -> None:
     parser.add_argument("--quick", action="store_true", help="2-seed smoke check")
     parser.add_argument("--seeds", type=int, default=20)
     parser.add_argument(
-        "--max-steps", type=int, default=3000, help="batches per method"
+        "--max-steps", type=int, default=3000, help="batches per method",
     )
     parser.add_argument("--groups", default="headline,smooth,multimodal,invariance")
     parser.add_argument(
-        "--lr-sweep", action="store_true", help="emit the Adam lr sensitivity figure"
+        "--lr-sweep", action="store_true", help="emit the Adam lr sensitivity figure",
     )
     parser.add_argument(
         "--plot-only",
@@ -524,7 +524,7 @@ def main() -> None:
         for group in args.groups.split(","):
             if group == "invariance":
                 print(
-                    "invariance panel writes no JSON; rerun --groups invariance (fast)"
+                    "invariance panel writes no JSON; rerun --groups invariance (fast)",
                 )
                 continue
             plot_group_from_json(group, HERE)
