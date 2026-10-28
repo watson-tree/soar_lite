@@ -184,11 +184,15 @@ shortcut had to exist at all. Replaced by:
 - `max_iters`: a deterministic horizon, iteration 0 = the init probe. Not a cost
   proxy - one iteration serves from zero batches (a fully stalled flock) up to a
   probe plus however many trials the method's line search serves.
-- `time_limit`: the same stop in wall-clock seconds, checked between iterations
-  and never inside one.
+- `time_limit`: the same stop in wall-clock seconds, asked at the loop head each
+  iteration and again before each g batch, so an over-running iteration is cut
+  at its next batch boundary.
 - At least one of the two, else `ValueError`. `budget_check` stays an extra
-  per-batch gate and the escape hatch for any other stop condition; it cannot
-  replace the horizon, because a stalled iteration asks for no batch.
+  gate for any other stop condition - one of the three inputs the run's one
+  stop query asks at the loop head each iteration and again before each g
+  batch; it cannot replace the horizon, because a gate that advances only on
+  served batches would spin forever under a stalled flock and the engine
+  cannot see which kind it is.
 - `n_batches`/`n_points` are reports, not caps, and they count the only billed
   unit: the fused value+gradient pass. A probe's f-only draws are cheaper work
   and appear in neither (nor are they gated), so the counts stay on the axis

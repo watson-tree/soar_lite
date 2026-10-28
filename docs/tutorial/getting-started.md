@@ -122,10 +122,11 @@ Three gotchas worth knowing up front:
   `max_iters` is a deterministic stop, not
   a cost estimate - read `n_batches` and `n_points` for what the run actually
   did, and pass `time_limit` if wall-clock is what you care about. `budget_check`
-  is an extra gate consulted before every billed batch, so an external budget
-  derived from batches or points can over-run by less than one batch, never more
-  (inside a multi-draw probe the blind spot is one probe: its f-only draws are
-  cheap and are neither gated nor counted).
+  is an extra gate consulted at the loop head each iteration and again before
+  every billed batch, so an external budget derived from batches or points can
+  over-run by less than one batch, never more (inside a multi-draw probe the
+  blind spot is one probe: its f-only draws are cheap and are neither gated nor
+  counted).
 
 ## 5. What a batch and a point cost
 
