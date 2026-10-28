@@ -82,12 +82,18 @@ Curves differ per panel; each curve has one role:
 - **Panel "preconditioning"** (groups 2+3, **P②**): `soar-lite n_paths=1` (pinned to
   `NoRestartRule`), `Adam`,
   `L-BFGS-B` (ceiling *reference*, not a head-to-head baseline — full-memory +
-  serial line search vs our per-coordinate + batched n_paths), plus `soar-lite n_paths=16`
-  as a supplementary "what parallelism buys" curve.
-- **Panel "escape"** (group 4, **P①**): `soar-lite n_paths=16`, `soar-lite n_paths=1`,
-  `Adam`.
+  serial line search vs our per-coordinate + batched n_paths), plus both
+  `soar-lite n_paths=16` curves — `NoRestartRule` and `EIRestartRule` — as
+  supplementary "what parallelism buys" / "what restart buys" curves.
+- **Panel "escape"** (group 4, **P①**): `soar-lite n_paths=16` under both rules,
+  `soar-lite n_paths=1`, `Adam`.
 - **Invariance panel** (group 5): `soar-lite` (n_paths=1) vs `Adam`, two unit
   systems, overlaid after the coordinate transform.
+
+Both n_paths=16 curves are drawn so neither step hides the other: `n_paths=1` →
+`n_paths=16` at a fixed rule is the parallelism step, `NoRestartRule` →
+`EIRestartRule` at a fixed width the restart step. A single n_paths=16 curve
+moves both knobs at once and charges the whole gap to "parallelism".
 
 L-BFGS-B appears only on the P② panels. Its role there is the *ceiling
 reference* — how close soar-lite's diagonal secant gets to a full-memory
@@ -105,7 +111,8 @@ NAAdam (Adam + `σ_t = σ0/√t` decaying Gaussian noise) was measured and
 **dropped**: on ackley/rastrigin at d=100 the noise never separates from plain
 Adam — larger `σ0` is flat (rastrigin) to worse (ackley) — so it would only be
 a redundant, exactly-overlapping curve. The escape panel is therefore
-`n_paths=16` vs `n_paths=1` vs Adam, which is the honest contrast for P①.
+`n_paths=16` under both rules vs `n_paths=1` vs Adam, which is the honest
+contrast for P①.
 
 Adam learning rate is **per-problem grid-tuned**: the optimal lr spans
 over two orders of magnitude (diag 1e-2 → rotated 2.0), and a wrong lr costs
@@ -224,8 +231,8 @@ not a universal theorem about the method.
 1. Add experiment deps via a dependency group (`optax`, `matplotlib`).
 2. `experiments/problems.py` — the five groups + a thin oracle wrapper matching
    the soar-lite seam `x_batch → (loss, grad, feas)`.
-3. `experiments/methods.py` — drivers: soar-lite n_paths=1/n_paths=16, Adam,
-   L-BFGS-B.
+3. `experiments/methods.py` — drivers: soar-lite n_paths=1 and n_paths=16 (the
+   latter under `NoRestartRule` and `EIRestartRule`), Adam, L-BFGS-B.
 4. `experiments/compare_baselines.py` — harness over `N=20` seeds, collects
    per-round best-so-far.
 5. Plot + dump `results.json`. **Self-check first**: two curves on the diag
@@ -251,17 +258,32 @@ two-curve self-check decides before the full run.
 
 The figures were re-run on the refactored engine (20 seeds, 3000 batches). Adam
 and L-BFGS-B came back bit-identical — the harness did not move — so every
-shift below is engine-side. Three readings should travel with the plots. These
-panels also predate the KDE restart rule described under the first reading: they
-show the single-Gaussian fit, which is what makes the diagnosis legible, and
-they have not been re-run since.
+shift below is engine-side. Three readings should travel with the plots.
 
-### Multi-path loses to single-path on a single-basin problem
+Those panels predate the KDE restart rule described under the first reading:
+they show the single-Gaussian fit, which is what makes the diagnosis legible.
+They have since been re-run on the current engine, and that rerun is the other
+change behind the numbers below: `n_paths=16` is now drawn twice, pinned to
+`NoRestartRule` and to the shipped rule, so the width and the restart are two
+single-attribute steps instead of one. Adam and L-BFGS-B come back bit-identical
+again, the single-path arm moves by at most 4.5% (on Ackley not at all), and the
+restart arm moves the most - which is why the first reading below is restated
+against the separated curves.
 
-Oscillator F20: `n_paths=1` reaches `7.7e-6`, `n_paths=16` `1.3e-4` (17x worse;
-the pre-refactor run already had the same direction, `4.4e-6` vs `1.6e-5`). The
-cause is the restart rule, not the width. With 16 paths the group-min pool holds
-16 i.i.d. start values (`lo 1.7`, `hi 39`) while the best is `f⋆ = 0.054`.
+### Restart loses on a single-basin problem; the width does not
+
+Oscillator F20, 20 seeds x 3000 batches, median final best: `n_paths=1`
+`7.7e-6`, `n_paths=16` without restart `2.2e-7` (35x better), `n_paths=16` with
+the shipped rule `5.3e-5` - 239x worse than the same width, 6.8x worse than a
+single path. Widening the pool pays here; the loss belongs to the restart. Until
+the arm was drawn twice both knobs moved together, which is why the earlier
+reading of this panel blamed the width (the pre-refactor run had the same
+direction, `4.4e-6` vs `1.6e-5`). The rotated quadratic, same seeds, repeats the
+split at smaller size: `61.0` one path, `33.9` sixteen without restart, `217.0`
+sixteen with it - 1.8x bought by the width, 6.4x lost to the rule.
+
+With 16 paths the group-min pool holds 16 i.i.d. start values (`lo 1.7`,
+`hi 39`) while the best is `f⋆ = 0.054`.
 That pool is a **mixture** - one draw per path - and the rule used to fold it
 into a single Gaussian (`mu_r 7.0`, `sigma_r 9.0`), which put
 `z = (f⋆ - mu_r)/sigma_r = -0.77` near the EI hump and priced one restart at
@@ -269,9 +291,10 @@ into a single Gaussian (`mu_r 7.0`, `sigma_r 9.0`), which put
 30x worse than `f⋆`. Fitting one Gaussian to a wide mix inflates the tail, so
 `EI_restart` stayed large precisely because n_paths is large. `EI_continue`
 meanwhile decays with the path's own stage (`3.2 -> 0.02` as it converges), and
-an iteration restarts a path or advances it, never both. Measured: 292 restarts
-in 3000 batches (one every ~10 iterations, 116 of the batches spent on probes),
-final best 17x worse.
+an iteration restarts a path or advances it, never both. Measured under that
+fit: 292 restarts in 3000 batches (one every ~10 iterations, 116 of the batches
+spent on probes), final best 17x worse than one path - the reading that opened
+this question, and the one the separated curves replace.
 
 This is model mis-specification, not a bad decision rule: the pool samples
 "what a random start is worth", which is a property of the landscape, and it is
@@ -283,6 +306,13 @@ continue side's Δ stream is no more guaranteed Gaussian than the pool is.
 Measured on the estimator alone (one 8-draw pool, `f⋆ = 0.054`): the
 single-Gaussian fit prices `EI_restart` at `0.83` against the KDE's `0.30`, a
 2.8x inflated tail. That is the mechanism, with no run behind it.
+
+The rerun carries the whole interval between the two panels - the KDE, but also
+the unified alpha grid and the phase-locked stage clock - so it prices that
+interval rather than the fit alone: `1.3e-4` under the single Gaussian, `5.3e-5`
+now. The direction the estimator predicted survives; the loss does not shrink to
+nothing. A restart counter is not instrumented, so how many of the current arm's
+3000 batches still go to probes is not measured here.
 
 End to end the picture is not settled. A 3-seed diagnostic on the same
 oscillator (`n_paths=16`, canonical 3000-batch, **not** the 20-seed panel) puts
@@ -301,9 +331,10 @@ and the verdict then turns on whether the continue side also reads 0 - which a
 flat or stalled chain does. The panel pins that arm to `NoRestartRule` so the
 curve stays the pure serial descent it was measured as, instead of picking up a
 probe whenever the chain flattens; `n_paths=16` is the configuration where the
-verdict is actually exercised. The restart mechanism on its own is isolated by
+verdict is actually exercised. Restart is isolated at fixed width by drawing
+that arm under both rules, and independently by
 `test_restart_beats_pure_multistart_on_multimodal` (same starts, same budget,
-rule swapped), which no panel curve does.
+rule swapped).
 
 Resolved: the verdict's best used to be the min over feasible points only (`inf`
 when none was served), while both verdict alternatives are free to sample

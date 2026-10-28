@@ -212,6 +212,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given up is the automatic localization of the first secant pair: an overshoot
   now stands until the next secant corrects it, `alpha0 < 1` damps it by hand,
   or `n_alpha >= 2` re-localizes it.
+- `experiments/compare_baselines.py` plots `soar-lite n_paths=16` twice, once
+  pinned to `NoRestartRule` and once to `EIRestartRule`, and names the rule in
+  every curve label. The single `n_paths=16` curve moved width and restart rule
+  together, so the step from `n_paths=1` could only be read as "what parallelism
+  buys" whole - which is also how `DESIGN.md` had described it. Now
+  `n_paths=1` -> `n_paths=16` at a fixed rule is the parallelism step and
+  `NoRestartRule` -> `EIRestartRule` at a fixed width the restart step. The
+  default rule is passed explicitly for the same reason: a curve that inherits
+  it does not say what it measured.
 
 ### Removed
 

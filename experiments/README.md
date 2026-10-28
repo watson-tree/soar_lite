@@ -27,7 +27,7 @@ pip install -e .
 uv run --group exp python -m experiments.compare_baselines --quick
 ```
 
-Two seeds per method, ~1 min, writes the same figures as the full run. Use it
+Two seeds per method, ~35 s, writes the same figures as the full run. Use it
 to confirm the environment before committing to the full schedule.
 
 ## Canonical run
@@ -39,10 +39,10 @@ uv run --group exp python -m experiments.compare_baselines \
     --max-steps 3000
 ```
 
-CPU wall-clock ≈ 60 min (headline ≈ 20 min, smooth ≈ 15 min, multimodal ≈
-25 min, invariance < 1 min). `--max-steps` is **batches per method**; the
-per-round chart re-reads the same runs on the "objective points served" axis,
-so both billing notions come from one execution.
+CPU wall-clock ≈ 105 min (headline ≈ 27 min, smooth ≈ 38 min, multimodal ≈
+37 min, invariance ≈ 1.5 min; measured, CPU-only). `--max-steps` is **batches
+per method**; the per-round chart re-reads the same runs on the "objective
+points served" axis, so both billing notions come from one execution.
 
 Run one panel to save time, e.g. `--groups smooth`; any subset works, and each
 panel writes its files as it finishes.

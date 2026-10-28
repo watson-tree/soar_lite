@@ -2,10 +2,16 @@
 
 Two panels per method family, following the design in `DESIGN.md`:
 
-* smooth + headline (preconditioning proposition): soar-lite n_paths=1,
-  soar-lite n_paths=16, Adam, L-BFGS-B (ceiling reference);
-* multimodal (escape proposition): soar-lite n_paths=1, soar-lite n_paths=16,
-  Adam.
+* smooth + headline (preconditioning proposition): soar-lite n_paths=1
+  (NoRestart), n_paths=16 (NoRestart), n_paths=16 (EIRestart), Adam,
+  L-BFGS-B (ceiling reference);
+* multimodal (escape proposition): the same three soar-lite arms, Adam.
+
+Both n_paths=16 arms are plotted because one curve would move width and rule
+at once: NoRestart 1 -> NoRestart 16 is the parallelism step, NoRestart 16 ->
+EIRestart 16 the restart step. Colour encodes the rule (C0 none, C1 EI),
+linestyle encodes width (solid one path, dashed sixteen), so each of the two
+steps is a single visual attribute.
 
 Every method gets the same number of **batches** (one batch = one eval of
 parallel points, ``--max-steps``) - the wall-clock axis of a batched
@@ -55,7 +61,7 @@ from experiments.methods import (
     run_lbfgs,
     run_soar_lite,
 )
-from soar_lite import NoRestartRule
+from soar_lite import EIRestartRule, NoRestartRule
 
 HERE = Path(__file__).parent
 Runner: TypeAlias = Callable[..., Trace]
@@ -69,6 +75,26 @@ def _serial(prob: problems.Problem, **kw: int) -> Trace:
     the one-batch-per-point reference the batched arms are compared against.
     """
     return run_soar_lite(prob, n_paths=1, restart_rule=NoRestartRule(), **kw)
+
+
+def _parallel_no_restart(prob: problems.Problem, **kw: int) -> Trace:
+    """soar-lite n_paths=16 with no restart: what width alone buys.
+
+    Pinned to `NoRestartRule` so the step from `_serial` differs only in
+    n_paths. Without this arm the only n_paths=16 curve carried the default
+    restart rule, so width and restart moved together.
+    """
+    return run_soar_lite(prob, n_paths=16, restart_rule=NoRestartRule(), **kw)
+
+
+def _parallel_restart(prob: problems.Problem, **kw: int) -> Trace:
+    """soar-lite n_paths=16 with the sample-based EI restart rule.
+
+    Passed explicitly rather than leaning on the engine default, so the panel
+    states which rule it measured; paired with `_parallel_no_restart` it
+    isolates restart at fixed width.
+    """
+    return run_soar_lite(prob, n_paths=16, restart_rule=EIRestartRule(), **kw)
 
 
 CurveEntry: TypeAlias = dict[str, list[float] | list[list[float | None]]]
@@ -97,17 +123,28 @@ def _adam_lr(prob: problems.Problem) -> float:
 
 INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
 
+# Curve labels name the rule: two arms share n_paths=16 and the step between
+# them is exactly the restart effect.
+LABEL_SERIAL = "soar-lite n_paths=1 (NoRestart)"
+LABEL_PARALLEL = "soar-lite n_paths=16 (NoRestart)"
+LABEL_PARALLEL_RESTART = "soar-lite n_paths=16 (EIRestart)"
+
 # Method roster per problem family: (label, runner, style kwargs).
 SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
-        "soar-lite n_paths=1",
+        LABEL_SERIAL,
         _serial,
         {"color": "C0", "lw": 2.0},
     ),
     (
-        "soar-lite n_paths=16",
-        lambda prob, **kw: run_soar_lite(prob, n_paths=16, **kw),
-        {"color": "C1", "lw": 1.2, "ls": "--"},
+        LABEL_PARALLEL,
+        _parallel_no_restart,
+        {"color": "C0", "lw": 2.0, "ls": "--"},
+    ),
+    (
+        LABEL_PARALLEL_RESTART,
+        _parallel_restart,
+        {"color": "C1", "lw": 2.0, "ls": "--"},
     ),
     (
         "Adam (grid lr)",
@@ -123,18 +160,24 @@ SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
 
 # NAAdam (Adam + sigma_t = sigma0/sqrt(t) noise) was measured and dropped: the
 # decaying noise never separates from plain Adam on ackley/rastrigin, so it is
-# a redundant curve. The honest escape panel is soar-lite n_paths=16 vs
-# n_paths=1 vs Adam.
+# a redundant curve. The honest escape panel is soar-lite n_paths=16 under
+# both rules vs n_paths=1 vs Adam, so the restart step sits beside the width
+# step instead of hiding inside it.
 MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
-        "soar-lite n_paths=16",
-        lambda prob, **kw: run_soar_lite(prob, n_paths=16, **kw),
-        {"color": "C1", "lw": 2.0},
+        LABEL_SERIAL,
+        _serial,
+        {"color": "C0", "lw": 2.0},
     ),
     (
-        "soar-lite n_paths=1",
-        _serial,
-        {"color": "C0", "lw": 1.2, "ls": "--"},
+        LABEL_PARALLEL,
+        _parallel_no_restart,
+        {"color": "C0", "lw": 2.0, "ls": "--"},
+    ),
+    (
+        LABEL_PARALLEL_RESTART,
+        _parallel_restart,
+        {"color": "C1", "lw": 2.0, "ls": "--"},
     ),
     (
         "Adam (grid lr)",
@@ -234,7 +277,7 @@ def run_invariance(out_dir: Path, n_seeds: int, max_steps: int) -> None:
     lr = _adam_lr(base)
     methods = [
         (
-            "soar-lite n_paths=1",
+            LABEL_SERIAL,
             "C0",
             _serial,
         ),
@@ -302,7 +345,7 @@ def run_panel(
         for label, _, _ in methods:
             fins = [t.fun for t in traces[label]]
             tail = f"final mean best = {np.mean(fins):.4e}"
-            print(f"  {prob.name:26s} {label:16s} {tail}")
+            print(f"  {prob.name:26s} {label:32s} {tail}")
         for axis in ("points", "batches"):
             col = 0 if axis == "points" else 1
             # Equal batches is the batched budget, equal points the serial one,
