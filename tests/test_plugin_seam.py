@@ -1,6 +1,6 @@
-"""Solver-seam self-checks.
+"""Plugin-seam self-checks.
 
-The seam's contract is only proven by injection: a stub `LocalSolver`, a stub
+The seams' contract is only proven by injection: a stub `LocalSolver`, a stub
 `RestartRule` and a stub `GlobalModel` are plugged into the engine, which must
 drive them instead of its defaults, and a foreign box (`bounds` as data) plus the
 caller's own x->θ map composed into `eval_f_g` must be honoured too. These also
@@ -9,7 +9,7 @@ run with no extra gate (`budget_check=None` -> `status == "max_iters"`).
 
 Run with:
 
-    uv run python -m tests.test_solver_seam
+    uv run python -m tests.test_plugin_seam
 """
 
 import math
@@ -218,7 +218,7 @@ def test_injected_solver_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         max_iters=2,  # iteration 0 places the flock, then one step
-        solver=solver,
+        local_solver=solver,
         restart_rule=RecordingRule(),
     )
     assert solver.inited == [0, 1, 2], solver.inited
@@ -240,7 +240,7 @@ def test_give_up_stalls_a_path() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         max_iters=2,  # the flock, then the single stalled iteration
-        solver=solver,
+        local_solver=solver,
         restart_rule=RecordingRule(),
     )
     assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
@@ -274,7 +274,7 @@ def test_an_unusable_start_is_refused_before_it_seeds_the_method() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         max_iters=2,  # the flock, then the iteration that finds nothing live
-        solver=solver,
+        local_solver=solver,
         restart_rule=RecordingRule(),
     )
     assert solver.inited == [], solver.inited  # an unusable start is never seed
@@ -294,7 +294,7 @@ def test_injected_rule_is_driven() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         max_iters=2,  # the flock, then one step
-        solver=StubSolver(),
+        local_solver=StubSolver(),
         restart_rule=rule,
     )
     # Iteration 0 places the flock and asks nothing: there is no step to judge
@@ -323,7 +323,7 @@ def test_rule_can_force_restarts() -> None:
         # starts and no step: a restarted path is skipped by that iteration.
         # The flock is no exception - iteration 0 is itself a restart.
         max_iters=3,  # the placement plus two restart iterations
-        solver=solver,
+        local_solver=solver,
         restart_rule=rule,
     )
     # One batch per iteration, the placement included - and nothing else.
@@ -372,7 +372,7 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
             bounds=unit_bounds(),
             budget_check=lambda: billed < limit,
             max_iters=20,  # not the binding stop: the gate closes first
-            solver=StubSolver(),
+            local_solver=StubSolver(),
             restart_rule=RecordingRule(),
         )
         return billed, donated, res.n_points, res.status
@@ -400,7 +400,7 @@ def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
         **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(4)),
         bounds=unit_bounds(),
         max_iters=4,  # the flock plus three steps
-        solver=StubSolver(),
+        local_solver=StubSolver(),
         restart_rule=RecordingRule(),
     )
     assert res.status == "max_iters", res
@@ -433,7 +433,7 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
         bounds=bounds,
         budget_check=None,
         max_iters=3,
-        solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
+        local_solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
         restart_rule=RecordingRule(),
     )
     assert served, "nothing was ever served"
@@ -473,7 +473,7 @@ def test_the_default_model_is_exactly_a_uniform_global_model() -> None:
             global_model=global_model,  # pyright: ignore[reportArgumentType]
             budget_check=None,
             max_iters=3,
-            solver=StubSolver(),
+            local_solver=StubSolver(),
             restart_rule=AlwaysRestartRule(),
             key=jax.random.PRNGKey(7),
         )
@@ -519,7 +519,7 @@ def test_every_path_feeds_once_per_iteration() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         max_iters=4,  # the flock plus three iterations
-        solver=StubSolver(),
+        local_solver=StubSolver(),
         restart_rule=rule,
     )
     assert res.status == "max_iters", res
@@ -555,7 +555,7 @@ def test_a_flocks_start_is_not_read_back_as_a_zero_step() -> None:
         bounds=unit_bounds(),
         budget_check=lambda: True,
         max_iters=2,  # the flock plus one step
-        solver=StubSolver(),
+        local_solver=StubSolver(),
         restart_rule=rule,
     )
     # StubSolver steps x -> x - 0.5·g = x - 5, which the box clips to 0, so every
@@ -585,7 +585,7 @@ def test_reports_points_and_batches_separately() -> None:
             bounds=unit_bounds(),
             budget_check=lambda: True,
             max_iters=2,  # the flock plus one accepted trial
-            solver=StubSolver(),
+            local_solver=StubSolver(),
             restart_rule=RecordingRule(),
         )
         return res.n_points, res.n_batches
@@ -626,7 +626,7 @@ def test_a_flocks_start_is_served_once_fused() -> None:
         **flock_kwargs(flock(2), unit_bounds(), key=jax.random.PRNGKey(3)),
         bounds=unit_bounds(),
         max_iters=1,  # the flock alone is iteration 0
-        solver=StubSolver(),
+        local_solver=StubSolver(),
     )
     assert f_calls == [], f_calls  # nothing to compare, so nothing read early
     assert fused_shapes == [(2, 1)], fused_shapes  # both halves, one pass
@@ -675,7 +675,7 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
         **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(3)),
         bounds=unit_bounds(),
         max_iters=2,  # the flock, then this one step
-        solver=solver,
+        local_solver=solver,
     )
     # The step's two trial rounds, value-only. The flock travels to `settle`
     # unread, so it spends no f of its own.
@@ -723,7 +723,7 @@ def test_one_gradient_batch_per_iteration() -> None:
         bounds=unit_bounds(),
         global_model=RecordingModel(unit_bounds(), key=jax.random.PRNGKey(3)),
         max_iters=2,  # the flock, then one mixed iteration
-        solver=StubSolver(),
+        local_solver=StubSolver(),
         restart_rule=RestartFirst(),
     )
     assert fused_shapes == [(2, 1), (2, 1)], fused_shapes  # k=2 both times
@@ -782,7 +782,7 @@ def test_the_model_is_fed_at_both_bottoms_of_a_batch() -> None:
             global_model=model,
             budget_check=None,
             max_iters=2,  # the flock, then one judged step
-            solver=StubSolver(give_up=give_up),
+            local_solver=StubSolver(give_up=give_up),
             restart_rule=RecordingRule(),
         )
         return model, res
@@ -838,7 +838,7 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
         **flock_kwargs(flock(1), unit_bounds(), key=jax.random.PRNGKey(3)),
         bounds=unit_bounds(),
         max_iters=2,  # the flock, then this one step
-        solver=solver,
+        local_solver=solver,
         restart_rule=rule,
     )
     assert solver.verdicts == [0], solver.verdicts  # the trial was judged
@@ -866,7 +866,7 @@ def test_a_non_finite_gradient_start_arrives_stalled() -> None:
         **flock_kwargs(flock(2), unit_bounds(), key=jax.random.PRNGKey(4)),
         bounds=unit_bounds(),
         max_iters=2,
-        solver=solver,
+        local_solver=solver,
     )
     # No path was ever live, so nothing stepped and nothing was judged.
     assert solver.verdicts == [], solver.verdicts
@@ -900,7 +900,7 @@ def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
             **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(7)),
             bounds=unit_bounds(),
             max_iters=2,  # the flock plus one step
-            solver=solver,
+            local_solver=solver,
             restart_rule=RecordingRule(),
         )
         return sum(f_only_widths), res.n_batches, res.n_points
@@ -943,7 +943,7 @@ def test_an_unjudged_winner_must_be_finite_to_be_committed() -> None:
             **flock_kwargs(flock(1), unit_bounds(), key=jax.random.PRNGKey(3)),
             bounds=unit_bounds(),
             max_iters=3,
-            solver=solver,
+            local_solver=solver,
             restart_rule=RecordingRule(),
         )
         return solver

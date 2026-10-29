@@ -117,7 +117,7 @@ def run_soar_lite(
         global_model=UniformGlobalModel(problem.bounds, key=key, x0=x0),
         max_iters=max_steps,
         budget_check=lambda: n_batches < max_steps,
-        solver=DiagonalPreconditioner(),
+        local_solver=DiagonalPreconditioner(),
         restart_rule=restart_rule,
     )
     trace.fun = float(result.fun)

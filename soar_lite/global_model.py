@@ -1,7 +1,7 @@
 """The shipped restart-point model: i.i.d. uniform over a finite box.
 
-One of the engine's three plugin concretes, beside `solver.py`
-(`DiagonalPreconditioner`) and `restart.py` (`NoRestartRule`,
+One of the engine's three plugin concretes, beside `local_solver.py`
+(`DiagonalPreconditioner`) and `restart_rule.py` (`NoRestartRule`,
 `StallRestartRule`): it implements the engine's `GlobalModel` contract, which
 stays in `engine.py` because the engine owns its seams. Import direction is
 one-way - this module reads the engine's types, and the engine binds this class

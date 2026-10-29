@@ -28,8 +28,8 @@ from soar_lite.engine import (
     n_path_schedule,
 )
 from soar_lite.global_model import UniformGlobalModel
-from soar_lite.restart import NoRestartRule, StallRestartRule
-from soar_lite.solver import DiagonalPreconditioner
+from soar_lite.local_solver import DiagonalPreconditioner
+from soar_lite.restart_rule import NoRestartRule, StallRestartRule
 
 __all__ = [
     "Bounds",

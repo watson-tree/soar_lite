@@ -18,9 +18,9 @@ A seventh dimension is not in that table because it is not a value: with the
 value finite, either half of the pair can still be broken. A gradient that is
 not all finite is "half dead" - the value is real and reports, the point cannot
 be proposed from or folded on - so the run stalls the path instead of poisoning
-the secant. `test_solver.py` owns the fold gate; the engine-level rows are here.
+the secant. `test_local_solver.py` owns the fold gate; the engine-level rows are here.
 
-`test_scheduler.py` and `test_restart.py` cover the same events where they meet
+`test_scheduler.py` and `test_restart_rule.py` cover the same events where they meet
 a specific mechanism (a probe group with a dead column, an all-NaN pool, the
 payoff of a zero term). This file is the table itself, so a change to any one
 site has to keep every other site's rows true.
@@ -45,7 +45,7 @@ from soar_lite.engine import (
     n_path_schedule,
 )
 from soar_lite.global_model import UniformGlobalModel
-from soar_lite.restart import NoRestartRule
+from soar_lite.restart_rule import NoRestartRule
 
 jax.config.update("jax_enable_x64", val=True)
 

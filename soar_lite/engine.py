@@ -13,9 +13,9 @@ the other way around at module level:
     soar_lite/
       engine.py        <- LocalSolver, RestartRule, GlobalModel, PathPoint,
                           Verdict, Bounds, the box helpers, n_path_schedule
-      solver.py        <- DiagonalPreconditioner (implements LocalSolver)
-      restart.py       <- NoRestartRule, StallRestartRule (implement RestartRule)
       global_model.py  <- UniformGlobalModel (implements GlobalModel)
+      local_solver.py  <- DiagonalPreconditioner (implements LocalSolver)
+      restart_rule.py  <- NoRestartRule, StallRestartRule (implements RestartRule)
 
 Dependency direction: plugins depend on engine types; the engine binds its three
 concrete defaults lazily inside `n_path_schedule` (keeps the module graph acyclic
@@ -464,11 +464,6 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     n_paths: int,
     eval_f: EvalF | None = None,
     bounds: Bounds | None = None,  # scipy-style (lb, ub) pairs, a (d, 2) array, or None
-    # Where a restart lands, and what the run has learned: a GlobalModel, asked
-    # for points only when a rule fires. None -> UniformGlobalModel over a finite
-    # `bounds`, whose first answer is then a uniform flock; an unbounded or
-    # absent box has nowhere to draw and is rejected below rather than guessed.
-    global_model: GlobalModel | None = None,
     # The run's horizon, counted in iterations: the engine completes at most
     # max_iters iterations. An iteration is one move per path (iteration 0
     # places `x0` instead), not one eval, so this is a reproducible stop, not a
@@ -488,8 +483,14 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # that advances only on served batches spins forever under a stalled flock,
     # and the engine cannot see which kind this is, so a horizon is required.
     budget_check: Callable[[], bool] | None = None,
-    # The two plugins, adjacent: the search method and the restart decision.
-    solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
+    # The three plugins, adjacent and in one order everywhere: where a restart
+    # lands (the model is also the run's evidence sink, asked for points only
+    # when a rule fires; None -> UniformGlobalModel over a finite `bounds`, whose
+    # first answer is a uniform flock - an unbounded or absent box has nowhere to
+    # draw and is rejected below rather than guessed), the search method, and the
+    # restart decision.
+    global_model: GlobalModel | None = None,
+    local_solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
     restart_rule: RestartRule | None = None,  # None -> NoRestartRule (frozen)
     # The random source of the restart points, last and optional (optax's `key`
     # placement): None means the fixed default PRNGKey(0), so an unseeded call
@@ -498,14 +499,16 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 ) -> NPathResult:
     """Advance a flock of chains in x from the caller's initial points.
 
-    The engine owns the schedule: it places `x0`, composes and clips every
-    proposal into `bounds`, serves each batch as one `eval_f_g` call, keeps the
-    n-path state machine, and owns the best `f⋆`. Three things are injected.
-    `solver` owns direction, step size and acceptance, and keeps its per-path
-    state in Python floats. `restart_rule` decides **when** a path restarts,
-    from the evidence the engine forwards (each path's step deltas and the raw
-    best). `global_model` supplies **where** a restart lands: the engine asks it
-    for one point per restarting path, clips them into the box and places them.
+    The engine owns the schedule: it composes and clips every proposal into
+    `bounds`, serves each batch as one `eval_f_g` call, keeps the n-path state
+    machine, and owns the best `f⋆`. Three things are injected, and the engine
+    spells them `global_model`, `local_solver`, `restart_rule` in that one order
+    wherever it names them: `global_model` supplies **where** a restart lands
+    (the engine asks it for one point per restarting path, clips them into the
+    box and places them), `local_solver` owns direction, step size and
+    acceptance and keeps its per-path state in Python floats, and
+    `restart_rule` decides **when** a path restarts, from the evidence the
+    engine forwards (each path's step deltas and the raw best).
     Splitting a restart into those two seams is the point - a rule that never
     restarts (`NoRestartRule`, the default) needs no model at all, and a model
     that proposes points (a surrogate maximising expected improvement, an
@@ -583,12 +586,6 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             its winners, in one batch.
         bounds: the search box, scipy-style: one ``(lb, ub)`` pair per dim, a
             ``(d, 2)`` array, or ``None`` for no box. ``None``/±inf = unbounded.
-        global_model: the restart-point source and the run's evidence sink: a
-            `GlobalModel` that is fed every served batch and asked for points
-            only when a restart fires. ``None`` builds a `UniformGlobalModel`
-            over a finite ``bounds``, which draws uniformly and fits nothing.
-            The model's ``d`` is the run's dimension; ``bounds`` must agree with
-            it.
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
@@ -596,7 +593,13 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             the three inputs the run's one stop query asks, at the loop head
             every iteration and again before each g batch, never inside a step's
             f-only trials. Additional, not a horizon (``None`` means none).
-        solver: the local method (``None`` binds ``DiagonalPreconditioner``).
+        global_model: the restart-point source and the run's evidence sink: a
+            `GlobalModel` that is fed every served batch and asked for points
+            only when a restart fires. ``None`` builds a `UniformGlobalModel`
+            over a finite ``bounds``, which draws uniformly and fits nothing.
+            The model's ``d`` is the run's dimension; ``bounds`` must agree with
+            it.
+        local_solver: the local method (``None`` binds ``DiagonalPreconditioner``).
         restart_rule: the restart decision (``None`` binds ``NoRestartRule``,
             the frozen flock that never re-seeds).
         key: the PRNG seed of the default model's draws; ``None`` uses the
@@ -657,20 +660,12 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         bounds=bounds,
     )
     # The seams: presence, not signatures, and the defaults, bound lazily -
-    # solver and the restart rules import the engine's types, so importing them
-    # at module scope would form a cycle. Kept with the knob checks above and
-    # apart from the build below.
-    _check_seam(solver, LocalSolver, "solver")
-    _check_seam(restart_rule, RestartRule, "restart_rule")
+    # the local solver and the restart rules import the engine's types, so
+    # importing them at module scope would form a cycle. Kept with the knob
+    # checks above and apart from the build below.
     _check_seam(global_model, GlobalModel, "global_model")
-    if solver is None:
-        from soar_lite.solver import DiagonalPreconditioner  # noqa: PLC0415
-
-        solver = DiagonalPreconditioner()
-    if restart_rule is None:
-        from soar_lite.restart import NoRestartRule  # noqa: PLC0415
-
-        restart_rule = NoRestartRule()
+    _check_seam(local_solver, LocalSolver, "local_solver")
+    _check_seam(restart_rule, RestartRule, "restart_rule")
 
     box = box_bounds(bounds)
     clip = box if box is not None else (-math.inf, math.inf)
@@ -681,6 +676,15 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             _finite_box_or_raise(bounds),
             key=jax.random.PRNGKey(0) if key is None else key,
         )
+    if local_solver is None:
+        from soar_lite.local_solver import DiagonalPreconditioner  # noqa: PLC0415
+
+        local_solver = DiagonalPreconditioner()
+    if restart_rule is None:
+        from soar_lite.restart_rule import NoRestartRule  # noqa: PLC0415
+
+        restart_rule = NoRestartRule()
+
     # The model is the run's statement of dimension, so the box is checked
     # against it here - the one place both are in hand - rather than per batch.
     d = _check_model_d(global_model, box)
@@ -695,7 +699,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     )
     # Last, because it takes the resolved seams and their collaborators: the
     # state machine drives them rather than receiving them per call.
-    paths = _Paths(n_paths, clip, evaluator, solver, restart_rule, global_model)
+    paths = _Paths(n_paths, clip, evaluator, global_model, local_solver, restart_rule)
 
     status: NPathStatus | None = None
     while True:
@@ -1085,9 +1089,9 @@ class _Paths:
         n_paths: int,
         clip: tuple[jnp.ndarray | float, jnp.ndarray | float],
         evaluator: _Evaluator,
-        solver: LocalSolver,
-        restart_rule: RestartRule,
         global_model: GlobalModel,
+        local_solver: LocalSolver,
+        restart_rule: RestartRule,
     ) -> None:
         self.n_paths = n_paths
         # Constant for the whole run, so it belongs beside the shape rather than
@@ -1097,9 +1101,9 @@ class _Paths:
         # handed in per call: every method below uses at least one of them, and
         # a step would otherwise thread them only to pass them straight back.
         self.evaluator = evaluator
-        self.solver = solver
-        self.restart_rule = restart_rule
         self.global_model = global_model
+        self.local_solver = local_solver
+        self.restart_rule = restart_rule
         # A path's point is one object, not three parallel lists: it is what
         # every seam call takes, and a step commits one path at a time (so a
         # list, whose item assignment is the commit, beats a stacked array). The
@@ -1232,7 +1236,9 @@ class _Paths:
             # `bounds`, so the caller's map never sees a point outside the box the
             # engine advertised. The clipped step is the actual one, so the
             # verdict is handed the served point.
-            raw = jnp.stack([self.solver.propose(i, self.points[i]) for i in rejecting])
+            raw = jnp.stack(
+                [self.local_solver.propose(i, self.points[i]) for i in rejecting],
+            )
             x_trial = jnp.clip(raw, lo, hi)
             served = self.evaluator.serve_trials(x_trial)
             still_rejecting: list[int] = []
@@ -1249,7 +1255,7 @@ class _Paths:
                 )
                 if finite and (i not in best or f_trial < best[i].value()):
                     best[i] = trial
-                verdict = self.solver.verdict(i, point, trial.x, f_trial)
+                verdict = self.local_solver.verdict(i, point, trial.x, f_trial)
                 if verdict == "retry":
                     still_rejecting.append(i)
                 elif verdict == "accept":
@@ -1272,7 +1278,7 @@ class _Paths:
         judged: list[int] = []
         for i in cohort:
             if not self.stalled[i]:
-                (judged if self.solver.needs_verdict(i) else unjudged).append(i)
+                (judged if self.local_solver.needs_verdict(i) else unjudged).append(i)
         return unjudged, judged
 
     def _propose_unjudged(self, paths: list[int]) -> dict[int, _Pending]:
@@ -1282,7 +1288,7 @@ class _Paths:
         served point is the clipped one. Both halves are left owed, which is what
         makes the iteration serve this point's value once rather than twice.
         """
-        raw = jnp.stack([self.solver.propose(i, self.points[i]) for i in paths])
+        raw = jnp.stack([self.local_solver.propose(i, self.points[i]) for i in paths])
         clipped = jnp.clip(raw, *self.clip)
         return dict(zip(paths, self.evaluator.pending_unread(clipped), strict=True))
 
@@ -1291,18 +1297,18 @@ class _Paths:
 
         The method's per-path state resets to cold start. A start the engine
         cannot use is refused on the same `usable` gate `_advance` applies to a
-        winner: it is not placed, the solver is not seeded from it, and the path
-        waits, stalled, for its rule to fire again. Refusing rather than placing
-        it keeps `points[i]` meaning "where the path stands": an unusable start
-        never becomes one. The start is this iteration's move for every restarted
-        path, usable or not, so none of them also steps.
+        winner: it is not placed, the local solver is not seeded from it, and
+        the path waits, stalled, for its rule to fire again. Refusing rather
+        than placing it keeps `points[i]` meaning "where the path stands": an
+        unusable start never becomes one. The start is this iteration's move for
+        every restarted path, usable or not, so none of them also steps.
         """
         for i, point in placed.items():
             self.stalled[i] = not point.usable
             if self.stalled[i]:
                 continue  # unusable: no point, no seed, no anchor (see `usable`)
             self.points[i] = point
-            self.solver.restart(i, point)
+            self.local_solver.restart(i, point)
             self.prev_f[i] = point.f
 
     def _advance(self, won: dict[int, PathPoint]) -> None:
@@ -1322,7 +1328,7 @@ class _Paths:
                 continue
             point = self.points[i]  # the step's start, for the fold's secant
             self.points[i] = best
-            self.solver.fold(i, point, best)
+            self.local_solver.fold(i, point, best)
 
     def _report(self, cohort: list[int]) -> None:
         """Fold one report per path per round, on the one continue channel.

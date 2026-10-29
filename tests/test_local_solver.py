@@ -4,7 +4,7 @@ Pins the secant ratio, the gradient-norm floor (a floor, not an addend), the two
 entry knobs, the decay, the gradient-norm stopping test, and the unit
 invariance of the steady-state step. No engine wiring. Run with:
 
-    uv run python -m tests.test_solver
+    uv run python -m tests.test_local_solver
 """
 
 import math
@@ -20,7 +20,7 @@ from soar_lite.engine import (
     n_path_schedule,
 )
 from soar_lite.global_model import UniformGlobalModel
-from soar_lite.solver import DiagonalPreconditioner
+from soar_lite.local_solver import DiagonalPreconditioner
 
 jax.config.update("jax_enable_x64", val=True)
 
@@ -338,7 +338,7 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
         ),
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         max_iters=50,
-        solver=DiagonalPreconditioner(theta=0.0),
+        local_solver=DiagonalPreconditioner(theta=0.0),
     )
     # θ = 0 makes the post-warm-up step exactly Newton, so g = 0 after it and
     # the next verdict gives up (the stopping test); the point is still the
@@ -425,7 +425,7 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
         ),
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         max_iters=50,
-        solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
+        local_solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
     )
     assert close(result.x, center, 1e-9)
     assert result.fun < 1e-12

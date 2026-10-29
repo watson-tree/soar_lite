@@ -6,14 +6,14 @@ a start is placed) is `test_scheduler.py`'s business.
 
 Run with:
 
-    uv run python -m tests.test_restart
+    uv run python -m tests.test_restart_rule
 """
 
 import math
 
 import pytest
 
-from soar_lite.restart import NoRestartRule, StallRestartRule
+from soar_lite.restart_rule import NoRestartRule, StallRestartRule
 
 
 def test_no_restart_never_fires() -> None:

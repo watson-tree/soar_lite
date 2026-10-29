@@ -11,14 +11,14 @@ Seam (拍板): the engine consumes its width, the callables, and the box it sear
         the run's dimension
 
 The caller composes x->θ and the chain rule grad_x = grad_θ * dθ_dx(x) into
-eval_f_g; the engine owns clip-to-bounds, and the starts are the model's - with
-the arguments in the order a run reads them: the width, then the rule that
-decides when to leave a point, then the model that decides where to go. With
+eval_f_g; the engine owns clip-to-bounds, and the starts are the model's - and
+the three plugins are spelled `global_model`, `local_solver`, `restart_rule`
+in that order wherever the engine names them. With
 `global_model=None` the engine falls back to a `UniformGlobalModel` drawing
 i.i.d. uniformly over a finite `bounds`; an unbounded box (or none) without a
 model is a wiring error, since the engine then has nothing of its own to draw
 from. Unbounded means a `None`/±inf side, and `clip` is then the identity.
-`test_solver_seam.py`'s evaluator is that composed form.
+`test_plugin_seam.py`'s evaluator is that composed form.
 
 Every run below plants its flock through `flock_kwargs`, i.e. through the
 shipped default model's first proposal: the engine has no start argument, and a
@@ -45,8 +45,8 @@ from soar_lite.engine import (
     n_path_schedule,
 )
 from soar_lite.global_model import UniformGlobalModel
-from soar_lite.restart import NoRestartRule, StallRestartRule
-from soar_lite.solver import DiagonalPreconditioner
+from soar_lite.local_solver import DiagonalPreconditioner
+from soar_lite.restart_rule import NoRestartRule, StallRestartRule
 
 jax.config.update("jax_enable_x64", val=True)
 
@@ -126,7 +126,8 @@ class HalfStep:
     proposes `x - 0.5*g` and accepts only a strict decrease, giving up after
     `trial_cap` rejects, so a path stalls for an engine reason (a rejected trial,
     typically one pinned at the box wall) and never because a curvature model
-    went quiet. What the real method does is `test_solver.py`'s subject.
+    went quiet. What the real method does is `test_local_solver.py`'s
+    subject.
     """
 
     def __init__(self, trial_cap: int = 20) -> None:
@@ -213,7 +214,7 @@ def test_batch_shape_and_point_counting() -> None:
         bounds=unit_bounds(),
         max_iters=50,
         budget_check=rec.limit_check(500),
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert isinstance(res, NPathResult)
     assert res.n_points == rec.evals, (res.n_points, rec.evals)
@@ -245,7 +246,7 @@ def test_budget_exhaustion_stops_everything() -> None:
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=rec.limit_check(30),
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert res.n_points == rec.evals
     assert 30 <= res.n_points < 30 + 8  # at most one batch past the limit
@@ -260,7 +261,7 @@ def test_budget_exhaustion_stops_everything() -> None:
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=rec0.limit_check(0),
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert res0.n_points == 0
     assert res0.n_iters == 0  # never got past the first gate check
@@ -275,7 +276,7 @@ def test_budget_exhaustion_stops_everything() -> None:
         **flock_kwargs(flock(4), unit_bounds(), key=jax.random.PRNGKey(3)),
         bounds=unit_bounds(),
         max_iters=1,
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert res1.n_points == 4  # iteration 0 served every path
     assert res1.n_iters == 1
@@ -298,7 +299,7 @@ def test_fun_is_true_min_over_history() -> None:
         bounds=unit_bounds(),
         max_iters=50,
         budget_check=rec.limit_check(500),
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert rec.all_f_vals
     assert res.fun == min(rec.all_f_vals)
@@ -353,7 +354,7 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=rec_k.limit_check(budget),
-        solver=DiagonalPreconditioner(),
+        local_solver=DiagonalPreconditioner(),
         restart_rule=NoRestartRule(),
     )
     rec_1 = Recorder(_two_well)
@@ -367,7 +368,7 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=rec_1.limit_check(budget),
-        solver=DiagonalPreconditioner(),
+        local_solver=DiagonalPreconditioner(),
         restart_rule=NoRestartRule(),
     )
     assert res_1.fun > -3.0, res_1.fun  # stuck near local well (-2)
@@ -397,7 +398,7 @@ def test_the_stall_rule_escapes_a_shallow_basin() -> None:
             bounds=unit_bounds(),
             max_iters=100,
             budget_check=rec.limit_check(budget),
-            solver=DiagonalPreconditioner(),
+            local_solver=DiagonalPreconditioner(),
             restart_rule=rule,
         )
 
@@ -433,7 +434,7 @@ def test_projected_descent_reaches_wall_optimum() -> None:
         restart_rule=NoRestartRule(),  # pure projected descent, no restarts
         max_iters=100,
         budget_check=rec.limit_check(500),
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert res.fun < 0.4, res.fun  # must slide near (1, 0), f=0.25
 
@@ -497,7 +498,7 @@ def test_feasible_only_best() -> None:
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=budget_check,
-        solver=HalfStep(),
+        local_solver=HalfStep(),
         restart_rule=rule,
     )
 
@@ -538,7 +539,7 @@ def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
         ),
         bounds=unit_bounds(),
         max_iters=50,
-        solver=HalfStep(),
+        local_solver=HalfStep(),
         restart_rule=NoRestartRule(),
     )
 
@@ -577,7 +578,7 @@ def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
         ),
         bounds=unit_bounds(),
         max_iters=20,
-        solver=HalfStep(),
+        local_solver=HalfStep(),
         restart_rule=NoRestartRule(),
     )
 
@@ -612,7 +613,7 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
         bounds=unit_bounds(),
         max_iters=5,
         budget_check=lambda: served[0] < 40,
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert res.fun == 0.01, res.fun
     assert bool(jnp.isfinite(res.x[0])), res.x
@@ -654,7 +655,7 @@ def test_a_dead_path_serves_nothing_after_its_start() -> None:
         bounds=unit_bounds(),
         max_iters=n_iterations + 1,
         budget_check=lambda: len(widths) < 100,
-        solver=HalfStep(),
+        local_solver=HalfStep(),
         restart_rule=NoRestartRule(),
     )
     assert res.n_iters == n_iterations + 1, res
@@ -695,7 +696,7 @@ def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
             **flock_kwargs(flock(1), unit_bounds(), key=jax.random.PRNGKey(0)),
             bounds=unit_bounds(),
             max_iters=20,
-            solver=DiagonalPreconditioner(),
+            local_solver=DiagonalPreconditioner(),
             restart_rule=rule,
         )
 
@@ -750,7 +751,7 @@ def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
         ),  # one path: a single batch per trial keeps the count exact
         bounds=unit_bounds(),
         max_iters=2,  # iteration 0 places x0, then this one step
-        solver=Patient(),
+        local_solver=Patient(),
     )
     assert len(rec.batch_shapes) == 1 + n_rejects + 1, rec.batch_shapes  # x0 + trials
     assert res.n_iters == 2, res
@@ -779,7 +780,7 @@ def test_bounds_spellings_are_the_same_box() -> None:
             bounds=bounds,
             budget_check=rec.limit_check(80),
             max_iters=10,
-            solver=HalfStep(),
+            local_solver=HalfStep(),
         )
         return rec.all_f_vals, res.fun
 
@@ -811,7 +812,7 @@ def test_the_default_model_needs_a_finite_box() -> None:
                 n_paths=2,
                 bounds=bounds,
                 max_iters=1,
-                solver=HalfStep(),
+                local_solver=HalfStep(),
             )
         except ValueError:
             pass
@@ -843,7 +844,7 @@ def test_the_model_is_the_only_authority_on_d() -> None:
         global_model=FixedModel(starts),
         budget_check=rec_none.limit_check(60),
         max_iters=3,
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert all(d == 3 for _m, d in rec_none.batch_shapes), rec_none.batch_shapes
     assert res.x.shape == (3,)
@@ -856,7 +857,7 @@ def test_the_model_is_the_only_authority_on_d() -> None:
         global_model=FixedModel(starts),
         budget_check=rec_pairs.limit_check(60),
         max_iters=3,
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert rec_pairs.all_f_vals == rec_none.all_f_vals
 
@@ -868,7 +869,7 @@ def test_the_model_is_the_only_authority_on_d() -> None:
             bounds=unit_bounds(2),
             global_model=FixedModel(flock(2, 3)),
             max_iters=1,
-            solver=HalfStep(),
+            local_solver=HalfStep(),
         )
     except ValueError:
         pass
@@ -899,7 +900,7 @@ def test_an_unbounded_box_is_really_unbounded() -> None:
         global_model=FixedModel(starts),  # starts near the well, box-free
         budget_check=lambda: True,
         max_iters=40,
-        solver=HalfStep(),
+        local_solver=HalfStep(),
     )
     assert max(seen) > 1.0, seen  # a finite [0,1] box could not have gone there
     assert res.fun < 1e-6, res.fun
@@ -1080,7 +1081,7 @@ def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
         msg = f"accepted: {knobs}"
         raise AssertionError(msg)
 
-    assert "solver" in rejects(solver=object())
+    assert "local_solver" in rejects(local_solver=object())
     assert "restart_rule" in rejects(restart_rule=object())
     assert "global_model" in rejects(global_model=object())
 
