@@ -5,7 +5,7 @@ This module is the seam (拍板) of soar_lite: it owns the two plugin contracts
 (`PathPoint`, `Verdict`), and the shared plumbing (`NPathResult`, the box and
 evaluator seams, the box normalization every concrete shares, and the
 `n_path_schedule` loop). The run's state lives in four private holders, one per
-state family: `_Evaluator` (the two evaluation seams and the one charged site),
+state family: `_Evaluator` (the two evaluation seams and what each one charges),
 `_Paths` (the n-path state machine), `_Best` (the run's best, `f⋆`), and
 `_Budget` (the stop meter and work report). Concretes import *from* here, never
 the other way around at module level:
@@ -371,8 +371,8 @@ class NPathResult:
     Work is reported as four counts instead of scipy's single `nfev`, on two
     independent axes that never mix. The seam that served the work decides the
     pair of fields: `n_f_*` is the value-only seam (`eval_f`), `n_f_g_*` the
-    fused value+gradient one - the expensive half, and the only one a budget gate
-    can close on. Points and batches are the second axis: the serial cost and the
+    fused value+gradient one, the expensive half. Points and batches are the
+    second axis: the serial cost and the
     parallel wall-clock cost. So `n_f_g_points` is the gradient points served and
     `n_f_g_batches` the gradient passes, while `n_f_points` / `n_f_batches` are
     the same two units for the cheap half. Which axis a comparison reads is the
@@ -422,7 +422,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # Keyword-only and defaulted, like scipy's `callback`: an extra gate for a
     # budget the engine cannot see (points, dollars, an external clock). It is
     # one of `_Budget.stop`'s three inputs, asked at the loop head every
-    # iteration and again before each g batch (the f-only trials never ask it).
+    # iteration and again before each served batch, fused or value-only.
     # None means "no extra gate". It is additional, never a horizon: a gate
     # that advances only on served batches spins forever under a stalled flock,
     # and the engine cannot see which kind this is, so a horizon is required.
@@ -489,13 +489,13 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     nothing about any map from these coordinates to the caller's physical ones.
 
     Work is reported as four counts, never mixed. The fused value+gradient seam
-    is the billable one - the only one a budget gate closes on - and
-    `n_f_g_points` is the g points it served (the initial points, each restart
-    start, and each trial winner - one each), the serial-cost number, with
-    `n_f_g_batches` the fused passes, the parallel wall-clock number. The
-    value-only seam (`eval_f`, when handed in) is counted the same way on its own
-    pair, `n_f_points` / `n_f_batches`: recorded but never gated, so a run
-    without the seam reports zero there. All four are reports, not caps.
+    is the expensive one, and `n_f_g_points` is the g points it served (the
+    initial points, each restart start, and each trial winner - one each), the
+    serial-cost number, with `n_f_g_batches` the fused passes, the parallel
+    wall-clock number. The value-only seam (`eval_f`, when handed in) is counted
+    the same way on its own pair, `n_f_points` / `n_f_batches`, so a run without
+    the seam reports zero there. Both seams ask the gate before serving; neither
+    pair of counts is what closes it. All four are reports, not caps.
 
     The run's own stop is the horizon: at most `max_iters` iterations (status
     "max_iters"), or, if `time_limit` is
@@ -509,7 +509,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     migrating a batch budget to `max_iters` can multiply the work done by that
     per-iteration spread. budget_check() is the caller's extra stop - one of the
     three inputs the run's one query (`_Budget.stop`) asks, at the loop head
-    every iteration and again before each g batch - for a budget the engine
+    every iteration and again before each served batch - for a budget the engine
     cannot see; a False verdict stops all paths globally (status
     "budget_exhausted"), and None means no extra gate; that external budget may
     over-run by <M points (the gate flips only between its asks).
@@ -548,8 +548,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         time_limit: a wall-clock deadline in seconds (``None`` means none).
         budget_check: an extra gate for a budget the engine cannot see; one of
             the three inputs the run's one stop query asks, at the loop head
-            every iteration and again before each g batch, never inside a step's
-            f-only trials. Additional, not a horizon (``None`` means none).
+            every iteration and again before each served batch. Additional, not
+            a horizon (``None`` means none).
         global_model: the restart-point source and the run's evidence sink: a
             `GlobalModel` that is fed every served batch and asked for points
             only when a restart fires. ``None`` builds a `UniformGlobalModel`
@@ -706,8 +706,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
     """A batch was requested past a closed gate, the reason carried along.
 
-    Raised only inside `n_path_schedule`, at the run's one charged site
-    (`_Evaluator._serve_f_g`), and caught by the loop. It carries the reason
+    Raised only inside `n_path_schedule`, at a serve site (`_Evaluator._serve_f_g`
+    or `_serve_f`), and caught by the loop. It carries the reason
     its `stop` answered at the batch altitude, so the loop names the run's
     status without re-asking the query (the caller's predicate is consulted
     once per ask, not re-derived by a second call).
@@ -738,7 +738,7 @@ class _Budget:
     Three predicates decide whether work may go on: the iteration horizon
     (`max_iters`), the wall-clock deadline (`time_limit`), and the caller's
     extra gate (`budget_check`). `stop` asks all three as one query - at the
-    loop head every iteration, and again before each g batch - and names the
+    loop head every iteration, and again before each served batch - and names the
     reason it refuses. At least one of the first two is required at entry,
     because they are the only stops the engine can see advance on its own: a
     `budget_check` that flips only on served batches spins forever under a
@@ -747,12 +747,12 @@ class _Budget:
     The four counters are pure reports, not caps, and not one of them gates: the
     fused pass counts on its pair (`n_f_g_points` / `n_f_g_batches`, one batch per
     value+gradient pass) and the value-only pass counts the same way on its own
-    (`n_f_points` / `n_f_batches`). Only the fused pair is where a refusal can
-    land - the gate is asked by `_Evaluator` before that charge, never here - so a
-    counted value-only batch is work the run records and never stops on. The
-    refusal is a signal (`_BudgetExhausted`), never a flag stored here, and a gate
-    that only tightens (a counter, a clock) needs no latching: the run ends on
-    the first thing it refuses.
+    (`n_f_points` / `n_f_batches`). What the counts never do is decide: `stop`
+    reads only the run's three predicates, so a value-only batch is counted here
+    and can still be refused by the gate like any other serve. The refusal is a
+    signal (`_BudgetExhausted`), never a flag stored here, and a gate that only
+    tightens (a counter, a clock) needs no latching: the run ends on the first
+    thing it refuses.
     """
 
     def __init__(
@@ -771,12 +771,12 @@ class _Budget:
         self._gate = budget_check
 
     def charge_f(self, batch_size: int) -> None:
-        """Record one served value-only batch. Counted, never gated."""
+        """Record one served value-only batch. Counted on the f pair; never gates."""
         self.n_f_batches += 1
         self.n_f_points += batch_size
 
     def charge_f_g(self, batch_size: int) -> None:
-        """Record one served fused batch - the run's only gated charge."""
+        """Record one served fused batch. Counted on the f_g pair; never gates."""
         self.n_f_g_batches += 1
         self.n_f_g_points += batch_size
 
@@ -799,10 +799,11 @@ class _Budget:
     def stop(self) -> NPathStatus | None:
         """Name the reason work may not go on, or None while it may.
 
-        Asked at the loop head before every iteration, and again before each g
-        batch, where a stop becomes the `_BudgetExhausted` signal. None while
-        work may go on; otherwise the first closed gate, named - the horizon
-        outranks the clock, which outranks the caller's gate.
+        Asked at the loop head before every iteration, and again before each
+        served batch (fused or value-only), where a stop becomes the
+        `_BudgetExhausted` signal. None while work may go on; otherwise the first
+        closed gate, named - the horizon outranks the clock, which outranks the
+        caller's gate.
         """
         if self.full():
             return "max_iters"
@@ -876,10 +877,10 @@ class _Evaluator:
     """The run's evaluation seams, and what they charge and observe.
 
     Both halves share one rule, stated here once so no call site has to restate
-    it: a fused `_serve_f_g` is the run's only gated site (the gate is asked
-    before the charge, so a batch is served whole or not at all), and a
-    `_serve_f` call is cheaper work that is counted on the f pair and never
-    gated. Whichever half
+    it: every batch asks the gate before it is served (so a batch is served
+    whole or not at all), and the seam that served it decides which pair of
+    counters moves - `_serve_f` the f pair, `_serve_f_g` the fused pair. No count
+    is ever what closes the gate. Whichever half
     served a batch reports it to the two readers of the run's evidence: the best
     (`_Best`, which filters for feasibility) and the global model (which does
     not). That pair is deliberately the only place either is fed - a batch is
@@ -969,9 +970,9 @@ class _Evaluator:
         The stop query is asked at this batch altitude before the charge, so a
         batch is served whole or not at all - no partial prefix of a batch is
         ever evaluated - and the fused counters only ever hold batches that were
-        served. This is the run's only gated site: a step's rejected trials are
-        f-only and cheaper, counted on the f pair and never a budget event. The
-        refusal is a
+        served. This is the expensive half: a step's rejected trials are f-only
+        and cheaper, served by `_serve_f`, which asks the same gate and counts on
+        the other pair. The refusal is a
         signal, not a state: it carries its reason straight to the run's one
         catch, so no intermediate frame has to check it. Returns (f_vals,
         g_batch).
@@ -992,14 +993,14 @@ class _Evaluator:
         return f_vals, g_batch
 
     def _serve_f(self, x_batch: jnp.ndarray) -> list[float]:
-        """Serve one f-only batch: counted, never gated, same bookkeeping.
+        """Serve one f-only batch: the same gate, the other pair of counters.
 
-        A step's rejected trials are the f half alone, which is the cheap half,
-        so they are not budget events: the stop query is not asked, though the
-        batch is counted on the f pair (`charge_f`) so the cheap half is reported
-        rather than lost. The winners' fused pass still is one, and the call
-        site is entered only after the loop head's stop query cleared the
-        iteration, so the f-only blind spot stays under one step. Only
+        The gate is asked here exactly as the fused half asks it, so a deadline
+        that passes mid-step cuts the run at the next value-only batch rather
+        than after a whole iteration's retries: the judged lane's `while
+        rejecting` loop can turn many times without ever reaching the loop head
+        or `settle`. What stays asymmetric is the charge - this batch counts on
+        the f pair (`charge_f`), and no count closes the gate. Only
         `serve_trials` calls this; the None-check below is for the type checker
         (it cannot see the caller is f-only) and is unreachable at runtime.
         """
@@ -1007,6 +1008,9 @@ class _Evaluator:
         if eval_f is None:
             msg = "_serve_f requires eval_f"
             raise RuntimeError(msg)
+        reason = self._budget.stop()
+        if reason is not None:
+            raise _BudgetExhausted(reason)
         self._budget.charge_f(x_batch.shape[0])
         f_batch, feas = eval_f(x_batch)
         f_vals = f_batch.tolist()

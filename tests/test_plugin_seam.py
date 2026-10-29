@@ -129,6 +129,28 @@ class UnjudgedSolver(StubSolver):
         return False
 
 
+class RetryingSolver(StubSolver):
+    """Reject a fixed number of trials per step before accepting one.
+
+    The engine has no trial cap of its own: how long a step enumerates is the
+    method's business, so a method that retries stretches one iteration over many
+    value-only batches - which is what puts the gate's per-batch ask under test.
+    """
+
+    def __init__(self, retries: int) -> None:
+        """Store how many trials each path rejects before it accepts."""
+        super().__init__()
+        self.retries = retries
+        self.rejected: dict[int, int] = {}
+
+    def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:  # noqa: ARG002
+        """Retry the first `retries` trials for a path, then accept."""
+        self.verdicts.append(i)
+        n = self.rejected.get(i, 0)
+        self.rejected[i] = n + 1
+        return "retry" if n < self.retries else "accept"
+
+
 class PushTo(UnjudgedSolver):
     """Propose one fixed point, unruled, to place a chosen value under the gate."""
 
@@ -312,6 +334,40 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
         # on, which is the whole point of splitting the counts.
         assert n_f_batches == donated, (limit, n_f_batches, donated)
         assert n_f_points == k * donated, (limit, n_f_points, donated)
+
+
+def test_the_gate_is_asked_before_a_value_only_batch_too() -> None:
+    """A gate counting value-only work is honoured per batch, not per iteration.
+
+    `budget_check` is the caller's own function and the engine cannot see what it
+    is made of, so the gate is asked at every serve rather than only the fused
+    one. This gate closes after two value-only calls: an un-gated f half would
+    run the step's whole retry loop and only be caught by the fused pass that
+    follows it, while asking per batch cuts the step at the second.
+    """
+    f_calls = 0
+    eval_f_g, _shapes = evaluator()
+
+    def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        nonlocal f_calls
+        f_calls += 1
+        return jnp.sum((x - 0.25) ** 2, axis=-1), None
+
+    res = n_path_schedule(
+        eval_f_g,
+        eval_f=eval_f,
+        **flock_kwargs(flock(2), unit_bounds(), key=jax.random.PRNGKey(11)),
+        bounds=unit_bounds(),
+        budget_check=lambda: f_calls < 2,
+        max_iters=10,  # never the binding stop: the caller's gate closes first
+        local_solver=RetryingSolver(retries=5),
+    )
+    assert res.status == "budget_exhausted", res
+    # Two value-only batches served; the third was refused before it ran, so the
+    # step's remaining four retries were never bought.
+    assert res.n_f_batches == 2, res
+    # The only fused pass is the flock's: the cut step never reached `settle`.
+    assert res.n_f_g_batches == 1, res
 
 
 def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
