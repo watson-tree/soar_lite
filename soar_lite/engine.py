@@ -1014,10 +1014,12 @@ class _Paths:
       its method's stage clock therefore keeps pace with its live cohort.
     - A start or a winner is committed only when it is `usable` - finite in
       both halves - one gate defined once on the point type.
-    - A path holds a point or it does not. "No point" (`points[i].f` not finite)
-      is the machine's own state, not a stall: such a path restarts without
-      consulting `restart_stalled`, which is how iteration 0 places the flock
-      and how a refused start is eventually re-drawn instead of idling forever.
+    - A path holds a point or it does not. "No point" (an empty `x`, which only
+      the placeholder has) is the machine's own state, not a stall: such a path
+      restarts without consulting `restart_stalled`, which is how iteration 0
+      places the flock and how a refused start is eventually re-drawn instead of
+      idling forever. A held point with a non-finite value is the other case -
+      a stall, so `restart_stalled` decides whether it is re-drawn.
     """
 
     def __init__(  # noqa: PLR0913 - the run's collaborators, built once
@@ -1047,9 +1049,9 @@ class _Paths:
         # A path's point is one object, not three parallel lists: it is what
         # every seam call takes, and a step commits one path at a time (so a
         # list, whose item assignment is the commit, beats a stacked array). The
-        # placeholder says "no point has arrived": a usable restart start
-        # replaces it, an unusable one never becomes a point, and a stalled path
-        # never serves or compares it.
+        # placeholder says "no point has arrived" and is the only empty `x` in
+        # the run: a usable restart start replaces it, an unusable one never
+        # becomes a point, and a stalled path never serves or compares it.
         self.points = [
             PathPoint(jnp.zeros(0), math.nan, jnp.zeros(0)) for _ in range(self.n_paths)
         ]
@@ -1085,13 +1087,16 @@ class _Paths:
         moves before placing any of them is the same schedule as placing each
         move as it is decided.
         """
-        # "No point" is the machine's own state, never a stall to weigh: only a
-        # path that holds a point can be read as stalled.
+        # "No point" is the machine's own state, never a stall to weigh, so it
+        # is read off the point's shape and not off its value: only the
+        # placeholder has an empty `x`, and only a path that holds a point can
+        # be read as stalled. A value test would conflate the two - a held point
+        # whose f is not finite is a stall (`_place`/`_advance` refuse it and set
+        # `stalled`), which `restart_stalled` owns, not an owed start.
         restarted = [
             i
             for i in range(self.n_paths)
-            if not math.isfinite(self.points[i].f)
-            or (self.restart_stalled and self.stalled[i])
+            if self.points[i].x.size == 0 or (self.restart_stalled and self.stalled[i])
         ]
         # Every path that did not restart. A stalled path is in here only when
         # the run never restarts: it proposes nothing, but it still holds its

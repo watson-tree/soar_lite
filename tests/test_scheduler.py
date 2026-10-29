@@ -620,15 +620,42 @@ def test_the_best_skips_nonfinite_values() -> None:
     assert _argmin_finite([math.nan, math.inf]) is None
 
 
-def test_a_dead_path_serves_nothing_after_its_start() -> None:
-    """A start whose served values are non-finite stalls on arrival.
+def test_a_dead_path_never_widens_a_batch() -> None:
+    """A row that never holds a point never widens a batch past one point.
 
-    It has no anchor to descend from, so it must not burn budget sitting there:
-    a dead row is served once, in iteration 0's fused batch, and never again
-    while the live row costs exactly one point per iteration.
+    Row 0 is served non-finite values forever, so it never becomes a point: it
+    joins no cohort and contributes no winner, and iteration 0's flock is
+    therefore the run's only fused batch - every later batch carries exactly one
+    point, the live row's alone. The dead row is not idle, and this test does not
+    claim it is: holding no point, it is owed a fresh start every iteration, and
+    that start is one of those width-1 batches. What it never does is make the
+    live row's batches wider, which is the cost pinned here.
     """
     n_paths, n_iterations = 2, 3
     widths: list[int] = []
+    asks: list[int] = []
+    inner = flock_kwargs(flock(n_paths), unit_bounds(), key=jax.random.PRNGKey(0))[
+        "global_model"
+    ]
+
+    class AskSpy:
+        """The flock's model, recording how many starts each ask wanted."""
+
+        def __init__(self, inner: UniformGlobalModel) -> None:
+            self.inner = inner
+            self.d = inner.d
+
+        def observe(
+            self,
+            x: jnp.ndarray,
+            f: list[float],
+            g: jnp.ndarray | None,
+        ) -> None:
+            self.inner.observe(x, f, g)
+
+        def propose(self, n_points: int) -> jnp.ndarray:
+            asks.append(n_points)
+            return self.inner.propose(n_points)
 
     def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         widths.append(int(theta.shape[0]))
@@ -644,7 +671,8 @@ def test_a_dead_path_serves_nothing_after_its_start() -> None:
 
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(flock(n_paths), unit_bounds(), key=jax.random.PRNGKey(0)),
+        n_paths=n_paths,
+        global_model=AskSpy(inner),
         bounds=unit_bounds(),
         max_iters=n_iterations + 1,
         budget_check=lambda: len(widths) < 100,
@@ -653,17 +681,22 @@ def test_a_dead_path_serves_nothing_after_its_start() -> None:
     assert res.n_iters == n_iterations + 1, res
     assert widths[0] == n_paths, widths  # iteration 0 serves the whole flock
     assert all(w == 1 for w in widths[1:]), widths  # then the live path alone
+    # One ask for the flock, then one re-draw per iteration for the dead row: the
+    # start it is owed, never merged into the live row's batch.
+    assert asks == [n_paths, *([1] * n_iterations)], asks
 
 
 def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
     """A path holding no point is owed a start: the engine draws one, unasked.
 
-    Iteration 0's only batch is all-NaN, so the path holds no point and the rule
-    is never consulted about it - a rule that only reads progress cannot recover
-    a path with no progress to read, so the engine must not need it to. The
-    re-draw comes from the global model, whose second answer is a uniform point
-    over the box, and that start descends: the dead row costs one batch, not the
-    run.
+    Iteration 0's only batch is all-NaN, so the path holds no point - an empty
+    `x` - and `restart_stalled` is never consulted about it: that knob governs a
+    path that holds a point and stalled on it, while a path with no point is owed
+    a start whatever the knob says. Nothing else could recover it, and gating it
+    on the knob would leave iteration 0 with nothing to place, so the difference
+    is not a policy choice. The re-draw comes from the global model, whose second
+    answer is a uniform point over the box, and that start descends: the dead row
+    costs one batch, not the run.
     """
 
     def make_evaluator() -> Callable[
