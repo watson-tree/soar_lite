@@ -1,11 +1,11 @@
 """Plugin-seam self-checks.
 
-The seams' contract is only proven by injection: a stub `LocalSolver`, a stub
-`RestartRule` and a stub `GlobalModel` are plugged into the engine, which must
-drive them instead of its defaults, and a foreign box (`bounds` as data) plus the
-caller's own x->θ map composed into `eval_f_g` must be honoured too. These also
-pin the documented zero-caller hook — a method returning `"give_up"` — and the
-run with no extra gate (`budget_check=None` -> `status == "max_iters"`).
+The seams' contract is only proven by injection: a stub `LocalSolver` and a stub
+`GlobalModel` are plugged into the engine, which must drive them instead of its
+defaults, and a foreign box (`bounds` as data) plus the caller's own x->θ map
+composed into `eval_f_g` must be honoured too. These also pin the documented
+zero-caller hook — a method returning `"give_up"` — and the run with no extra
+gate (`budget_check=None` -> `status == "max_iters"`).
 
 Run with:
 
@@ -142,38 +142,6 @@ class PushTo(UnjudgedSolver):
         return jnp.full_like(p.x, self.x_star)
 
 
-class RecordingRule:
-    """Records the engine's rule-side calls; never fires.
-
-    Both channels are recorded, so the tests can prove the engine asked once per
-    path per iteration and reported once per path per iteration - and that a
-    restarted path is reported to no one.
-    """
-
-    def __init__(self) -> None:
-        """Start with no evidence and no verdicts."""
-        self.deltas: list[tuple[int, float | None]] = []
-        self.verdicts: list[int] = []
-
-    def observe_step(self, i: int, delta: float | None) -> None:
-        """Record one f change (or a stall tick, `None`) for path i."""
-        self.deltas.append((i, delta))
-
-    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
-        """Record the verdict call for path i; never restart."""
-        self.verdicts.append(i)
-        return False
-
-
-class AlwaysRestartRule(RecordingRule):
-    """Same recorder, but every verdict says restart."""
-
-    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
-        """Record the verdict call for path i and always restart."""
-        self.verdicts.append(i)
-        return True
-
-
 class RecordingModel:
     """Records what the engine asks and feeds it, and draws inside the box.
 
@@ -219,7 +187,6 @@ def test_injected_solver_is_driven() -> None:
         budget_check=lambda: True,
         max_iters=2,  # iteration 0 places the flock, then one step
         local_solver=solver,
-        restart_rule=RecordingRule(),
     )
     assert solver.inited == [0, 1, 2], solver.inited
     assert solver.verdicts == [0, 1, 2], solver.verdicts  # one trial, then accept
@@ -241,7 +208,6 @@ def test_give_up_stalls_a_path() -> None:
         budget_check=lambda: True,
         max_iters=2,  # the flock, then the single stalled iteration
         local_solver=solver,
-        restart_rule=RecordingRule(),
     )
     assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
     # Nothing to commit: every batch this run serves is a trial, and a trial
@@ -275,65 +241,10 @@ def test_an_unusable_start_is_refused_before_it_seeds_the_method() -> None:
         budget_check=lambda: True,
         max_iters=2,  # the flock, then the iteration that finds nothing live
         local_solver=solver,
-        restart_rule=RecordingRule(),
     )
     assert solver.inited == [], solver.inited  # an unusable start is never seed
     assert solver.folds == [], solver.folds  # and never becomes a start
     assert res.n_batches == 2, res.n_batches  # the flock and one re-draw
-    assert res.status == "max_iters"
-
-
-def test_injected_rule_is_driven() -> None:
-    """The engine feeds its one injected rule instance both channels, once per path."""
-    k = 2
-    eval_f_g, _shapes = evaluator()
-    rule = RecordingRule()
-    res = n_path_schedule(
-        eval_f_g,
-        **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(2)),
-        bounds=unit_bounds(),
-        budget_check=lambda: True,
-        max_iters=2,  # the flock, then one step
-        local_solver=StubSolver(),
-        restart_rule=rule,
-    )
-    # Iteration 0 places the flock and asks nothing: there is no step to judge
-    # and no Δ to report yet.
-    assert rule.verdicts == [0, 1], rule.verdicts
-    # One report per path on the one step, and it is a real decrease.
-    assert [i for i, _delta in rule.deltas] == [0, 1], rule.deltas
-    assert all(delta is not None and delta < 0.0 for _i, delta in rule.deltas)
-    assert res.status == "max_iters"
-
-
-def test_rule_can_force_restarts() -> None:
-    """A rule that always says restart re-draws every iteration, never steps."""
-    k = 2
-    eval_f_g, shapes = evaluator()
-    solver = StubSolver()
-    rule = AlwaysRestartRule()
-    model = RecordingModel(unit_bounds(), key=jax.random.PRNGKey(3))
-    res = n_path_schedule(
-        eval_f_g,
-        n_paths=k,
-        bounds=unit_bounds(),
-        global_model=model,
-        budget_check=lambda: True,
-        # Each iteration restarts every path, so each one buys one batch of
-        # starts and no step: a restarted path is skipped by that iteration.
-        # The flock is no exception - iteration 0 is itself a restart.
-        max_iters=3,  # the placement plus two restart iterations
-        local_solver=solver,
-        restart_rule=rule,
-    )
-    # One batch per iteration, the placement included - and nothing else.
-    assert res.n_points == sum(w for w, _d in shapes) == 3 * k
-    assert model.calls == [k, k, k], model.calls  # every iteration asks
-    assert rule.verdicts == [0, 1] * 2, rule.verdicts  # one round per iteration
-    assert rule.deltas == [], rule.deltas  # a restarted path reports nothing
-    assert solver.verdicts == []  # restarted, not stepped
-    # The flock seeds both paths once, then every restart seeds its path again.
-    assert solver.inited == [0, 1] * 3, solver.inited
     assert res.status == "max_iters"
 
 
@@ -373,7 +284,6 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
             budget_check=lambda: billed < limit,
             max_iters=20,  # not the binding stop: the gate closes first
             local_solver=StubSolver(),
-            restart_rule=RecordingRule(),
         )
         return billed, donated, res.n_points, res.status
 
@@ -401,7 +311,6 @@ def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
         bounds=unit_bounds(),
         max_iters=4,  # the flock plus three steps
         local_solver=StubSolver(),
-        restart_rule=RecordingRule(),
     )
     assert res.status == "max_iters", res
     # The flock's batch, then one fused batch per step (no f-only seam is
@@ -434,7 +343,6 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
         budget_check=None,
         max_iters=3,
         local_solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
-        restart_rule=RecordingRule(),
     )
     assert served, "nothing was ever served"
     assert min(served) >= lo, min(served)
@@ -451,8 +359,8 @@ def test_the_default_model_is_exactly_a_uniform_global_model() -> None:
     The default is a shipped object a caller can hand over itself, so the two
     spellings have to be the same run to the bit: a finite-box number recorded
     with the default then stays comparable with one recorded after a model was
-    handed over. Every verdict says restart, so both sites - the flock's
-    placement and the re-draws - are exercised.
+    handed over. Every path gives up on its first trial and is then re-drawn, so
+    both sites - the flock's placement and the re-draw - are exercised.
     """
     box = unit_bounds(2)
 
@@ -473,8 +381,8 @@ def test_the_default_model_is_exactly_a_uniform_global_model() -> None:
             global_model=global_model,  # pyright: ignore[reportArgumentType]
             budget_check=None,
             max_iters=3,
-            local_solver=StubSolver(),
-            restart_rule=AlwaysRestartRule(),
+            local_solver=StubSolver(give_up=True),
+            restart_stalled=True,
             key=jax.random.PRNGKey(7),
         )
         return served, res.x, res.fun, res.n_points
@@ -490,82 +398,6 @@ def test_the_default_model_is_exactly_a_uniform_global_model() -> None:
     assert jnp.array_equal(default_x, ours_x), (default_x, ours_x)
     assert default_fun == ours_fun, (default_fun, ours_fun)
     assert default_points == ours_points, (default_points, ours_points)
-
-
-def test_every_path_feeds_once_per_iteration() -> None:
-    """Pin that a path feeds observe_step once per iteration it holds a point.
-
-    Column 0 is non-finite in iteration 0, so path 0 arrives with no point at
-    all - and a path with no point is restarted without being asked, so it is
-    fed nothing that iteration. Its placement batch answers with a finite value,
-    so from the next iteration it is asked exactly like its cohort: one call per
-    iteration, and its stage clock starts one iteration late rather than being
-    handed a stall it never had.
-    """
-    k = 2
-    calls = [0]
-
-    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        calls[0] += 1
-        f_vals = jnp.full((x.shape[0],), 1.0, dtype=x.dtype)
-        if calls[0] == 1:  # the flock's batch: column 0 has no evidence
-            f_vals = f_vals.at[0].set(jnp.inf)
-        return f_vals, jnp.zeros_like(x), None
-
-    rule = RecordingRule()
-    res = n_path_schedule(
-        eval_f_g,
-        **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(6)),
-        bounds=unit_bounds(),
-        budget_check=lambda: True,
-        max_iters=4,  # the flock plus three iterations
-        local_solver=StubSolver(),
-        restart_rule=rule,
-    )
-    assert res.status == "max_iters", res
-    counts: dict[int, int] = {}
-    for i, _delta in rule.deltas:
-        counts[i] = counts.get(i, 0) + 1
-    # path 1 held its flock row and was asked every iteration; path 0 was
-    # placed in iteration 1 and asked from there.
-    assert counts == {0: 2, 1: 3}, counts
-    assert [d for i, d in rule.deltas if i == 0] == [0.0, 0.0]
-
-
-def test_a_flocks_start_is_not_read_back_as_a_zero_step() -> None:
-    """A path's first Δ carries its first step: the flock is the anchor, not a Δ.
-
-    The flock's f becomes the Δ anchor and iteration 0 reports nothing (the
-    engine has no step to report yet), so the first Δ for a path is the step that
-    follows its start. Reading the start back as `f - f = 0` would hand the rule a
-    fake "nothing changed" sample on every run and on every restart.
-    """
-    k = 2
-    rule = RecordingRule()
-
-    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        # A ramp: distinct points have distinct f values, so a reported Δ of 0
-        # can only come from comparing a point with itself.
-        f_vals = 10.0 * x[:, 0]
-        return f_vals, jnp.full_like(x, 10.0), None
-
-    res = n_path_schedule(
-        eval_f_g,
-        **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(9)),
-        bounds=unit_bounds(),
-        budget_check=lambda: True,
-        max_iters=2,  # the flock plus one step
-        local_solver=StubSolver(),
-        restart_rule=rule,
-    )
-    # StubSolver steps x -> x - 0.5·g = x - 5, which the box clips to 0, so every
-    # step is a strict decrease and the start's own f never reappears as a zero.
-    for path in range(k):
-        seq = [d for i, d in rule.deltas if i == path]
-        assert len(seq) == 1, (path, rule.deltas)  # the step, and nothing else
-        assert seq[0] is not None, (path, seq)  # not read back as a no-step round
-        assert seq[0] < 0.0, (path, seq)  # ... and it is a real decrease
-    assert res.n_batches == 2, res
 
 
 def test_reports_points_and_batches_separately() -> None:
@@ -586,7 +418,6 @@ def test_reports_points_and_batches_separately() -> None:
             budget_check=lambda: True,
             max_iters=2,  # the flock plus one accepted trial
             local_solver=StubSolver(),
-            restart_rule=RecordingRule(),
         )
         return res.n_points, res.n_batches
 
@@ -693,23 +524,21 @@ def test_one_gradient_batch_per_iteration() -> None:
     Deciding on values lets an iteration put everything it kept into a single
     gradient pass: the restarted paths' fresh starts and the stepped paths'
     winners travel together, so a mixed iteration costs one call instead of one
-    per half. The shapes are what pins it - unmerged, iteration 1 would show two
-    width-1 batches rather than one width-2 batch.
+    per half. Path 0 arrives with no point at all (its flock value is non-finite)
+    so the engine owes it a fresh start every iteration while path 1 steps; the
+    shapes are what pins the merge - unmerged, iteration 1 would show two width-1
+    batches rather than one width-2 batch.
     """
     k = 2
+    calls = [0]
     fused_shapes: list[tuple[int, int]] = []
 
-    class RestartFirst(RecordingRule):
-        """Restart path 0 every iteration; path 1 keeps stepping."""
-
-        def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
-            """Record the verdict call and restart path 0 alone."""
-            self.verdicts.append(i)
-            return i == 0
-
     def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        calls[0] += 1
         fused_shapes.append((int(x.shape[0]), int(x.shape[1])))
         f_vals, grads = jax.vmap(pointwise)(x)
+        if calls[0] == 1:  # the flock's batch: column 0 has no evidence
+            f_vals = f_vals.at[0].set(jnp.inf)
         return f_vals, grads, None
 
     def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
@@ -719,12 +548,10 @@ def test_one_gradient_batch_per_iteration() -> None:
     res = n_path_schedule(
         eval_f_g,
         eval_f=eval_f,
-        n_paths=k,
+        **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(3)),
         bounds=unit_bounds(),
-        global_model=RecordingModel(unit_bounds(), key=jax.random.PRNGKey(3)),
         max_iters=2,  # the flock, then one mixed iteration
         local_solver=StubSolver(),
-        restart_rule=RestartFirst(),
     )
     assert fused_shapes == [(2, 1), (2, 1)], fused_shapes  # k=2 both times
     assert res.n_batches == 2, res
@@ -783,7 +610,6 @@ def test_the_model_is_fed_at_both_bottoms_of_a_batch() -> None:
             budget_check=None,
             max_iters=2,  # the flock, then one judged step
             local_solver=StubSolver(give_up=give_up),
-            restart_rule=RecordingRule(),
         )
         return model, res
 
@@ -831,7 +657,6 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
         return f_vals, None
 
     solver = StubSolver()
-    rule = RecordingRule()
     res = n_path_schedule(
         eval_f_g,
         eval_f=eval_f,
@@ -839,11 +664,9 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
         bounds=unit_bounds(),
         max_iters=2,  # the flock, then this one step
         local_solver=solver,
-        restart_rule=rule,
     )
     assert solver.verdicts == [0], solver.verdicts  # the trial was judged
     assert solver.folds == [], solver.folds  # but never committed
-    assert rule.deltas == [(0, None)], rule.deltas  # the one round was a stall
     assert res.status == "max_iters", res
 
 
@@ -901,7 +724,6 @@ def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
             bounds=unit_bounds(),
             max_iters=2,  # the flock plus one step
             local_solver=solver,
-            restart_rule=RecordingRule(),
         )
         return sum(f_only_widths), res.n_batches, res.n_points
 
@@ -944,7 +766,6 @@ def test_an_unjudged_winner_must_be_finite_to_be_committed() -> None:
             bounds=unit_bounds(),
             max_iters=3,
             local_solver=solver,
-            restart_rule=RecordingRule(),
         )
         return solver
 

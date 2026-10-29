@@ -61,7 +61,6 @@ from experiments.methods import (
     run_lbfgs,
     run_soar_lite,
 )
-from soar_lite import NoRestartRule, StallRestartRule
 
 HERE = Path(__file__).parent
 Runner: TypeAlias = Callable[..., Trace]
@@ -70,31 +69,31 @@ Runner: TypeAlias = Callable[..., Trace]
 def _serial(prob: problems.Problem, **kw: int) -> Trace:
     """soar-lite n_paths=1 with no restart: the pure serial descent arm.
 
-    The serial arm is pinned to `NoRestartRule` instead of relying on a
+    The serial arm is pinned to `restart_stalled=False` instead of relying on a
     one-sample pool never tying: a probe is a batched action, and this arm is
     the one-batch-per-point reference the batched arms are compared against.
     """
-    return run_soar_lite(prob, n_paths=1, restart_rule=NoRestartRule(), **kw)
+    return run_soar_lite(prob, n_paths=1, restart_stalled=False, **kw)
 
 
 def _parallel_no_restart(prob: problems.Problem, **kw: int) -> Trace:
     """soar-lite n_paths=16 with no restart: what width alone buys.
 
-    Pinned to `NoRestartRule` so the step from `_serial` differs only in
-    n_paths. Without this arm the only n_paths=16 curve carried the default
-    restart rule, so width and restart moved together.
+    Pinned to `restart_stalled=False` so the step from `_serial` differs only in
+    n_paths. Without this arm the only n_paths=16 curve carried restart on, so
+    width and restart moved together.
     """
-    return run_soar_lite(prob, n_paths=16, restart_rule=NoRestartRule(), **kw)
+    return run_soar_lite(prob, n_paths=16, restart_stalled=False, **kw)
 
 
 def _parallel_restart(prob: problems.Problem, **kw: int) -> Trace:
-    """soar-lite n_paths=16 with the stall restart rule.
+    """soar-lite n_paths=16 with restart on the first stall.
 
     Passed explicitly rather than leaning on the engine default, so the panel
-    states which rule it measured; paired with `_parallel_no_restart` it
+    states whether it measured restart; paired with `_parallel_no_restart` it
     isolates restart at fixed width.
     """
-    return run_soar_lite(prob, n_paths=16, restart_rule=StallRestartRule(), **kw)
+    return run_soar_lite(prob, n_paths=16, restart_stalled=True, **kw)
 
 
 CurveEntry: TypeAlias = dict[str, list[float] | list[list[float | None]]]

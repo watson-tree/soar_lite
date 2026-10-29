@@ -12,8 +12,9 @@ Seam (拍板): the engine consumes its width, the callables, and the box it sear
 
 The caller composes x->θ and the chain rule grad_x = grad_θ * dθ_dx(x) into
 eval_f_g; the engine owns clip-to-bounds, and the starts are the model's - and
-the three plugins are spelled `global_model`, `local_solver`, `restart_rule`
-in that order wherever the engine names them. With
+the two plugins are spelled `global_model`, `local_solver`
+in that order wherever the engine names them. Whether a stall is re-drawn is
+the `restart_stalled` knob, not a plugin. With
 `global_model=None` the engine falls back to a `UniformGlobalModel` drawing
 i.i.d. uniformly over a finite `bounds`; an unbounded box (or none) without a
 model is a wiring error, since the engine then has nothing of its own to draw
@@ -46,7 +47,6 @@ from soar_lite.engine import (
 )
 from soar_lite.global_model import UniformGlobalModel
 from soar_lite.local_solver import DiagonalPreconditioner
-from soar_lite.restart_rule import NoRestartRule, StallRestartRule
 
 jax.config.update("jax_enable_x64", val=True)
 
@@ -337,9 +337,9 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     Global well -8 @ θ=0.38, local well -2 @ θ=0.62, saddle ~ 0.505 (the deep
     well is 4x deeper, so its basin reaches just past mid-domain). The identity
     map makes θ = x, so the single path is placed in the shallow well and the
-    sixteen are spread across the box; both arms run the shipped method and are
-    pinned to `NoRestartRule`, so the only difference is the start count. What a
-    rule adds on top of width is the next test's subject.
+    sixteen are spread across the box; both arms run the shipped method with
+    restart off, so the only difference is the start count. What restarting adds
+    on top of width is the next test's subject.
     """
     # independent literal grid check: global min is -8 (brute force)
     grid = jnp.linspace(0.05, 0.95, 901)
@@ -355,7 +355,6 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
         max_iters=100,
         budget_check=rec_k.limit_check(budget),
         local_solver=DiagonalPreconditioner(),
-        restart_rule=NoRestartRule(),
     )
     rec_1 = Recorder(_two_well)
     res_1 = n_path_schedule(
@@ -369,24 +368,24 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
         max_iters=100,
         budget_check=rec_1.limit_check(budget),
         local_solver=DiagonalPreconditioner(),
-        restart_rule=NoRestartRule(),
     )
     assert res_1.fun > -3.0, res_1.fun  # stuck near local well (-2)
     assert res_k.fun < -7.0, res_k.fun  # found the global well (-8)
     assert res_k.fun < res_1.fun  # strictly better, equal budget
 
 
-def test_the_stall_rule_hands_a_redraw_to_the_global_model() -> None:
+def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
     """A stalled path is re-placed where the model says, not where it stood.
 
     Synthetic on purpose. The value depends only on which side of 0.5 the point
     lies on, and the gradient is zero everywhere, so `HalfStep` can never find a
-    strict decrease: it gives up (its own trial cap) and the engine reports a
-    stall. Nothing in either run moves except by a restart, which is exactly the
-    seam under test - the rule says *when*, the model says *where*. The model
-    places the shallow flock on its first ask and the deep well on every later
-    one, so the comparison is deterministic: the frozen rule parks the flock at
-    -2, the stall rule hands each stop to the model and collects -8.
+    strict decrease: it gives up (its own trial cap) and the engine marks the
+    path stalled. Nothing in either run moves except by a restart, which is
+    exactly what `restart_stalled` wires together - the engine's own stall bit
+    says *when*, the model says *where*. The model places the shallow flock on
+    its first ask and the deep well on every later one, so the comparison is
+    deterministic: the frozen arm parks the flock at -2, the restarting arm
+    hands each stop to the model and collects -8.
     """
     shallow, deep = 0.62, 0.38
 
@@ -417,19 +416,19 @@ def test_the_stall_rule_hands_a_redraw_to_the_global_model() -> None:
             self.asked += 1
             return jnp.full((n_points, 1), centre)
 
-    def run(rule: NoRestartRule | StallRestartRule) -> NPathResult:
+    def run(*, restart_stalled: bool) -> NPathResult:
         return n_path_schedule(
             eval_f_g,
             n_paths=2,
             bounds=unit_bounds(),
             max_iters=6,
             local_solver=HalfStep(),
-            restart_rule=rule,
+            restart_stalled=restart_stalled,
             global_model=FirstShallowThenDeep(),
         )
 
-    frozen = run(NoRestartRule())
-    revived = run(StallRestartRule())
+    frozen = run(restart_stalled=False)
+    revived = run(restart_stalled=True)
     assert frozen.fun == -2.0, frozen.fun  # nothing ever moved
     assert float(frozen.x[0]) == shallow
     assert revived.fun == -8.0, revived.fun  # the model's re-draws landed deep
@@ -456,7 +455,6 @@ def test_projected_descent_reaches_wall_optimum() -> None:
         rec,
         **flock_kwargs(flock(1, 2), unit_bounds(2), key=jax.random.PRNGKey(4)),
         bounds=unit_bounds(2),
-        restart_rule=NoRestartRule(),  # pure projected descent, no restarts
         max_iters=100,
         budget_check=rec.limit_check(500),
         local_solver=HalfStep(),
@@ -464,29 +462,8 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     assert res.fun < 0.4, res.fun  # must slide near (1, 0), f=0.25
 
 
-class _RecordingBest:
-    """A rule that logs the raw best each verdict is handed, and never fires.
-
-    Recording only: the run is `NoRestartRule`'s plus a log of what `f⋆` each
-    verdict read, which is how the engine's reporting can be told apart from its
-    trajectory.
-    """
-
-    def __init__(self) -> None:
-        """Start with an empty log."""
-        self.bs: list[float] = []
-
-    def observe_step(self, i: int, delta: float | None) -> None:
-        """No-op: the log is of verdicts, not of steps."""
-
-    def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
-        """Log the raw best the verdict reads, then keep the path."""
-        self.bs.append(best_fun_raw)
-        return False
-
-
 def test_feasible_only_best() -> None:
-    """The reported best (`fun`) is the feasible min; `f⋆` is raw.
+    """The reported best (`fun`) is the feasible min, never the raw min.
 
     f = (θ-0.2)^2 has its global min at θ=0.2, which the feas mask marks
     infeasible (θ <= 0.5); the best feasible design is θ=0.5+ (f 0.09). The
@@ -516,7 +493,6 @@ def test_feasible_only_best() -> None:
     def budget_check() -> bool:
         return evals < 600
 
-    rule = _RecordingBest()
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(4), unit_bounds(), key=jax.random.PRNGKey(5)),
@@ -524,7 +500,6 @@ def test_feasible_only_best() -> None:
         max_iters=100,
         budget_check=budget_check,
         local_solver=HalfStep(),
-        restart_rule=rule,
     )
 
     feasible_f_vals = [L for L, ok in zip(all_f_vals, all_feas, strict=True) if ok]
@@ -534,10 +509,6 @@ def test_feasible_only_best() -> None:
     # the reported answer is the best feasible point, never the raw min
     assert res.fun == min(feasible_f_vals)
     assert res.x[0] > thr  # the reported best lies on the feasible side
-    # ... and the verdict reads the raw min: an `f⋆` below every feasible value
-    # can only have come from an infeasible point.
-    assert rule.bs, "a verdict was never asked"
-    assert min(rule.bs) < min(feasible_f_vals)
 
 
 def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
@@ -565,7 +536,6 @@ def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
         bounds=unit_bounds(),
         max_iters=50,
         local_solver=HalfStep(),
-        restart_rule=NoRestartRule(),
     )
 
     assert res.fun == -math.inf
@@ -604,7 +574,6 @@ def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
         bounds=unit_bounds(),
         max_iters=20,
         local_solver=HalfStep(),
-        restart_rule=NoRestartRule(),
     )
 
     assert any(v == -math.inf for v in served), "no -inf point was ever served"
@@ -655,9 +624,8 @@ def test_a_dead_path_serves_nothing_after_its_start() -> None:
     """A start whose served values are non-finite stalls on arrival.
 
     It has no anchor to descend from, so it must not burn budget sitting there:
-    under `NoRestartRule` a dead row is served once, in iteration 0's fused
-    batch, and never again, while the live row costs exactly one point per
-    iteration.
+    a dead row is served once, in iteration 0's fused batch, and never again
+    while the live row costs exactly one point per iteration.
     """
     n_paths, n_iterations = 2, 3
     widths: list[int] = []
@@ -681,7 +649,6 @@ def test_a_dead_path_serves_nothing_after_its_start() -> None:
         max_iters=n_iterations + 1,
         budget_check=lambda: len(widths) < 100,
         local_solver=HalfStep(),
-        restart_rule=NoRestartRule(),
     )
     assert res.n_iters == n_iterations + 1, res
     assert widths[0] == n_paths, widths  # iteration 0 serves the whole flock
@@ -715,19 +682,20 @@ def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
 
         return eval_f_g
 
-    def run(rule: NoRestartRule | StallRestartRule) -> NPathResult:
+    def run(*, restart_stalled: bool) -> NPathResult:
         return n_path_schedule(
             make_evaluator(),
             **flock_kwargs(flock(1), unit_bounds(), key=jax.random.PRNGKey(0)),
             bounds=unit_bounds(),
             max_iters=20,
             local_solver=DiagonalPreconditioner(),
-            restart_rule=rule,
+            restart_stalled=restart_stalled,
         )
 
-    # `NoRestartRule` is the control: it says nothing at all, ever.
-    assert math.isfinite(run(NoRestartRule()).fun)
-    assert math.isfinite(run(StallRestartRule()).fun)
+    # restart off is the control: a path with no point is re-drawn by the
+    # engine's own "no point" rule either way, so both arms must survive.
+    assert math.isfinite(run(restart_stalled=False).fun)
+    assert math.isfinite(run(restart_stalled=True).fun)
 
 
 def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
@@ -1082,7 +1050,7 @@ def test_malformed_bounds_are_rejected_at_the_entry() -> None:
 
 
 def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
-    """The three seams are checked for presence once, before any point is served.
+    """The two seams are checked for presence once, before any point is served.
 
     Static typing already refuses these; the runtime check catches the caller
     who reaches the engine from untyped code, and it names which seam objected.
@@ -1107,7 +1075,6 @@ def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
         raise AssertionError(msg)
 
     assert "local_solver" in rejects(local_solver=object())
-    assert "restart_rule" in rejects(restart_rule=object())
     assert "global_model" in rejects(global_model=object())
 
 

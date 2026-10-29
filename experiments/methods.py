@@ -28,7 +28,6 @@ from scipy.optimize import minimize
 from experiments.problems import Problem
 from soar_lite import (
     DiagonalPreconditioner,
-    RestartRule,
     UniformGlobalModel,
     n_path_schedule,
 )
@@ -63,7 +62,7 @@ def run_soar_lite(
     n_paths: int,
     max_steps: int,
     seed: int,
-    restart_rule: RestartRule | None = None,
+    restart_stalled: bool = False,
 ) -> Trace:
     """Drive the n-path engine, recording best-so-far after every batch.
 
@@ -74,10 +73,10 @@ def run_soar_lite(
     the run stops within one batch of it. ``max_iters`` is the horizon the
     engine requires - deliberately non-binding, so it never ends the run first.
 
-    ``restart_rule`` is the rule instance to run; ``None`` keeps the engine's
-    default, `NoRestartRule` (the frozen flock). The n_paths=1 arms pass it
-    explicitly so their single chain is the pure serial descent, which is what
-    the panels compare a batched run against.
+    ``restart_stalled`` is whether a path the engine marks stalled is re-drawn;
+    ``False`` keeps the flock frozen. The n_paths=1 arms leave it off so their
+    single chain is the pure serial descent, which is what the panels compare a
+    batched run against.
 
     The flock is drawn here, uniformly over the box, so the experiment's
     distribution is the caller's: the engine only ever places the points it is
@@ -118,7 +117,7 @@ def run_soar_lite(
         max_iters=max_steps,
         budget_check=lambda: n_batches < max_steps,
         local_solver=DiagonalPreconditioner(),
-        restart_rule=restart_rule,
+        restart_stalled=restart_stalled,
     )
     trace.fun = float(result.fun)
     return trace
