@@ -17,9 +17,9 @@ import jax.numpy as jnp
 from soar_lite.engine import (
     Bounds,
     PathPoint,
-    UniformGlobalModel,
     n_path_schedule,
 )
+from soar_lite.global_model import UniformGlobalModel
 from soar_lite.solver import DiagonalPreconditioner
 
 jax.config.update("jax_enable_x64", val=True)

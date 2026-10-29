@@ -39,12 +39,12 @@ import pytest
 
 from soar_lite.engine import (
     Bounds,
-    UniformGlobalModel,
     _argmin_finite,
     _Best,
     _OptimumReached,
     n_path_schedule,
 )
+from soar_lite.global_model import UniformGlobalModel
 from soar_lite.restart import NoRestartRule
 
 jax.config.update("jax_enable_x64", val=True)

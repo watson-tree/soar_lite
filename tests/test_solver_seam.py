@@ -23,10 +23,10 @@ from soar_lite.engine import (
     Bounds,
     NPathResult,
     PathPoint,
-    UniformGlobalModel,
     Verdict,
     n_path_schedule,
 )
+from soar_lite.global_model import UniformGlobalModel
 
 jax.config.update("jax_enable_x64", val=True)
 

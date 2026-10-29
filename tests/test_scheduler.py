@@ -40,11 +40,11 @@ from soar_lite.engine import (
     Bounds,
     NPathResult,
     PathPoint,
-    UniformGlobalModel,
     Verdict,
     _argmin_finite,
     n_path_schedule,
 )
+from soar_lite.global_model import UniformGlobalModel
 from soar_lite.restart import NoRestartRule, StallRestartRule
 from soar_lite.solver import DiagonalPreconditioner
 

@@ -3,22 +3,23 @@
 This module is the seam (拍板) of soar_lite: it owns the three plugin contracts
 (`LocalSolver`, `RestartRule`, `GlobalModel`), the data the plugins exchange
 (`PathPoint`, `Verdict`), and the shared plumbing (`NPathResult`, the box and
-evaluator seams, the shipped `UniformGlobalModel`, and the `n_path_schedule`
-loop). The run's state lives in four private holders, one per state family:
-`_Evaluator` (the two evaluation seams and the one charged site), `_Paths` (the
-n-path state machine), `_Best` (the run's best, `f⋆`), and `_Budget` (the stop
-meter and work report). Concretes import *from* here, never the other way around
-at module level:
+evaluator seams, the box normalization every concrete shares, and the
+`n_path_schedule` loop). The run's state lives in four private holders, one per
+state family: `_Evaluator` (the two evaluation seams and the one charged site),
+`_Paths` (the n-path state machine), `_Best` (the run's best, `f⋆`), and
+`_Budget` (the stop meter and work report). Concretes import *from* here, never
+the other way around at module level:
 
     soar_lite/
-      engine.py   <- LocalSolver, RestartRule, GlobalModel, PathPoint, Verdict,
-                     UniformGlobalModel, n_path_schedule
-      solver.py   <- DiagonalPreconditioner (implements LocalSolver)
-      restart.py  <- NoRestartRule, StallRestartRule (implement RestartRule)
+      engine.py        <- LocalSolver, RestartRule, GlobalModel, PathPoint,
+                          Verdict, Bounds, the box helpers, n_path_schedule
+      solver.py        <- DiagonalPreconditioner (implements LocalSolver)
+      restart.py       <- NoRestartRule, StallRestartRule (implement RestartRule)
+      global_model.py  <- UniformGlobalModel (implements GlobalModel)
 
-Dependency direction: plugins depend on engine types; the engine binds its two
-defaults lazily inside `n_path_schedule` (keeps the module graph acyclic and
-`__init__` importable in any order). The engine is first-order (value-and-
+Dependency direction: plugins depend on engine types; the engine binds its three
+concrete defaults lazily inside `n_path_schedule` (keeps the module graph acyclic
+and `__init__` importable in any order). The engine is first-order (value-and-
 gradient), coordinate-free, and owns the flock, the box, the shared horizon, the
 clip-to-bounds and the restart cadence; the local solver owns only
 direction/step size/acceptance, the restart rule only the continue-vs-restart
@@ -54,9 +55,9 @@ class PathPoint:
         from (`-p.g`) and folded on (`best.g - p.g`), so one NaN there poisons
         that coordinate's magnitude EMAs for the rest of the run. The f half is
         asked first, so a dead value short-circuits before the device sync in
-        `_all_finite`.
+        `all_finite`.
         """
-        return math.isfinite(self.f) and _all_finite(self.g)
+        return math.isfinite(self.f) and all_finite(self.g)
 
 
 @dataclass(frozen=True)
@@ -319,11 +320,11 @@ EvalFG: TypeAlias = Callable[
 # for their values alone and buy gradients only for its winners, in one batch.
 EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | None]"]
 
-# The search box in scipy's spelling (which `_box_bounds` normalizes): one
+# The search box in scipy's spelling (which `box_bounds` normalizes): one
 # `(lb, ub)` pair per dim, a side of None or ±inf meaning unbounded. A `(d, 2)`
 # array is the same data row-wise, for the callers that already hold one. No box
-# at all is spelled `Bounds | None` at the call site (then the flock's own d is
-# the only dimension the engine knows).
+# at all is spelled `Bounds | None` at the call site; the dimension then comes
+# from the global model, the run's authority on it.
 Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
 
 
@@ -384,97 +385,6 @@ class GlobalModel(Protocol):
         makes a seeded model reproducible.
         """
         ...
-
-
-class UniformGlobalModel:
-    """The model-free default: i.i.d. uniform over a finite box.
-
-    Fits nothing - `observe` is a no-op - because with no surrogate the box is
-    the only distribution the engine can synthesize. It is also how a caller
-    hands the engine a chosen flock: `x0`, when given, is what the first
-    `propose` returns, so the run's first restart lands exactly where the caller
-    asked and every later one is drawn uniformly.
-
-    The box is the one thing this model validates harder than the engine does:
-    an unbounded side has no width to draw from, and a NaN side would poison
-    every draw silently, so both are refused at construction.
-    """
-
-    def __init__(
-        self,
-        bounds: Bounds,
-        *,
-        key: jnp.ndarray,
-        x0: jnp.ndarray | None = None,
-    ) -> None:
-        """Bind the box, the key and the module-free draw.
-
-        Args:
-            bounds: the finite box the draws fill, scipy-style pairs or a
-                ``(d, 2)`` array.
-            key: the PRNG key the draws are split from.
-            x0: the first ``propose``'s answer, shape ``(n, d)`` - n the run's
-                number of paths. Ignored after that; ``None`` draws the first
-                points like any other.
-
-        Raises:
-            ValueError: If the box is absent, has an unbounded or NaN side, or
-                if `x0` is not a finite ``(n, d)`` array whose d matches the box.
-
-        """
-        _check_bounds(bounds)
-        box = _box_bounds(bounds)
-        if box is None or not _finite_box(box):
-            msg = (
-                "UniformGlobalModel draws uniformly, so it needs a finite box: "
-                f"got {bounds!r}"
-            )
-            raise ValueError(msg)
-        self._lo, self._hi = box
-        # The box is the projection here, so it is also the dimension: a (d, 2)
-        # pair list cannot disagree with itself.
-        self.d = int(self._lo.shape[0])
-        self._key = key
-        self._x0 = None if x0 is None else _check_x0(x0, self.d)
-
-    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
-        """Ignore the evidence: a uniform model fits nothing."""
-
-    def propose(self, n_points: int) -> jnp.ndarray:
-        """Return x0 on the first ask, then n_points uniform draws."""
-        if self._x0 is not None:
-            x_first, self._x0 = self._x0, None
-            if x_first.shape[0] != n_points:
-                msg = (
-                    f"x0 holds {x_first.shape[0]} starts but the first restart "
-                    f"asks for {n_points}"
-                )
-                raise ValueError(msg)
-            return x_first
-        self._key, sub = jax.random.split(self._key)
-        return jax.random.uniform(
-            sub,
-            (n_points, self.d),
-            minval=self._lo,
-            maxval=self._hi,
-        )
-
-
-def _check_x0(x0: jnp.ndarray, d: int) -> jnp.ndarray:
-    """Reject a flock a model cannot hand back: wrong shape, or not finite.
-
-    A coordinate is not an objective that went non-finite, and no clip or
-    proposal repairs one, so a bad start is refused here rather than left to
-    stall a path on arrival.
-    """
-    pts = jnp.asarray(x0)
-    if pts.ndim != 2 or pts.shape[1] != d:
-        msg = f"x0 must be a (n_paths, {d}) array, got shape {pts.shape}"
-        raise ValueError(msg)
-    if pts.shape[0] < 1 or not _all_finite(pts):
-        msg = f"x0 needs at least one finite start, got shape {pts.shape}"
-        raise ValueError(msg)
-    return pts
 
 
 def _check_positive_int(value: object, name: str) -> int:
@@ -762,9 +672,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
         restart_rule = NoRestartRule()
 
-    box = _box_bounds(bounds)
+    box = box_bounds(bounds)
     clip = box if box is not None else (-math.inf, math.inf)
     if global_model is None:
+        from soar_lite.global_model import UniformGlobalModel  # noqa: PLC0415
+
         global_model = UniformGlobalModel(
             _finite_box_or_raise(bounds),
             key=jax.random.PRNGKey(0) if key is None else key,
@@ -1333,7 +1245,7 @@ class _Paths:
                 # whose gradient is not all finite. A value-only trial has none
                 # to gate yet - it is gated by `settle` + `_advance` instead.
                 finite = math.isfinite(f_trial) and (
-                    trial.g is None or _all_finite(trial.g)
+                    trial.g is None or all_finite(trial.g)
                 )
                 if finite and (i not in best or f_trial < best[i].value()):
                     best[i] = trial
@@ -1493,13 +1405,13 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
         if fn is not None and not callable(fn):
             msg = f"{what} must be callable or None, got {type(fn).__name__}"
             raise TypeError(msg)
-    _check_bounds(bounds)
+    check_bounds(bounds)
 
 
-def _check_bounds(bounds: Bounds | None) -> None:
+def check_bounds(bounds: Bounds | None) -> None:
     """Reject a malformed box at the entry, not deep inside a clip.
 
-    Both spellings `_box_bounds` accepts are checked: one `(lb, ub)` pair per
+    Both spellings `box_bounds` accepts are checked: one `(lb, ub)` pair per
     dim, or a `(d, 2)` array. A NaN side is rejected too - it would poison
     every clip silently instead of failing; +-inf sides are legitimate
     (unbounded dim).
@@ -1537,8 +1449,8 @@ def _finite_box_or_raise(bounds: Bounds | None) -> Bounds:
     synthesize, so an unbounded side (or no box at all) is a wiring error, not a
     run to guess our way out of.
     """
-    box = _box_bounds(bounds)
-    if bounds is None or box is None or not _finite_box(box):
+    box = box_bounds(bounds)
+    if bounds is None or box is None or not finite_box(box):
         msg = (
             "an unbounded or absent box needs `global_model`: the engine draws "
             "its restart points from the model, and with global_model=None it "
@@ -1548,7 +1460,7 @@ def _finite_box_or_raise(bounds: Bounds | None) -> Bounds:
     return bounds
 
 
-def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
+def box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
     """Normalize `bounds` to (lo, hi) arrays; None (no box at all) -> None.
 
     A `None` side becomes ∓inf, so every downstream consumer sees one spelling
@@ -1563,13 +1475,13 @@ def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None
     return jnp.asarray(lo), jnp.asarray(hi)
 
 
-def _finite_box(box: tuple[jnp.ndarray, jnp.ndarray]) -> bool:
+def finite_box(box: tuple[jnp.ndarray, jnp.ndarray]) -> bool:
     """Report whether every side of every dim is finite (no-sampler precondition)."""
     lo, hi = box
-    return _all_finite(lo) and _all_finite(hi)
+    return all_finite(lo) and all_finite(hi)
 
 
-def _all_finite(a: jnp.ndarray) -> bool:
+def all_finite(a: jnp.ndarray) -> bool:
     """Report whether every component of an array is finite (all-or-nothing)."""
     return bool(jnp.all(jnp.isfinite(a)))
 
