@@ -376,39 +376,64 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     assert res_k.fun < res_1.fun  # strictly better, equal budget
 
 
-def test_the_stall_rule_escapes_a_shallow_basin() -> None:
-    """Same starts, same budget, one rule swapped: the rule is what escapes.
+def test_the_stall_rule_hands_a_redraw_to_the_global_model() -> None:
+    """A stalled path is re-placed where the model says, not where it stood.
 
-    Four starts planted in the shallow well (-2 @ θ=0.62) and the same method in
-    both arms, so every step is identical until the first verdict. The frozen
-    flock descends to the bottom of the well it was given and idles there; the
-    stall rule reads a converged path as no progress, fires once its window is
-    full, and the engine's default global model re-draws it - some draw lands in
-    the deep basin (-8 @ θ=0.38). Both runs end on the budget, not the horizon,
-    so the comparison is equal work.
+    Synthetic on purpose. The value depends only on which side of 0.5 the point
+    lies on, and the gradient is zero everywhere, so `HalfStep` can never find a
+    strict decrease: it gives up (its own trial cap) and the engine reports a
+    stall. Nothing in either run moves except by a restart, which is exactly the
+    seam under test - the rule says *when*, the model says *where*. The model
+    places the shallow flock on its first ask and the deep well on every later
+    one, so the comparison is deterministic: the frozen rule parks the flock at
+    -2, the stall rule hands each stop to the model and collects -8.
     """
-    budget = 320
-    x0_shallow = jnp.array([[0.60], [0.64], [0.58], [0.66]])
+    shallow, deep = 0.62, 0.38
+
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        f = jnp.where(theta[:, 0] < 0.5, -8.0, -2.0)
+        return f, jnp.zeros_like(theta), None
+
+    class FirstShallowThenDeep:
+        """Answer ask 0 with the shallow well, every later ask with the deep one."""
+
+        d = 1
+
+        def __init__(self) -> None:
+            """Start on the shallow first ask."""
+            self.asked = 0
+
+        def observe(
+            self,
+            x: jnp.ndarray,
+            f: list[float],
+            g: jnp.ndarray | None,
+        ) -> None:
+            """Ignore the evidence: this model fits nothing."""
+
+        def propose(self, n_points: int) -> jnp.ndarray:
+            """Return n_points of the well this ask is assigned to."""
+            centre = shallow if self.asked == 0 else deep
+            self.asked += 1
+            return jnp.full((n_points, 1), centre)
 
     def run(rule: NoRestartRule | StallRestartRule) -> NPathResult:
-        rec = Recorder(_two_well)
         return n_path_schedule(
-            rec,
-            **flock_kwargs(x0_shallow, unit_bounds(), key=jax.random.PRNGKey(9)),
+            eval_f_g,
+            n_paths=2,
             bounds=unit_bounds(),
-            max_iters=100,
-            budget_check=rec.limit_check(budget),
-            local_solver=DiagonalPreconditioner(),
+            max_iters=6,
+            local_solver=HalfStep(),
             restart_rule=rule,
+            global_model=FirstShallowThenDeep(),
         )
 
     frozen = run(NoRestartRule())
-    revived = run(StallRestartRule(window=10))
-    assert frozen.status == "budget_exhausted", frozen
-    assert revived.status == "budget_exhausted", revived
-    assert frozen.fun > -3.0, frozen.fun  # four shallow starts, all stuck
-    assert revived.fun < -7.0, revived.fun  # a re-draw reached the deep basin
-    assert revived.fun < frozen.fun
+    revived = run(StallRestartRule())
+    assert frozen.fun == -2.0, frozen.fun  # nothing ever moved
+    assert float(frozen.x[0]) == shallow
+    assert revived.fun == -8.0, revived.fun  # the model's re-draws landed deep
+    assert float(revived.x[0]) == deep
 
 
 def test_projected_descent_reaches_wall_optimum() -> None:
@@ -702,7 +727,7 @@ def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
 
     # `NoRestartRule` is the control: it says nothing at all, ever.
     assert math.isfinite(run(NoRestartRule()).fun)
-    assert math.isfinite(run(StallRestartRule(window=2)).fun)
+    assert math.isfinite(run(StallRestartRule()).fun)
 
 
 def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:

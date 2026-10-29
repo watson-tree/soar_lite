@@ -7,9 +7,13 @@ answers a verdict (`should_restart`). Neither rule fits a surrogate; the
 engine's flock is the sample.
 
 `NoRestartRule` is the default: the flock the caller handed in is the flock the
-run keeps. `StallRestartRule` is the fallback that fires on a path that has
-stopped buying anything - cheap, but it reads a path's own progress, so it
-measures conditioning rather than the scarcity of better basins elsewhere.
+run keeps. `StallRestartRule` is the simplest rule that ever fires: it restarts
+a path the moment the engine reports that the path stopped (a stall round,
+`delta is None`). It carries no knob, because the engine's stall is sticky - a
+stalled path never moves again until it is restarted - so a longer window would
+only delay the re-draw without buying new evidence. It is still a single-path
+signal: what a restart can buy is exactly what the global model's `propose` can
+offer as an alternative basin.
 """
 
 import math
@@ -40,63 +44,48 @@ class NoRestartRule(RestartRule):
 
 
 class StallRestartRule(RestartRule):
-    """Restart a path whose last `window` rounds bought nothing.
+    """Restart a path the moment the engine reports it stopped.
 
-    Per path the rule keeps the last `window` deltas the engine reported and
-    fires when none of them is a step that moved the path by at least `rel_tol`
-    relatively - every round in the window was a stall (`delta is None`) or a
-    step too small to count. A path that takes one real step keeps its window
-    and its place; a path that keeps micro-stepping the same basin is restarted
-    even though its method never gave up.
+    A path stops when the engine takes no step for it: its method gave up
+    (converged, or found no finite sample), or the point it was handed was not
+    usable. The engine spells that round `delta is None` on `observe_step`, and
+    that `None` is the rule's whole evidence - a finite delta means the path
+    moved, whatever the step was worth, so it is not stalled.
 
-    The tolerance is relative to the value the path stands at (`|f_k|`) rather
-    than absolute, because the two failure modes the rule is meant to catch are
-    both scale-relative: a converged basin and a nearly flat one. A path with no
-    usable point (`f_k` is `nan`) never counts as progress, so it also fires
-    after `window` stalled rounds - a start that landed on non-finite values is
-    given another draw instead of holding the path forever.
+    The rule is a one-bit latch per path, and that is all it needs to be: the
+    engine's stall is sticky (a stalled path proposes nothing, so every later
+    round reports `None` until a restart places a usable point), and a restart
+    round is silent (the engine does not report it, so it cannot arrive here as
+    evidence). One `None` is therefore the whole signal - a window over more
+    rounds would read the same `None` again and only delay the re-draw.
 
-    Known limit: this is a single-path signal, so it cannot tell "this basin is
-    exhausted" from "this basin is badly conditioned" - on an ill-conditioned
-    unimodal problem it restarts paths that were still converging. Restarting
-    without a model that can propose a better basin elsewhere mostly pays for the
-    lost descent. It ships as the cheap fallback, not as the recommended rule.
+    A consequence worth naming: the rule never judges whether a step was an
+    improvement, only whether the path moved. An uphill or micro step is still a
+    step; whether it was worth taking is the local solver's verdict, not this
+    rule's.
 
-    Args:
-        window: how many consecutive no-progress rounds a path needs before it
-            is restarted. Larger is more conservative.
-        rel_tol: how much of ``|f_k|`` a step has to gain to count as progress.
-
-    Raises:
-        ValueError: If `window` < 1, or `rel_tol` is negative or not finite.
+    What a restart is worth is the global model's question, not this rule's:
+    with `UniformGlobalModel` every restart is a fresh uniform draw, so the rule
+    is a random multistart dressed as a restart policy. It pays off only when
+    the model can propose a better basin elsewhere.
 
     Example:
         The engine binds it like any other seam:
 
             >>> from soar_lite import StallRestartRule, n_path_schedule
             >>> result = n_path_schedule(
-            ...     eval_f_g, x0=x0, bounds=[(-5.0, 5.0)], max_iters=50,
-            ...     restart_rule=StallRestartRule(window=10),
+            ...     eval_f_g, n_paths=4, bounds=[(-5.0, 5.0)], max_iters=50,
+            ...     restart_rule=StallRestartRule(),
             ... )  # doctest: +SKIP
 
     """
 
-    def __init__(self, *, window: int = 10, rel_tol: float = 1e-3) -> None:
-        """Validate the two knobs and start with no path's history."""
-        if window < 1:
-            msg = f"window must be >= 1, got {window}"
-            raise ValueError(msg)
-        if not math.isfinite(rel_tol) or rel_tol < 0:
-            msg = f"rel_tol must be finite and >= 0, got {rel_tol}"
-            raise ValueError(msg)
-        self.window = window
-        self.rel_tol = rel_tol
-        # Per path, the last `window` deltas: `None` for a round that took no
-        # step. Bounded by the flock's width, and dropped when the rule fires.
-        self._deltas: dict[int, list[float | None]] = {}
+    def __init__(self) -> None:
+        """Start with every path unknown, which reads as "did not stall"."""
+        self._stalled: set[int] = set()
 
     def observe_step(self, i: int, delta: float | None) -> None:
-        """Append this round's delta to path i's window of last rounds.
+        """Latch whether path i moved this round (`None` means it stalled).
 
         Raises:
             ValueError: If `delta` is neither `None` nor finite. The engine
@@ -107,24 +96,16 @@ class StallRestartRule(RestartRule):
         if delta is not None and not math.isfinite(delta):
             msg = f"path {i}: delta must be None or finite, got {delta!r}"
             raise ValueError(msg)
-        history = self._deltas.setdefault(i, [])
-        history.append(delta)
-        del history[: -self.window]
+        if delta is None:
+            self._stalled.add(i)
+        else:
+            self._stalled.discard(i)
 
     def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
-        """Return True once path i's whole window bought nothing.
+        """Return True iff path i's last reported round was a stall.
 
-        Returning True also drops that path's window, so the next verdict judges
-        the fresh descent instead of re-reading the history that fired. This is
-        the one place a rule acts in a query, and the contract is why: the engine
-        never reports a path's own restart (that round took no step), so the
-        verdict is the only call that can carry it.
+        A pure query: firing does not clear the latch. The engine's next report
+        clears it - a step discards the mark, another stall keeps it, which is
+        what re-draws a path whose fresh start was unusable.
         """
-        history = self._deltas.get(i)
-        if history is None or len(history) < self.window:
-            return False
-        gain = -self.rel_tol * abs(f_k)
-        if any(delta is not None and delta < gain for delta in history):
-            return False
-        self._deltas.pop(i, None)
-        return True
+        return i in self._stalled
