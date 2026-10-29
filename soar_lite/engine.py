@@ -367,13 +367,18 @@ class NPathResult:
     fresh starts plus
     up to the method's own per-step trial count), so `n_iters` is not a batch
     count. It is spelled
-    `n_iters` rather than scipy's `nit` to sit beside the two work counts.
-    Work is reported on two axes instead of scipy's single `nfev`: `n_points` is the
-    g points served (the serial-cost number) and `n_batches` the g batches served
-    (the parallel wall-clock number); they are different numbers and never mix.
-    Only fused value+gradient passes are charged, so a step's f-only trials
-    appear in neither: the axis that dominates is exact, the cheap half is
-    reported nowhere.
+    `n_iters` rather than scipy's `nit` to sit beside the four work counts.
+    Work is reported as four counts instead of scipy's single `nfev`, on two
+    independent axes that never mix. The seam that served the work decides the
+    pair of fields: `n_f_*` is the value-only seam (`eval_f`), `n_f_g_*` the
+    fused value+gradient one - the expensive half, and the only one a budget gate
+    can close on. Points and batches are the second axis: the serial cost and the
+    parallel wall-clock cost. So `n_f_g_points` is the gradient points served and
+    `n_f_g_batches` the gradient passes, while `n_f_points` / `n_f_batches` are
+    the same two units for the cheap half. Which axis a comparison reads is the
+    caller's business, not the engine's: a global-model comparison reads the f
+    pair, a descent-cost comparison the f_g pair. Neither is secondary, so a run
+    handed no `eval_f` seam simply reports zero on the f pair.
 
     Two deliberate differences from `OptimizeResult`: `success`/`message` are
     absent because the engine has no convergence criterion of its own - the one
@@ -386,8 +391,10 @@ class NPathResult:
 
     x: jnp.ndarray  # (d,) coords of the best point found
     fun: float  # min over feasible recorded evals; inf if none, -inf if unbounded
-    n_points: int  # points served (the serial-cost count)
-    n_batches: int  # batches (evals) served (the parallel wall-clock count)
+    n_f_points: int  # value-only points served (the f seam)
+    n_f_batches: int  # value-only batches served (the f seam)
+    n_f_g_points: int  # fused points served (the serial-cost count)
+    n_f_g_batches: int  # fused batches served (the parallel wall-clock count)
     n_iters: int  # completed iterations (iteration 0 places the flock)
     status: NPathStatus
 
@@ -481,13 +488,17 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     pair per dim, `None`/±inf = unbounded); the engine clips into it and knows
     nothing about any map from these coordinates to the caller's physical ones.
 
-    Work is billed on two axes, never mixed, and only the fused
-    value+gradient pass is charged: f-only trials and rejected trial batches are
-    billed nowhere. `n_points` is the g points served (the initial points, each
-    restart start, and each trial winner - one each), the serial-cost number;
-    `n_batches` is the g batches (one per fused pass), the parallel wall-clock
-    number. They are reports, not caps. The run's own stop is the horizon: at
-    most `max_iters` iterations (status "max_iters"), or, if `time_limit` is
+    Work is reported as four counts, never mixed. The fused value+gradient seam
+    is the billable one - the only one a budget gate closes on - and
+    `n_f_g_points` is the g points it served (the initial points, each restart
+    start, and each trial winner - one each), the serial-cost number, with
+    `n_f_g_batches` the fused passes, the parallel wall-clock number. The
+    value-only seam (`eval_f`, when handed in) is counted the same way on its own
+    pair, `n_f_points` / `n_f_batches`: recorded but never gated, so a run
+    without the seam reports zero there. All four are reports, not caps.
+
+    The run's own stop is the horizon: at most `max_iters` iterations (status
+    "max_iters"), or, if `time_limit` is
     given, the wall-clock deadline (status "time_limit"); at least one of the
     two must be passed. Iterations are the unit on purpose - an iteration is one
     move per path (iteration 0 places the flock instead), so the same number
@@ -558,8 +569,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         - ``x``: the argmin in the caller's coordinates
         - ``fun``: the best value (min feasible eval; ``inf`` if none, ``-inf``
           when the objective has no floor, which also ends the run)
-        - ``n_points``: g points served (the serial-cost count)
-        - ``n_batches``: g batches served (the parallel wall-clock count)
+        - ``n_f_points``: value-only points served (the f seam)
+        - ``n_f_batches``: value-only batches served (the f seam)
+        - ``n_f_g_points``: fused points served (the serial-cost count)
+        - ``n_f_g_batches``: fused batches served (the parallel wall-clock count)
         - ``n_iters``: completed iterations (iteration 0 places the flock)
         - ``status``: why the run stopped
 
@@ -681,8 +694,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     return NPathResult(
         x=best.x,
         fun=best.fun,
-        n_points=budget.n_points,
-        n_batches=budget.n_batches,
+        n_f_points=budget.n_f_points,
+        n_f_batches=budget.n_f_batches,
+        n_f_g_points=budget.n_f_g_points,
+        n_f_g_batches=budget.n_f_g_batches,
         n_iters=budget.n_iters,
         status=status,
     )
@@ -729,15 +744,15 @@ class _Budget:
     `budget_check` that flips only on served batches spins forever under a
     stalled flock, and the engine cannot tell it from one that flips alone.
 
-    `n_batches` and `n_points` are pure reports, not caps: the g batches served
-    (one per fused value+gradient pass, the parallel wall-clock number) and the
-    points they covered (the serial-cost number). What is charged is the one
-    gradient pass an iteration buys for the points it decided on, so a rejected
-    trial is cheaper work that is charged nowhere and the report stays the
-    honest bill on the axis that dominates. The refusal is a signal
-    (`_BudgetExhausted`),
-    never a flag stored here, and a gate that only tightens (a counter, a clock)
-    needs no latching: the run ends on the first thing it refuses.
+    The four counters are pure reports, not caps, and not one of them gates: the
+    fused pass counts on its pair (`n_f_g_points` / `n_f_g_batches`, one batch per
+    value+gradient pass) and the value-only pass counts the same way on its own
+    (`n_f_points` / `n_f_batches`). Only the fused pair is where a refusal can
+    land - the gate is asked by `_Evaluator` before that charge, never here - so a
+    counted value-only batch is work the run records and never stops on. The
+    refusal is a signal (`_BudgetExhausted`), never a flag stored here, and a gate
+    that only tightens (a counter, a clock) needs no latching: the run ends on
+    the first thing it refuses.
     """
 
     def __init__(
@@ -748,15 +763,22 @@ class _Budget:
     ) -> None:
         self.max_iters = max_iters
         self.deadline = None if time_limit is None else time.monotonic() + time_limit
-        self.n_points = 0
-        self.n_batches = 0
+        self.n_f_points = 0
+        self.n_f_batches = 0
+        self.n_f_g_points = 0
+        self.n_f_g_batches = 0
         self.n_iters = 0
         self._gate = budget_check
 
-    def charge(self, batch_size: int) -> None:
-        """Record one served g batch - the run's only charged site."""
-        self.n_batches += 1
-        self.n_points += batch_size
+    def charge_f(self, batch_size: int) -> None:
+        """Record one served value-only batch. Counted, never gated."""
+        self.n_f_batches += 1
+        self.n_f_points += batch_size
+
+    def charge_f_g(self, batch_size: int) -> None:
+        """Record one served fused batch - the run's only gated charge."""
+        self.n_f_g_batches += 1
+        self.n_f_g_points += batch_size
 
     def tick(self) -> None:
         """Record one completed iteration. The caller ticks only finished ones."""
@@ -854,9 +876,10 @@ class _Evaluator:
     """The run's evaluation seams, and what they charge and observe.
 
     Both halves share one rule, stated here once so no call site has to restate
-    it: a fused `_serve_f_g` is the run's only charged site (the gate is asked
+    it: a fused `_serve_f_g` is the run's only gated site (the gate is asked
     before the charge, so a batch is served whole or not at all), and a
-    `_serve_f` call is cheaper work that is not a budget event. Whichever half
+    `_serve_f` call is cheaper work that is counted on the f pair and never
+    gated. Whichever half
     served a batch reports it to the two readers of the run's evidence: the best
     (`_Best`, which filters for feasibility) and the global model (which does
     not). That pair is deliberately the only place either is fed - a batch is
@@ -945,9 +968,10 @@ class _Evaluator:
 
         The stop query is asked at this batch altitude before the charge, so a
         batch is served whole or not at all - no partial prefix of a batch is
-        ever evaluated - and the counters only ever hold g batches that were
-        served. This is the run's only charged site: a step's rejected trials
-        are f-only and cheaper, and are not budget events. The refusal is a
+        ever evaluated - and the fused counters only ever hold batches that were
+        served. This is the run's only gated site: a step's rejected trials are
+        f-only and cheaper, counted on the f pair and never a budget event. The
+        refusal is a
         signal, not a state: it carries its reason straight to the run's one
         catch, so no intermediate frame has to check it. Returns (f_vals,
         g_batch).
@@ -955,7 +979,7 @@ class _Evaluator:
         reason = self._budget.stop()
         if reason is not None:
             raise _BudgetExhausted(reason)
-        self._budget.charge(x_batch.shape[0])
+        self._budget.charge_f_g(x_batch.shape[0])
         f_batch, g_batch, feas = self._eval_f_g(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
@@ -968,11 +992,12 @@ class _Evaluator:
         return f_vals, g_batch
 
     def _serve_f(self, x_batch: jnp.ndarray) -> list[float]:
-        """Serve one f-only batch: no gate asked, no charge, same bookkeeping.
+        """Serve one f-only batch: counted, never gated, same bookkeeping.
 
         A step's rejected trials are the f half alone, which is the cheap half,
-        so they are not budget events: the stop query is not asked and the
-        counters do not move. The winners' fused pass still is one, and the call
+        so they are not budget events: the stop query is not asked, though the
+        batch is counted on the f pair (`charge_f`) so the cheap half is reported
+        rather than lost. The winners' fused pass still is one, and the call
         site is entered only after the loop head's stop query cleared the
         iteration, so the f-only blind spot stays under one step. Only
         `serve_trials` calls this; the None-check below is for the type checker
@@ -982,6 +1007,7 @@ class _Evaluator:
         if eval_f is None:
             msg = "_serve_f requires eval_f"
             raise RuntimeError(msg)
+        self._budget.charge_f(x_batch.shape[0])
         f_batch, feas = eval_f(x_batch)
         f_vals = f_batch.tolist()
         # No gradient in hand: the f half alone. The same point is reported

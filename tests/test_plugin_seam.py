@@ -192,7 +192,7 @@ def test_injected_solver_is_driven() -> None:
     assert solver.verdicts == [0, 1, 2], solver.verdicts  # one trial, then accept
     # The flock's one fused batch, then the accepted winners' one: two batches,
     # k points each.
-    assert res.n_points == sum(w for w, _d in shapes) == 2 * k
+    assert res.n_f_g_points == sum(w for w, _d in shapes) == 2 * k
     assert res.status == "max_iters"
 
 
@@ -212,7 +212,7 @@ def test_give_up_stalls_a_path() -> None:
     assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
     # Nothing to commit: every batch this run serves is a trial, and a trial
     # without the f-only seam is fused, so the count is one flock plus one round.
-    assert res.n_points == sum(w for w, _d in shapes) == 2 * k
+    assert res.n_f_g_points == sum(w for w, _d in shapes) == 2 * k
     assert res.status == "max_iters"
 
 
@@ -244,23 +244,25 @@ def test_an_unusable_start_is_refused_before_it_seeds_the_method() -> None:
     )
     assert solver.inited == [], solver.inited  # an unusable start is never seed
     assert solver.folds == [], solver.folds  # and never becomes a start
-    assert res.n_batches == 2, res.n_batches  # the flock and one re-draw
+    assert res.n_f_g_batches == 2, res.n_f_g_batches  # the flock and one re-draw
     assert res.status == "max_iters"
 
 
 def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
-    """The gate bills the fused pass; a step's value-only trial is not billed.
+    """The gate bills the fused pass; a value-only trial is counted, not billed.
 
     What a caller spends real time on is the value *and* gradient pass, so that
     is what `budget_check` counts. A judged step first serves its proposal
     value-only (the ruling is on f) and then buys the winner's gradient, fused
     with the value it already knows - so a step is one billed batch and one
-    donated one, and the run never serves a fused batch past the gate.
+    counted-but-ungated one, and the run never serves a fused batch past the
+    gate. The cheap half is reported on its own pair of counters instead of being
+    lost; what it never does is move the fused pair or close the gate.
     """
     k = 2
 
-    def run(limit: int) -> tuple[int, int, int, str]:
-        """Serve under one gate limit; return (billed, donated, n_points, status)."""
+    def run(limit: int) -> tuple[int, int, int, int, int, str]:
+        """Serve under one limit; return (billed, donated, f_b, f_p, f_g_p, status)."""
         billed = 0  # fused batches: the only billed calls
         donated = 0  # value-only trials: served, never billed
 
@@ -285,20 +287,31 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
             max_iters=20,  # not the binding stop: the gate closes first
             local_solver=StubSolver(),
         )
-        return billed, donated, res.n_points, res.status
+        return (
+            billed,
+            donated,
+            res.n_f_batches,
+            res.n_f_points,
+            res.n_f_g_points,
+            res.status,
+        )
 
     for limit in (1, 2, 4, 7):
-        billed, donated, n_points, status = run(limit)
+        billed, donated, n_f_batches, n_f_points, n_f_g_points, status = run(limit)
         # The gate closes on the billed count alone: never one fused batch past it.
         assert billed == limit, (limit, billed)
-        # n_points is the charged half: an f-only trial serves work that is
-        # never counted (and never billed).
-        assert n_points == k * billed, (limit, n_points, donated)
+        # The fused pair is the billable half, and it is exact.
+        assert n_f_g_points == k * billed, (limit, n_f_g_points, donated)
         assert status == "budget_exhausted", (limit, status)
         # The value-only trials did happen, and stayed out of the billed count.
         # One donated trial per iteration after the flock's: the run's first
         # batch is the flock, so a gate of `limit` buys `limit - 1` trials.
         assert donated == limit - 1, (limit, donated)
+        # ...and the f pair now records them: one counted batch per served trial,
+        # one point per judged path in it. Neither number is what the gate closed
+        # on, which is the whole point of splitting the counts.
+        assert n_f_batches == donated, (limit, n_f_batches, donated)
+        assert n_f_points == k * donated, (limit, n_f_points, donated)
 
 
 def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
@@ -315,7 +328,10 @@ def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
     assert res.status == "max_iters", res
     # The flock's batch, then one fused batch per step (no f-only seam is
     # handed in, so a trial arrives already graded).
-    assert res.n_points == sum(w for w, _d in shapes) == k + 3 * k
+    assert res.n_f_g_points == sum(w for w, _d in shapes) == k + 3 * k
+    # No seam handed in, so the cheap pair never moves: a fused-only run reports
+    # zero on the f axis rather than an absent field.
+    assert (res.n_f_points, res.n_f_batches) == (0, 0), res
 
 
 def test_box_is_data_not_a_unit_cube_assumption() -> None:
@@ -385,7 +401,7 @@ def test_the_default_model_is_exactly_a_uniform_global_model() -> None:
             restart_stalled=True,
             key=jax.random.PRNGKey(7),
         )
-        return served, res.x, res.fun, res.n_points
+        return served, res.x, res.fun, res.n_f_g_points
 
     default_served, default_x, default_fun, default_points = run(None)
     ours_served, ours_x, ours_fun, ours_points = run(
@@ -400,16 +416,18 @@ def test_the_default_model_is_exactly_a_uniform_global_model() -> None:
     assert default_points == ours_points, (default_points, ours_points)
 
 
-def test_reports_points_and_batches_separately() -> None:
-    """n_points and n_batches are two units, and both are always reported.
+def test_reports_four_counts_on_two_axes() -> None:
+    """Points and batches are two units; f and f_g are two seams. All four report.
 
     A batch is the points one eval serves, so a run of k paths that serves the
     same batches reports k times the points of a k=1 run, and the same batch
-    count. There is no billing mode to switch: the serial cost is `n_points`, the
-    parallel wall-clock cost is `n_batches`.
+    count. There is no billing mode to switch and no primary axis: `points` and
+    `batches` are the serial cost and the parallel wall-clock cost, and which
+    seam served them picks the pair. A run handed no `eval_f` seam reports its
+    work on the fused pair and zero on the f pair.
     """
 
-    def run(k: int) -> tuple[int, int]:
+    def run(k: int) -> tuple[int, int, int, int]:
         eval_f_g, _shapes = evaluator()
         res = n_path_schedule(
             eval_f_g,
@@ -419,11 +437,13 @@ def test_reports_points_and_batches_separately() -> None:
             max_iters=2,  # the flock plus one accepted trial
             local_solver=StubSolver(),
         )
-        return res.n_points, res.n_batches
+        return res.n_f_points, res.n_f_batches, res.n_f_g_points, res.n_f_g_batches
 
     batches = 2  # the flock, then the winners; independent of n_paths
-    points_3, batches_3 = run(3)
-    points_1, batches_1 = run(1)
+    f_points_3, f_batches_3, points_3, batches_3 = run(3)
+    f_points_1, f_batches_1, points_1, batches_1 = run(1)
+    assert (f_points_3, f_batches_3) == (0, 0)  # no seam, so no f work
+    assert (f_points_1, f_batches_1) == (0, 0)
     assert batches_3 == batches_1 == batches
     assert points_3 == batches * 3  # 6 points
     assert points_1 == batches  # 2 points
@@ -461,8 +481,9 @@ def test_a_flocks_start_is_served_once_fused() -> None:
     )
     assert f_calls == [], f_calls  # nothing to compare, so nothing read early
     assert fused_shapes == [(2, 1)], fused_shapes  # both halves, one pass
-    assert res.n_batches == 1, res  # that pass is also the flock's batch
-    assert res.n_points == 2, res
+    assert res.n_f_g_batches == 1, res  # that pass is also the flock's batch
+    assert res.n_f_g_points == 2, res
+    assert (res.n_f_points, res.n_f_batches) == (0, 0), res  # never read early
 
 
 def test_a_rejected_trial_is_bought_no_gradient() -> None:
@@ -514,8 +535,8 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
     assert solver.verdicts == [0, 0], solver.verdicts
     assert solver.folds == [0], solver.folds  # one winner, one fold
     # Two batches for the whole run: the flock's, then the winner's.
-    assert res.n_batches == 2, res
-    assert res.n_points == 2 * k, res
+    assert res.n_f_g_batches == 2, res
+    assert res.n_f_g_points == 2 * k, res
 
 
 def test_one_gradient_batch_per_iteration() -> None:
@@ -554,8 +575,8 @@ def test_one_gradient_batch_per_iteration() -> None:
         local_solver=StubSolver(),
     )
     assert fused_shapes == [(2, 1), (2, 1)], fused_shapes  # k=2 both times
-    assert res.n_batches == 2, res
-    assert res.n_points == 2 * k, res
+    assert res.n_f_g_batches == 2, res
+    assert res.n_f_g_points == 2 * k, res
 
 
 def test_the_model_is_fed_at_both_bottoms_of_a_batch() -> None:
@@ -705,11 +726,12 @@ def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
     own: the ruling is f-only, and the winner's gradient is bought again, fused,
     in `settle`. Both lanes therefore bill the same fused batches; what the
     unjudged one never pays is the f-only pass, which is the whole reason to
-    answer False.
+    answer False. The engine's own f counters agree with the seam's tally, so what
+    the unjudged lane skips shows up as a zero rather than as an absence.
     """
     k = 2
 
-    def run(solver: StubSolver) -> tuple[int, int, int]:
+    def run(solver: StubSolver) -> tuple[int, int, int, int, int]:
         eval_f_g, _shapes = evaluator()
         f_only_widths: list[int] = []
 
@@ -725,11 +747,18 @@ def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
             max_iters=2,  # the flock plus one step
             local_solver=solver,
         )
-        return sum(f_only_widths), res.n_batches, res.n_points
+        return (
+            sum(f_only_widths),
+            res.n_f_points,
+            res.n_f_batches,
+            res.n_f_g_batches,
+            res.n_f_g_points,
+        )
 
-    # The flock needs no ruling either, so iteration 0 is silent.
-    assert run(StubSolver()) == (k, 2, 2 * k)
-    assert run(UnjudgedSolver()) == (0, 2, 2 * k)
+    # The flock needs no ruling either, so iteration 0 is silent. A judged step is
+    # one f-only batch of k points, then the winner's fused pass.
+    assert run(StubSolver()) == (k, k, 1, 2, 2 * k)
+    assert run(UnjudgedSolver()) == (0, 0, 0, 2, 2 * k)
 
 
 def test_an_unjudged_winner_must_be_finite_to_be_committed() -> None:

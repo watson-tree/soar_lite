@@ -187,7 +187,7 @@ def test_a_half_dead_start_stalls_the_path_but_its_value_still_reports() -> None
     )
 
     # One batch per iteration: a point-less path is re-drawn, never stepped.
-    assert res.n_batches == 10, res.n_batches
+    assert res.n_f_g_batches == 10, res.n_f_g_batches
     assert res.fun == float(batches[0].min())  # and its value is still the answer
     assert math.isfinite(float(res.fun))
     assert bool(jnp.all(jnp.isfinite(res.x)))
@@ -221,6 +221,6 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
         max_iters=10,
     )
 
-    assert res.n_batches == 2, res.n_batches  # the flock + the one refused step
+    assert res.n_f_g_batches == 2, res.n_f_g_batches  # the flock + the one refused step
     assert res.status == "max_iters"
     assert math.isfinite(float(res.fun))

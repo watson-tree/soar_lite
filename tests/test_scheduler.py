@@ -217,16 +217,16 @@ def test_batch_shape_and_point_counting() -> None:
         local_solver=HalfStep(),
     )
     assert isinstance(res, NPathResult)
-    assert res.n_points == rec.evals, (res.n_points, rec.evals)
-    assert res.n_points <= 500
+    assert res.n_f_g_points == rec.evals, (res.n_f_g_points, rec.evals)
+    assert res.n_f_g_points <= 500
     # n_iters counts engine iterations, not the trials inside them (the method's
     # own trial cap bounds one iteration), so it stays far below the eval
     # count and never passes the horizon.
     assert 0 < res.n_iters <= 50
     # With no rule firing, a path serves at most one g point per iteration, and
     # every g batch serves at least one: the two counts bracket each other.
-    assert res.n_points <= res.n_iters * 4, (res.n_points, res.n_iters)
-    assert res.n_batches <= res.n_points, (res.n_batches, res.n_points)
+    assert res.n_f_g_points <= res.n_iters * 4, (res.n_f_g_points, res.n_iters)
+    assert res.n_f_g_batches <= res.n_f_g_points, (res.n_f_g_batches, res.n_f_g_points)
     # batched concurrency: at least one call served >1 point at once
     assert any(m > 1 for (m, _d) in rec.batch_shapes), rec.batch_shapes
     # all batches carry the same width d
@@ -248,8 +248,8 @@ def test_budget_exhaustion_stops_everything() -> None:
         budget_check=rec.limit_check(30),
         local_solver=HalfStep(),
     )
-    assert res.n_points == rec.evals
-    assert 30 <= res.n_points < 30 + 8  # at most one batch past the limit
+    assert res.n_f_g_points == rec.evals
+    assert 30 <= res.n_f_g_points < 30 + 8  # at most one batch past the limit
     assert 0 < res.n_iters < 100  # the gate stopped it, not the horizon
     assert res.status == "budget_exhausted"
 
@@ -263,7 +263,7 @@ def test_budget_exhaustion_stops_everything() -> None:
         budget_check=rec0.limit_check(0),
         local_solver=HalfStep(),
     )
-    assert res0.n_points == 0
+    assert res0.n_f_g_points == 0
     assert res0.n_iters == 0  # never got past the first gate check
     assert res0.status == "budget_exhausted"
 
@@ -278,7 +278,7 @@ def test_budget_exhaustion_stops_everything() -> None:
         max_iters=1,
         local_solver=HalfStep(),
     )
-    assert res1.n_points == 4  # iteration 0 served every path
+    assert res1.n_f_g_points == 4  # iteration 0 served every path
     assert res1.n_iters == 1
     assert res1.status == "max_iters"
 
