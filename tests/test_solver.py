@@ -9,11 +9,17 @@ invariance of the steady-state step. No engine wiring. Run with:
 
 import math
 from collections.abc import Callable
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 
-from soar_lite.engine import PathPoint, n_path_schedule
+from soar_lite.engine import (
+    Bounds,
+    PathPoint,
+    UniformGlobalModel,
+    n_path_schedule,
+)
 from soar_lite.solver import DiagonalPreconditioner
 
 jax.config.update("jax_enable_x64", val=True)
@@ -26,6 +32,29 @@ def close(
 ) -> bool:
     """Return True iff all elements of a and b agree within tol."""
     return bool(jnp.max(jnp.abs(a - b)) < tol)
+
+
+def flock_kwargs(
+    x0: jnp.ndarray,
+    bounds: Bounds,
+    *,
+    key: jnp.ndarray | None = None,
+) -> dict[str, Any]:
+    """Return the entry's two flock kwargs: the run's width and its starts.
+
+    The engine takes its width as `n_paths` and every point a path starts from as
+    the global model's first proposal, so a test that chooses its flock says both
+    here. The model is the shipped default one: it hands `x0` back on the first
+    `propose` and draws any later re-draw from `key`.
+    """
+    return {
+        "n_paths": int(x0.shape[0]),
+        "global_model": UniformGlobalModel(
+            bounds,
+            key=jax.random.PRNGKey(0) if key is None else key,
+            x0=x0,
+        ),
+    }
 
 
 # --- DiagonalPreconditioner ---
@@ -302,11 +331,14 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
 
     result = n_path_schedule(
         eval_f_g,
-        x0=jnp.array([[0.5, 0.5]]),
+        **flock_kwargs(
+            jnp.array([[0.5, 0.5]]),
+            jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
+            key=jax.random.PRNGKey(0),
+        ),
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         max_iters=50,
         solver=DiagonalPreconditioner(theta=0.0),
-        key=jax.random.PRNGKey(0),
     )
     # θ = 0 makes the post-warm-up step exactly Newton, so g = 0 after it and
     # the next verdict gives up (the stopping test); the point is still the
@@ -386,11 +418,14 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
 
     result = n_path_schedule(
         eval_f_g,
-        x0=jnp.array([[0.5, 0.5]]),
+        **flock_kwargs(
+            jnp.array([[0.5, 0.5]]),
+            jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
+            key=jax.random.PRNGKey(0),
+        ),
         bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
         max_iters=50,
         solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
-        key=jax.random.PRNGKey(0),
     )
     assert close(result.x, center, 1e-9)
     assert result.fun < 1e-12

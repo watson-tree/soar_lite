@@ -12,7 +12,8 @@ Every driver returns a :class:`Trace` - best-so-far against both cost axes:
 
 All single-chain drivers start from one uniform draw over the box; soar-lite
 draws its n_paths starts the same way - uniformly over the box, in the driver -
-so no method gets a start it did not pay for.
+and hands them to the engine as the default model's first proposal, so no method
+gets a start it did not pay for.
 """
 
 import math
@@ -25,7 +26,12 @@ import optax
 from scipy.optimize import minimize
 
 from experiments.problems import Problem
-from soar_lite import DiagonalPreconditioner, RestartRule, n_path_schedule
+from soar_lite import (
+    DiagonalPreconditioner,
+    RestartRule,
+    UniformGlobalModel,
+    n_path_schedule,
+)
 
 Carry = tuple[jnp.ndarray, optax.OptState, jnp.ndarray]
 
@@ -75,8 +81,9 @@ def run_soar_lite(
 
     The flock is drawn here, uniformly over the box, so the experiment's
     distribution is the caller's: the engine only ever places the points it is
-    handed. The key is split once, so the flock and the restart draws do not
-    share a stream.
+    handed. It arrives as the default model's first proposal (`x0`), which is
+    also why the key is split once - the flock takes one half and the restarts
+    the other, so the two do not share a stream.
     """
     trace = Trace()
     n_points = 0
@@ -105,13 +112,13 @@ def run_soar_lite(
     )
     result = n_path_schedule(
         eval_f_g,
-        x0=x0,
+        n_paths=n_paths,
         bounds=problem.bounds,
+        global_model=UniformGlobalModel(problem.bounds, key=key, x0=x0),
         max_iters=max_steps,
         budget_check=lambda: n_batches < max_steps,
         solver=DiagonalPreconditioner(),
         restart_rule=restart_rule,
-        key=key,
     )
     trace.fun = float(result.fun)
     return trace
@@ -138,7 +145,9 @@ def run_adam(problem: Problem, *, max_steps: int, seed: int, lr: float) -> Trace
         return (x, opt_state, best), best
 
     _, bests = jax.lax.scan(
-        body, (x0, state, jnp.asarray(jnp.inf)), jnp.arange(1, max_steps + 1),
+        body,
+        (x0, state, jnp.asarray(jnp.inf)),
+        jnp.arange(1, max_steps + 1),
     )
     values = np.asarray(bests.tolist(), dtype=float)
     grid = np.arange(1, max_steps + 1)

@@ -31,12 +31,15 @@ site has to keep every other site's rows true.
 # is the intended read, not a boundary crossing.
 
 import math
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import pytest
 
 from soar_lite.engine import (
+    Bounds,
+    UniformGlobalModel,
     _argmin_finite,
     _Best,
     _OptimumReached,
@@ -50,6 +53,29 @@ jax.config.update("jax_enable_x64", val=True)
 def unit_bounds(d: int = 1) -> jnp.ndarray:
     """Return the engine's box in working coords: x ∈ [0,1]^d."""
     return jnp.stack([jnp.zeros(d), jnp.ones(d)], axis=1)
+
+
+def flock_kwargs(
+    x0: jnp.ndarray,
+    bounds: Bounds,
+    *,
+    key: jnp.ndarray | None = None,
+) -> dict[str, Any]:
+    """Return the entry's two flock kwargs: the run's width and its starts.
+
+    The engine takes its width as `n_paths` and every point a path starts from as
+    the global model's first proposal, so a test that chooses its flock says both
+    here. The model is the shipped default one: it hands `x0` back on the first
+    `propose` and draws any later re-draw from `key`.
+    """
+    return {
+        "n_paths": int(x0.shape[0]),
+        "global_model": UniformGlobalModel(
+            bounds,
+            key=jax.random.PRNGKey(0) if key is None else key,
+            x0=x0,
+        ),
+    }
 
 
 @pytest.mark.parametrize(
@@ -71,7 +97,12 @@ def unit_bounds(d: int = 1) -> jnp.ndarray:
     ],
 )
 def test_best_counts_a_value_only_when_it_is_feasible_and_finite(
-    f: float, fun: float, fun_raw: float, *, feasible: bool | None, ends_run: bool,
+    f: float,
+    fun: float,
+    fun_raw: float,
+    *,
+    feasible: bool | None,
+    ends_run: bool,
 ) -> None:
     """One served point, every row of the table, against one fresh `_Best`."""
     best = _Best(1)
@@ -127,7 +158,8 @@ def test_a_mask_flag_that_is_not_zero_or_one_is_refused(flag: float) -> None:
     ],
 )
 def test_argmin_finite_never_returns_a_non_finite_candidate(
-    values: list[float], expected: int | None,
+    values: list[float],
+    expected: int | None,
 ) -> None:
     """The finite-only argmin, which both bests and the feasible read sit on."""
     assert _argmin_finite(values) == expected
@@ -138,10 +170,12 @@ def test_a_half_dead_start_stalls_the_path_but_its_value_still_reports() -> None
 
     Every start has a finite value and a NaN in the first gradient component.
     Nothing may be proposed from such a point, so the path never steps - and
-    with `NoRestartRule` nothing re-draws it either - yet its value is a value
+    since it never holds a point, the engine owes it a fresh start every
+    iteration, which is refused the same way. `NoRestartRule` is never asked: a
+    path with no point is restarted without a verdict. Yet the value is a value
     the run served, so it is the answer. The two halves are gated on different
     questions and are allowed to disagree: the report is about the value, the
-    stall is about what can be done next.
+    re-draw is about what can be done next.
     """
     batches: list[jnp.ndarray] = []
 
@@ -154,14 +188,14 @@ def test_a_half_dead_start_stalls_the_path_but_its_value_still_reports() -> None
 
     res = n_path_schedule(
         eval_f_g,
-        x0=jnp.array([[0.5]]),
+        **flock_kwargs(jnp.array([[0.5]]), unit_bounds(), key=jax.random.PRNGKey(0)),
         bounds=unit_bounds(),
         max_iters=10,
         restart_rule=NoRestartRule(),
-        key=jax.random.PRNGKey(0),
     )
 
-    assert res.n_batches == 1, res.n_batches  # the half-dead start is never stepped
+    # One batch per iteration: a point-less path is re-drawn, never stepped.
+    assert res.n_batches == 10, res.n_batches
     assert res.fun == float(batches[0].min())  # and its value is still the answer
     assert math.isfinite(float(res.fun))
     assert bool(jnp.all(jnp.isfinite(res.x)))
@@ -190,11 +224,10 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
 
     res = n_path_schedule(
         eval_f_g,
-        x0=jnp.array([[0.5]]),
+        **flock_kwargs(jnp.array([[0.5]]), unit_bounds(), key=jax.random.PRNGKey(0)),
         bounds=unit_bounds(),
         max_iters=10,
         restart_rule=NoRestartRule(),
-        key=jax.random.PRNGKey(0),
     )
 
     assert res.n_batches == 2, res.n_batches  # the flock + the one refused step

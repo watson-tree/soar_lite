@@ -1,17 +1,18 @@
 """The n-path engine: contracts, shared types, and the schedule.
 
-This module is the seam (拍板) of soar_lite: it owns the two plugin contracts
-(`LocalSolver` and `RestartRule`), the data the plugins exchange (`PathPoint`,
-`Verdict`), and the shared plumbing (`NPathResult`, the box/global-model and
-evaluator seams, and the `n_path_schedule` loop). The run's state lives in five
-private holders, one per state family: `_GlobalModel` (the restart-point
-source), `_Evaluator` (the two evaluation seams and the one charged site),
-`_Paths` (the n-path state machine), `_Best` (the run's best, `f⋆`), and
-`_Budget` (the stop meter and work report). Concretes import *from* here, never
-the other way around at module level:
+This module is the seam (拍板) of soar_lite: it owns the three plugin contracts
+(`LocalSolver`, `RestartRule`, `GlobalModel`), the data the plugins exchange
+(`PathPoint`, `Verdict`), and the shared plumbing (`NPathResult`, the box and
+evaluator seams, the shipped `UniformGlobalModel`, and the `n_path_schedule`
+loop). The run's state lives in four private holders, one per state family:
+`_Evaluator` (the two evaluation seams and the one charged site), `_Paths` (the
+n-path state machine), `_Best` (the run's best, `f⋆`), and `_Budget` (the stop
+meter and work report). Concretes import *from* here, never the other way around
+at module level:
 
     soar_lite/
-      engine.py   <- LocalSolver, RestartRule, PathPoint, Verdict, n_path_schedule
+      engine.py   <- LocalSolver, RestartRule, GlobalModel, PathPoint, Verdict,
+                     UniformGlobalModel, n_path_schedule
       solver.py   <- DiagonalPreconditioner (implements LocalSolver)
       restart.py  <- NoRestartRule, StallRestartRule (implement RestartRule)
 
@@ -246,14 +247,14 @@ class RestartRule(Protocol):
     them.
 
     These methods are called by the engine on its own schedule -
-    `should_restart` once per path per iteration, before that iteration's move,
-    and `observe_step` once per path per iteration the path spent stepping or
-    stalling - so they trust their arguments: `n_path_schedule` validates the
-    object once (that it carries this contract) at the entry, and nothing here
-    re-checks. The one exception is `observe_step`'s `delta`: a finite float or
-    `None` (no step) are the only two things the engine reports, so a
-    non-finite delta is a wiring error a rule may reject there rather than fold
-    into its evidence.
+    `should_restart` once per path per iteration that holds a point, before that
+    iteration's move, and `observe_step` once per path per iteration the path
+    spent stepping or stalling - so they trust their arguments: `n_path_schedule`
+    validates the object once (that it carries this contract) at the entry, and
+    nothing here re-checks. The one exception is `observe_step`'s `delta`: a
+    finite float or `None` (no step) are the only two things the engine reports,
+    so a non-finite delta is a wiring error a rule may reject there rather than
+    fold into its evidence.
     """
 
     def observe_step(self, i: int, delta: float | None) -> None:
@@ -275,16 +276,15 @@ class RestartRule(Protocol):
     def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:
         """Return True iff path i should be restarted from f_k with raw best `f⋆`.
 
-        Asked for every path before the iteration's move, iteration 0 included:
-        `x0` has been placed by then, so there is no cold start for a rule to
-        special-case - a path that could not be placed is stalled, and its stall
-        arrives on `observe_step`.
+        Asked for every path that holds a point, before the iteration's move.
+        A path with no point (every path on iteration 0, and any path whose
+        start was refused) is restarted without being asked - "no point" is the
+        engine's own state, not a verdict to weigh - which is how the flock gets
+        placed without a rule having to special-case a cold start.
 
         `f⋆` is the raw minimum (see the class docstring) and `f_k` is path i's
-        current value in the same unfiltered terms. A path with no current point
-        - its initial point was refused as unusable - hands `nan`; a rule that
-        restarts on absence reads that case, and a rule that weighs values sees
-        only paths that have one.
+        current value in the same unfiltered terms, always finite: a path whose
+        point went non-finite is stalled, not point-less, and still reports.
         """
         ...
 
@@ -292,7 +292,10 @@ class RestartRule(Protocol):
 # --- engine: the n-path schedule ---
 
 NPathStatus: TypeAlias = Literal[
-    "max_iters", "time_limit", "budget_exhausted", "unbounded",
+    "max_iters",
+    "time_limit",
+    "budget_exhausted",
+    "unbounded",
 ]
 # Four names for four ways to end a run: the three gates, in the order they are
 # checked (iteration horizon, wall-clock deadline, the caller's extra batch
@@ -305,7 +308,8 @@ NPathStatus: TypeAlias = Literal[
 # together on purpose - the caller's fused value_and_grad is one AD pass, and
 # the step's call sites want both at once (scipy's `jac=True` form, batched).
 EvalFG: TypeAlias = Callable[
-    [jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]",
+    [jnp.ndarray],
+    "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]",
 ]
 
 # The f-only sibling, for a caller that also holds a value function without the
@@ -322,14 +326,186 @@ EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | Non
 # the only dimension the engine knows).
 Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
 
-# The restart-point source - SOAR's *global model*: (key, n_points) ->
-# (n_points, d) points in the engine's own coordinates. The engine asks it only
-# when a restart fires, so it never seeds the run (`x0` does), and it is the
-# only authority on where a restart lands. `None` means i.i.d. uniform over a
-# finite `bounds`, the model-free default; an injected one may be anything that
-# proposes points (a surrogate maximising expected improvement - the SOAR
-# reading - a quasi-random grid, or a cached list).
-GlobalModel: TypeAlias = Callable[[jnp.ndarray, int], jnp.ndarray]
+
+@runtime_checkable
+class GlobalModel(Protocol):
+    """The engine's restart-point source (its third plugin point).
+
+    The model answers two questions the engine cannot: *where* a restart lands
+    (`propose`) and *what the run has learned so far* (`observe`). The engine
+    feeds it every batch it serves and asks for points only when a restart
+    fires - it never seeds the run itself, since the first restart is the
+    flock's placement. That split is what lets a caller cap how much evidence
+    the model fits: a surrogate that wants more points than it has can answer
+    `propose` with random search until its evidence arrives, and the engine has
+    no opinion either way, since it only ever sees the points.
+
+    One instance serves the whole run (like `LocalSolver` and `RestartRule`),
+    so whatever the model accumulates lives inside it; the engine never reads
+    it. The methods are called by the engine on its own schedule - `observe`
+    once per served batch, `propose` once per cohort of restarting paths - so
+    they trust their arguments: `n_path_schedule` validates the object once at
+    the entry (that it carries this contract), and nothing here re-checks.
+    """
+
+    d: int  # the run's dimension: the model's own property, read once at entry
+
+    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
+        """Fold one served batch into the model's evidence.
+
+        Called by the engine immediately after a batch is served, in the
+        engine's own coordinates, before anything is decided on it: `x` is the
+        batch's rows, `f` their values (Python floats - the same values the run
+        compares) and `g` their gradients, or `None` when the batch was served
+        for its values alone. A point may arrive twice: a step's trial is
+        served for its value first and its gradient later if it wins the step,
+        so a model keyed on coordinates sees the second call as the same design
+        with more evidence.
+
+        Nothing is filtered for feasibility here: the engine models the raw
+        objective everywhere, and only the value it *reports* is filtered, so
+        the model fits the same surface the paths move on. Called for batches
+        the run never decides on too (a trial that loses its step, the batch
+        that ended the run on an unbounded objective), because the work was
+        served either way.
+        """
+        ...
+
+    def propose(self, n_points: int) -> jnp.ndarray:
+        """Return ``n_points`` fresh restart starts, shape ``(n_points, d)``.
+
+        Called with the number of paths that restart this iteration - on
+        iteration 0 that is every path, and every path holds no point yet, so
+        the first call places the flock. The engine clips the result into
+        `bounds`, so a model may propose outside the box; it is asked for points
+        in the same coordinates the objective takes.
+
+        The model owns its randomness (an instance holds its key), which is what
+        makes a seeded model reproducible.
+        """
+        ...
+
+
+class UniformGlobalModel:
+    """The model-free default: i.i.d. uniform over a finite box.
+
+    Fits nothing - `observe` is a no-op - because with no surrogate the box is
+    the only distribution the engine can synthesize. It is also how a caller
+    hands the engine a chosen flock: `x0`, when given, is what the first
+    `propose` returns, so the run's first restart lands exactly where the caller
+    asked and every later one is drawn uniformly.
+
+    The box is the one thing this model validates harder than the engine does:
+    an unbounded side has no width to draw from, and a NaN side would poison
+    every draw silently, so both are refused at construction.
+    """
+
+    def __init__(
+        self,
+        bounds: Bounds,
+        *,
+        key: jnp.ndarray,
+        x0: jnp.ndarray | None = None,
+    ) -> None:
+        """Bind the box, the key and the module-free draw.
+
+        Args:
+            bounds: the finite box the draws fill, scipy-style pairs or a
+                ``(d, 2)`` array.
+            key: the PRNG key the draws are split from.
+            x0: the first ``propose``'s answer, shape ``(n, d)`` - n the run's
+                number of paths. Ignored after that; ``None`` draws the first
+                points like any other.
+
+        Raises:
+            ValueError: If the box is absent, has an unbounded or NaN side, or
+                if `x0` is not a finite ``(n, d)`` array whose d matches the box.
+
+        """
+        _check_bounds(bounds)
+        box = _box_bounds(bounds)
+        if box is None or not _finite_box(box):
+            msg = (
+                "UniformGlobalModel draws uniformly, so it needs a finite box: "
+                f"got {bounds!r}"
+            )
+            raise ValueError(msg)
+        self._lo, self._hi = box
+        # The box is the projection here, so it is also the dimension: a (d, 2)
+        # pair list cannot disagree with itself.
+        self.d = int(self._lo.shape[0])
+        self._key = key
+        self._x0 = None if x0 is None else _check_x0(x0, self.d)
+
+    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
+        """Ignore the evidence: a uniform model fits nothing."""
+
+    def propose(self, n_points: int) -> jnp.ndarray:
+        """Return x0 on the first ask, then n_points uniform draws."""
+        if self._x0 is not None:
+            x_first, self._x0 = self._x0, None
+            if x_first.shape[0] != n_points:
+                msg = (
+                    f"x0 holds {x_first.shape[0]} starts but the first restart "
+                    f"asks for {n_points}"
+                )
+                raise ValueError(msg)
+            return x_first
+        self._key, sub = jax.random.split(self._key)
+        return jax.random.uniform(
+            sub,
+            (n_points, self.d),
+            minval=self._lo,
+            maxval=self._hi,
+        )
+
+
+def _check_x0(x0: jnp.ndarray, d: int) -> jnp.ndarray:
+    """Reject a flock a model cannot hand back: wrong shape, or not finite.
+
+    A coordinate is not an objective that went non-finite, and no clip or
+    proposal repairs one, so a bad start is refused here rather than left to
+    stall a path on arrival.
+    """
+    pts = jnp.asarray(x0)
+    if pts.ndim != 2 or pts.shape[1] != d:
+        msg = f"x0 must be a (n_paths, {d}) array, got shape {pts.shape}"
+        raise ValueError(msg)
+    if pts.shape[0] < 1 or not _all_finite(pts):
+        msg = f"x0 needs at least one finite start, got shape {pts.shape}"
+        raise ValueError(msg)
+    return pts
+
+
+def _check_positive_int(value: object, name: str) -> int:
+    """Return `value` if it is a positive int, refusing bools and the rest.
+
+    Takes `object` on purpose: the two callers hand in what an injected object
+    carries, so the check is the only thing that knows the answer.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        msg = f"{name} must be a positive int, got {value!r}"
+        raise ValueError(msg)
+    return value
+
+
+def _check_model_d(
+    model: GlobalModel,
+    box: tuple[jnp.ndarray, jnp.ndarray] | None,
+) -> int:
+    """Read the run's dimension off the model, making the box agree with it.
+
+    The model is the authority because it is the one proposing points: a
+    surrogate is built on a d-dimensional objective and knows d before the run
+    starts, while `bounds` may be absent entirely. The box is still checked
+    against it, so a mismatched pair fails here rather than as a batch-shape
+    error a frame later.
+    """
+    d = _check_positive_int(getattr(model, "d", None), "global_model.d")
+    if box is not None and box[0].shape[0] != d:
+        msg = f"the global model has d={d} but bounds has d={box[0].shape[0]}"
+        raise ValueError(msg)
+    return d
 
 
 @dataclass
@@ -339,8 +515,9 @@ class NPathResult:
     Field names follow `scipy.optimize.OptimizeResult` where the concepts
     correspond: `x` is the argmin in the coordinates the engine was handed
     (the caller's coords), `fun` is its objective value, and `n_iters` counts
-    completed engine iterations: iteration 0 places the caller's initial points,
-    and one iteration may serve several batches (a restart's fresh starts plus
+    completed engine iterations: iteration 0 is the flock's placement (the run's
+    first restart), and one iteration may serve several batches (a restart's
+    fresh starts plus
     up to the method's own per-step trial count), so `n_iters` is not a batch
     count. It is spelled
     `n_iters` rather than scipy's `nit` to sit beside the two work counts.
@@ -364,7 +541,7 @@ class NPathResult:
     fun: float  # min over feasible recorded evals; inf if none, -inf if unbounded
     n_points: int  # points served (the serial-cost count)
     n_batches: int  # batches (evals) served (the parallel wall-clock count)
-    n_iters: int  # completed iterations (iteration 0 places x0; not trials)
+    n_iters: int  # completed iterations (iteration 0 places the flock)
     status: NPathStatus
 
 
@@ -372,15 +549,15 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # after the one positional seam: one name per dial beats a config object here)
     eval_f_g: EvalFG,
     *,
-    # The flock, and the only statement of the run's width and dimension: one
-    # starting point per path, in the engine's own coordinates.
-    x0: jnp.ndarray,
+    # The run's width: how many chains the engine drives. Its dimension is the
+    # global model's (`d`), and the box has to agree with it.
+    n_paths: int,
     eval_f: EvalF | None = None,
     bounds: Bounds | None = None,  # scipy-style (lb, ub) pairs, a (d, 2) array, or None
-    # Where a restart lands: (key, n_points) -> (n_points, d) in the engine's
-    # coordinates, asked only when a rule fires. None -> i.i.d. uniform over a
-    # finite `bounds`; an unbounded or absent box then has nowhere to draw and
-    # is rejected below rather than guessed.
+    # Where a restart lands, and what the run has learned: a GlobalModel, asked
+    # for points only when a rule fires. None -> UniformGlobalModel over a finite
+    # `bounds`, whose first answer is then a uniform flock; an unbounded or
+    # absent box has nowhere to draw and is rejected below rather than guessed.
     global_model: GlobalModel | None = None,
     # The run's horizon, counted in iterations: the engine completes at most
     # max_iters iterations. An iteration is one move per path (iteration 0
@@ -424,16 +601,22 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     that proposes points (a surrogate maximising expected improvement, an
     out-of-tree adapter) never touches the verdict.
 
-    `x0` is the flock: shape ``(n_paths, d)``, one starting point per path, so
-    `n_paths` and `d` are its shape rather than separate knobs. Iteration 0
-    serves it as one fused batch and places every path on its row; a row whose
-    served value or gradient comes back non-finite stalls that path on arrival
-    instead of being placed. With `global_model=None` the engine draws restart
-    points i.i.d. uniform over a finite `bounds`, which is then also the only
-    source it has - an unbounded box (or none) needs an injected model, because
-    the engine has no distribution of its own to draw from. `key` seeds those
-    draws; None means the fixed default PRNGKey(0), so an unseeded call still
-    runs, deterministically.
+    `n_paths` is the run's width and nothing else; the dimension `d` is the
+    model's (see below), so a run never spells it twice. Iteration 0 is the
+    flock's placement and it is not a special case: no path holds a point yet,
+    a path without a point restarts, so the run's first move asks the model for
+    one start per path and serves that whole flock as one fused batch. A start
+    whose served value or gradient comes back non-finite stalls its path on
+    arrival instead of being placed, and - having no point - that path restarts
+    again next iteration rather than idling forever.
+
+    With `global_model=None` the engine builds a `UniformGlobalModel` over a
+    finite `bounds`: i.i.d. uniform starts, no fit, and the box is then the only
+    distribution it has - an unbounded box (or none) needs an injected model,
+    because the engine has nothing of its own to draw from. `key` seeds that
+    default model's draws; None means the fixed default PRNGKey(0), so an
+    unseeded call still runs, deterministically. An injected model owns its
+    randomness, so `key` is ignored for it.
 
     `bounds` is data, not an injected object (scipy's spelling: a `(lb, ub)`
     pair per dim, `None`/±inf = unbounded); the engine clips into it and knows
@@ -448,7 +631,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     most `max_iters` iterations (status "max_iters"), or, if `time_limit` is
     given, the wall-clock deadline (status "time_limit"); at least one of the
     two must be passed. Iterations are the unit on purpose - an iteration is one
-    move per path (iteration 0 places `x0` instead), so the same number
+    move per path (iteration 0 places the flock instead), so the same number
     reproduces on any machine and does not change when the method's per-step
     trial count changes the per-iteration batch count. It is not a cost bound:
     one iteration serves from zero batches (a fully stalled one) up to a
@@ -466,10 +649,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     penalized objective.
 
     The caller's inputs are validated here, once per run: knob ranges, the
-    box's own shape/ordering, and `x0`'s shape and finiteness raise ValueError,
-    and a seam object that does not carry its contract's methods raises
-    TypeError. The seam methods themselves trust the engine - they run per path
-    per iteration, and the engine is their only caller.
+    box's own shape/ordering, and a model whose `d` disagrees with that box all
+    raise ValueError, and a seam object that does not carry its contract's
+    methods raises TypeError. The seam methods themselves trust the engine -
+    they run per path per iteration, and the engine is their only caller.
 
     Args:
         eval_f_g: the objective as one batched pass. Takes rows ``x`` of
@@ -478,10 +661,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             holds 0/1 (or booleans) and nothing else: only 0 marks a point
             infeasible, so any other flag is refused rather than read as
             truthiness.
-        x0: the flock's initial points, shape ``(n_paths, d)``, in the engine's
-            own coordinates. Its shape is the run's width and dimension, so
-            there is no separate ``n_paths`` knob; a non-finite entry is refused
-            at the entry rather than left to stall a path.
+        n_paths: how many chains to drive; one point per path per iteration. A
+            value below 1 is refused at the entry.
         eval_f: the objective's value half alone, same ``x`` rows, returning
             ``(f: (M,), feas: (M,) | None)``. Both seams are named for what they
             return - ``eval_f_g`` hands back f and g together, ``eval_f`` f
@@ -492,9 +673,12 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             its winners, in one batch.
         bounds: the search box, scipy-style: one ``(lb, ub)`` pair per dim, a
             ``(d, 2)`` array, or ``None`` for no box. ``None``/±inf = unbounded.
-        global_model: the restart-point source ``(key, n_points) -> (n_points,
-            d)`` in the engine's own coordinates, asked only when a restart
-            fires; ``None`` draws i.i.d. uniform over a finite ``bounds``.
+        global_model: the restart-point source and the run's evidence sink: a
+            `GlobalModel` that is fed every served batch and asked for points
+            only when a restart fires. ``None`` builds a `UniformGlobalModel`
+            over a finite ``bounds``, which draws uniformly and fits nothing.
+            The model's ``d`` is the run's dimension; ``bounds`` must agree with
+            it.
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
@@ -505,8 +689,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         solver: the local method (``None`` binds ``DiagonalPreconditioner``).
         restart_rule: the restart decision (``None`` binds ``NoRestartRule``,
             the frozen flock that never re-seeds).
-        key: the PRNG seed of the restart draws; ``None`` uses the fixed default
-            so unseeded runs are deterministic.
+        key: the PRNG seed of the default model's draws; ``None`` uses the
+            fixed default, so unseeded runs are deterministic.
 
     Returns:
         An ``NPathResult`` with the run's end state:
@@ -516,23 +700,33 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
           when the objective has no floor, which also ends the run)
         - ``n_points``: g points served (the serial-cost count)
         - ``n_batches``: g batches served (the parallel wall-clock count)
-        - ``n_iters``: completed iterations (iteration 0 places ``x0``)
+        - ``n_iters``: completed iterations (iteration 0 places the flock)
         - ``status``: why the run stopped
 
     Example:
         Minimize ``f(x) = ‖x - 3‖²`` by handing the engine a batched objective:
 
+            >>> import jax
             >>> import jax.numpy as jnp
-            >>> from soar_lite import n_path_schedule
+            >>> from soar_lite import UniformGlobalModel, n_path_schedule
 
             >>> def eval_f_g(x):
             ...     g = 2.0 * (x - 3.0)
             ...     return (jnp.sum((x - 3.0) ** 2, axis=1), g, None)
 
+            >>> box = [(-5.0, 5.0), (-5.0, 5.0)]
             >>> result = n_path_schedule(
             ...     eval_f_g,
-            ...     x0=jnp.array([[-1.0, -1.0], [1.0, 1.0], [-4.0, 4.0], [4.0, -4.0]]),
-            ...     bounds=[(-5.0, 5.0), (-5.0, 5.0)],
+            ...     n_paths=4,
+            ...     bounds=box,
+            ...     # the flock rides the default model's first proposal
+            ...     global_model=UniformGlobalModel(
+            ...         box,
+            ...         key=jax.random.PRNGKey(0),
+            ...         x0=jnp.array(
+            ...             [[-1.0, -1.0], [1.0, 1.0], [-4.0, 4.0], [4.0, -4.0]],
+            ...         ),
+            ...     ),
             ...     max_iters=30,
             ... )
 
@@ -544,21 +738,21 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
     """
     _validate_run(
-        x0=x0,
+        n_paths=n_paths,
         max_iters=max_iters,
         time_limit=time_limit,
         eval_f_g=eval_f_g,
         eval_f=eval_f,
-        global_model=global_model,
         budget_check=budget_check,
         bounds=bounds,
     )
-    # The seam check: presence, not signatures, and the two defaults, bound
-    # lazily - solver and the restart rules import the engine's types, so
-    # importing them at module scope would form a cycle. Kept with the knob
-    # checks above and apart from the build below.
+    # The seams: presence, not signatures, and the defaults, bound lazily -
+    # solver and the restart rules import the engine's types, so importing them
+    # at module scope would form a cycle. Kept with the knob checks above and
+    # apart from the build below.
     _check_seam(solver, LocalSolver, "solver")
     _check_seam(restart_rule, RestartRule, "restart_rule")
+    _check_seam(global_model, GlobalModel, "global_model")
     if solver is None:
         from soar_lite.solver import DiagonalPreconditioner  # noqa: PLC0415
 
@@ -570,46 +764,26 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
     box = _box_bounds(bounds)
     clip = box if box is not None else (-math.inf, math.inf)
-    # The flock is clipped once, here: the box is the engine's and every point a
-    # path holds is inside it, so a caller's out-of-box start is brought in
-    # rather than searched from outside. d is then x0's second axis - the run's
-    # one statement of dimension - and `_Best`/`_GlobalModel` are told it.
-    flock = jnp.clip(jnp.asarray(x0), *clip)
-    d = flock.shape[1]
     if global_model is None:
-        # The global_model=None contract: a finite box is the only distribution
-        # the engine can synthesize, so an unbounded side (or no box at all) is
-        # a wiring error, not a run to guess our way out of.
-        if box is None or not _finite_box(box):
-            msg = (
-                "an unbounded or absent box needs `global_model`: the engine "
-                "draws its restart points from the model, and with "
-                "global_model=None it can only draw a finite box"
-            )
-            raise ValueError(msg)
-        lo_f, hi_f = box
-
-        def default_global_model(sub: jnp.ndarray, n_points: int) -> jnp.ndarray:
-            """Default source: n_points i.i.d. uniform points over the finite box."""
-            return jax.random.uniform(
-                sub, (n_points, lo_f.shape[0]), minval=lo_f, maxval=hi_f,
-            )
-
-        propose: GlobalModel = default_global_model
-    else:
-        propose = global_model
-    # The random source: an explicit key wins, otherwise the fixed default, so
-    # an unseeded call still runs (deterministically). The model owns the draw's
-    # own d check - its d is a property of the callable, not of the draw, so a
-    # mismatch with the flock's d is validated once, on the first restart.
-    model = _GlobalModel(propose, d, jax.random.PRNGKey(0) if key is None else key)
+        global_model = UniformGlobalModel(
+            _finite_box_or_raise(bounds),
+            key=jax.random.PRNGKey(0) if key is None else key,
+        )
+    # The model is the run's statement of dimension, so the box is checked
+    # against it here - the one place both are in hand - rather than per batch.
+    d = _check_model_d(global_model, box)
     budget = _Budget(max_iters, time_limit, budget_check)
     best = _Best(d)
-
-    evaluator = _Evaluator(eval_f_g, eval_f, budget=budget, best=best)
+    evaluator = _Evaluator(
+        eval_f_g,
+        eval_f,
+        budget=budget,
+        best=best,
+        global_model=global_model,
+    )
     # Last, because it takes the resolved seams and their collaborators: the
     # state machine drives them rather than receiving them per call.
-    paths = _Paths(flock, clip, evaluator, solver, restart_rule, model)
+    paths = _Paths(n_paths, clip, evaluator, solver, restart_rule, global_model)
 
     status: NPathStatus | None = None
     while True:
@@ -620,9 +794,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         if status is not None:
             break
         try:
-            # Iteration 0 places the flock; every later iteration reads the
-            # best, decides which paths restart, decides every move on values,
-            # then buys the gradients those decisions need in one batch. A
+            # Read the best, decide which paths restart (iteration 0: all of
+            # them, since no path holds a point), decide every move on values,
+            # then buy the gradients those decisions need in one batch. A
             # refused batch raises `_BudgetExhausted` here, before anything is
             # placed.
             paths.move(best.fun_raw)
@@ -677,37 +851,6 @@ class _OptimumReached(Exception):  # noqa: N818 - a signal, not an error
     that point, so `fun` is `-inf` and `status` is `"unbounded"`. Nothing is
     left to unwind - a batch raises before any point is placed or advanced.
     """
-
-
-class _GlobalModel:
-    """The run's restart-point source, and the draw's own d check.
-
-    Holds the splitting key and the invariant that the model's d is a property
-    of the callable, not of the draw, so a mismatch with the flock's d is a
-    wiring bug caught once rather than on every restart.
-    """
-
-    def __init__(self, propose: GlobalModel, d: int, key: jnp.ndarray) -> None:
-        self._propose = propose
-        self._d = d
-        self._key = key
-        self._checked = False
-
-    def points(self, n_points: int) -> jnp.ndarray:
-        """Ask for n_points restart points; the model's d is validated once."""
-        self._key, sub = jax.random.split(self._key)
-        x_cand = self._propose(sub, n_points)
-        if not self._checked:
-            # d is a property of the callable, constant for the run: one check
-            # after the first draw suffices.
-            self._checked = True
-            if x_cand.shape[1] != self._d:
-                msg = (
-                    f"the global model proposed d={x_cand.shape[1]} but the "
-                    f"flock has d={self._d}"
-                )
-                raise ValueError(msg)
-        return x_cand
 
 
 class _Budget:
@@ -815,7 +958,10 @@ class _Best:
         self.x = jnp.full(d, math.nan)
 
     def observe(
-        self, f_vals: list[float], x_batch: jnp.ndarray, feas: jnp.ndarray | None,
+        self,
+        f_vals: list[float],
+        x_batch: jnp.ndarray,
+        feas: jnp.ndarray | None,
     ) -> None:
         """Fold one served batch's values into both bests, stopping on -inf.
 
@@ -857,10 +1003,13 @@ class _Evaluator:
     it: a fused `_serve_f_g` is the run's only charged site (the gate is asked
     before the charge, so a batch is served whole or not at all), and a
     `_serve_f` call is cheaper work that is not a budget event. Whichever half
-    served a point updates the best. `seed_points` and `settle` live here too:
-    iteration 0 serves the caller's `x0` through this seam, and `settle` is
-    where an iteration's deferred gradients are bought together, since this
-    object owns both the seam and the charge.
+    served a batch reports it to the two readers of the run's evidence: the best
+    (`_Best`, which filters for feasibility) and the global model (which does
+    not). That pair is deliberately the only place either is fed - a batch is
+    reported once, by whichever seam served it, so no caller has to remember to
+    feed either, and a batch nobody decides on is still reported. `settle` lives
+    here too: it is where an iteration's deferred gradients are bought together,
+    since this object owns both the seam and the charge.
     """
 
     def __init__(
@@ -870,24 +1019,13 @@ class _Evaluator:
         *,
         budget: _Budget,
         best: _Best,
+        global_model: GlobalModel,
     ) -> None:
         self._eval_f_g = eval_f_g
         self._eval_f = eval_f
         self._budget = budget
         self._best = best
-
-    def seed_points(self, x0: jnp.ndarray) -> list[PathPoint]:
-        """Serve the flock as one fused batch, graded on arrival.
-
-        Iteration 0 has nothing deferred: the starts are the run's first points,
-        so there is no earlier point to compare them with and no reason to
-        serve them for values alone. The whole flock is one batch, so a wide
-        flock costs one pass.
-        """
-        f_vals, g_batch = self._serve_f_g(x0)
-        return [
-            PathPoint(x0[pos], f_vals[pos], g_batch[pos]) for pos in range(len(f_vals))
-        ]
+        self._global_model = global_model
 
     def pending_unread(self, x_batch: jnp.ndarray) -> list[_Pending]:
         """Return one unread point per row: both halves owed to `settle`.
@@ -968,6 +1106,10 @@ class _Evaluator:
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
         f_vals = f_batch.tolist()
+        # The model first: a feasible -inf below raises `_OptimumReached`, and
+        # the batch was served and charged either way, so the model still sees
+        # it even though the run keeps nothing else from this pass.
+        self._global_model.observe(x_batch, f_vals, g_batch)
         self._best.observe(f_vals, x_batch, feas)
         return f_vals, g_batch
 
@@ -988,6 +1130,9 @@ class _Evaluator:
             raise RuntimeError(msg)
         f_batch, feas = eval_f(x_batch)
         f_vals = f_batch.tolist()
+        # No gradient in hand: the f half alone. The same point is reported
+        # again with `g` if it wins its step and `settle` buys the gradient.
+        self._global_model.observe(x_batch, f_vals, None)
         self._best.observe(f_vals, x_batch, feas)
         return f_vals
 
@@ -1017,23 +1162,22 @@ class _Paths:
       cohort.
     - A start or a winner is committed only when it is `usable` - finite in
       both halves - one gate defined once on the point type.
+    - A path holds a point or it does not. "No point" (`points[i].f` not finite)
+      is the machine's own state, not a verdict: such a path restarts without
+      asking the rule, which is how iteration 0 places the flock and how a
+      refused start is eventually re-drawn instead of idling forever.
     """
 
     def __init__(  # noqa: PLR0913, PLR0917 - the run's collaborators, built once
         self,
-        x0: jnp.ndarray,
+        n_paths: int,
         clip: tuple[jnp.ndarray | float, jnp.ndarray | float],
         evaluator: _Evaluator,
         solver: LocalSolver,
         restart_rule: RestartRule,
-        global_model: _GlobalModel,
+        global_model: GlobalModel,
     ) -> None:
-        self.n_paths = int(x0.shape[0])
-        # The flock as handed in (the entry already clipped it): iteration 0
-        # places it, and that is the only use it gets - a later restart asks the
-        # global model instead, so the caller's starts are consumed once.
-        self.x0 = x0
-        self._seed_pending = True
+        self.n_paths = n_paths
         # Constant for the whole run, so it belongs beside the shape rather than
         # in `move`'s signature: every proposal below is clipped into this box.
         self.clip = clip
@@ -1054,7 +1198,7 @@ class _Paths:
             PathPoint(jnp.zeros(0), math.nan, jnp.zeros(0)) for _ in range(self.n_paths)
         ]
         # Nothing has arrived yet, and a path that has not arrived is not
-        # stalled: iteration 0 places the flock before anything reads the flag.
+        # stalled: iteration 0 restarts it rather than reading it as a stall.
         self.stalled: list[bool] = [False] * self.n_paths
         # The continue side's sample is one step, so the Δ it reports is
         # points[i].f - prev_f[i]; a restart resets the anchor to the fresh
@@ -1065,14 +1209,17 @@ class _Paths:
     def move(self, best_fun_raw: float) -> None:
         """Take one iteration's move for every path, then settle what it deferred.
 
-        Iteration 0 is the exception and returns early: the caller's flock is
-        placed, and nothing has a step to take yet.
+        Iteration 0 is not a special case: no path holds a point, and a path
+        with no point restarts (see the class docstring), so the run's first
+        move asks the global model for one start per path - the flock - and
+        places them in one batch.
 
         The restart decision comes first, against the best the caller holds: a
-        path whose rule fires is given a fresh start instead of stepping this
-        iteration. Both halves then decide where a path goes from values alone
-        when the f-only seam is present - the restarted paths by the global
-        model's proposal, the cohort by its trials - and the gradients those
+        path whose rule fires, or that holds no point at all, is given a fresh
+        start instead of stepping this iteration. Both halves then decide where a
+        path goes from values alone when the f-only seam is present - the
+        restarted paths by the global model's proposal, the cohort by its trials
+        - and the gradients those
         decisions need are then bought together, in one batch (`settle`), so an
         iteration costs one gradient pass however many moves it deferred. What
         is not deferred is served fused and reaches `settle` already graded:
@@ -1087,13 +1234,13 @@ class _Paths:
         judges against, not the best point's reported value, which is why it
         arrives already unwrapped.
         """
-        if self._seed_pending:
-            self._seed()
-            return
+        # "No point" is decided here rather than left to the rule: the rule is
+        # never asked about a path it could only answer by reading `nan`.
         restarted = [
             i
             for i in range(self.n_paths)
-            if self.restart_rule.should_restart(i, self.points[i].f, best_fun_raw)
+            if not math.isfinite(self.points[i].f)
+            or self.restart_rule.should_restart(i, self.points[i].f, best_fun_raw)
         ]
         # Every path the rule did not fire on, stalled ones included: a stalled
         # path proposes nothing but still reports a stall this iteration, so its
@@ -1114,24 +1261,6 @@ class _Paths:
         self._advance(wins)
         self._report(cohort)
 
-    def _seed(self) -> None:
-        """Place every path on its row of the flock (iteration 0, one batch).
-
-        The flock is the caller's answer to "where does the run start", so it is
-        served once, fused, and never asked for again: a restart asks the global
-        model instead. A row the engine cannot use is not placed - it stalls the
-        path on the same `usable` gate `_place` and `_advance` apply - so
-        `points[i]` keeps meaning "where the path stands".
-        """
-        self._seed_pending = False
-        for i, point in enumerate(self.evaluator.seed_points(self.x0)):
-            self.stalled[i] = not point.usable
-            if self.stalled[i]:
-                continue
-            self.points[i] = point
-            self.solver.restart(i, point)
-            self.prev_f[i] = point.f
-
     def _restart_starts(self, n_points: int) -> list[_Pending]:
         """Ask the global model for n_points fresh starts, clipped into the box.
 
@@ -1141,7 +1270,7 @@ class _Paths:
         judged on - so `settle` buys them in the same batch as the step winners,
         which is what keeps a restart from costing its own gradient pass.
         """
-        x_cand = jnp.clip(self.global_model.points(n_points), *self.clip)
+        x_cand = jnp.clip(self.global_model.propose(n_points), *self.clip)
         return self.evaluator.pending_unread(x_cand)
 
     def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
@@ -1323,12 +1452,11 @@ def _check_seam(obj: object | None, proto: type, what: str) -> None:
 
 def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
     *,
-    x0: jnp.ndarray,
+    n_paths: int,
     max_iters: int | None,
     time_limit: float | None,
     eval_f_g: EvalFG,
     eval_f: EvalF | None,
-    global_model: GlobalModel | None,
     budget_check: Callable[[], bool] | None,
     bounds: Bounds | None,
 ) -> None:
@@ -1353,48 +1481,19 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
         )
         raise ValueError(msg)
 
+    _check_positive_int(n_paths, "n_paths")
+
     # Presence of the callables, not their signatures. Without this a mistyped
     # seam reaches the first batch and fails there as `'int' object is not
     # callable`, a symptom a frame away from the argument that caused it.
     if not callable(eval_f_g):
         msg = f"eval_f_g must be callable, got {type(eval_f_g).__name__}"
         raise TypeError(msg)
-    for what, fn in (
-        ("eval_f", eval_f),
-        ("global_model", global_model),
-        ("budget_check", budget_check),
-    ):
+    for what, fn in (("eval_f", eval_f), ("budget_check", budget_check)):
         if fn is not None and not callable(fn):
             msg = f"{what} must be callable or None, got {type(fn).__name__}"
             raise TypeError(msg)
     _check_bounds(bounds)
-    _check_flock(x0, bounds)
-
-
-def _check_flock(x0: jnp.ndarray, bounds: Bounds | None) -> None:
-    """Reject a flock the engine cannot place, or that disagrees with the box.
-
-    The flock is the run's only statement of n_paths and d, so a malformed one
-    would surface a frame later as a box or batch-shape mismatch. A non-finite
-    row is refused rather than left to stall a path: a coordinate is not an
-    objective that went non-finite, and no clip or proposal can repair it.
-    """
-    flock = jnp.asarray(x0)
-    if flock.ndim != 2:
-        msg = f"x0 must be a (n_paths, d) array, got shape {flock.shape}"
-        raise ValueError(msg)
-    if flock.shape[0] < 1 or flock.shape[1] < 1:
-        msg = f"x0 needs at least one point of at least one dim, got {flock.shape}"
-        raise ValueError(msg)
-    if not _all_finite(flock):
-        msg = "x0 must be finite: a non-finite starting point cannot be placed"
-        raise ValueError(msg)
-    # The two statements of d have to agree before either is used: x0's second
-    # axis and the box's width.
-    box = _box_bounds(bounds)
-    if box is not None and box[0].shape[0] != flock.shape[1]:
-        msg = f"x0 has d={flock.shape[1]} but bounds has d={box[0].shape[0]}"
-        raise ValueError(msg)
 
 
 def _check_bounds(bounds: Bounds | None) -> None:
@@ -1429,6 +1528,24 @@ def _check_bounds(bounds: Bounds | None) -> None:
         if lo_f > hi_f:
             msg = f"bounds[{j}] has lo={lo_f} > hi={hi_f}"
             raise ValueError(msg)
+
+
+def _finite_box_or_raise(bounds: Bounds | None) -> Bounds:
+    """Return `bounds` when it is a finite box, else refuse the run.
+
+    The model=None contract: a finite box is the only distribution the engine can
+    synthesize, so an unbounded side (or no box at all) is a wiring error, not a
+    run to guess our way out of.
+    """
+    box = _box_bounds(bounds)
+    if bounds is None or box is None or not _finite_box(box):
+        msg = (
+            "an unbounded or absent box needs `global_model`: the engine draws "
+            "its restart points from the model, and with global_model=None it "
+            "can only draw a finite box"
+        )
+        raise ValueError(msg)
+    return bounds
 
 
 def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:

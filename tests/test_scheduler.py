@@ -1,22 +1,28 @@
 """n-path scheduler self-checks.
 
-Seam (拍板): the engine consumes the flock, callables, and the box it searches
+Seam (拍板): the engine consumes its width, the callables, and the box it searches
 
     eval_f_g(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
     budget_check() -> bool
     bounds -> scipy-style (lb, ub) pairs | (d, 2) array | None (no box)
-    x0 (n_paths, d) -> the flock; the sole authority on n_paths and d
-    global_model(key, n_points) -> (n_points, d) restart points; not consulted
-        unless a restart rule fires
+    n_paths -> the run's width, the engine's own structure
+    global_model -> the restart-point source and the evidence sink: fed every
+        served batch, asked for points only when a restart fires; its `d` is
+        the run's dimension
 
 The caller composes x->θ and the chain rule grad_x = grad_θ * dθ_dx(x) into
-eval_f_g; the engine owns clip-to-bounds, and the flock is the caller's - with
-the arguments in the order a run reads them: `x0` first, then the rule that
-decides when to leave a point and the model that decides where to go. With
-`global_model=None` the engine falls back to i.i.d. uniform over a finite
-`bounds`, so an unbounded box (or none) without a model is a wiring error.
-Unbounded means a `None`/±inf side, and `clip` is then the identity.
+eval_f_g; the engine owns clip-to-bounds, and the starts are the model's - with
+the arguments in the order a run reads them: the width, then the rule that
+decides when to leave a point, then the model that decides where to go. With
+`global_model=None` the engine falls back to a `UniformGlobalModel` drawing
+i.i.d. uniformly over a finite `bounds`; an unbounded box (or none) without a
+model is a wiring error, since the engine then has nothing of its own to draw
+from. Unbounded means a `None`/±inf side, and `clip` is then the identity.
 `test_solver_seam.py`'s evaluator is that composed form.
+
+Every run below plants its flock through `flock_kwargs`, i.e. through the
+shipped default model's first proposal: the engine has no start argument, and a
+test that wants known starts hands them to a model.
 """
 
 # pyright: reportPrivateUsage=false
@@ -25,14 +31,16 @@ Unbounded means a `None`/±inf side, and `clip` is then the identity.
 
 import math
 from collections.abc import Callable
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 import jax
 import jax.numpy as jnp
 
 from soar_lite.engine import (
+    Bounds,
     NPathResult,
     PathPoint,
+    UniformGlobalModel,
     Verdict,
     _argmin_finite,
     n_path_schedule,
@@ -60,6 +68,52 @@ def flock(n_paths: int, d: int = 1) -> jnp.ndarray:
     """
     row = jnp.linspace(0.0, 1.0, n_paths + 2)[1:-1]
     return jnp.repeat(row[:, None], d, axis=1)
+
+
+def flock_kwargs(
+    x0: jnp.ndarray,
+    bounds: Bounds,
+    *,
+    key: jnp.ndarray | None = None,
+) -> dict[str, Any]:
+    """Return the entry's two flock kwargs: the run's width and its starts.
+
+    The engine takes its width as `n_paths` and every point a path starts from as
+    the global model's first proposal, so a test that chooses its flock says both
+    here. The model is the shipped default one: it hands `x0` back on the first
+    `propose` and draws any later re-draw from `key`.
+    """
+    return {
+        "n_paths": int(x0.shape[0]),
+        "global_model": UniformGlobalModel(
+            bounds,
+            key=jax.random.PRNGKey(0) if key is None else key,
+            x0=x0,
+        ),
+    }
+
+
+class FixedModel:
+    """A global model over a fixed list of points: the flock, then the same rows.
+
+    For the runs with no finite box at all: `UniformGlobalModel` needs one to
+    draw from, and a model-free test that only needs starts of a known `d` says
+    so with a list.
+    """
+
+    def __init__(self, points: jnp.ndarray) -> None:
+        """Store the points every ask is answered from."""
+        self.points = points
+        self.d = int(points.shape[1])
+
+    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
+        """Ignore the evidence: this model fits nothing."""
+
+    def propose(self, n_points: int) -> jnp.ndarray:
+        """Return n_points of the stored rows, tiling them if more are asked."""
+        rows = int(self.points.shape[0])
+        reps = -(-n_points // rows)
+        return jnp.concatenate([self.points] * reps)[:n_points]
 
 
 class HalfStep:
@@ -155,12 +209,11 @@ def test_batch_shape_and_point_counting() -> None:
     rec = Recorder(quartic)
     res = n_path_schedule(
         rec,
-        x0=flock(4),
+        **flock_kwargs(flock(4), unit_bounds(), key=jax.random.PRNGKey(0)),
         bounds=unit_bounds(),
         max_iters=50,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
-        key=jax.random.PRNGKey(0),
     )
     assert isinstance(res, NPathResult)
     assert res.n_points == rec.evals, (res.n_points, rec.evals)
@@ -188,12 +241,11 @@ def test_budget_exhaustion_stops_everything() -> None:
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
-        x0=flock(8),
+        **flock_kwargs(flock(8), unit_bounds(), key=jax.random.PRNGKey(1)),
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=rec.limit_check(30),
         solver=HalfStep(),
-        key=jax.random.PRNGKey(1),
     )
     assert res.n_points == rec.evals
     assert 30 <= res.n_points < 30 + 8  # at most one batch past the limit
@@ -204,12 +256,11 @@ def test_budget_exhaustion_stops_everything() -> None:
     rec0 = Recorder(quad)
     res0 = n_path_schedule(
         rec0,
-        x0=flock(4),
+        **flock_kwargs(flock(4), unit_bounds(), key=jax.random.PRNGKey(2)),
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=rec0.limit_check(0),
         solver=HalfStep(),
-        key=jax.random.PRNGKey(2),
     )
     assert res0.n_points == 0
     assert res0.n_iters == 0  # never got past the first gate check
@@ -221,11 +272,10 @@ def test_budget_exhaustion_stops_everything() -> None:
     rec1 = Recorder(quad)
     res1 = n_path_schedule(
         rec1,
-        x0=flock(4),
+        **flock_kwargs(flock(4), unit_bounds(), key=jax.random.PRNGKey(3)),
         bounds=unit_bounds(),
         max_iters=1,
         solver=HalfStep(),
-        key=jax.random.PRNGKey(3),
     )
     assert res1.n_points == 4  # iteration 0 served every path
     assert res1.n_iters == 1
@@ -244,12 +294,11 @@ def test_fun_is_true_min_over_history() -> None:
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
-        x0=flock(4),
+        **flock_kwargs(flock(4), unit_bounds(), key=jax.random.PRNGKey(3)),
         bounds=unit_bounds(),
         max_iters=50,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
-        key=jax.random.PRNGKey(3),
     )
     assert rec.all_f_vals
     assert res.fun == min(rec.all_f_vals)
@@ -300,24 +349,26 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     rec_k = Recorder(_two_well)
     res_k = n_path_schedule(
         rec_k,
-        x0=flock(16),
+        **flock_kwargs(flock(16), unit_bounds(), key=jax.random.PRNGKey(2)),
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=rec_k.limit_check(budget),
         solver=DiagonalPreconditioner(),
         restart_rule=NoRestartRule(),
-        key=jax.random.PRNGKey(2),
     )
     rec_1 = Recorder(_two_well)
     res_1 = n_path_schedule(
         rec_1,
-        x0=jnp.array([[0.62]]),  # planted in the shallow well
+        **flock_kwargs(
+            jnp.array([[0.62]]),
+            unit_bounds(),
+            key=jax.random.PRNGKey(2),
+        ),  # planted in the shallow well
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=rec_1.limit_check(budget),
         solver=DiagonalPreconditioner(),
         restart_rule=NoRestartRule(),
-        key=jax.random.PRNGKey(2),
     )
     assert res_1.fun > -3.0, res_1.fun  # stuck near local well (-2)
     assert res_k.fun < -7.0, res_k.fun  # found the global well (-8)
@@ -342,13 +393,12 @@ def test_the_stall_rule_escapes_a_shallow_basin() -> None:
         rec = Recorder(_two_well)
         return n_path_schedule(
             rec,
-            x0=x0_shallow,
+            **flock_kwargs(x0_shallow, unit_bounds(), key=jax.random.PRNGKey(9)),
             bounds=unit_bounds(),
             max_iters=100,
             budget_check=rec.limit_check(budget),
             solver=DiagonalPreconditioner(),
             restart_rule=rule,
-            key=jax.random.PRNGKey(9),
         )
 
     frozen = run(NoRestartRule())
@@ -378,13 +428,12 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     rec = Recorder(wall_quad)
     res = n_path_schedule(
         rec,
-        x0=flock(1, 2),
+        **flock_kwargs(flock(1, 2), unit_bounds(2), key=jax.random.PRNGKey(4)),
         bounds=unit_bounds(2),
         restart_rule=NoRestartRule(),  # pure projected descent, no restarts
         max_iters=100,
         budget_check=rec.limit_check(500),
         solver=HalfStep(),
-        key=jax.random.PRNGKey(4),
     )
     assert res.fun < 0.4, res.fun  # must slide near (1, 0), f=0.25
 
@@ -444,13 +493,12 @@ def test_feasible_only_best() -> None:
     rule = _RecordingBest()
     res = n_path_schedule(
         eval_f_g,
-        x0=flock(4),
+        **flock_kwargs(flock(4), unit_bounds(), key=jax.random.PRNGKey(5)),
         bounds=unit_bounds(),
         max_iters=100,
         budget_check=budget_check,
         solver=HalfStep(),
         restart_rule=rule,
-        key=jax.random.PRNGKey(5),
     )
 
     feasible_f_vals = [L for L, ok in zip(all_f_vals, all_feas, strict=True) if ok]
@@ -483,12 +531,15 @@ def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
 
     res = n_path_schedule(
         eval_f_g,
-        x0=jnp.linspace(0.05, 0.95, 4)[:, None],
+        **flock_kwargs(
+            jnp.linspace(0.05, 0.95, 4)[:, None],
+            unit_bounds(),
+            key=jax.random.PRNGKey(0),
+        ),
         bounds=unit_bounds(),
         max_iters=50,
         solver=HalfStep(),
         restart_rule=NoRestartRule(),
-        key=jax.random.PRNGKey(0),
     )
 
     assert res.fun == -math.inf
@@ -519,12 +570,15 @@ def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
 
     res = n_path_schedule(
         eval_f_g,
-        x0=jnp.linspace(0.05, 0.95, 4)[:, None],
+        **flock_kwargs(
+            jnp.linspace(0.05, 0.95, 4)[:, None],
+            unit_bounds(),
+            key=jax.random.PRNGKey(0),
+        ),
         bounds=unit_bounds(),
         max_iters=20,
         solver=HalfStep(),
         restart_rule=NoRestartRule(),
-        key=jax.random.PRNGKey(0),
     )
 
     assert any(v == -math.inf for v in served), "no -inf point was ever served"
@@ -554,12 +608,11 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
 
     res = n_path_schedule(
         eval_f_g,
-        x0=flock(2),
+        **flock_kwargs(flock(2), unit_bounds(), key=jax.random.PRNGKey(6)),
         bounds=unit_bounds(),
         max_iters=5,
         budget_check=lambda: served[0] < 40,
         solver=HalfStep(),
-        key=jax.random.PRNGKey(6),
     )
     assert res.fun == 0.01, res.fun
     assert bool(jnp.isfinite(res.x[0])), res.x
@@ -597,32 +650,32 @@ def test_a_dead_path_serves_nothing_after_its_start() -> None:
 
     res = n_path_schedule(
         eval_f_g,
-        x0=flock(n_paths),
+        **flock_kwargs(flock(n_paths), unit_bounds(), key=jax.random.PRNGKey(0)),
         bounds=unit_bounds(),
         max_iters=n_iterations + 1,
         budget_check=lambda: len(widths) < 100,
         solver=HalfStep(),
         restart_rule=NoRestartRule(),
-        key=jax.random.PRNGKey(0),
     )
     assert res.n_iters == n_iterations + 1, res
     assert widths[0] == n_paths, widths  # iteration 0 serves the whole flock
     assert all(w == 1 for w in widths[1:]), widths  # then the live path alone
 
 
-def test_a_dead_start_is_redrawn_by_a_restart() -> None:
-    """A rule that fires on a dead path recovers it; a frozen flock cannot.
+def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
+    """A path holding no point is owed a start: the engine draws one, unasked.
 
-    The dead row is dead only in iteration 0, so the path recovers as soon as it
-    is given a new start: `StallRestartRule` reads the stalls as no progress,
-    fires once its window is full, the engine draws the start from the default
-    global model (uniform over the box) and the path descends. `NoRestartRule`
-    is the control on the same objective - same dead start, no re-draw, fun
-    stays inf - which is what makes the recovery the verdict's doing.
+    Iteration 0's only batch is all-NaN, so the path holds no point and the rule
+    is never consulted about it - a rule that only reads progress cannot recover
+    a path with no progress to read, so the engine must not need it to. The
+    re-draw comes from the global model, whose second answer is a uniform point
+    over the box, and that start descends: the dead row costs one batch, not the
+    run.
     """
 
     def make_evaluator() -> Callable[
-        [jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None],
+        [jnp.ndarray],
+        tuple[jnp.ndarray, jnp.ndarray, None],
     ]:
         calls = [0]
 
@@ -639,17 +692,16 @@ def test_a_dead_start_is_redrawn_by_a_restart() -> None:
     def run(rule: NoRestartRule | StallRestartRule) -> NPathResult:
         return n_path_schedule(
             make_evaluator(),
-            x0=flock(1),
+            **flock_kwargs(flock(1), unit_bounds(), key=jax.random.PRNGKey(0)),
             bounds=unit_bounds(),
             max_iters=20,
             solver=DiagonalPreconditioner(),
             restart_rule=rule,
-            key=jax.random.PRNGKey(0),
         )
 
-    revived = run(StallRestartRule(window=2))
-    assert math.isfinite(revived.fun), revived
-    assert run(NoRestartRule()).fun == math.inf
+    # `NoRestartRule` is the control: it says nothing at all, ever.
+    assert math.isfinite(run(NoRestartRule()).fun)
+    assert math.isfinite(run(StallRestartRule(window=2)).fun)
 
 
 def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
@@ -691,11 +743,14 @@ def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
-        x0=flock(1),  # one path: a single batch per trial keeps the count exact
+        **flock_kwargs(
+            flock(1),
+            unit_bounds(),
+            key=jax.random.PRNGKey(11),
+        ),  # one path: a single batch per trial keeps the count exact
         bounds=unit_bounds(),
         max_iters=2,  # iteration 0 places x0, then this one step
         solver=Patient(),
-        key=jax.random.PRNGKey(11),
     )
     assert len(rec.batch_shapes) == 1 + n_rejects + 1, rec.batch_shapes  # x0 + trials
     assert res.n_iters == 2, res
@@ -720,12 +775,11 @@ def test_bounds_spellings_are_the_same_box() -> None:
         rec = Recorder(quad)
         res = n_path_schedule(
             rec,
-            x0=flock(4, 2),
+            **flock_kwargs(flock(4, 2), bounds, key=jax.random.PRNGKey(3)),
             bounds=bounds,
             budget_check=rec.limit_check(80),
             max_iters=10,
             solver=HalfStep(),
-            key=jax.random.PRNGKey(3),
         )
         return rec.all_f_vals, res.fun
 
@@ -735,15 +789,15 @@ def test_bounds_spellings_are_the_same_box() -> None:
     assert fun_pairs == fun_arr
 
 
-def test_unbounded_or_absent_box_needs_a_global_model() -> None:
-    """global_model=None can only draw a finite box; anything else is an error.
+def test_the_default_model_needs_a_finite_box() -> None:
+    """With no model, a finite box is required: it is where the draws come from.
 
-    An unbounded side has no distribution to draw from unless the caller brings
-    one, so the engine refuses instead of inventing a box (or a d) of its own.
+    `UniformGlobalModel` draws uniformly, so an unbounded side has no
+    distribution to draw from - the engine refuses instead of inventing one.
     One-sided is the quiet case: half the box still exists, so the run would
     silently be a different algorithm than the one the caller thinks it wired.
-    The check is eager - a model that is never asked is still required, because
-    the rule can change without the box changing.
+    The check is eager - the model is built before any point is served, because
+    the first restart is iteration 0's placement.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -754,11 +808,10 @@ def test_unbounded_or_absent_box_needs_a_global_model() -> None:
         try:
             n_path_schedule(
                 rec,
-                x0=flock(2),
+                n_paths=2,
                 bounds=bounds,
                 max_iters=1,
                 solver=HalfStep(),
-                key=jax.random.PRNGKey(0),
             )
         except ValueError:
             pass
@@ -768,9 +821,11 @@ def test_unbounded_or_absent_box_needs_a_global_model() -> None:
         assert rec.evals == 0  # rejected before any point was served
 
 
-def test_the_flock_is_the_only_authority_on_d() -> None:
-    """A bare None box + a flock is a well-posed run: d is the flock's width.
+def test_the_model_is_the_only_authority_on_d() -> None:
+    """With no box at all, d is the model's to declare.
 
+    A surrogate knows d before the run starts and `bounds` may be absent
+    entirely, so the model is the authority and the box only cross-checks it.
     `bounds=None` and an all-unbounded pair list are the same box (∓inf), so
     they must also be the same run.
     """
@@ -778,19 +833,17 @@ def test_the_flock_is_the_only_authority_on_d() -> None:
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum((theta - 0.7) ** 2), 2.0 * (theta - 0.7)
 
-    def draw(sub: jnp.ndarray, n: int) -> jnp.ndarray:
-        return jax.random.logistic(sub, (n, 3))
+    starts = jax.random.logistic(jax.random.PRNGKey(4), (2, 3))
 
     rec_none = Recorder(quad)
     res = n_path_schedule(
         rec_none,
-        x0=draw(jax.random.PRNGKey(4), 2),
+        n_paths=2,
         bounds=None,
-        global_model=draw,
+        global_model=FixedModel(starts),
         budget_check=rec_none.limit_check(60),
         max_iters=3,
         solver=HalfStep(),
-        key=jax.random.PRNGKey(4),
     )
     assert all(d == 3 for _m, d in rec_none.batch_shapes), rec_none.batch_shapes
     assert res.x.shape == (3,)
@@ -798,31 +851,29 @@ def test_the_flock_is_the_only_authority_on_d() -> None:
     rec_pairs = Recorder(quad)
     n_path_schedule(
         rec_pairs,
-        x0=draw(jax.random.PRNGKey(4), 2),
+        n_paths=2,
         bounds=[(None, None)] * 3,
-        global_model=draw,
+        global_model=FixedModel(starts),
         budget_check=rec_pairs.limit_check(60),
         max_iters=3,
         solver=HalfStep(),
-        key=jax.random.PRNGKey(4),
     )
     assert rec_pairs.all_f_vals == rec_none.all_f_vals
 
-    # a flock and a box that disagree on d is the wiring bug this catches
+    # a model and a box that disagree on d is the wiring bug this catches
     try:
         n_path_schedule(
             Recorder(quad),
-            x0=flock(2, 3),
+            n_paths=2,
             bounds=unit_bounds(2),
-            global_model=draw,
+            global_model=FixedModel(flock(2, 3)),
             max_iters=1,
             solver=HalfStep(),
-            key=jax.random.PRNGKey(4),
         )
     except ValueError:
         pass
     else:  # pragma: no cover - the raise is the assertion
-        msg = "a d=3 flock was accepted against a d=2 box"
+        msg = "a d=3 model was accepted against a d=2 box"
         raise AssertionError(msg)
 
 
@@ -839,18 +890,16 @@ def test_an_unbounded_box_is_really_unbounded() -> None:
         seen.append(float(jnp.max(jnp.abs(x))))
         return jnp.sum((x - 3.0) ** 2, axis=-1), 2.0 * (x - 3.0), None
 
-    def draw(sub: jnp.ndarray, n: int) -> jnp.ndarray:
-        return jax.random.logistic(sub, (n, 1)) + 3.0  # starts near the well
+    starts = jax.random.logistic(jax.random.PRNGKey(5), (4, 1)) + 3.0
 
     res = n_path_schedule(
         eval_f_g,
-        x0=draw(jax.random.PRNGKey(5), 4),
+        n_paths=4,
         bounds=[(None, None)],
-        global_model=draw,
+        global_model=FixedModel(starts),  # starts near the well, box-free
         budget_check=lambda: True,
         max_iters=40,
         solver=HalfStep(),
-        key=jax.random.PRNGKey(5),
     )
     assert max(seen) > 1.0, seen  # a finite [0,1] box could not have gone there
     assert res.fun < 1e-6, res.fun
@@ -859,8 +908,8 @@ def test_an_unbounded_box_is_really_unbounded() -> None:
 def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
     """A bad budget knob fails once, at the entry, naming the knob.
 
-    None of these shapes can run: zero paths advance nothing, and a negative
-    horizon means no iteration at all. The caller should see the knob, not an
+    Neither shape can run: a negative horizon means no iteration at all, and a
+    zero time limit no second of it. The caller should see the knob, not an
     empty result later.
     """
 
@@ -872,7 +921,7 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
             # the knob under test is deliberately out of contract
             n_path_schedule(
                 Recorder(quad),
-                x0=flock(1),
+                **flock_kwargs(flock(1), [(0.0, 1.0)]),  # pyright: ignore[reportArgumentType]
                 bounds=[(0.0, 1.0)],
                 **knobs,  # pyright: ignore[reportArgumentType]
             )
@@ -887,12 +936,41 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
     assert "max_iters" in rejects()
 
 
-def test_a_malformed_flock_is_rejected_at_the_entry() -> None:
-    """The flock is validated where it is handed over, not at the first clip.
+def test_a_nonpositive_width_is_refused_at_the_entry() -> None:
+    """The run's width is the engine's own structure, checked with the model's d.
 
-    Four defects, one place: not a batch, no paths, no dims, and a non-finite
-    start. The fifth is the box agreement - d is the flock's second axis, so a
-    flock that disagrees with the box is the wiring bug, not a run to guess at.
+    A model knows d but not how many paths a caller wants, so `n_paths` is
+    passed on its own and validated beside the model: zero paths advance nothing
+    and a bool is not a count.
+    """
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    def rejects(width: object) -> str:
+        try:
+            n_path_schedule(
+                Recorder(quad),
+                n_paths=width,  # pyright: ignore[reportArgumentType]
+                bounds=[(0.0, 1.0)],
+                max_iters=1,
+            )
+        except ValueError as e:
+            return str(e)
+        msg = f"accepted: {width!r}"
+        raise AssertionError(msg)
+
+    assert "n_paths" in rejects(0)
+    assert "n_paths" in rejects(-2)
+    assert "n_paths" in rejects(width=True)
+
+
+def test_a_malformed_flock_is_refused_by_the_model() -> None:
+    """A flock a model cannot hand back is refused where it is handed over.
+
+    Four defects, one place, in the model that carries it: not a batch, no
+    paths, no dims, and a non-finite start. The shape check names the d it
+    wanted, because the model is what knows the run's dimension.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -900,17 +978,21 @@ def test_a_malformed_flock_is_rejected_at_the_entry() -> None:
 
     def rejects(x0: jnp.ndarray) -> str:
         try:
-            n_path_schedule(Recorder(quad), x0=x0, bounds=[(0.0, 1.0)], max_iters=1)
+            n_path_schedule(
+                Recorder(quad),
+                **flock_kwargs(x0, [(0.0, 1.0)]),
+                bounds=[(0.0, 1.0)],
+                max_iters=1,
+            )
         except ValueError as e:
             return str(e)
         msg = f"accepted: {x0!r}"
         raise AssertionError(msg)
 
-    assert "x0 must be a (n_paths, d) array" in rejects(jnp.zeros(3))
-    assert "at least one point" in rejects(jnp.zeros((0, 1)))
-    assert "at least one dim" in rejects(jnp.zeros((2, 0)))
-    assert "x0 must be finite" in rejects(jnp.array([[0.0], [jnp.nan]]))
-    assert "d=2" in rejects(flock(2, 2))  # the box is d=1
+    assert "x0 must be a (n_paths, 1) array" in rejects(jnp.zeros(3))
+    assert "at least one finite start" in rejects(jnp.zeros((0, 1)))
+    assert "x0 must be a (n_paths, 1) array" in rejects(jnp.zeros((2, 0)))
+    assert "at least one finite start" in rejects(jnp.array([[0.0], [jnp.nan]]))
 
 
 def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
@@ -929,7 +1011,7 @@ def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
             # the dial under test is deliberately out of contract
             n_path_schedule(
                 first,  # pyright: ignore[reportArgumentType]
-                x0=flock(1),
+                **flock_kwargs(flock(1), [(0.0, 1.0)]),  # pyright: ignore[reportArgumentType]
                 bounds=[(0.0, 1.0)],
                 max_iters=1,
                 **knobs,  # pyright: ignore[reportArgumentType]
@@ -941,7 +1023,6 @@ def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
 
     assert "eval_f_g must be callable" in rejects(42)
     assert "eval_f must be callable" in rejects(eval_f_g, eval_f=7)
-    assert "global_model must be callable or None" in rejects(eval_f_g, global_model=3)
     assert "budget_check must be callable" in rejects(eval_f_g, budget_check=0)
 
 
@@ -958,7 +1039,12 @@ def test_malformed_bounds_are_rejected_at_the_entry() -> None:
 
     def rejects(bounds: jnp.ndarray | list[tuple[float | None, float | None]]) -> str:
         try:
-            n_path_schedule(Recorder(quad), x0=flock(1), bounds=bounds, max_iters=1)
+            n_path_schedule(
+                Recorder(quad),
+                **flock_kwargs(flock(1), bounds),
+                bounds=bounds,
+                max_iters=1,
+            )
         except ValueError as e:
             return str(e)
         msg = f"accepted: {bounds!r}"
@@ -970,7 +1056,7 @@ def test_malformed_bounds_are_rejected_at_the_entry() -> None:
 
 
 def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
-    """The two seams are checked for presence once, before any point is served.
+    """The three seams are checked for presence once, before any point is served.
 
     Static typing already refuses these; the runtime check catches the caller
     who reaches the engine from untyped code, and it names which seam objected.
@@ -984,7 +1070,7 @@ def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
             # the knob under test is deliberately out of contract
             n_path_schedule(
                 Recorder(quad),
-                x0=flock(1),
+                **flock_kwargs(flock(1), [(0.0, 1.0)]),  # pyright: ignore[reportArgumentType]
                 bounds=[(0.0, 1.0)],
                 max_iters=1,
                 **knobs,  # pyright: ignore[reportArgumentType]
@@ -996,6 +1082,7 @@ def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
 
     assert "solver" in rejects(solver=object())
     assert "restart_rule" in rejects(restart_rule=object())
+    assert "global_model" in rejects(global_model=object())
 
 
 if __name__ == "__main__":
