@@ -61,10 +61,14 @@ class DiagonalPreconditioner(LocalSolver):
     either phase, because neither phase tests monotonicity: a grid sample is
     ruled against its siblings, never against the step's start.
 
-    ``needs_verdict`` is therefore phase-independent: it answers True exactly
-    when the grid has more than one sample to compare (n_alpha > 1). A
-    single-sample step - warm-up or steady - is committed as proposed, so the
-    engine never asks for a ruling and its own gate on the winner's value and
+    ``needs_verdict`` is therefore phase-independent: it answers True when the
+    grid has more than one sample to compare (n_alpha > 1), and also whenever
+    the stopping test below already holds - ``verdict`` is the contract's only
+    channel for "give_up", and the engine asks for one only from a path that
+    answered True, so a converged path must ask for its own last ruling instead
+    of being committed unjudged and stepping off a stationary point. A
+    single-sample step anywhere else is committed as proposed, so the engine
+    never asks for a ruling there and its own gate on the winner's value and
     gradient is the whole of its acceptance.
 
     The stopping test is a gradient-norm test: ‖g‖ ≤ τ_rel·‖g_0‖ gives up, the
@@ -165,19 +169,24 @@ class DiagonalPreconditioner(LocalSolver):
         self.y_ema[i] = jnp.zeros_like(p.g)
         self._reset_step(i)
 
-    def needs_verdict(self, i: int) -> bool:  # noqa: ARG002 - the seam's per-path shape
-        """Rule per candidate only when the alpha grid compares samples.
+    def needs_verdict(self, i: int, p: PathPoint) -> bool:
+        """Rule per candidate when the grid compares samples, or p stops the path.
 
-        True exactly when ``n_alpha > 1``: the grid serves that many samples and
+        ``n_alpha > 1`` is the grid case: the step serves that many samples and
         each served value decides whether to shrink and try again, so the engine
         must ask for a ruling. The phase does not enter - an ``n_alpha >= 2``
-        warm-up is ruled on its grid like any steady step. The default
-        single-sample step is not ruled: it is committed as proposed, and the
-        engine's own gate on the winner's value and gradient is the whole of its
-        acceptance (a non-finite one stalls the path instead of folding a nan
-        into every later step).
+        warm-up is ruled on its grid like any steady step.
+
+        The second case is the stopping test. A path already at its
+        gradient-norm floor has nothing left to rule on, but ``verdict`` is the
+        contract's only channel for "give_up", so it asks for that one ruling
+        rather than being committed unjudged and stepping off a stationary
+        point. Anywhere else a single-sample step is not ruled: it is committed
+        as proposed, and the engine's own gate on the winner's value and
+        gradient is the whole of its acceptance (a non-finite one stalls the
+        path instead of folding a nan into every later step).
         """
-        return self.n_alpha > 1
+        return self.n_alpha > 1 or self._stationary(i, p)
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
         """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - d⊙g."""
@@ -223,7 +232,7 @@ class DiagonalPreconditioner(LocalSolver):
         # eval, which the engine's best still counts) rather than stepping
         # off it. g0 is the anchor: the same test at the start is ‖g0‖ ≤ τ‖g0‖,
         # true only for a zero-gradient start.
-        if bool(jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self.g0[i])):
+        if self._stationary(i, p):
             return "give_up"
         return self._step_verdict(i, f)
 
@@ -247,6 +256,17 @@ class DiagonalPreconditioner(LocalSolver):
         self.has_secant[i] = True
         self._reset_step(i)
 
+    def _stationary(self, i: int, p: PathPoint) -> bool:
+        """Return whether path i's gradient has hit its floor: ‖g‖ ≤ τ_rel·‖g_0‖.
+
+        The anchor is ``g_0``, the gradient at the path's cold start, so the test
+        at the start itself reads ‖g_0‖ ≤ τ·‖g_0‖ and holds only for a
+        zero-gradient one. Read off the step's starting point ``p`` - the point
+        ``verdict`` also reads - so the ask in ``needs_verdict`` and the ruling
+        in ``verdict`` can never disagree.
+        """
+        return bool(jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self.g0[i]))
+
     def _reset_step(self, i: int) -> None:
         """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
         self.alpha[i] = self.alpha0
@@ -258,13 +278,13 @@ class DiagonalPreconditioner(LocalSolver):
 
         Reached by the engine only with ``n_alpha >= 2``, in either phase: a
         single-sample step answers False to ``needs_verdict`` and is committed
-        unruled, with the engine's own finiteness gate standing in for the
-        give-up below - the grid code is the same one sample, so a direct call
-        with ``n_alpha == 1`` still rules that way. One grid
-        of ``n_alpha`` samples along the current step direction, shrinking alpha
-        by the grid's spacing each retry; the win is handed to the engine on
-        "accept", which commits its per-step argmin and folds the winner through
-        ``fold``.
+        unruled, and the one that answers True (a path at its stopping test) is
+        given up above instead of reaching here - the grid code is the same one
+        sample, so a direct call with ``n_alpha == 1`` still rules that way. One
+        grid of ``n_alpha`` samples along the current step direction, shrinking
+        alpha by the grid's spacing each retry; the win is handed to the engine
+        on "accept", which commits its per-step argmin and folds the winner
+        through ``fold``.
 
         The ruling reads `f` alone: no sample's gradient is in hand, and the
         engine gates the winner's gradient before it folds, so a non-finite

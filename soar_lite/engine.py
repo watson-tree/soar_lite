@@ -106,14 +106,14 @@ class LocalSolver(Protocol):
     test, **and how long the enumeration may run** - the engine loops until the
     method ends it, so ``verdict`` must reach "accept" or "give_up" on its own.
     An enumerator with no bound of its own is a hang, not a slow run.
-    ``needs_verdict(i)`` is the other half of that ownership: a method that rules
-    on each candidate says True, one whose step always commits its single
+    ``needs_verdict(i, p)`` is the other half of that ownership: a method that
+    rules on each candidate says True, one whose step always commits its single
     proposal says False, and the engine then serves no value for a ruling it
-    would only rubber-stamp. All state
-    is per path, lives inside the instance, and is opaque to the engine (the
-    engine never reads it) - implementers index it by path i. Attributes are
-    public so an instance can be inspected and subclassed, not because the
-    engine may write them: the engine only hands them to the methods below.
+    would only rubber-stamp. All state is per path, lives inside the instance,
+    and is opaque to the engine (the engine never reads it) - implementers index
+    it by path i. Attributes are public so an instance can be inspected and
+    subclassed, not because the engine may write them: the engine only hands
+    them to the methods below.
 
     One engine step, for every path i that steps this iteration: propose(i, p)
     is called repeatedly. p is the path's current point, unchanged for the whole
@@ -154,18 +154,23 @@ class LocalSolver(Protocol):
         """
         ...
 
-    def needs_verdict(self, i: int) -> bool:
-        """Report whether path i's next step is ruled on candidate by candidate.
+    def needs_verdict(self, i: int, p: PathPoint) -> bool:
+        """Report whether path i's next step from p is ruled on candidate by candidate.
 
-        Asked once per path per iteration, before ``propose``, and the answer
-        holds for that whole step. ``True`` is the enumerated kind: the engine
-        serves each trial for its value alone and asks ``verdict`` what to do
-        with it. ``False`` promises the step commits its one proposal unjudged -
-        the engine leaves both halves of the point to `settle`, so its value is
-        served once (fused, with the gradient) instead of once for a ruling and
-        again for the gradient. What replaces the ruling is the engine's gate: a
-        winner whose value or gradient is not finite stalls the path instead of
-        being committed, which is the same gate a fresh restart start passes.
+        Asked once per path per iteration, before ``propose``, so the only point
+        it can see is the step's start p - whose gradient a path always has. A
+        method with a stopping test reads it here: answering True is how it gets
+        the one ``verdict`` call that carries "give_up", since a step it did not
+        ask to rule is committed as proposed.
+
+        ``True`` is the enumerated kind: the engine serves each trial for its
+        value alone and asks ``verdict`` what to do with it. ``False`` promises
+        the step commits its one proposal unjudged - the engine leaves both
+        halves of the point to `settle`, so its value is served once (fused, with
+        the gradient) instead of once for a ruling and again for the gradient.
+        What replaces the ruling is the engine's gate: a winner whose value or
+        gradient is not finite stalls the path instead of being committed, which
+        is the same gate a fresh restart start passes.
 
         The cost of ``True`` is the method's own, and it is the caller's to
         weigh: absent the ``eval_f`` seam every served trial is a fused pass, so
@@ -1277,8 +1282,10 @@ class _Paths:
         unjudged: list[int] = []
         judged: list[int] = []
         for i in cohort:
-            if not self.stalled[i]:
-                (judged if self.local_solver.needs_verdict(i) else unjudged).append(i)
+            if self.stalled[i]:
+                continue
+            ruled = self.local_solver.needs_verdict(i, self.points[i])
+            (judged if ruled else unjudged).append(i)
         return unjudged, judged
 
     def _propose_unjudged(self, paths: list[int]) -> dict[int, _Pending]:

@@ -58,18 +58,21 @@ def test_a_step_clears_the_latch() -> None:
     assert rule.should_restart(0, 1.0, 1.0) is False
 
 
-def test_the_verdict_is_a_pure_query() -> None:
-    """Firing does not clear the latch: only the engine's next report does.
+def test_the_verdict_consumes_the_stall() -> None:
+    """One stall buys one restart; the second ask says no until re-armed.
 
-    That is what re-draws a path whose fresh start was unusable - the engine
-    reports `None` again, so the same verdict fires again.
+    The engine asks before it places anything and silences a path for the round
+    it re-places, so a latch left set after firing would re-place that path every
+    iteration - evaluated each time, never given a round to step in - and nothing
+    would ever be reported to clear it.
     """
     rule = StallRestartRule()
     rule.observe_step(0, None)
     assert rule.should_restart(0, 1.0, 1.0) is True
+    assert rule.should_restart(0, 1.0, 1.0) is False
+    rule.observe_step(0, None)  # the fresh start stalled too
     assert rule.should_restart(0, 1.0, 1.0) is True
-    rule.observe_step(0, None)
-    assert rule.should_restart(0, 1.0, 1.0) is True
+    assert rule.should_restart(0, 1.0, 1.0) is False
 
 
 def test_stall_rule_ignores_the_best_so_far() -> None:

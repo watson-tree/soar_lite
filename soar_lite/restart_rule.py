@@ -59,6 +59,13 @@ class StallRestartRule(RestartRule):
     evidence). One `None` is therefore the whole signal - a window over more
     rounds would read the same `None` again and only delay the re-draw.
 
+    Firing consumes the latch, and that is the one place a rule has to act
+    inside a query. The engine asks the rule before it places anything and
+    silences a path for the round it re-places it, so a latch left set after it
+    fired would have the path re-placed - and re-evaluated - every iteration
+    without ever getting a round to step in, and without ever reporting again to
+    clear itself. Consuming it here is what hands the path back its round.
+
     A consequence worth naming: the rule never judges whether a step was an
     improvement, only whether the path moved. An uphill or micro step is still a
     step; whether it was worth taking is the local solver's verdict, not this
@@ -102,10 +109,15 @@ class StallRestartRule(RestartRule):
             self._stalled.discard(i)
 
     def should_restart(self, i: int, f_k: float, best_fun_raw: float) -> bool:  # noqa: ARG002
-        """Return True iff path i's last reported round was a stall.
+        """Return True once per stall: fire on the latched path and clear it.
 
-        A pure query: firing does not clear the latch. The engine's next report
-        clears it - a step discards the mark, another stall keeps it, which is
-        what re-draws a path whose fresh start was unusable.
+        Not a pure query, and the contract is why: the engine never reports a
+        path's own restart round (that round took no step), so this verdict is
+        the only call that can consume the observation. Leaving the latch set
+        would re-place the path every iteration - evaluated each time - with no
+        round left for it to step in and nothing ever reported to clear it.
         """
-        return i in self._stalled
+        if i not in self._stalled:
+            return False
+        self._stalled.discard(i)
+        return True

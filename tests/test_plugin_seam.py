@@ -107,7 +107,7 @@ class StubSolver:
         """Return a halved steepest-descent step from p."""
         return p.x - 0.5 * p.g
 
-    def needs_verdict(self, i: int) -> bool:  # noqa: ARG002
+    def needs_verdict(self, i: int, p: PathPoint) -> bool:  # noqa: ARG002
         """Rule every trial: this stub's `give_up` policy needs a ruling to fire."""
         return True
 
@@ -124,7 +124,7 @@ class StubSolver:
 class UnjudgedSolver(StubSolver):
     """A method whose step commits its one proposal unread: no verdict needed."""
 
-    def needs_verdict(self, i: int) -> bool:  # noqa: ARG002
+    def needs_verdict(self, i: int, p: PathPoint) -> bool:  # noqa: ARG002
         """Never rule: every step is taken as proposed."""
         return False
 

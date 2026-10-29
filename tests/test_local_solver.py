@@ -66,7 +66,8 @@ def test_diag_warmup_is_one_unruled_gradient_step() -> None:
     p = PathPoint(x=jnp.zeros(3), f=2.0, g=jnp.array([3.0, 0.0, 4.0]))
     solver.restart(0, p)
     assert not solver.has_secant[0]
-    assert not solver.needs_verdict(0)  # n_alpha=1: there is nothing to compare
+    # n_alpha=1 and a gradient far above its floor: nothing to compare
+    assert not solver.needs_verdict(0, p)
     assert solver.alpha[0] == 1.0
     assert close(solver.propose(0, p), p.x + 1.0 * (-p.g), 1e-12)
     # Committed exactly as proposed: the engine never asks for a ruling, and the
@@ -82,12 +83,28 @@ def test_diag_warmup_is_ruled_when_the_grid_compares_samples() -> None:
     solver = DiagonalPreconditioner(n_alpha=2)
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.restart(0, p)
-    assert solver.needs_verdict(0)
+    assert solver.needs_verdict(0, p)
     # No descent test any more: a sample worse than the start still advances the
     # grid, because only the sibling comparison will decide the winner.
     assert solver.verdict(0, p, p.x - p.g, 7.0) == "retry"
     assert solver.alpha[0] == solver.backtrack
     assert solver.verdict(0, p, p.x - solver.backtrack * p.g, 8.0) == "accept"
+
+
+def test_a_stationary_path_asks_for_the_ruling_that_ends_it() -> None:
+    """n_alpha=1 rules nothing else, but the stopping test needs its own verdict.
+
+    `verdict` is the contract's only channel for "give_up", and the engine only
+    asks a path that answered True to `needs_verdict` - so a converged path has
+    to ask, or it is committed unjudged and steps off its stationary point
+    forever, never reporting the stall a restart rule reads.
+    """
+    solver = DiagonalPreconditioner()
+    start = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
+    solver.restart(0, start)
+    floor = PathPoint(x=start.x, f=1.0, g=jnp.array([1e-9, -1e-9]))
+    assert solver.needs_verdict(0, floor)
+    assert solver.verdict(0, floor, floor.x, floor.f) == "give_up"
 
 
 def test_diag_warmup_grid_drops_a_nonfinite_sample() -> None:
@@ -114,7 +131,7 @@ def _warm_up(
         x = solver.propose(0, p)
         f, g = quad(x)
         trial = PathPoint(x=x, f=f, g=g)
-        ruled = solver.needs_verdict(0)
+        ruled = solver.needs_verdict(0, p)
         if not ruled or solver.verdict(0, p, trial.x, trial.f) == "accept":
             solver.fold(0, p, trial)
             return trial
