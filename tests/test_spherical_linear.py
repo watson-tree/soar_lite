@@ -206,7 +206,7 @@ def test_a_masked_model_proposes_inside_the_box() -> None:
     model.observe(xs, [float(jnp.sum((row - center) ** 2)) for row in xs], None)
     starts = model.propose(2)
     assert starts.shape == (2, 3)
-    mean, sigma = model.predict(starts)
+    mean, sigma = model._predict(starts)
     assert bool(jnp.all(jnp.isfinite(starts)))
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
@@ -266,7 +266,7 @@ def test_integer_bounds_still_normalize_to_a_unit_box() -> None:
     assert bool(jnp.all(draws >= 0.0))
     assert bool(jnp.all(draws <= 1.0))
     model.observe(jnp.asarray([[0.2, 0.3], [0.8, 0.9]]), [1.0, 2.0], None)
-    mean, sigma = model.predict(jnp.asarray([[0.5, 0.5]]))
+    mean, sigma = model._predict(jnp.asarray([[0.5, 0.5]]))
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
 
@@ -276,7 +276,7 @@ def test_predict_refuses_a_fit_it_cannot_standardize() -> None:
     model = _model()
     model.observe(jnp.asarray([[0.5, -0.5]]), [1.0], None)
     with pytest.raises(ValueError, match="spread to standardize"):
-        model.predict(jnp.asarray([[0.0, 0.0]]))
+        model._predict(jnp.asarray([[0.0, 0.0]]))
 
 
 def test_a_flat_batch_has_no_spread_to_fit() -> None:
@@ -289,14 +289,14 @@ def test_a_flat_batch_has_no_spread_to_fit() -> None:
     assert bool(jnp.all(draws >= -2.0))
     assert bool(jnp.all(draws <= 2.0))
     with pytest.raises(ValueError, match="spread to standardize"):
-        model.predict(jnp.asarray([[0.0, 0.0]]))
+        model._predict(jnp.asarray([[0.0, 0.0]]))
 
 
 def test_posterior_deviation_never_dips_below_the_observation_noise() -> None:
     """Keep the root defined by construction: noise plus a non-negative form."""
     model = _model()
     _observe(model, 6)
-    _, sigma = model.predict(jnp.stack(model._xs))
+    _, sigma = model._predict(jnp.stack(model._xs))
     assert float(jnp.min(sigma)) >= math.sqrt(model._noise) - 1e-6
 
 
@@ -310,7 +310,7 @@ def test_observe_and_predict_demand_a_two_dimensional_batch(
     with pytest.raises(ValueError, match="needs a"):
         model.observe(jnp.zeros(bad), [0.0] * bad[0], None)
     with pytest.raises(ValueError, match="needs a"):
-        model.predict(jnp.zeros(bad))
+        model._predict(jnp.zeros(bad))
 
 
 def test_posterior_variance_stays_under_the_prior_far_from_data() -> None:
@@ -319,8 +319,8 @@ def test_posterior_variance_stays_under_the_prior_far_from_data() -> None:
     # A >= (noise/var_prior) I, so sigma^2 <= noise + var_prior everywhere.
     model = _model()
     _observe(model, 6)
-    near, near_sigma = model.predict(jnp.asarray([[1.9, -1.9]]))
-    far, far_sigma = model.predict(jnp.asarray([[1.9, 1.9]]))
+    near, near_sigma = model._predict(jnp.asarray([[1.9, -1.9]]))
+    far, far_sigma = model._predict(jnp.asarray([[1.9, 1.9]]))
     assert bool(jnp.all(jnp.isfinite(near)))
     assert bool(jnp.all(jnp.isfinite(far)))
     assert float(far_sigma[0]) <= math.sqrt(1.01) + 1e-3  # noise + var_prior
@@ -336,7 +336,7 @@ def test_propose_descends_the_acquisition_into_the_box() -> None:
     assert bool(jnp.all(jnp.isfinite(starts)))
     assert bool(jnp.all(starts >= -2.0))
     assert bool(jnp.all(starts <= 2.0))
-    mean, sigma = model.predict(starts)
+    mean, sigma = model._predict(starts)
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
 

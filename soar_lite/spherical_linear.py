@@ -321,14 +321,15 @@ class SphericalLinearModel(GlobalModel):
             raise ValueError(msg)
         return starts
 
-    def predict(self, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def _predict(self, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Return the posterior mean and standard deviation at `x` rows.
 
-        The surrogate's own query point: `propose` builds its acquisition from
-        it, so a caller inspecting the fit reads the same posterior. Answers in
-        the engine's coordinates but the *standardized* value scale (the fit
-        centers and scales the observed values), which is why the acquisition is
-        the caller that consumes it.
+        A read-only diagnostic kept `_`-private for the tests: the engine never
+        calls it, and `propose` reaches the posterior directly rather than
+        through this method, so it is not part of the `GlobalModel` contract a
+        caller implements. It also answers only in the *standardized* value
+        scale - the fit centers and scales the observed values - which is one
+        more reason it stays off the public face.
 
         Raises:
             ValueError: If the fit has no spread to standardize by yet, or if
@@ -336,11 +337,11 @@ class SphericalLinearModel(GlobalModel):
 
         """
         if not self._can_fit():
-            msg = "predict needs a spread to standardize by"
+            msg = "a posterior read needs a spread to standardize by"
             raise ValueError(msg)
         batch = jnp.asarray(x)
         if batch.ndim != 2 or batch.shape[1] != self.d:
-            msg = f"predict needs a (m, {self.d}) batch, got {batch.shape}"
+            msg = f"a posterior read needs a (m, {self.d}) batch, got {batch.shape}"
             raise ValueError(msg)
         weights, cov = self._posterior()
         return self._posterior_at(batch, weights, cov)
