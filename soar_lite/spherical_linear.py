@@ -103,7 +103,6 @@ class SphericalLinearModel(GlobalModel):
         Raises:
             ValueError: If the box is absent, unbounded on any side, or has a
                 NaN side; or if any hyperparameter is out of range.
-            TypeError: If `minimize` is not callable.
 
         """
         check_bounds(bounds)
@@ -114,9 +113,6 @@ class SphericalLinearModel(GlobalModel):
                 f"finite box: got {bounds!r}"
             )
             raise ValueError(msg)
-        if not callable(minimize):
-            msg = f"minimize must be callable, got {minimize!r}"
-            raise TypeError(msg)
         self._lo, self._hi = box
         self.d = len(bounds)
         self._bounds = bounds

@@ -213,20 +213,13 @@ def test_minimize_output_shape_is_validated() -> None:
         model.propose(3)
 
 
-def test_a_bad_box_or_knob_or_minimizer_is_refused() -> None:
-    """Refuse an unbounded box, a non-callable minimizer and a zero noise."""
+def test_an_unbounded_box_or_a_bad_knob_is_refused() -> None:
+    """Refuse an unbounded box and a zero noise, the two that reach the fit."""
     unbounded = jnp.asarray([[0.0, math.inf]])
     with pytest.raises(ValueError, match="finite box"):
         SphericalLinearModel(
             unbounded,
             minimize=_grid_minimize,
-            key=jax.random.PRNGKey(0),
-        )
-    finite = jnp.asarray([[-1.0, 1.0]])
-    with pytest.raises(TypeError, match="callable"):
-        SphericalLinearModel(
-            finite,
-            minimize=None,  # pyright: ignore[reportArgumentType]
             key=jax.random.PRNGKey(0),
         )
     with pytest.raises(ValueError, match="noise"):
