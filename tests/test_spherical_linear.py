@@ -126,12 +126,41 @@ def test_propose_draws_uniformly_until_a_fit_is_possible() -> None:
         assert bool(jnp.all(draws <= 2.0))
 
 
+def test_integer_bounds_still_normalize_to_a_unit_box() -> None:
+    """Keep the box usable when a caller spells its pairs in integers."""
+    model = SphericalLinearModel(
+        [(0, 1), (0, 1)],
+        minimize=_grid_minimize,
+        key=jax.random.PRNGKey(0),
+    )
+    draws = model.propose(3)
+    assert bool(jnp.all(draws >= 0.0))
+    assert bool(jnp.all(draws <= 1.0))
+    model.observe(jnp.asarray([[0.2, 0.3], [0.8, 0.9]]), [1.0, 2.0], None)
+    mean, sigma = model.predict(jnp.asarray([[0.5, 0.5]]))
+    assert bool(jnp.all(jnp.isfinite(mean)))
+    assert bool(jnp.all(jnp.isfinite(sigma)))
+
+
 def test_predict_refuses_a_fit_it_cannot_standardize() -> None:
     """Refuse a posterior query that has no value spread to work from."""
     model = _model()
     model.observe(jnp.asarray([[0.5, -0.5]]), [1.0], None)
-    with pytest.raises(ValueError, match="at least two"):
+    with pytest.raises(ValueError, match="spread to standardize"):
         model.predict(jnp.asarray([[0.0, 0.0]]))
+
+
+@pytest.mark.parametrize("bad", [(3, 2, 2), (3, 3)])
+def test_observe_and_predict_demand_a_two_dimensional_batch(
+    bad: tuple[int, ...],
+) -> None:
+    """Refuse a shape the fit would broadcast into nonsense."""
+    model = _model()
+    _observe(model, 4)
+    with pytest.raises(ValueError, match="needs a"):
+        model.observe(jnp.zeros(bad), [0.0] * bad[0], None)
+    with pytest.raises(ValueError, match="needs a"):
+        model.predict(jnp.zeros(bad))
 
 
 def test_posterior_variance_stays_under_the_prior_far_from_data() -> None:

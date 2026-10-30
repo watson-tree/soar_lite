@@ -102,7 +102,7 @@ class SphericalLinearModel(GlobalModel):
 
         Raises:
             ValueError: If the box is absent, unbounded on any side, or has a
-                NaN side; if `n_points` or any hyperparameter is out of range.
+                NaN side; or if any hyperparameter is out of range.
             TypeError: If `minimize` is not callable.
 
         """
@@ -117,24 +117,21 @@ class SphericalLinearModel(GlobalModel):
         if not callable(minimize):
             msg = f"minimize must be callable, got {minimize!r}"
             raise TypeError(msg)
-        lo, hi = box
-        dtype = jnp.promote_types(jnp.result_type(lo, hi), jnp.float32)
-        self._lo = jnp.asarray(lo, dtype=dtype)
-        self._hi = jnp.asarray(hi, dtype=dtype)
-        self.d = int(self._lo.shape[0])
+        self._lo, self._hi = box
+        self.d = len(bounds)
         self._bounds = bounds
         self._minimize = minimize
         self._width = self._hi - self._lo
-        self._var_prior = _check_positive("var_prior", var_prior)
-        self._noise = _check_positive("noise", noise)
-        kappa_v = _check_positive("kappa", kappa)
+        self._var_prior = _check_finite_positive("var_prior", var_prior)
+        self._noise = _check_finite_positive("noise", noise)
+        kappa_v = _check_finite_positive("kappa", kappa)
         if kappa_v >= 1.0:
             msg = (
                 "kappa ties the projection radius to the box diagonal, so it "
                 f"must lie in (0, 1); got {kappa!r}"
             )
             raise ValueError(msg)
-        self._ell = _check_lengthscale(ell, self.d, dtype)
+        self._ell = _check_lengthscale(ell, self.d)
         # The global lengthscale is the piece that makes the projection scale-
         # free: it maps the box's farthest corner to radius sqrt(2*kappa) for any
         # d, so a wider box does not push every corner to the pole.
@@ -160,15 +157,18 @@ class SphericalLinearModel(GlobalModel):
         same coordinate is worth.
 
         Raises:
-            ValueError: If the batch has a different number of rows than values.
+            ValueError: If `x` is not an ``(m, d)`` batch, or if the batch has a
+                different number of rows than values.
 
         """
-        rows = jnp.atleast_2d(jnp.asarray(x))
-        values = [float(v) for v in f]
-        if rows.shape[0] != len(values):
-            msg = f"observe got {rows.shape[0]} rows but {len(values)} values"
+        rows = jnp.asarray(x)
+        if rows.ndim != 2 or rows.shape[1] != self.d:
+            msg = f"observe needs a (m, {self.d}) batch, got {rows.shape}"
             raise ValueError(msg)
-        for row, value in zip(rows, values, strict=True):
+        if rows.shape[0] != len(f):
+            msg = f"observe got {rows.shape[0]} rows but {len(f)} values"
+            raise ValueError(msg)
+        for row, value in zip(rows, f, strict=True):
             if math.isfinite(value):
                 self._xs.append(row)
                 self._fs.append(value)
@@ -176,9 +176,9 @@ class SphericalLinearModel(GlobalModel):
     def propose(self, n_points: int) -> jnp.ndarray:
         """Return `n_points` restart points: a uniform draw until a fit is possible.
 
-        Fewer than two observations cannot be standardized (one point has no
-        spread), so until that evidence arrives the answer is the uniform draw
-        the default model would give - the engine only ever sees the points.
+        Until the fit has a spread to standardize, the answer is the uniform
+        draw the default model would give - the engine only ever sees the
+        points.
         Afterwards the answer is the injected `minimize`'s local minimizers of
         ``-log EI`` over the box; the log form keeps the acquisition's gradient
         alive in the region where the raw improvement has decayed to zero.
@@ -188,11 +188,11 @@ class SphericalLinearModel(GlobalModel):
                 anything but a ``(n_points, d)`` array.
 
         """
-        if n_points < 1:
+        if n_points <= 0:
             msg = f"propose needs at least one point, got {n_points}"
             raise ValueError(msg)
         self._key, sub = jax.random.split(self._key)
-        if len(self._xs) < 2:
+        if not self._can_fit():
             return jax.random.uniform(
                 sub,
                 (n_points, self.d),
@@ -228,15 +228,27 @@ class SphericalLinearModel(GlobalModel):
         the caller that consumes it.
 
         Raises:
-            ValueError: If fewer than two points have been observed - the fit
-                has no spread to standardize by.
+            ValueError: If the fit has no spread to standardize by yet, or if
+                `x` is not an ``(m, d)`` batch.
 
         """
-        if len(self._xs) < 2:
-            msg = "predict needs at least two observed points"
+        if not self._can_fit():
+            msg = "predict needs a spread to standardize by"
+            raise ValueError(msg)
+        batch = jnp.asarray(x)
+        if batch.ndim != 2 or batch.shape[1] != self.d:
+            msg = f"predict needs a (m, {self.d}) batch, got {batch.shape}"
             raise ValueError(msg)
         beta, inv_gram, _ = self._posterior()
-        return self._posterior_at(jnp.atleast_2d(jnp.asarray(x)), beta, inv_gram)
+        return self._posterior_at(batch, beta, inv_gram)
+
+    def _can_fit(self) -> bool:
+        """Return whether the values have a spread to standardize by.
+
+        One observation is not enough: its standardized spread is zero, so there
+        is nothing to divide by and no improvement to measure against it.
+        """
+        return len(self._xs) > 1
 
     def _features(self, x: jnp.ndarray) -> jnp.ndarray:
         """Inverse-stereographic features of the normalized, lengthscaled rows.
@@ -275,7 +287,7 @@ class SphericalLinearModel(GlobalModel):
         inv_gram: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Posterior mean and deviation of the standardized value at ``(m, d)`` rows."""
-        features = self._features(jnp.atleast_2d(x))
+        features = self._features(x)
         mean = features @ beta
         var = self._noise * (
             1.0 + jnp.einsum("ij,jk,ik->i", features, inv_gram, features)
@@ -311,22 +323,17 @@ def _log_h(z: jnp.ndarray) -> jnp.ndarray:
     )
 
 
-def _check_positive(name: str, value: float) -> float:
-    """Return `value` as a float, refusing a non-finite or non-positive knob."""
-    v = float(value)
-    if not math.isfinite(v) or v <= 0.0:
+def _check_finite_positive(name: str, value: float) -> float:
+    """Return `value` unchanged, refusing a non-finite or non-positive knob."""
+    if not math.isfinite(value) or value <= 0.0:
         msg = f"{name} must be a finite positive number, got {value!r}"
         raise ValueError(msg)
-    return v
+    return value
 
 
-def _check_lengthscale(
-    ell: float | jnp.ndarray,
-    d: int,
-    dtype: jnp.dtype,
-) -> jnp.ndarray:
+def _check_lengthscale(ell: float | jnp.ndarray, d: int) -> jnp.ndarray:
     """Broadcast the per-dimension lengthscale to ``(d,)``, refusing a bad one."""
-    lengthscale = jnp.broadcast_to(jnp.asarray(ell, dtype=dtype), (d,))
+    lengthscale = jnp.broadcast_to(jnp.asarray(ell), (d,))
     if not bool(jnp.all(jnp.isfinite(lengthscale))) or not bool(
         jnp.all(lengthscale > 0.0),
     ):
