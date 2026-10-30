@@ -118,7 +118,9 @@ class SphereProjection:
             )
             raise ValueError(msg)
         self.lo, self.hi = box
-        self.d = int(self.lo.shape[0])
+        # The dimension is what `bounds` declares: read it off the argument,
+        # not off `lo`/`hi`, which `box_bounds` just derived from it.
+        self.d = len(bounds)
         self.width = self.hi - self.lo
         self.bounds = bounds
         self.mask = _check_mask(mask, self.d)

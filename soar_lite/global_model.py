@@ -68,9 +68,9 @@ class UniformGlobalModel(GlobalModel):
             )
             raise ValueError(msg)
         self._lo, self._hi = box
-        # The box is the projection here, so it is also the dimension: a (d, 2)
-        # pair list cannot disagree with itself.
-        self.d = int(self._lo.shape[0])
+        # The dimension is what `bounds` declares: read it there, not off
+        # `_lo`, which `box_bounds` just derived from it.
+        self.d = len(bounds)
         self._key = key
         self._x0 = None if x0 is None else _check_x0(x0, self.d)
 
