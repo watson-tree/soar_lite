@@ -212,7 +212,7 @@ class DiagonalPreconditioner(LocalSolver):
         self,
         i: int,
         p: PathPoint,
-        x: jnp.ndarray,  # noqa: ARG002 - stays in the seam's trial shape
+        x: jnp.ndarray,
         f: float,
     ) -> Verdict:
         """Give up at a stationary point; otherwise rule one alpha-grid sample.
@@ -227,6 +227,8 @@ class DiagonalPreconditioner(LocalSolver):
         it folds. The stopping test reads ``p`` - the step's start, whose
         gradient a path always has.
         """
+        del x
+
         # Checked on the *current* point, so a path that has just landed on a
         # stationary one gives up on the next iteration (costing that one trial's
         # eval, which the engine's best still counts) rather than stepping

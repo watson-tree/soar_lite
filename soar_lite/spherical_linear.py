@@ -140,7 +140,7 @@ class SphericalLinearModel(GlobalModel):
         self,
         x: jnp.ndarray,
         f: list[float],
-        g: jnp.ndarray | None,  # noqa: ARG002 - the seam carries it; the fit is f-only
+        g: jnp.ndarray | None,
     ) -> None:
         """Fold one served batch into the model's value-only evidence.
 
@@ -157,6 +157,8 @@ class SphericalLinearModel(GlobalModel):
                 different number of rows than values.
 
         """
+        del g
+
         rows = jnp.asarray(x)
         if rows.ndim != 2 or rows.shape[1] != self.d:
             msg = f"observe needs a (m, {self.d}) batch, got {rows.shape}"
