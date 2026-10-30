@@ -149,6 +149,49 @@ def test_a_mask_that_selects_nothing_usable_is_refused(mask: Sequence[object]) -
         SphereProjection(bounds, mask=mask)  # pyright: ignore[reportArgumentType]
 
 
+@pytest.mark.parametrize(
+    "ell",
+    [
+        jnp.asarray(1.0),
+        jnp.asarray([1.0]),
+        jnp.ones((4, 1)),
+        jnp.ones(3),
+        jnp.asarray([1.0, 0.0, 1.0, 1.0]),
+        jnp.asarray([1.0, -1.0, 1.0, 1.0]),
+        jnp.asarray([1.0, jnp.inf, 1.0, 1.0]),
+    ],
+)
+def test_a_lengthscale_that_is_not_a_d_vector_is_refused(ell: jnp.ndarray) -> None:
+    """Refuse a scalar, a short vector, a matrix and a non-positive entry.
+
+    A scalar or a length-one vector would broadcast into a uniform vector, which
+    is a real projection but never what a caller writing those shapes means, so
+    it is refused rather than guessed at.
+    """
+    bounds = jnp.asarray([[-2.0, 2.0]] * 4)
+    with pytest.raises(ValueError, match="ell"):
+        SphereProjection(bounds, ell=ell)
+
+
+def test_none_lengthscale_bends_every_dimension_alike() -> None:
+    """Read `None` as the uniform default, bit-identical to an explicit unit vector."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 3)
+    xs = jnp.asarray([[-1.9, 2.7, 0.05], [0.0, 0.0, 0.5]])
+    assert jnp.array_equal(
+        SphereProjection(bounds).features(xs),
+        SphereProjection(bounds, ell=jnp.ones(3)).features(xs),
+    )
+
+
+def test_a_non_uniform_lengthscale_moves_the_features() -> None:
+    """Carry anisotropy through the ratios between the vector's entries."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 3)
+    xs = jnp.asarray([[-1.9, 2.7, 0.05], [1.3, -2.1, 0.8]])
+    uniform = SphereProjection(bounds).features(xs)
+    bent = SphereProjection(bounds, ell=jnp.asarray([3.0, 0.5, 2.0])).features(xs)
+    assert not bool(jnp.allclose(uniform, bent))
+
+
 def test_a_masked_model_proposes_inside_the_box() -> None:
     """Keep the acquisition path working when only some dimensions bend."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 3)

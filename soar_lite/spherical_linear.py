@@ -96,7 +96,7 @@ class SphereProjection:
         self,
         bounds: Bounds,
         *,
-        ell: float | jnp.ndarray = 1.0,
+        ell: jnp.ndarray | None = None,
         kappa: float = 0.5,
         mask: jnp.ndarray | Sequence[bool] | Sequence[int] | None = None,
     ) -> None:
@@ -105,8 +105,11 @@ class SphereProjection:
         Args:
             bounds: the finite box the projection normalizes, scipy-style pairs
                 or a ``(d, 2)`` array. Every side must be finite.
-            ell: per-dimension lengthscale in unit-box units, a scalar or a
-                ``(d,)`` array.
+            ell: per-dimension lengthscale in unit-box units, a ``(d,)`` vector
+                or ``None`` for the default, which bends every dimension
+                alike. Only the ratios between the projected dimensions' entries
+                move the features: `glob_ls` divides one global lengthscale back
+                out, so a uniform vector and ``None`` give the same projection.
             kappa: fraction of the box diagonal the projection radius spans.
                 Must lie in ``(0, 1)``; without that tie a high-dimensional box
                 pushes every corner past the pole and the posterior collapses
@@ -117,8 +120,9 @@ class SphereProjection:
 
         Raises:
             ValueError: If the box is absent, unbounded on any side, or has a
-                NaN side; if `ell` or `kappa` is out of range; or if `mask`
-                selects no dimension or names one outside the box.
+                NaN side; if `ell` is not a ``(d,)`` vector of finite positive
+                values, or `kappa` is out of range; or if `mask` selects no
+                dimension or names one outside the box.
 
         """
         check_bounds(bounds)
@@ -187,7 +191,7 @@ class SphericalLinearModel(GlobalModel):
         bounds: Bounds,
         *,
         minimize: MinimizeFn,
-        ell: float | jnp.ndarray = 1.0,
+        ell: jnp.ndarray | None = None,
         kappa: float = 0.5,
         mask: jnp.ndarray | Sequence[bool] | Sequence[int] | None = None,
         var_prior: float = 1.0,
@@ -203,8 +207,10 @@ class SphericalLinearModel(GlobalModel):
             minimize: the acquisition's inner optimizer, shape
                 ``MinimizeFn``. Owned by the caller: the descent recipe is the
                 engine's, not this model's.
-            ell: per-dimension lengthscale in unit-box units, a scalar or a
-                ``(d,)`` array. Read by `SphereProjection`.
+            ell: per-dimension lengthscale in unit-box units, a ``(d,)`` vector
+                or ``None`` for every dimension bending alike. Read by
+                `SphereProjection`, which documents where the ratio is what
+                counts.
             kappa: fraction of the box diagonal the projection radius spans.
                 Must lie in ``(0, 1)``. Read by `SphereProjection`.
             mask: which dimensions the projection bends, a ``(d,)`` boolean
@@ -217,7 +223,8 @@ class SphericalLinearModel(GlobalModel):
 
         Raises:
             ValueError: If the box is absent, unbounded on any side, or has a
-                NaN side; or if any hyperparameter is out of range; or if the
+                NaN side; if `ell` is not a ``(d,)`` vector of finite positive
+                values; if any other hyperparameter is out of range; or if the
                 mask bends no dimension.
 
         """
@@ -492,12 +499,24 @@ def _check_mask(
     return selected
 
 
-def _check_lengthscale(ell: float | jnp.ndarray, d: int) -> jnp.ndarray:
-    """Broadcast the per-dimension lengthscale to ``(d,)``, refusing a bad one."""
-    lengthscale = jnp.broadcast_to(jnp.asarray(ell), (d,))
+def _check_lengthscale(ell: jnp.ndarray | None, d: int) -> jnp.ndarray:
+    """Normalize the per-dimension lengthscale to ``(d,)``, refusing a bad one.
+
+    ``None`` is every dimension at one, the projection that bends them alike.
+    Anything but a ``(d,)`` vector is refused rather than broadcast into one: a
+    scalar or a length-one vector would silently become a uniform vector, which
+    is a real projection but never what a caller reaching for those shapes
+    means.
+    """
+    if ell is None:
+        return jnp.ones(d)
+    lengthscale = jnp.asarray(ell)
+    if lengthscale.ndim != 1 or lengthscale.shape[0] != d:
+        msg = f"ell must be a ({d},) vector or None, got shape {lengthscale.shape}"
+        raise ValueError(msg)
     if not bool(jnp.all(jnp.isfinite(lengthscale))) or not bool(
         jnp.all(lengthscale > 0.0),
     ):
-        msg = f"ell must be a finite positive scalar or (d,) array, got {ell!r}"
+        msg = f"ell must hold finite positive values, got {ell!r}"
         raise ValueError(msg)
     return lengthscale
