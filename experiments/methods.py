@@ -17,6 +17,7 @@ gets a start it did not pay for.
 """
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import jax
@@ -33,6 +34,11 @@ from soar_lite import (
 )
 
 Carry = tuple[jnp.ndarray, optax.OptState, jnp.ndarray]
+
+# Inner horizon of `surrogate_minimize`: one restart-free single-path descent,
+# long enough for the acquisition to reach its local minimum from a uniform
+# start, short of the outer run's own horizon.
+_INNER_ITERS = 40
 
 
 @dataclass
@@ -121,6 +127,60 @@ def run_soar_lite(
     )
     trace.fun = float(result.fun)
     return trace
+
+
+def surrogate_minimize(
+    objective: Callable[[jnp.ndarray], jnp.ndarray],
+    bounds: jnp.ndarray,
+    key: jnp.ndarray,
+    n_points: int,
+) -> jnp.ndarray:
+    """Minimize a scalar acquisition with `n_points` single-path engine runs.
+
+    The injected inner minimizer `SphericalLinearModel.propose` asks for: the
+    model hands out its own acquisition and this driver answers with the
+    library's own descent, one serial path per start - the same restart-free
+    recipe the n_paths=1 arms use, so the acquisition is optimized by the method
+    it will later drive. Starts are uniform over the box, matching the default
+    model's draw; each run stops at `_INNER_ITERS`.
+
+    Args:
+        objective: the scalar function to descend, ``(d,) -> ()``.
+        bounds: the search box, a ``(d, 2)`` array.
+        key: the PRNG key the starts are split from.
+        n_points: how many local minimizers to return, one per row.
+
+    Returns:
+        A ``(n_points, d)`` array, one minimizer per row.
+
+    """
+    d = bounds.shape[0]
+    lo, hi = bounds[:, 0], bounds[:, 1]
+
+    def eval_g(x_batch: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        return (
+            jax.vmap(objective, 0)(x_batch),
+            jax.vmap(jax.grad(objective))(
+                x_batch,
+            ),
+            None,
+        )
+
+    outs = []
+    for _ in range(n_points):
+        key, sub = jax.random.split(key)
+        x0 = jax.random.uniform(sub, (1, d), minval=lo, maxval=hi)
+        result = n_path_schedule(
+            eval_g,
+            n_paths=1,
+            bounds=bounds,
+            global_model=UniformGlobalModel(bounds, key=sub, x0=x0),
+            max_iters=_INNER_ITERS,
+            local_solver=DiagonalPreconditioner(),
+            restart_stalled=False,
+        )
+        outs.append(result.x)
+    return jnp.stack(outs)
 
 
 # --- Adam: one compiled scan per run --------------------------------
