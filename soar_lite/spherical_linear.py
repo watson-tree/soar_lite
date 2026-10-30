@@ -10,8 +10,10 @@ The structure is a fixed-hyperparameter port of Doumont, Fan, et al., "We Still
 Don't Understand High-Dimensional Bayesian Optimization" (2025),
 ``github.com/colmont/linear-bo``: a linear kernel read after projecting onto the
 unit sphere, a box-diagonal lengthscale normalization, and the resulting
-posterior variance bounded away from the prior away from data. Two things are
-deliberately dropped. That implementation fits its lengthscale, coefficient and
+posterior variance bounded away from the prior away from data. The projection is
+`SphereProjection`, a geometry of its own: it can bend only a chosen subset of
+the dimensions, leaving the rest linear. Two things are deliberately dropped.
+That implementation fits its lengthscale, coefficient and
 noise hyperparameters by marginal likelihood (it is gpytorch; this package is
 jax-only), so here the same knobs are constructor values instead. And it
 minimizes its acquisition with a multi-start L-BFGS-B, which is why the
@@ -24,7 +26,7 @@ the projection bounds it, so improvement is driven by the fitted values instead.
 """
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TypeAlias
 
 import jax
@@ -54,6 +56,101 @@ MinimizeFn: TypeAlias = Callable[
 _HALF_LOG_2PI = 0.5 * jnp.log(2.0 * jnp.pi)
 
 
+class SphereProjection:
+    """Inverse-stereographic projection of a chosen subset of the box's dims.
+
+    The restart models read the box in whatever coordinates the objective takes.
+    This maps them onto the unit sphere, ``[2z; |z|^2 - 1] / (|z|^2 + 1)``, where
+    ``z`` is the box's coordinates centered, divided by the per-dimension
+    lengthscales and by one global lengthscale. Two properties matter
+    downstream.
+
+    Every projected row has norm one, so a linear head read on these features
+    has a constant self inner product: its posterior variance stays bounded far
+    from data instead of climbing back to the prior, which is the corner-seeking
+    pathology the projection exists to cure. And the last coordinate,
+    ``(|z|^2 - 1)/(|z|^2 + 1)``, is a radially symmetric, saturating feature of
+    the input - the one extra degree of freedom a linear head gets, an isotropic
+    bowl whose center the weights place.
+
+    `mask` keeps that bowl off dimensions whose natural prior is uniform - an
+    angle, say, wants no attraction to the box center. A left-out dimension
+    keeps its box coordinate and enters a linear head as a plain trend, so the
+    feature vector is ``d + 1`` wide however many dimensions the projection
+    bends.
+    """
+
+    def __init__(
+        self,
+        bounds: Bounds,
+        *,
+        ell: float | jnp.ndarray = 1.0,
+        kappa: float = 0.5,
+        mask: jnp.ndarray | Sequence[bool] | Sequence[int] | None = None,
+    ) -> None:
+        """Bind the box, the lengthscales and the projected subset.
+
+        Args:
+            bounds: the finite box the projection normalizes, scipy-style pairs
+                or a ``(d, 2)`` array. Every side must be finite.
+            ell: per-dimension lengthscale in unit-box units, a scalar or a
+                ``(d,)`` array.
+            kappa: fraction of the box diagonal the projection radius spans.
+                Must lie in ``(0, 1)``; without that tie a high-dimensional box
+                pushes every corner past the pole and the posterior collapses
+                there.
+            mask: which dimensions the projection bends, a ``(d,)`` boolean
+                selector or the indices of the projected dimensions; ``None``
+                bends all of them.
+
+        Raises:
+            ValueError: If the box is absent, unbounded on any side, or has a
+                NaN side; if `ell` or `kappa` is out of range; or if `mask`
+                selects no dimension or names one outside the box.
+
+        """
+        check_bounds(bounds)
+        box = box_bounds(bounds)
+        if box is None or not finite_box(box):
+            msg = (
+                "SphereProjection normalizes the search box, so it needs a "
+                f"finite box: got {bounds!r}"
+            )
+            raise ValueError(msg)
+        self.lo, self.hi = box
+        self.d = int(self.lo.shape[0])
+        self.width = self.hi - self.lo
+        self.bounds = bounds
+        self.mask = _check_mask(mask, self.d)
+        self.ell = _check_lengthscale(ell, self.d)
+        kappa_v = _check_finite_positive("kappa", kappa)
+        if kappa_v >= 1.0:
+            msg = (
+                "kappa ties the projection radius to the box diagonal, so it "
+                f"must lie in (0, 1); got {kappa!r}"
+            )
+            raise ValueError(msg)
+        # The global lengthscale is the piece that makes the projection scale-
+        # free: it maps the box's farthest corner to radius sqrt(2*kappa) for any
+        # d, so a wider box does not push every corner to the pole. Summed over
+        # the projected dimensions only - a dimension the projection leaves out
+        # has no radius to tie.
+        self.glob_ls = jnp.sqrt(kappa_v * jnp.sum((0.5 / self.ell[self.mask]) ** 2))
+
+    def features(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Return the ``(m, d + 1)`` feature rows for ``(m, d)`` coordinates.
+
+        The bent dimensions become their stereographic image on the unit sphere;
+        the rest keep their box coordinate, uncentered and unscaled, so a linear
+        head reads them as a plain linear trend.
+        """
+        unit = (x - self.lo) / self.width
+        z = (unit[:, self.mask] - 0.5) / self.ell[self.mask] / self.glob_ls
+        sq = jnp.sum(z * z, axis=-1, keepdims=True)
+        sphere = jnp.concatenate([2.0 * z, sq - 1.0], axis=-1) / (sq + 1.0)
+        return jnp.concatenate([sphere, unit[:, ~self.mask]], axis=-1)
+
+
 class SphericalLinearModel(GlobalModel):
     """Restart points from a spherical-linear posterior's log improvement.
 
@@ -66,8 +163,9 @@ class SphericalLinearModel(GlobalModel):
 
     Every knob is a fixed hyperparameter, not a fitted one; the defaults are the
     reference implementation's starting points rather than its marginal-
-    likelihood optimum. `ell` is in unit-box units, so ``1.0`` is "the whole
-    box", matching how the reference reads its inputs.
+    likelihood optimum. The geometry knobs (`bounds`, `ell`, `kappa`, `mask`)
+    belong to `SphereProjection`; what this class adds on top is the value fit
+    and the acquisition that descends it.
     """
 
     def __init__(  # noqa: PLR0913 - each knob is a distinct, independently-swept facet
@@ -77,6 +175,7 @@ class SphericalLinearModel(GlobalModel):
         minimize: MinimizeFn,
         ell: float | jnp.ndarray = 1.0,
         kappa: float = 0.5,
+        mask: jnp.ndarray | Sequence[bool] | Sequence[int] | None = None,
         var_prior: float = 1.0,
         noise: float = 0.01,
         key: jnp.ndarray,
@@ -91,11 +190,12 @@ class SphericalLinearModel(GlobalModel):
                 ``MinimizeFn``. Owned by the caller: the descent recipe is the
                 engine's, not this model's.
             ell: per-dimension lengthscale in unit-box units, a scalar or a
-                ``(d,)`` array.
+                ``(d,)`` array. Read by `SphereProjection`.
             kappa: fraction of the box diagonal the projection radius spans.
-                Must lie in ``(0, 1)``; without that tie a high-dimensional box
-                pushes every corner past the pole and the posterior collapses
-                there.
+                Must lie in ``(0, 1)``. Read by `SphereProjection`.
+            mask: which dimensions the projection bends, a ``(d,)`` boolean
+                selector or the indices of the projected dimensions; ``None``
+                bends all of them. Read by `SphereProjection`.
             var_prior: weight-prior variance (the ridge scale opposite `noise`).
             noise: observation-noise variance added to the posterior mean's
                 self-covariance.
@@ -103,36 +203,18 @@ class SphericalLinearModel(GlobalModel):
 
         Raises:
             ValueError: If the box is absent, unbounded on any side, or has a
-                NaN side; or if any hyperparameter is out of range.
+                NaN side; or if any hyperparameter is out of range; or if the
+                mask bends no dimension.
 
         """
-        check_bounds(bounds)
-        box = box_bounds(bounds)
-        if box is None or not finite_box(box):
-            msg = (
-                "SphericalLinearModel normalizes the search box, so it needs a "
-                f"finite box: got {bounds!r}"
-            )
-            raise ValueError(msg)
-        self._lo, self._hi = box
-        self.d = len(bounds)
-        self._bounds = bounds
+        # The projection is the box's authority: it validates the box, takes `d`
+        # off it, and holds every geometry knob. The one value kept here is `d`,
+        # because the `GlobalModel` seam asks the model for the run's dimension.
+        self._projection = SphereProjection(bounds, ell=ell, kappa=kappa, mask=mask)
+        self.d = self._projection.d
         self._minimize = minimize
-        self._width = self._hi - self._lo
         self._var_prior = _check_finite_positive("var_prior", var_prior)
         self._noise = _check_finite_positive("noise", noise)
-        kappa_v = _check_finite_positive("kappa", kappa)
-        if kappa_v >= 1.0:
-            msg = (
-                "kappa ties the projection radius to the box diagonal, so it "
-                f"must lie in (0, 1); got {kappa!r}"
-            )
-            raise ValueError(msg)
-        self._ell = _check_lengthscale(ell, self.d)
-        # The global lengthscale is the piece that makes the projection scale-
-        # free: it maps the box's farthest corner to radius sqrt(2*kappa) for any
-        # d, so a wider box does not push every corner to the pole.
-        self._glob_ls = jnp.sqrt(kappa_v * jnp.sum((0.5 / self._ell) ** 2))
         self._key = key
         self._xs: list[jnp.ndarray] = []
         self._fs: list[float] = []
@@ -195,8 +277,8 @@ class SphericalLinearModel(GlobalModel):
             return jax.random.uniform(
                 sub,
                 (n_points, self.d),
-                minval=self._lo,
-                maxval=self._hi,
+                minval=self._projection.lo,
+                maxval=self._projection.hi,
             )
         weights, cov = self._posterior()
         best = self._standardize(jnp.asarray(self._fs)).min()
@@ -209,7 +291,9 @@ class SphericalLinearModel(GlobalModel):
             z = (best - mean[0]) / sigma[0]
             return -(jnp.log(sigma[0]) + _log_h(z))
 
-        starts = jnp.asarray(self._minimize(acquisition, self._bounds, sub, n_points))
+        starts = jnp.asarray(
+            self._minimize(acquisition, self._projection.bounds, sub, n_points),
+        )
         if starts.shape != (n_points, self.d):
             msg = (
                 "minimize must return a "
@@ -251,18 +335,6 @@ class SphericalLinearModel(GlobalModel):
         """
         return len(self._xs) > 1 and bool(jnp.asarray(self._fs).std() > 0)
 
-    def _features(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Inverse-stereographic features of the normalized, lengthscaled rows.
-
-        Maps ``x`` into the unit sphere: ``[2z; |z|^2 - 1] / (|z|^2 + 1)``. Every
-        row has norm one, which is what bounds the linear kernel's inner product
-        and with it the posterior variance far from data.
-        """
-        unit = (x - self._lo) / self._width
-        z = (unit - 0.5) / self._ell / self._glob_ls
-        sq = jnp.sum(z * z, axis=-1, keepdims=True)
-        return jnp.concatenate([2.0 * z, sq - 1.0], axis=-1) / (sq + 1.0)
-
     def _standardize(self, f: jnp.ndarray) -> jnp.ndarray:
         """Return `f` centered and scaled to unit variance.
 
@@ -282,7 +354,7 @@ class SphericalLinearModel(GlobalModel):
         x_obs = jnp.stack(self._xs)
         f_obs = jnp.asarray(self._fs, dtype=x_obs.dtype)
         values = self._standardize(f_obs)
-        features = self._features(x_obs)
+        features = self._projection.features(x_obs)
         precision = (
             features.T @ features / self._noise
             + jnp.eye(self.d + 1, dtype=features.dtype) / self._var_prior
@@ -302,7 +374,7 @@ class SphericalLinearModel(GlobalModel):
         The variance is the observation noise plus the covariance's quadratic
         form, so it stays above `noise` and its root needs no floor.
         """
-        features = self._features(x)
+        features = self._projection.features(x)
         mean = features @ weights
         var = self._noise + jnp.einsum("ij,jk,ik->i", features, cov, features)
         return mean, jnp.sqrt(var)
@@ -342,6 +414,47 @@ def _check_finite_positive(name: str, value: float) -> float:
         msg = f"{name} must be a finite positive number, got {value!r}"
         raise ValueError(msg)
     return value
+
+
+def _check_mask(
+    mask: jnp.ndarray | Sequence[bool] | Sequence[int] | None,
+    d: int,
+) -> jnp.ndarray:
+    """Normalize `mask` to a ``(d,)`` boolean selector, refusing an empty one.
+
+    Two spellings are accepted - a boolean selector, or the indices of the
+    projected dimensions - because the index form is how a caller names a few
+    dimensions while the boolean form is what the feature gather needs. A
+    floating-point selector is refused rather than rounded into indices: a
+    caller who writes ``[0.0, 1.0]`` means something this cannot guess.
+    """
+    if mask is None:
+        return jnp.ones(d, dtype=bool)
+    given = jnp.asarray(mask)
+    if given.ndim != 1:
+        msg = f"mask must be a 1-D selector, got shape {given.shape}"
+        raise ValueError(msg)
+    if given.shape[0] == 0:
+        msg = "mask must project at least one dimension"
+        raise ValueError(msg)
+    if given.dtype == jnp.bool_:
+        if given.shape[0] != d:
+            msg = f"mask needs {d} boolean entries, got {given.shape[0]}"
+            raise ValueError(msg)
+        selected = given
+    elif given.dtype.kind in "iu":
+        indices = given.astype(jnp.int32)
+        if bool(jnp.any(indices < 0)) or bool(jnp.any(indices >= d)):
+            msg = f"mask indices must lie in [0, {d}), got {mask!r}"
+            raise ValueError(msg)
+        selected = jnp.zeros(d, dtype=bool).at[indices].set(True)
+    else:
+        msg = f"mask must be a boolean selector or integer indices, got {mask!r}"
+        raise ValueError(msg)
+    if not bool(jnp.any(selected)):
+        msg = "mask must project at least one dimension"
+        raise ValueError(msg)
+    return selected
 
 
 def _check_lengthscale(ell: float | jnp.ndarray, d: int) -> jnp.ndarray:

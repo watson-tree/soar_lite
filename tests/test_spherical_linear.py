@@ -9,7 +9,7 @@ consumes them, which is the specification here rather than an oversight.
 # pyright: reportPrivateUsage=false
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from soar_lite import Bounds, SphericalLinearModel
-from soar_lite.spherical_linear import _log_h
+from soar_lite.spherical_linear import SphereProjection, _log_h
 
 Objective = Callable[[jnp.ndarray], jnp.ndarray]
 
@@ -109,8 +109,66 @@ def test_log_h_is_continuous_across_the_mills_seam() -> None:
 def test_features_lie_on_the_unit_sphere() -> None:
     """Bind the posterior variance through unit-norm feature rows."""
     xs = jnp.asarray([[-1.9, 1.9], [0.0, 0.0], [1.3, -0.4]])
-    norms = jnp.linalg.norm(_model()._features(xs), axis=-1)
+    norms = jnp.linalg.norm(_model()._projection.features(xs), axis=-1)
     assert np.allclose(np.asarray(norms), 1.0, atol=1e-5)
+
+
+def test_features_stay_d_plus_one_wide_whatever_the_mask_bends() -> None:
+    """Keep the ridge width fixed: a bent dimension donates one column."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 4)
+    xs = jnp.linspace(-1.9, 1.9, 6)[:, None] * jnp.ones(4)[None, :]
+    for mask in (None, [0], [0, 2], [True, False, True, False]):
+        projection = SphereProjection(bounds, mask=mask)
+        assert projection.features(xs).shape == (6, 5)
+
+
+def test_dimensions_left_out_keep_their_box_coordinate() -> None:
+    """Read unmasked dimensions as the plain unit coordinate, with no bowl."""
+    bounds = jnp.asarray([[-2.0, 2.0], [0.0, 10.0]])
+    projection = SphereProjection(bounds, mask=[0])
+    xs = jnp.asarray([[-1.0, 2.5], [1.0, 7.5]])
+    unit = (xs - projection.lo) / projection.width
+    assert jnp.array_equal(projection.features(xs)[:, 2:], unit[:, 1:])
+
+
+def test_the_bent_block_alone_still_lies_on_the_unit_sphere() -> None:
+    """Keep the variance bound on the bent subset, not the whole row."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 4)
+    xs = jnp.linspace(-1.9, 1.9, 6)[:, None] * jnp.ones(4)[None, :]
+    bent = SphereProjection(bounds, mask=[0, 1]).features(xs)[:, :3]
+    assert np.allclose(np.asarray(jnp.linalg.norm(bent, axis=-1)), 1.0, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "mask",
+    [[], [4], [-1], [0.0, 1.0], [True, False], [False, False, False, False]],
+)
+def test_a_mask_that_selects_nothing_usable_is_refused(mask: Sequence[object]) -> None:
+    """Refuse an empty, out-of-range or wrongly-typed selector."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 4)
+    with pytest.raises(ValueError, match="mask"):
+        # The point of the case is a selector the type says is not a selector.
+        SphereProjection(bounds, mask=mask)  # pyright: ignore[reportArgumentType]
+
+
+def test_a_masked_model_proposes_inside_the_box() -> None:
+    """Keep the acquisition path working when only some dimensions bend."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 3)
+    model = SphericalLinearModel(
+        bounds,
+        minimize=_grid_minimize,
+        mask=[0, 2],
+        key=jax.random.PRNGKey(0),
+    )
+    xs = jnp.linspace(-1.9, 1.9, 6)[:, None] * jnp.ones(3)[None, :]
+    center = jnp.asarray([0.3, -0.2, 0.1])
+    model.observe(xs, [float(jnp.sum((row - center) ** 2)) for row in xs], None)
+    starts = model.propose(2)
+    assert starts.shape == (2, 3)
+    mean, sigma = model.predict(starts)
+    assert bool(jnp.all(jnp.isfinite(starts)))
+    assert bool(jnp.all(jnp.isfinite(mean)))
+    assert bool(jnp.all(jnp.isfinite(sigma)))
 
 
 def test_propose_draws_uniformly_until_a_fit_is_possible() -> None:
