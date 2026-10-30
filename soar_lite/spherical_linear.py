@@ -60,8 +60,9 @@ class SphericalLinearModel(GlobalModel):
     `observe` accumulates the run's served batches (values only - the gradient
     is not fitted), and `propose` fits the closed-form weight posterior over
     those points and returns the minimizers of ``-log EI`` the injected
-    `minimize` finds. Below two observations there is no spread to standardize
-    by, so it answers with the uniform draw the default model would give.
+    `minimize` finds. Below two observations - and with every value equal -
+    there is no spread to standardize by, so it answers with the uniform draw
+    the default model would give.
 
     Every knob is a fixed hyperparameter, not a fitted one; the defaults are the
     reference implementation's starting points rather than its marginal-
@@ -197,13 +198,14 @@ class SphericalLinearModel(GlobalModel):
                 minval=self._lo,
                 maxval=self._hi,
             )
-        beta, inv_gram, best = self._posterior()
+        weights, cov = self._posterior()
+        best = self._standardize(jnp.asarray(self._fs)).min()
 
         # shortcut: the minimizers are independent, so a flat acquisition can
         # return a cluster on one face. Upgrade to greedy conditioning on the
         # points already picked when a cohort asks for many at once.
         def acquisition(point: jnp.ndarray) -> jnp.ndarray:
-            mean, sigma = self._posterior_at(point[None, :], beta, inv_gram)
+            mean, sigma = self._posterior_at(point[None, :], weights, cov)
             z = (best - mean[0]) / sigma[0]
             return -(jnp.log(sigma[0]) + _log_h(z))
 
@@ -237,16 +239,17 @@ class SphericalLinearModel(GlobalModel):
         if batch.ndim != 2 or batch.shape[1] != self.d:
             msg = f"predict needs a (m, {self.d}) batch, got {batch.shape}"
             raise ValueError(msg)
-        beta, inv_gram, _ = self._posterior()
-        return self._posterior_at(batch, beta, inv_gram)
+        weights, cov = self._posterior()
+        return self._posterior_at(batch, weights, cov)
 
     def _can_fit(self) -> bool:
         """Return whether the values have a spread to standardize by.
 
-        One observation is not enough: its standardized spread is zero, so there
-        is nothing to divide by and no improvement to measure against it.
+        One observation has no spread of its own, and neither has a batch of
+        equal values: both leave nothing to divide by and no improvement to
+        measure against.
         """
-        return len(self._xs) > 1
+        return len(self._xs) > 1 and bool(jnp.asarray(self._fs).std() > 0)
 
     def _features(self, x: jnp.ndarray) -> jnp.ndarray:
         """Inverse-stereographic features of the normalized, lengthscaled rows.
@@ -260,37 +263,49 @@ class SphericalLinearModel(GlobalModel):
         sq = jnp.sum(z * z, axis=-1, keepdims=True)
         return jnp.concatenate([2.0 * z, sq - 1.0], axis=-1) / (sq + 1.0)
 
-    def _posterior(self) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        """Closed-form weight posterior over standardized values, and its best.
+    def _standardize(self, f: jnp.ndarray) -> jnp.ndarray:
+        """Return `f` centered and scaled to unit variance.
 
-        Returns (beta, inv_gram, best) for the ridge form
-        ``(Phi^T Phi + noise/var_prior I) beta = Phi^T y``.
+        Only reached once `_can_fit` has found a non-zero spread, so the divisor
+        never is zero and no floor is needed to keep it finite.
+        """
+        return (f - f.mean()) / f.std()
+
+    def _posterior(self) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """Return the weight posterior's mean and covariance.
+
+        Written as the precision it is: ``P^T P / noise + I / var_prior`` is
+        likelihood plus prior, and one inversion gives the covariance matrix
+        itself - not an inverse scaled afterwards - with
+        ``weights = cov @ P^T y / noise`` its mean.
         """
         x_obs = jnp.stack(self._xs)
         f_obs = jnp.asarray(self._fs, dtype=x_obs.dtype)
-        values = (f_obs - f_obs.mean()) / (f_obs.std() + 1e-8)
+        values = self._standardize(f_obs)
         features = self._features(x_obs)
-        gram = features.T @ features + (self._noise / self._var_prior) * jnp.eye(
-            self.d + 1,
-            dtype=features.dtype,
+        precision = (
+            features.T @ features / self._noise
+            + jnp.eye(self.d + 1, dtype=features.dtype) / self._var_prior
         )
-        inv_gram = jnp.linalg.inv(gram)
-        beta = inv_gram @ features.T @ values
-        return beta, inv_gram, values.min()
+        cov = jnp.linalg.inv(precision)
+        weights = cov @ features.T @ values / self._noise
+        return weights, cov
 
     def _posterior_at(
         self,
         x: jnp.ndarray,
-        beta: jnp.ndarray,
-        inv_gram: jnp.ndarray,
+        weights: jnp.ndarray,
+        cov: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """Posterior mean and deviation of the standardized value at ``(m, d)`` rows."""
+        """Posterior mean and deviation of the standardized value at ``(m, d)`` rows.
+
+        The variance is the observation noise plus the covariance's quadratic
+        form, so it stays above `noise` and its root needs no floor.
+        """
         features = self._features(x)
-        mean = features @ beta
-        var = self._noise * (
-            1.0 + jnp.einsum("ij,jk,ik->i", features, inv_gram, features)
-        )
-        return mean, jnp.sqrt(jnp.maximum(var, 1e-12))
+        mean = features @ weights
+        var = self._noise + jnp.einsum("ij,jk,ik->i", features, cov, features)
+        return mean, jnp.sqrt(var)
 
 
 def _log_h(z: jnp.ndarray) -> jnp.ndarray:

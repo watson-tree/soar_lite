@@ -150,6 +150,27 @@ def test_predict_refuses_a_fit_it_cannot_standardize() -> None:
         model.predict(jnp.asarray([[0.0, 0.0]]))
 
 
+def test_a_flat_batch_has_no_spread_to_fit() -> None:
+    """Fall back like a lone observation: equal values leave nothing to scale."""
+    model = _model()
+    model.observe(jnp.asarray([[0.5, -0.5], [-0.5, 0.5]]), [3.0, 3.0], None)
+    assert not model._can_fit()
+    draws = model.propose(4)
+    assert draws.shape == (4, 2)
+    assert bool(jnp.all(draws >= -2.0))
+    assert bool(jnp.all(draws <= 2.0))
+    with pytest.raises(ValueError, match="spread to standardize"):
+        model.predict(jnp.asarray([[0.0, 0.0]]))
+
+
+def test_posterior_deviation_never_dips_below_the_observation_noise() -> None:
+    """Keep the root defined by construction: noise plus a non-negative form."""
+    model = _model()
+    _observe(model, 6)
+    _, sigma = model.predict(jnp.stack(model._xs))
+    assert float(jnp.min(sigma)) >= math.sqrt(model._noise) - 1e-6
+
+
 @pytest.mark.parametrize("bad", [(3, 2, 2), (3, 3)])
 def test_observe_and_predict_demand_a_two_dimensional_batch(
     bad: tuple[int, ...],
