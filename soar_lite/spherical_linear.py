@@ -16,8 +16,9 @@ the dimensions, leaving the rest linear. Two things are deliberately dropped.
 That implementation fits its lengthscale, coefficient and
 noise hyperparameters by marginal likelihood (it is gpytorch; this package is
 jax-only), so here the same knobs are constructor values instead. And it
-minimizes its acquisition with a multi-start L-BFGS-B, which is why the
-minimizer is injected rather than shipped - see `MinimizeFn`.
+descends its acquisition with a shipped multi-start L-BFGS-B; here the
+minimizer is injected instead, so a driver can descend with the library's own
+n-path engine rather than a second recipe - see `MinimizeFn`.
 
 What is kept is the part that cures the pathology this model exists for: under
 a Euclidean RBF posterior the variance returns to the prior far from data, so
@@ -41,15 +42,26 @@ from soar_lite.engine import (
     finite_box,
 )
 
-# The inner minimizer `propose` hands its own acquisition function to, injected
-# by the composition root (the experiment driver) instead of imported, so this
-# module never reaches back into the engine's scheduler:
-# `minimize(objective, bounds, key, n_points)` returns up to `n_points` local
-# minimizers of the scalar `objective` over `bounds`, one per row, shape
-# `(n_points, d)`. The engine already owns the descent recipe; a second one here
-# would be a second answer to the same question.
+# The acquisition `propose` hands the injected minimizer: x rows (m, d) in,
+# (values (m,), gradients (m, d)) out - the engine's `EvalFG` shape with the
+# feasibility column dropped, since an acquisition is finite everywhere and
+# nothing is infeasible. Batched, so a zero-order minimizer reads the values off
+# a whole grid in one call and a first-order one gets the gradient it needs
+# alongside.
+AcquisitionFn: TypeAlias = Callable[
+    [jnp.ndarray],
+    tuple[jnp.ndarray, jnp.ndarray],
+]
+
+# The inner minimizer `propose` hands its own acquisition to, injected by the
+# composition root (the experiment driver) instead of imported, so this module
+# never reaches back into the engine's scheduler:
+# `minimize(acquisition, bounds, key, n_points)` returns up to `n_points` local
+# minimizers of `acquisition` over `bounds`, one per row, shape `(n_points, d)`.
+# The engine already owns the descent recipe; a second one here would be a
+# second answer to the same question.
 MinimizeFn: TypeAlias = Callable[
-    [Callable[[jnp.ndarray], jnp.ndarray], Bounds, jnp.ndarray, int],
+    [AcquisitionFn, Bounds, jnp.ndarray, int],
     jnp.ndarray,
 ]
 
@@ -288,10 +300,8 @@ class SphericalLinearModel(GlobalModel):
         # shortcut: the minimizers are independent, so a flat acquisition can
         # return a cluster on one face. Upgrade to greedy conditioning on the
         # points already picked when a cohort asks for many at once.
-        def acquisition(point: jnp.ndarray) -> jnp.ndarray:
-            mean, sigma = self._posterior_at(point[None, :], weights, cov)
-            z = (best - mean[0]) / sigma[0]
-            return -(jnp.log(sigma[0]) + _log_h(z))
+        def acquisition(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+            return self._acq_value_and_grad(x, weights, cov, best)
 
         starts = jnp.asarray(
             self._minimize(acquisition, self._projection.bounds, sub, n_points),
@@ -380,6 +390,29 @@ class SphericalLinearModel(GlobalModel):
         mean = features @ weights
         var = self._noise + jnp.einsum("ij,jk,ik->i", features, cov, features)
         return mean, jnp.sqrt(var)
+
+    def _acq_value_and_grad(
+        self,
+        x: jnp.ndarray,
+        weights: jnp.ndarray,
+        cov: jnp.ndarray,
+        best: jnp.ndarray,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """Return ``-log EI`` and its per-row gradient at ``(m, d)`` rows.
+
+        `jax.value_and_grad` differentiates a scalar output only, and the rows
+        of the acquisition are independent of one another, so the gradient is
+        taken one row at a time under `vmap`. The batch Jacobian is diagonal,
+        and this reads only its diagonal where `jax.jacobian` would build the
+        whole ``m x m`` block and throw all but that away.
+        """
+
+        def scalar(row: jnp.ndarray) -> jnp.ndarray:
+            mean, sigma = self._posterior_at(row[None, :], weights, cov)
+            z = (best - mean[0]) / sigma[0]
+            return -(jnp.log(sigma[0]) + _log_h(z))
+
+        return jax.vmap(jax.value_and_grad(scalar))(x)
 
 
 def _log_h(z: jnp.ndarray) -> jnp.ndarray:

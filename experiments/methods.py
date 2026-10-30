@@ -17,7 +17,6 @@ gets a start it did not pay for.
 """
 
 import math
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import jax
@@ -28,6 +27,7 @@ from scipy.optimize import minimize
 
 from experiments.problems import Problem
 from soar_lite import (
+    AcquisitionFn,
     DiagonalPreconditioner,
     UniformGlobalModel,
     n_path_schedule,
@@ -130,12 +130,12 @@ def run_soar_lite(
 
 
 def surrogate_minimize(
-    objective: Callable[[jnp.ndarray], jnp.ndarray],
+    objective: AcquisitionFn,
     bounds: jnp.ndarray,
     key: jnp.ndarray,
     n_points: int,
 ) -> jnp.ndarray:
-    """Minimize a scalar acquisition with `n_points` single-path engine runs.
+    """Minimize a batched acquisition with `n_points` single-path engine runs.
 
     The injected inner minimizer `SphericalLinearModel.propose` asks for: the
     model hands out its own acquisition and this driver answers with the
@@ -145,7 +145,9 @@ def surrogate_minimize(
     model's draw; each run stops at `_INNER_ITERS`.
 
     Args:
-        objective: the scalar function to descend, ``(d,) -> ()``.
+        objective: the acquisition to descend, ``(m, d) -> ((m,), (m, d))``:
+            values and their per-row gradients, the engine's `EvalFG` shape
+            without the feasibility column.
         bounds: the search box, a ``(d, 2)`` array.
         key: the PRNG key the starts are split from.
         n_points: how many local minimizers to return, one per row.
@@ -158,13 +160,8 @@ def surrogate_minimize(
     lo, hi = bounds[:, 0], bounds[:, 1]
 
     def eval_g(x_batch: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        return (
-            jax.vmap(objective, 0)(x_batch),
-            jax.vmap(jax.grad(objective))(
-                x_batch,
-            ),
-            None,
-        )
+        f, g = objective(x_batch)
+        return f, g, None
 
     outs = []
     for _ in range(n_points):

@@ -9,21 +9,19 @@ consumes them, which is the specification here rather than an oversight.
 # pyright: reportPrivateUsage=false
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from soar_lite import Bounds, SphericalLinearModel
+from soar_lite import AcquisitionFn, Bounds, SphericalLinearModel
 from soar_lite.spherical_linear import SphereProjection, _log_h
-
-Objective = Callable[[jnp.ndarray], jnp.ndarray]
 
 
 def _grid_minimize(
-    objective: Objective,
+    objective: AcquisitionFn,
     bounds: Bounds,
     key: jnp.ndarray,
     n_points: int,
@@ -37,13 +35,13 @@ def _grid_minimize(
         minval=box[:, 0],
         maxval=box[:, 1],
     )
-    values = jax.vmap(objective)(grid)
+    values, _ = objective(grid)
     ranked = jnp.argsort(jnp.where(jnp.isfinite(values), values, jnp.inf))
     return grid[ranked[:n_points]]
 
 
 def _short_minimize(
-    objective: Objective,
+    objective: AcquisitionFn,
     bounds: Bounds,
     key: jnp.ndarray,
     n_points: int,
@@ -169,6 +167,36 @@ def test_a_masked_model_proposes_inside_the_box() -> None:
     assert bool(jnp.all(jnp.isfinite(starts)))
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
+
+
+def test_the_acquisition_gradient_is_the_jacobian_diagonal() -> None:
+    """Read off the per-row gradient the batch Jacobian would only keep on its diagonal.
+
+    The acquisition's rows are independent, so its ``m x m`` Jacobian is
+    diagonal. This checks the `vmap`-of-`value_and_grad` gradient of
+    `_acq_value_and_grad` against forward AD of the batch form written out
+    here - an independent pass down the same math - so a row or shape mixup
+    in the reverse-mode path shows up as a mismatch.
+    """
+    model = _model()
+    _observe(model, 8)
+    xs = jnp.asarray([[-1.4, 0.7], [0.3, -1.1], [1.6, 0.9]])
+    weights, cov = model._posterior()
+    best = model._standardize(jnp.asarray(model._fs)).min()
+
+    def values(x: jnp.ndarray) -> jnp.ndarray:
+        mean, sigma = model._posterior_at(x, weights, cov)
+        z = (best - mean) / sigma
+        return -(jnp.log(sigma) + _log_h(z))
+
+    value, grad = model._acq_value_and_grad(xs, weights, cov, best)
+    jac = jax.jacfwd(values)(xs)
+    diagonal = jnp.stack([jac[i, i] for i in range(xs.shape[0])])
+
+    assert value.shape == (3,)
+    assert grad.shape == (3, 2)
+    assert np.allclose(np.asarray(value), np.asarray(values(xs)), atol=2e-4)
+    assert np.allclose(np.asarray(grad), np.asarray(diagonal), atol=2e-4)
 
 
 def test_propose_draws_uniformly_until_a_fit_is_possible() -> None:

@@ -32,9 +32,14 @@ from soar_lite.engine import (
 )
 from soar_lite.global_model import UniformGlobalModel
 from soar_lite.local_solver import DiagonalPreconditioner
-from soar_lite.spherical_linear import MinimizeFn, SphericalLinearModel
+from soar_lite.spherical_linear import (
+    AcquisitionFn,
+    MinimizeFn,
+    SphericalLinearModel,
+)
 
 __all__ = [
+    "AcquisitionFn",
     "Bounds",
     "DiagonalPreconditioner",
     "EvalF",
