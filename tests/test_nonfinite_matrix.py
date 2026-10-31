@@ -111,9 +111,9 @@ def test_best_counts_a_value_only_when_it_is_feasible_and_finite(
 
     if ends_run:
         with pytest.raises(_OptimumReached):
-            best.observe([f], x_batch, feas)
+            best.observe(x_batch, [f], feas)
     else:
-        best.observe([f], x_batch, feas)
+        best.observe(x_batch, [f], feas)
 
     assert best.fun == fun
     assert best.unbounded is ends_run
@@ -125,7 +125,7 @@ def test_a_mask_of_zero_and_one_flags_is_accepted() -> None:
     """The one accepted shape: 0/1 numbers, or the booleans they stand for."""
     for mask in (jnp.array([0.0, 1.0]), jnp.array([False, True])):
         best = _Best(1)
-        best.observe([1.0, 2.0], jnp.array([[0.1], [0.9]]), mask)
+        best.observe(jnp.array([[0.1], [0.9]]), [1.0, 2.0], mask)
         # Row 0 is the cheaper value and row 1 is the flagged one, so the read has
         # to follow the mask row by row rather than dropping the flagged points.
         assert best.fun == 2.0
@@ -136,7 +136,7 @@ def test_a_mask_flag_that_is_not_zero_or_one_is_refused(flag: float) -> None:
     """Every truthy-but-not-1 flag is refused, and refused before any fold."""
     best = _Best(1)
     with pytest.raises(ValueError, match="feas mask"):
-        best.observe([1.0], jnp.array([[0.25]]), jnp.array([flag]))
+        best.observe(jnp.array([[0.25]]), [1.0], jnp.array([flag]))
     assert best.fun == math.inf  # the batch was refused before any fold
 
 

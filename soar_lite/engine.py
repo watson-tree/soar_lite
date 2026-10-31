@@ -106,6 +106,69 @@ class _Pending:
 
 
 @runtime_checkable
+class GlobalModel(Protocol):
+    """The engine's restart-point source (its second plugin point).
+
+    The model answers two questions the engine cannot: *where* a restart lands
+    (`propose`) and *what the run has learned so far* (`observe`). The engine
+    feeds it every batch it serves and asks for points only when a restart
+    fires - it never seeds the run itself, since the first restart is the
+    flock's placement. That split is what lets a caller cap how much evidence
+    the model fits: a surrogate that wants more points than it has can answer
+    `propose` with random search until its evidence arrives, and the engine has
+    no opinion either way, since it only ever sees the points.
+
+    One instance serves the whole run (like `LocalSolver`), so whatever the
+    model accumulates lives inside it; the engine never reads
+    it. The methods are called by the engine on its own schedule - `observe`
+    once per served batch, `propose` once per cohort of restarting paths - so
+    they trust their arguments: `n_path_schedule` validates the object once at
+    the entry (that it carries this contract), and nothing here re-checks.
+    """
+
+    d: int  # the run's dimension: the model's own property, read once at entry
+
+    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
+        """Fold one served batch into the model's evidence.
+
+        Called by the engine immediately after a batch is served, in the
+        engine's own coordinates, before anything is decided on it: `x` is the
+        batch's rows, `f` their values (Python floats - the same values the run
+        compares) and `g` their gradients, or `None` when the batch was served
+        for its values alone. A point may arrive twice: a step's trial is
+        served for its value first and its gradient later if it wins the step,
+        so a model keyed on coordinates sees the second call as the same design
+        with more evidence.
+
+        Nothing is filtered for feasibility here: the engine models the raw
+        objective everywhere, and only the value it *reports* is filtered, so
+        the model fits the same surface the paths move on. Called for batches
+        the run never decides on too (a trial that loses its step, the batch
+        that ended the run on an unbounded objective), because the work was
+        served either way.
+        """
+        ...
+
+    def propose(self, n_points: int) -> jnp.ndarray:
+        """Return ``n_points`` fresh restart starts, shape ``(n_points, d)``.
+
+        Called with the number of paths that restart this iteration - on
+        iteration 0 that is every path, and every path holds no point yet, so
+        the first call places the flock. The engine clips the result into
+        `bounds`, so a model may propose outside the box; it is asked for points
+        in the same coordinates the objective takes.
+
+        The engine clips the result into the run's `domain`, so a model may
+        propose outside the box it was built over, and only the points it
+        returns are clipped.
+
+        The model owns its randomness (an instance holds its key), which is what
+        makes a seeded model reproducible.
+        """
+        ...
+
+
+@runtime_checkable
 class LocalSolver(Protocol):
     """The search method the n-path engine drives (the engine's plugin point).
 
@@ -233,18 +296,6 @@ class LocalSolver(Protocol):
 
 # --- engine: the n-path schedule ---
 
-NPathStatus: TypeAlias = Literal[
-    "max_iters",
-    "time_limit",
-    "budget_exhausted",
-    "unbounded",
-]
-# Four names for four ways to end a run: the three gates, in the order they are
-# checked (iteration horizon, wall-clock deadline, the caller's extra batch
-# gate), plus the objective bottoming out at -inf. A stalled flock has no fifth
-# stop - every report still advances a stage clock, so the verdicts keep coming
-# until the horizon or the deadline ends the run.
-
 # The one way the engine sees the objective: x rows (M,d) in the run's
 # coordinates in, (f (M,), grads_x (M,d), feas (M,)|None) out. Value and gradient
 # come back together on purpose - the caller's fused value_and_grad is one AD
@@ -262,96 +313,17 @@ EvalFG: TypeAlias = Callable[
 # for their values alone and buy gradients only for its winners, in one batch.
 EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | None]"]
 
-
-@runtime_checkable
-class GlobalModel(Protocol):
-    """The engine's restart-point source (its second plugin point).
-
-    The model answers two questions the engine cannot: *where* a restart lands
-    (`propose`) and *what the run has learned so far* (`observe`). The engine
-    feeds it every batch it serves and asks for points only when a restart
-    fires - it never seeds the run itself, since the first restart is the
-    flock's placement. That split is what lets a caller cap how much evidence
-    the model fits: a surrogate that wants more points than it has can answer
-    `propose` with random search until its evidence arrives, and the engine has
-    no opinion either way, since it only ever sees the points.
-
-    One instance serves the whole run (like `LocalSolver`), so whatever the
-    model accumulates lives inside it; the engine never reads
-    it. The methods are called by the engine on its own schedule - `observe`
-    once per served batch, `propose` once per cohort of restarting paths - so
-    they trust their arguments: `n_path_schedule` validates the object once at
-    the entry (that it carries this contract), and nothing here re-checks.
-    """
-
-    d: int  # the run's dimension: the model's own property, read once at entry
-
-    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
-        """Fold one served batch into the model's evidence.
-
-        Called by the engine immediately after a batch is served, in the
-        engine's own coordinates, before anything is decided on it: `x` is the
-        batch's rows, `f` their values (Python floats - the same values the run
-        compares) and `g` their gradients, or `None` when the batch was served
-        for its values alone. A point may arrive twice: a step's trial is
-        served for its value first and its gradient later if it wins the step,
-        so a model keyed on coordinates sees the second call as the same design
-        with more evidence.
-
-        Nothing is filtered for feasibility here: the engine models the raw
-        objective everywhere, and only the value it *reports* is filtered, so
-        the model fits the same surface the paths move on. Called for batches
-        the run never decides on too (a trial that loses its step, the batch
-        that ended the run on an unbounded objective), because the work was
-        served either way.
-        """
-        ...
-
-    def propose(self, n_points: int) -> jnp.ndarray:
-        """Return ``n_points`` fresh restart starts, shape ``(n_points, d)``.
-
-        Called with the number of paths that restart this iteration - on
-        iteration 0 that is every path, and every path holds no point yet, so
-        the first call places the flock. The engine clips the result into
-        `bounds`, so a model may propose outside the box; it is asked for points
-        in the same coordinates the objective takes.
-
-        The engine clips the result into the run's `domain`, so a model may
-        propose outside the box it was built over, and only the points it
-        returns are clipped.
-
-        The model owns its randomness (an instance holds its key), which is what
-        makes a seeded model reproducible.
-        """
-        ...
-
-
-def _check_positive_int(value: object, name: str) -> int:
-    """Return `value` if it is a positive int, refusing bools and the rest.
-
-    Takes `object` on purpose: the two callers hand in what an injected object
-    carries, so the check is the only thing that knows the answer.
-    """
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        msg = f"{name} must be a positive int, got {value!r}"
-        raise ValueError(msg)
-    return value
-
-
-def _check_model_d(model: GlobalModel, domain: Domain | None) -> int:
-    """Read the run's dimension off the model, making the domain agree with it.
-
-    The model is the authority because it is the one proposing points: a
-    surrogate is built on a d-dimensional objective and knows d before the run
-    starts, while `domain` may be absent entirely. The domain is still checked
-    against it, so a mismatched pair fails here rather than as a batch-shape
-    error a frame later.
-    """
-    d = _check_positive_int(getattr(model, "d", None), "global_model.d")
-    if domain is not None and domain.d != d:
-        msg = f"the global model has d={d} but the domain has d={domain.d}"
-        raise ValueError(msg)
-    return d
+# Four names for four ways to end a run: the three gates, in the order they are
+# checked (iteration horizon, wall-clock deadline, the caller's extra batch
+# gate), plus the objective bottoming out at -inf. A stalled flock has no fifth
+# stop - every report still advances a stage clock, so the verdicts keep coming
+# until the horizon or the deadline ends the run.
+NPathStatus: TypeAlias = Literal[
+    "max_iters",
+    "time_limit",
+    "budget_exhausted",
+    "unbounded",
+]
 
 
 @dataclass
@@ -837,18 +809,18 @@ class _Best:
     """
 
     def __init__(self, d: int) -> None:
+        # d is the flock's business (it is `x0`'s second axis), so the
+        # placeholder is already the right shape.
+        self.x = jnp.full(d, math.nan)
         self.fun = math.inf
         # Set when a feasible point priced the objective at -inf: the run has an
         # answer that no later trial can beat, so it stops on it.
         self.unbounded = False
-        # d is the flock's business (it is `x0`'s second axis), so the
-        # placeholder is already the right shape.
-        self.x = jnp.full(d, math.nan)
 
     def observe(
         self,
-        f_vals: list[float],
         x_batch: jnp.ndarray,
+        f_vals: list[float],
         feas: jnp.ndarray | None,
     ) -> None:
         """Fold one served batch's values into the best, stopping on -inf.
@@ -997,7 +969,7 @@ class _Evaluator:
         # the batch was served and charged either way, so the model still sees
         # it even though the run keeps nothing else from this pass.
         self._global_model.observe(x_batch, f_vals, g_batch)
-        self._best.observe(f_vals, x_batch, feas)
+        self._best.observe(x_batch, f_vals, feas)
         return f_vals, g_batch
 
     def _serve_f(self, x_batch: jnp.ndarray) -> list[float]:
@@ -1025,7 +997,7 @@ class _Evaluator:
         # No gradient in hand: the f half alone. The same point is reported
         # again with `g` if it wins its step and `settle` buys the gradient.
         self._global_model.observe(x_batch, f_vals, None)
-        self._best.observe(f_vals, x_batch, feas)
+        self._best.observe(x_batch, f_vals, feas)
         return f_vals
 
 
@@ -1422,3 +1394,31 @@ def _feas_flags(feas: jnp.ndarray) -> list[bool]:
         )
         raise ValueError(msg)
     return [bool(v) for v in feas.tolist()]
+
+
+def _check_model_d(model: GlobalModel, domain: Domain | None) -> int:
+    """Read the run's dimension off the model, making the domain agree with it.
+
+    The model is the authority because it is the one proposing points: a
+    surrogate is built on a d-dimensional objective and knows d before the run
+    starts, while `domain` may be absent entirely. The domain is still checked
+    against it, so a mismatched pair fails here rather than as a batch-shape
+    error a frame later.
+    """
+    d = _check_positive_int(getattr(model, "d", None), "global_model.d")
+    if domain is not None and domain.d != d:
+        msg = f"the global model has d={d} but the domain has d={domain.d}"
+        raise ValueError(msg)
+    return d
+
+
+def _check_positive_int(value: object, name: str) -> int:
+    """Return `value` if it is a positive int, refusing bools and the rest.
+
+    Takes `object` on purpose: the two callers hand in what an injected object
+    carries, so the check is the only thing that knows the answer.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        msg = f"{name} must be a positive int, got {value!r}"
+        raise ValueError(msg)
+    return value
