@@ -37,6 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- With no `global_model`, an unbounded `domain` is accepted instead of
+  refused. The engine's default `SampleGlobalModel` draws whatever the domain
+  admits - uniform inside a bounded dimension, `N(0, scale_i^2)` inside a free
+  one, that same normal truncated inside a half-bounded one - so a declared
+  unbounded side is a prior the domain already states in coordinate units, and
+  the old refusal (which claimed a uniform default had nothing to draw there)
+  contradicted the model's own contract. Measured on a free dimension, the
+  default flock's spread tracks `domain.scale` (std/scale 1.028 at 400 starts,
+  mean 0), so nothing about the draw comes from a box width. Only `domain=None`
+  with no model stays a `ValueError`: there is then nothing at all to sample.
 - The seams are checked for being callable, not only the two Protocol objects.
   `eval_f_g`, `eval_f`, `sample` and `budget_check` are refused with a
   `TypeError` naming the argument before any batch is served; before this a

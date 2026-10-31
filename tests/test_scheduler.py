@@ -16,11 +16,13 @@ eval_f_g; the engine owns clip-to-domain, and the starts are the model's - and
 the two plugins are spelled `global_model`, `local_solver`
 in that order wherever the engine names them. Whether a stall is re-drawn is
 the `restart_stalled` knob, not a plugin. With
-`global_model=None` the engine falls back to a `SampleGlobalModel` drawing from
-the bounded `domain` it was handed; an unbounded domain (or none) without a
-model is a wiring error, since the engine then has nothing of its own to draw
-from - an unbounded side is a `None`/±inf end, and a prior only an injected
-model reads. `domain=None` means no clip at all (`clip` is the identity).
+`global_model=None` the engine falls back to a `SampleGlobalModel` drawing what
+the `domain` it was handed admits - uniform inside a bounded dimension, its own
+`N(0, scale_i^2)` inside a free one, that normal truncated inside a
+half-bounded one - so a declared unbounded side is a prior the domain already
+states, not a wiring error. Only `domain=None` (with no model) is refused: there
+is then nothing at all to draw from. `domain=None` also means no clip
+(`clip` is the identity), which is a run only beside an injected model.
 `test_plugin_seam.py`'s evaluator is that composed form.
 
 Every run below plants its flock through `flock_kwargs`, i.e. through the
@@ -38,6 +40,7 @@ from typing import Any, TypeAlias
 
 import jax
 import jax.numpy as jnp
+import pytest
 
 from soar_lite.domain import Domain
 from soar_lite.engine import (
@@ -834,36 +837,46 @@ def test_bounds_spellings_are_the_same_box() -> None:
     assert fun_pairs == fun_arr
 
 
-def test_the_default_model_needs_a_bounded_domain() -> None:
-    """With no model, a finite box is required: it is where the draws come from.
+def test_the_default_model_needs_a_domain_to_draw_from() -> None:
+    """With no model, an absent domain is refused - an unbounded one is not.
 
-    `SampleGlobalModel` draws uniformly, so an unbounded side has no
-    distribution to draw from - the engine refuses instead of inventing one.
-    One-sided is the quiet case: half the box still exists, so the run would
-    silently be a different algorithm than the one the caller thinks it wired.
-    The check is eager - the model is built before any point is served, because
-    the first restart is iteration 0's placement.
+    The default `SampleGlobalModel` draws whatever the domain admits, so a
+    declared unbounded side is a prior the domain already states rather than a
+    distribution the engine has to invent: free dimensions draw the domain's
+    own `N(0, scale_i^2)`, half-bounded ones that normal truncated. Only
+    `domain=None` leaves the engine nothing to sample at all. The check is
+    eager - the model is built before any point is served, because the first
+    restart is iteration 0's placement.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum(theta**2), 2.0 * theta
 
-    for domain in (Domain([(-jnp.inf, 1.0)]), Domain([(None, None)]), None):
-        rec = Recorder(quad)
-        try:
-            n_path_schedule(
-                rec,
-                n_paths=2,
-                domain=domain,
-                max_iters=1,
-                local_solver=HalfStep(),
-            )
-        except ValueError:
-            pass
-        else:  # pragma: no cover - the raise is the assertion
-            msg = f"no global model, yet {domain} was accepted"
-            raise AssertionError(msg)
-        assert rec.evals == 0  # rejected before any point was served
+    rec = Recorder(quad)
+    with pytest.raises(ValueError, match="needs a `domain`"):
+        n_path_schedule(
+            rec,
+            n_paths=2,
+            domain=None,
+            max_iters=1,
+            local_solver=HalfStep(),
+        )
+    assert rec.evals == 0  # rejected before any point was served
+
+    # Both unbounded shapes draw: the run places its flock and every placed
+    # start is finite, which the old bounded-only refusal would have prevented.
+    for domain in (Domain([(-jnp.inf, 1.0)]), Domain([(None, None)])):
+        run = Recorder(quad)
+        res = n_path_schedule(
+            run,
+            n_paths=2,
+            domain=domain,
+            max_iters=1,
+            key=jax.random.PRNGKey(0),
+            local_solver=HalfStep(),
+        )
+        assert run.evals > 0
+        assert bool(jnp.all(jnp.isfinite(res.x)))
 
 
 def test_the_model_is_the_only_authority_on_d() -> None:

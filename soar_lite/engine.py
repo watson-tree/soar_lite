@@ -413,9 +413,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     restart_stalled: bool = False,
     # The two plugins, adjacent and in one order everywhere: where a restart
     # lands (the model is also the run's evidence sink, asked for points only
-    # when a restart fires; None -> SampleGlobalModel drawing a bounded
-    # `domain` - an unbounded or absent one has nowhere to draw and is rejected
-    # below rather than guessed), and the search method.
+    # when a restart fires; None -> SampleGlobalModel drawing whatever the
+    # `domain` admits, so only an absent domain is rejected below - a declared
+    # unbounded side is a prior the domain itself already states, not a draw
+    # the engine has to invent), and the search method.
     global_model: GlobalModel | None = None,
     local_solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
     # The random source of the restart points, last and optional (optax's `key`
@@ -426,7 +427,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     """Advance a flock of chains in x from the caller's initial points.
 
     The engine owns the schedule: it composes and clips every proposal into
-    `bounds`, serves each batch as one `eval_f_g` call, keeps the n-path state
+    `domain`, serves each batch as one `eval_f_g` call, keeps the n-path state
     machine, and owns the best `f⋆`. Two things are injected, and the engine
     spells them `global_model`, `local_solver` in that one order wherever it
     names them: `global_model` supplies **where** a restart lands (the engine
@@ -440,8 +441,6 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     improvement, an out-of-tree adapter) never touches the verdict, and a run
     that never restarts (`restart_stalled=False`, the default) needs no model
     of its own at all.
-    that proposes points (a surrogate maximising expected improvement, an
-    out-of-tree adapter) never touches the verdict.
 
     `n_paths` is the run's width and nothing else; the dimension `d` is the
     model's (see below), so a run never spells it twice. Iteration 0 is the
@@ -452,17 +451,21 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     arrival instead of being placed, and - having no point - that path restarts
     again next iteration rather than idling forever.
 
-    With `global_model=None` the engine builds a `SampleGlobalModel` over a
-    finite `bounds`: i.i.d. uniform starts, no fit, and the box is then the only
-    distribution it has - an unbounded box (or none) needs an injected model,
-    because the engine has nothing of its own to draw from. `key` seeds that
-    default model's draws; None means the fixed default PRNGKey(0), so an
-    unseeded call still runs, deterministically. An injected model owns its
-    randomness, so `key` is ignored for it.
+    With `global_model=None` the engine builds a `SampleGlobalModel` over the
+    run's `domain` and lets that draw: uniform inside a bounded dimension, its
+    own ``N(0, scale_i^2)`` inside a free one, and that same normal truncated
+    inside a half-bounded one. A declared unbounded side is thus a prior the
+    domain already states - `scale` is the length the caller gave it, in
+    coordinate units - rather than something the engine reads off a width or
+    guesses. Only an absent domain is refused, because there is then nothing to
+    draw from at all. `key` seeds that default model's draws; None means the
+    fixed default PRNGKey(0), so an unseeded call still runs, deterministically.
+    An injected model owns its randomness, so `key` is ignored for it.
 
-    `bounds` is data, not an injected object (scipy's spelling: a `(lb, ub)`
-    pair per dim, `None`/±inf = unbounded); the engine clips into it and knows
-    nothing about any map from these coordinates to the caller's physical ones.
+    `domain` is the run's box and the coordinate space the engine works in, a
+    `Domain` the caller built (its constructor refused a malformed one already);
+    the engine clips into it and knows nothing about any map from these
+    coordinates to the caller's physical ones.
 
     Work is reported as four counts, never mixed. The fused value+gradient seam
     is the expensive one, and `n_f_g_points` is the g points it served (the
@@ -533,7 +536,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         global_model: the restart-point source and the run's evidence sink: a
             `GlobalModel` that is fed every served batch and asked for points
             only when a restart fires. ``None`` builds a `SampleGlobalModel`
-            over the bounded ``domain``, which fits nothing.
+            over ``domain`` - bounded, free or half-bounded, wherever the
+            domain's own draw reaches - which fits nothing.
             The model's ``d`` is the run's dimension; ``domain`` must agree with
             it.
         local_solver: the local method (``None`` binds ``DiagonalPreconditioner``).
@@ -609,10 +613,17 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # the identity, which is a run only beside an injected model.
     clip = (domain.lo, domain.hi) if domain is not None else (-math.inf, math.inf)
     if global_model is None:
+        if domain is None:
+            msg = (
+                "global_model=None needs a `domain` to draw the flock from - "
+                "pass one, or inject a `global_model` that proposes its own "
+                "starts"
+            )
+            raise ValueError(msg)
         from soar_lite.global_model import SampleGlobalModel  # noqa: PLC0415
 
         global_model = SampleGlobalModel(
-            _bounded_domain(domain),
+            domain,
             key=jax.random.PRNGKey(0) if key is None else key,
         )
     if local_solver is None:
@@ -1337,25 +1348,6 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
         if fn is not None and not callable(fn):
             msg = f"{what} must be callable or None, got {type(fn).__name__}"
             raise TypeError(msg)
-
-
-def _bounded_domain(domain: Domain | None) -> Domain:
-    """Return `domain` when the default model may draw it, else refuse the run.
-
-    The model=None contract: with no model injected the engine samples the box
-    itself, so a domain that is not fully bounded states a prior (its `scale`)
-    the caller never asked the engine to use. That is a wiring error, not a run
-    to guess our way out of; the caller who meant it injects the sampler.
-    """
-    if domain is None or not bool(jnp.all(domain.bounded)):
-        msg = (
-            "global_model=None needs a bounded `domain`: the engine's default "
-            "model samples the box, so an unbounded side or an absent domain "
-            "states a prior it cannot read - inject "
-            "`SampleGlobalModel(domain, key=...)`"
-        )
-        raise ValueError(msg)
-    return domain
 
 
 def all_finite(a: jnp.ndarray) -> bool:
