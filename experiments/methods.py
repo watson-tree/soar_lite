@@ -137,7 +137,7 @@ def surrogate_minimize(
 ) -> jnp.ndarray:
     """Minimize a batched acquisition with `n_points` single-path engine runs.
 
-    The injected inner minimizer `SphericalLinearModel.propose` asks for: the
+    The injected inner minimizer `BLRGlobalModel.propose` asks for: the
     model hands out its own acquisition and this driver answers with the
     library's own descent, one serial path per start - the same restart-free
     recipe the n_paths=1 arms use, so the acquisition is optimized by the method

@@ -1,4 +1,4 @@
-"""Tests for the spherical-linear surrogate restart model.
+"""Tests for the Bayesian linear-regression restart model.
 
 The projection and the improvement kernel are the model's own math, tested
 where they live. Both are `_`-private because nothing outside the package
@@ -16,7 +16,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from soar_lite import AcquisitionFn, Bounds, SphereProjection, SphericalLinearModel
+from soar_lite import (
+    AcquisitionFn,
+    BLRGlobalModel,
+    Bounds,
+    IdentityProjection,
+    Projection,
+    SphereProjection,
+)
 from soar_lite.spherical_linear import _log_h
 
 
@@ -51,10 +58,10 @@ def _short_minimize(
     return jnp.zeros((max(n_points - 1, 0), jnp.asarray(bounds).shape[0]))
 
 
-def _model(d: int = 2, half: float = 2.0, noise: float = 0.01) -> SphericalLinearModel:
+def _model(d: int = 2, half: float = 2.0, noise: float = 0.01) -> BLRGlobalModel:
     """Build a model over the symmetric ``[-half, half]^d`` box."""
     bounds = jnp.asarray([[-half, half]] * d)
-    return SphericalLinearModel(
+    return BLRGlobalModel(
         SphereProjection(bounds),
         minimize=_grid_minimize,
         noise=noise,
@@ -62,7 +69,7 @@ def _model(d: int = 2, half: float = 2.0, noise: float = 0.01) -> SphericalLinea
     )
 
 
-def _observe(model: SphericalLinearModel, n: int) -> None:
+def _observe(model: BLRGlobalModel, n: int) -> None:
     """Feed `n` deterministic box points with a smooth, off-centre minimum."""
     axis = jnp.linspace(-1.9, 1.9, n)[:, None] * jnp.asarray([1.0, -1.0])[None, :]
     f = [float(jnp.sum((row - jnp.asarray([0.3, -0.2])) ** 2)) for row in axis]
@@ -195,7 +202,7 @@ def test_a_non_uniform_lengthscale_moves_the_features() -> None:
 def test_a_masked_model_proposes_inside_the_box() -> None:
     """Keep the acquisition path working when only some dimensions bend."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 3)
-    model = SphericalLinearModel(
+    model = BLRGlobalModel(
         SphereProjection(bounds, mask=[True, False, True]),
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
@@ -217,7 +224,7 @@ def test_the_injected_projection_is_the_geometry_authority() -> None:
         jnp.asarray([[-1.0, 1.0]] * 4),
         mask=[False, True, False, True],
     )
-    model = SphericalLinearModel(
+    model = BLRGlobalModel(
         projection,
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
@@ -271,7 +278,7 @@ def test_propose_draws_uniformly_until_a_fit_is_possible() -> None:
 
 def test_integer_bounds_still_normalize_to_a_unit_box() -> None:
     """Keep the box usable when a caller spells its pairs in integers."""
-    model = SphericalLinearModel(
+    model = BLRGlobalModel(
         SphereProjection([(0, 1), (0, 1)]),
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
@@ -367,7 +374,7 @@ def test_observe_drops_non_finite_values_and_checks_its_rows() -> None:
 def test_minimize_output_shape_is_validated() -> None:
     """Refuse an injected minimizer that answers the wrong shape."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 2)
-    model = SphericalLinearModel(
+    model = BLRGlobalModel(
         SphereProjection(bounds),
         minimize=_short_minimize,
         key=jax.random.PRNGKey(1),
@@ -383,3 +390,44 @@ def test_the_projection_refuses_an_unbounded_box_and_the_model_a_zero_noise() ->
         SphereProjection(jnp.asarray([[0.0, math.inf]]))
     with pytest.raises(ValueError, match="noise"):
         _model(noise=0.0)
+
+
+def test_identity_features_are_the_coordinates_themselves() -> None:
+    """Read every coordinate back unchanged, with no added width."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 3)
+    xs = jnp.asarray([[1.0, -0.5, 2.0], [-2.0, 0.0, 0.4]])
+    feats = IdentityProjection(bounds).features(xs)
+    assert bool(jnp.array_equal(feats, xs))
+    assert feats.shape == (2, 3)
+
+
+def test_an_identity_projection_is_a_projection_and_the_sphere_is_too() -> None:
+    """Pin the abstraction: both shipped projections inherit `Projection`."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 2)
+    assert isinstance(IdentityProjection(bounds), Projection)
+    assert isinstance(SphereProjection(bounds), Projection)
+
+
+def test_the_identity_model_fits_a_width_d_posterior() -> None:
+    """The feature width is read off `features`, not hardcoded ``d + 1``."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 2)
+    model = BLRGlobalModel(
+        IdentityProjection(bounds),
+        minimize=_grid_minimize,
+        key=jax.random.PRNGKey(0),
+    )
+    _observe(model, 4)
+    mean, sigma = model._predict(jnp.asarray([[0.5, -0.5]]))
+    assert bool(jnp.all(jnp.isfinite(mean)))
+    assert bool(jnp.all(jnp.isfinite(sigma)))
+    draws = model.propose(3)
+    assert draws.shape == (3, 2)
+    assert bool(jnp.all(jnp.isfinite(draws)))
+    assert bool(jnp.all(draws >= -2.0))
+    assert bool(jnp.all(draws <= 2.0))
+
+
+def test_an_identity_projection_also_refuses_an_unbounded_box() -> None:
+    """The box check moved up to `Projection`, so it guards both subclasses."""
+    with pytest.raises(ValueError, match="finite box"):
+        IdentityProjection(jnp.asarray([[0.0, math.inf]]))

@@ -1,31 +1,39 @@
-"""A spherical-linear Bayesian surrogate as the engine's restart model.
+"""A Bayesian linear-regression surrogate as the engine's restart model.
 
 The second `GlobalModel` concrete, beside `global_model.py`'s uniform draw. It
-fits a weight posterior over an inverse-stereographic projection of the
-normalized box and proposes restart points by descending the *log* expected
-improvement of that posterior - the sample-based restart the uniform draw only
-approximates.
+fits a closed-form weight posterior over the feature rows a `Projection` hands
+it and proposes restart points by descending the *log* expected improvement of
+that posterior - the sample-based restart the uniform draw only approximates.
 
-The structure is a fixed-hyperparameter port of Doumont, Fan, et al., "We Still
-Don't Understand High-Dimensional Bayesian Optimization" (2025),
+The geometry lives entirely in the injected `Projection`, so the model itself
+is projection-agnostic: `SphereProjection` bends a chosen subset of the box's
+dimensions through inverse stereography, and `IdentityProjection` reads the
+coordinates as their own features. The two are two priors over where the
+optimum sits - the bend pulls the corners toward the pole and centres the bowl,
+the identity keeps every coordinate's own scale and puts the centre nowhere
+special - and the caller picks the one the task's belief deserves.
+
+The structure of the sphere is a fixed-hyperparameter port of Doumont, Fan, et
+al., "We Still Don't Understand High-Dimensional Bayesian Optimization" (2025),
 ``github.com/colmont/linear-bo``: a linear kernel read after projecting onto the
 unit sphere, a box-diagonal lengthscale normalization, and the resulting
-posterior variance bounded away from the prior away from data. The projection is
-`SphereProjection`, a geometry of its own: it can bend only a chosen subset of
-the dimensions, leaving the rest linear. Two things are deliberately dropped.
-That implementation fits its lengthscale, coefficient and
+posterior variance bounded away from the prior away from data. Two things are
+deliberately dropped. That implementation fits its lengthscale, coefficient and
 noise hyperparameters by marginal likelihood (it is gpytorch; this package is
 jax-only), so here the same knobs are constructor values instead. And it
 descends its acquisition with a shipped multi-start L-BFGS-B; here the
 minimizer is injected instead, so a driver can descend with the library's own
 n-path engine rather than a second recipe - see `MinimizeFn`.
 
-What is kept is the part that cures the pathology this model exists for: under
-a Euclidean RBF posterior the variance returns to the prior far from data, so
-expected improvement becomes variance-dominated and points at the box corners;
-the projection bounds it, so improvement is driven by the fitted values instead.
+What the bend keeps is the part that cures the corner-seeking pathology under a
+Euclidean RBF posterior: the variance returns to the prior far from data and
+expected improvement becomes variance-dominated, pointing at the box corners.
+Bounding the feature rows makes improvement follow the fitted values instead -
+a centre-biased prior, which is why `IdentityProjection` exists for tasks whose
+optimum lives on a boundary.
 """
 
+import abc
 import math
 from collections.abc import Callable, Sequence
 from typing import TypeAlias
@@ -68,7 +76,60 @@ MinimizeFn: TypeAlias = Callable[
 _HALF_LOG_2PI = 0.5 * jnp.log(2.0 * jnp.pi)
 
 
-class SphereProjection:
+class Projection(abc.ABC):
+    """The map a restart model reads box coordinates through.
+
+    A projection turns every ``(m, d)`` batch of coordinates into an ``(m, w)``
+    batch of posterior feature rows - `w` is this projection's width, read off
+    `features` by the model rather than assumed ``d + 1``. The box is shared:
+    `propose` draws its fallback starts and descends the acquisition inside it,
+    so the projection carries the finite box and every subclass gets the same
+    validation. A subclass decides only what the feature rows look like - the
+    geometry, its centre bias or none - not the box bookkeeping.
+
+    `features` is the one contract. It is a pure query of the coordinates: the
+    same ``(m, d)`` input maps to the same ``(m, w)`` rows, with `w` stable
+    across calls for one projection.
+    """
+
+    def __init__(self, bounds: Bounds) -> None:
+        """Validate and carry the finite box the model proposes inside.
+
+        Args:
+            bounds: the finite box, scipy-style pairs or a ``(d, 2)`` array;
+                every side must be finite so a fallback draw has a width.
+
+        Raises:
+            ValueError: If the box is absent, unbounded on any side, or has a
+                NaN side.
+
+        """
+        check_bounds(bounds)
+        box = box_bounds(bounds)
+        if box is None or not finite_box(box):
+            msg = (
+                "a projection proposes inside its box, so it needs a "
+                f"finite box: got {bounds!r}"
+            )
+            raise ValueError(msg)
+        self.lo, self.hi = box
+        # The dimension is what `bounds` declares: read it off the argument,
+        # not off `lo`/`hi`, which `box_bounds` just derived from it.
+        self.d = len(bounds)
+        self.bounds = bounds
+
+    @abc.abstractmethod
+    def features(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Return the ``(m, w)`` feature rows for ``(m, d)`` coordinates.
+
+        `w` is this projection's feature width: the model reads it off the
+        returned shape, never off `d`, so a projection is free to widen or
+        narrow the representation however its geometry needs.
+        """
+        ...
+
+
+class SphereProjection(Projection):
     """Inverse-stereographic projection of a chosen subset of the box's dims.
 
     The restart models read the box in whatever coordinates the objective takes.
@@ -118,26 +179,14 @@ class SphereProjection:
                 selector; ``None`` bends all of them.
 
         Raises:
-            ValueError: If the box is absent, unbounded on any side, or has a
-                NaN side; if `ell` is not a ``(d,)`` vector of finite positive
-                values, or `kappa` is out of range; or if `mask` is not a
-                ``(d,)`` boolean selector selecting at least one dimension.
+            ValueError: If `ell` is not a ``(d,)`` vector of finite positive
+                values, or `kappa` is out of range, or `mask` is not a ``(d,)``
+                boolean selector selecting at least one dimension. The box is
+                validated by `Projection`'s constructor.
 
         """
-        check_bounds(bounds)
-        box = box_bounds(bounds)
-        if box is None or not finite_box(box):
-            msg = (
-                "SphereProjection normalizes the search box, so it needs a "
-                f"finite box: got {bounds!r}"
-            )
-            raise ValueError(msg)
-        self.lo, self.hi = box
-        # The dimension is what `bounds` declares: read it off the argument,
-        # not off `lo`/`hi`, which `box_bounds` just derived from it.
-        self.d = len(bounds)
+        super().__init__(bounds)
         self.width = self.hi - self.lo
-        self.bounds = bounds
         self.mask = _check_mask(mask, self.d)
         self.ell = _check_lengthscale(ell, self.d)
         kappa_v = _check_finite_positive("kappa", kappa)
@@ -168,8 +217,30 @@ class SphereProjection:
         return jnp.concatenate([sphere, unit[:, ~self.mask]], axis=-1)
 
 
-class SphericalLinearModel(GlobalModel):
-    """Restart points from a spherical-linear posterior's log improvement.
+class IdentityProjection(Projection):
+    """The no-geometry projection: coordinates are their own features.
+
+    `features` returns the coordinates unchanged - width ``d``, no centre bowl,
+    no normalization to the unit box. Where `SphereProjection` bends the corners
+    toward the pole and seats the box centre at the south pole (a prior that the
+    optimum lives near the middle), this one keeps every coordinate's own scale
+    and range and puts the centre nowhere special: a prior that the optimum may
+    well sit on a boundary or a corner.
+
+    The cost of no geometry is no bound. The posterior variance is a quadratic
+    form in these unbent features, so it grows toward the box corners and
+    expected improvement on this arm is extrapolation-dominated, pointing at
+    corners - exactly the behaviour wanted when the truth lives there, and the
+    one `SphereProjection` exists to cure when it does not.
+    """
+
+    def features(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Return the coordinates unchanged: the identity feature map."""
+        return x
+
+
+class BLRGlobalModel(GlobalModel):
+    """Restart points from a Bayesian linear posterior's log improvement.
 
     `observe` accumulates the run's served batches (values only - the gradient
     is not fitted), and `propose` fits the closed-form weight posterior over
@@ -180,14 +251,17 @@ class SphericalLinearModel(GlobalModel):
 
     Every knob is a fixed hyperparameter, not a fitted one; the defaults are the
     reference implementation's starting points rather than its marginal-
-    likelihood optimum. The search box and the geometry knobs (`ell`, `kappa`,
-    `mask`) live in the injected `SphereProjection`; what this class adds on top
-    is the value fit and the acquisition that descends it.
+    likelihood optimum. The geometry lives in the injected `Projection` -
+    `SphereProjection` for the centre-biased bend of the reference model,
+    `IdentityProjection` for no prior on where the optimum sits - and the box
+    comes with it. What this class adds on top is the value fit and the
+    acquisition that descends it; the feature width is read off `features`, so
+    any projection width fits.
     """
 
     def __init__(
         self,
-        projection: SphereProjection,
+        projection: Projection,
         *,
         minimize: MinimizeFn,
         var_prior: float = 1.0,
@@ -197,11 +271,12 @@ class SphericalLinearModel(GlobalModel):
         """Bind the projection, the injected minimizer and the value fits.
 
         Args:
-            projection: the `SphereProjection` turning a coordinate into the
+            projection: the `Projection` turning a coordinate into the
                 posterior's feature row. It is the authority for the run's
-                dimension and search box - `d` and `bounds` are read off it,
-                and its own construction already validated the box, `ell`,
-                `kappa` and `mask`.
+                dimension and search box - `d`, `bounds` and the fallback
+                draw's corners are read off it, and `Projection`'s constructor
+                already validated the box; a `SphereProjection` further
+                validates its own `ell`, `kappa` and `mask`.
             minimize: the acquisition's inner optimizer, shape
                 ``MinimizeFn``. Owned by the caller: the descent recipe is the
                 engine's, not this model's.
@@ -365,7 +440,7 @@ class SphericalLinearModel(GlobalModel):
         features = self._projection.features(x_obs)
         precision = (
             features.T @ features / self._noise
-            + jnp.eye(self.d + 1, dtype=features.dtype) / self._var_prior
+            + jnp.eye(features.shape[1], dtype=features.dtype) / self._var_prior
         )
         cov = jnp.linalg.inv(precision)
         weights = cov @ features.T @ values / self._noise
