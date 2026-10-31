@@ -499,6 +499,44 @@ def test_an_unbounded_box_proposes_and_predicts_without_a_width() -> None:
     assert float(sigma[1]) <= math.sqrt(1.01) + 1e-3
 
 
+@pytest.mark.parametrize(
+    "side",
+    [[[0.0, math.inf]], [[-math.inf, 0.0]], [[5.0, math.inf]]],
+)
+def test_a_half_bounded_dimension_draws_inside_its_one_side(
+    side: list[list[float]],
+) -> None:
+    """Truncate the default normal to the domain instead of stepping over it."""
+    box = jnp.asarray(side)
+    lower, upper = float(box[0, 0]), float(box[0, 1])
+    draws = SphereProjection(box).draw(jax.random.PRNGKey(0), 512)[:, 0]
+    assert bool(jnp.all(jnp.isfinite(draws)))
+    assert bool(jnp.all(draws >= lower))
+    assert bool(jnp.all(draws <= upper))
+
+
+def test_a_half_bounded_draw_is_the_half_normal_not_the_full_one() -> None:
+    """Anchor the truncation at the declared side: mean ``scale*sqrt(2/pi)``."""
+    draws = SphereProjection(
+        jnp.asarray([[0.0, math.inf]]),
+        scale=jnp.asarray([2.0]),
+    ).draw(jax.random.PRNGKey(0), 2048)[:, 0]
+    assert float(jnp.mean(draws)) == pytest.approx(
+        2.0 * math.sqrt(2.0 / math.pi),
+        rel=0.1,
+    )
+
+
+def test_a_domain_truncated_past_float_resolution_lands_on_its_boundary() -> None:
+    """Collapse onto the side rather than draw past it, or draw an infinity."""
+    draws = SphereProjection(
+        jnp.asarray([[10.0, math.inf]]),
+        scale=jnp.asarray([1.0]),
+    ).draw(jax.random.PRNGKey(0), 64)[:, 0]
+    assert bool(jnp.all(jnp.isfinite(draws)))
+    assert bool(jnp.all(draws == 10.0))
+
+
 def test_an_injected_sampler_replaces_that_dimensions_default() -> None:
     """Take one column's starts from the caller's own distribution."""
     bounds = jnp.asarray([[-2.0, 2.0], [-math.inf, math.inf]])

@@ -44,7 +44,7 @@ from typing import TypeAlias
 
 import jax
 import jax.numpy as jnp
-from jax.scipy.special import log_ndtr
+from jax.scipy.special import log_ndtr, ndtr, ndtri
 
 from soar_lite.engine import Bounds, GlobalModel, box_bounds, check_bounds
 
@@ -127,9 +127,12 @@ class Projection(abc.ABC):
                 coordinates span far more or far less than one wants its own
                 entry rather than the default.
             samplers: one optional draw per dimension, ``d`` entries; a ``None``
-                entry keeps the default - uniform inside a bounded dimension,
-                ``N(0, scale_i^2)`` inside an unbounded one. Dimensions are
-                drawn independently, so a prior that couples them needs its own
+                entry keeps the default its domain admits - uniform inside a
+                bounded dimension, ``N(0, scale_i^2)`` inside a free one, and
+                that same normal restricted to the domain inside a
+                half-bounded one, where drawing the unrestricted normal would
+                step over the one side that is declared. Dimensions are drawn
+                independently, so a prior that couples them needs its own
                 `GlobalModel`, not a projection.
 
         Raises:
@@ -158,6 +161,10 @@ class Projection(abc.ABC):
         # only centre an unbounded dimension has, and `scale` the only length
         # a caller can state about it.
         self.bounded = jnp.isfinite(self.lo) & jnp.isfinite(self.hi)
+        # Neither side finite. The half-bounded dimension - one side finite,
+        # one not - is the remaining case, and the only one whose default draw
+        # has a boundary to respect.
+        self.free = ~jnp.isfinite(self.lo) & ~jnp.isfinite(self.hi)
         self.width = jnp.where(self.bounded, self.hi - self.lo, 0.0)
         self.center = jnp.where(self.bounded, self.lo + self.width / 2.0, 0.0)
 
@@ -175,11 +182,14 @@ class Projection(abc.ABC):
         """Return ``(n_points, d)`` restart starts, one dimension at a time.
 
         A dimension with an injected `DrawFn` takes its column from that, else
-        from the default its domain admits: uniform inside a bounded side, and
-        ``N(0, scale_i^2)`` inside an unbounded one, where there is no width to
-        be uniform over. That default is also why an injected sampler is the
-        caller's own statement about the dimension's spread - nothing checks the
-        drawn values against `scale`, since a black-box distribution has no
+        from the default its domain admits: uniform inside a bounded side,
+        ``N(0, scale_i^2)`` inside a free one, and the same normal *truncated*
+        to the domain inside a half-bounded one - a sampler free to step over
+        the side the caller declared is not sampling from the declared box at
+        all, and truncating is what the normal the default promises looks like
+        once it may not cross. That default is also why an injected sampler is
+        the caller's own statement about the dimension's spread - nothing checks
+        the drawn values against `scale`, since a black-box distribution has no
         readable spread to check them against.
 
         Raises:
@@ -202,8 +212,16 @@ class Projection(abc.ABC):
                     minval=self.lo[j],
                     maxval=self.hi[j],
                 )
-            else:
+            elif bool(self.free[j]):
                 column = self.scale[j] * jax.random.normal(sub, (n_points,))
+            else:
+                column = _truncated_normal(
+                    sub,
+                    n_points,
+                    lower=float(self.lo[j]),
+                    upper=float(self.hi[j]),
+                    scale=float(self.scale[j]),
+                )
             if jnp.shape(column) != (n_points,):
                 msg = (
                     f"each drawn column must be ({n_points},) long, got "
@@ -693,3 +711,58 @@ def _check_samplers(
         msg = f"samplers needs {d} entries, got {len(given)}"
         raise ValueError(msg)
     return given
+
+
+_TRUNCATED_TAIL = 9.0
+"""Clip the standard-normal draw to this many scales either way.
+
+Only the domain's own endpoints can push the CDF inverse past it: `ndtri` is
+undefined at 0 and 1, and a truncation far into the tail rounds both bounds of
+the uniform interval onto the same endpoint. The clip keeps such a draw finite,
+and it costs nothing else - beyond nine scales the normal's mass is 1e-19, so
+no reachable draw is touched, while a domain truncated that far out collapses
+onto its own boundary, which is the right limit anyway.
+"""
+
+
+def _truncated_normal(
+    key: jnp.ndarray,
+    n_points: int,
+    *,
+    lower: float,
+    upper: float,
+    scale: float,
+) -> jnp.ndarray:
+    """Draw ``N(0, scale^2)`` restricted to ``[lower, upper]``.
+
+    Both bounds take an infinity, so this one routine serves either orientation
+    of a half-bounded domain. Inverse-CDF because the alternative - draw and
+    reject - costs a variable number of rounds that JAX cannot express without
+    a fixed cap, which would bias whatever the cap cuts off.
+
+    Args:
+        key: the PRNG key to draw from.
+        n_points: how many values to draw.
+        lower: the domain's lower bound, possibly ``-inf``.
+        upper: the domain's upper bound, possibly ``+inf``.
+        scale: the prior's standard deviation, in coordinate units.
+
+    Returns:
+        ``(n_points,)`` finite values, all inside ``[lower, upper]``.
+
+    """
+    v = jax.random.uniform(key, (n_points,))
+    # Sample the *tail* probability, not the CDF value. A half-line is one tail,
+    # and a truncation far out makes that tail small enough that `1 - Phi(a)` and
+    # `Phi(a)` agree to the last float32 - the CDF value loses its precision
+    # exactly where the truncated mass still lives. Multiplying the small tail by
+    # `v` keeps the relative precision, so the draw tracks the true truncated
+    # normal instead of piling its far tail onto one clipped value.
+    if lower == -math.inf:
+        p = ndtr(jnp.asarray(upper) / scale)
+        z = ndtri(p * v)
+    else:
+        p = ndtr(-jnp.asarray(lower) / scale)
+        z = -ndtri(p * (1.0 - v))
+    z = jnp.clip(z, -_TRUNCATED_TAIL, _TRUNCATED_TAIL)
+    return jnp.clip(scale * z, lower, upper)
