@@ -30,16 +30,16 @@ from soar_lite.engine import (
     Verdict,
     n_path_schedule,
 )
-from soar_lite.global_model import SampleGlobalModel
-from soar_lite.local_solver import DiagonalPreconditioner
-from soar_lite.spherical_linear import (
+from soar_lite.global_model import (
     AcquisitionFn,
     BLRGlobalModel,
     IdentityProjection,
     MinimizeFn,
     Projection,
+    SampleGlobalModel,
     SphereProjection,
 )
+from soar_lite.local_solver import DiagonalPreconditioner
 
 __all__ = [
     "AcquisitionFn",

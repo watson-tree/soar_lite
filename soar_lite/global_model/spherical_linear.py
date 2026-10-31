@@ -1,6 +1,6 @@
 """A Bayesian linear-regression surrogate as the engine's restart model.
 
-The second `GlobalModel` concrete, beside `global_model.py`'s model-free draw. It
+The second `GlobalModel` concrete, beside `SampleGlobalModel`'s model-free draw. It
 fits a closed-form weight posterior over the feature rows a `Projection` hands
 it and proposes restart points by descending the *log* expected improvement of
 that posterior - the sample-based restart the uniform draw only approximates.

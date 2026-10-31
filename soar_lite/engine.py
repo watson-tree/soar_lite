@@ -13,7 +13,9 @@ here, never the other way around at module level:
       engine.py        <- LocalSolver, GlobalModel, PathPoint, Verdict,
                           n_path_schedule
       domain.py        <- Domain, Bounds (the box, its scales and draws; a leaf)
-      global_model.py  <- SampleGlobalModel (implements GlobalModel)
+      global_model/    <- the restart-model family
+        sample.py          SampleGlobalModel (implements GlobalModel)
+        spherical_linear.py  BLRGlobalModel + the Projections it reads
       local_solver.py  <- DiagonalPreconditioner (implements LocalSolver)
 
 Dependency direction: plugins depend on engine types; the engine binds its two
