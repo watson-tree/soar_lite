@@ -46,7 +46,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import log_ndtr
 
-from soar_lite.domain import Domain, DrawFn
+from soar_lite.domain import Domain
 from soar_lite.engine import Bounds, GlobalModel
 
 # The acquisition `propose` hands the injected minimizer: x rows (m, d) in,
@@ -75,21 +75,39 @@ MinimizeFn: TypeAlias = Callable[
 _HALF_LOG_2PI = 0.5 * jnp.log(2.0 * jnp.pi)
 
 
-class Projection(Domain, abc.ABC):
+class Projection(abc.ABC):
     """The feature map a restart model reads domain coordinates through.
 
-    A projection is a `Domain` plus one map: `features` turns every ``(m, d)``
-    batch of coordinates into an ``(m, w)`` batch of posterior feature rows - `w`
-    is this projection's width, read off `features` by the model rather than
-    assumed ``d + 1``. The box, the per-dimension scales and the draws are
-    inherited from `Domain`, so every subclass gets the same validation and the
-    same fallback sampler; a subclass decides only what the feature rows look
-    like - the geometry, its centre bias or none - not the domain bookkeeping.
+    A projection wraps a `Domain` and adds one map: `features` turns every
+    ``(m, d)`` batch of coordinates into an ``(m, w)`` batch of posterior
+    feature rows - `w` is this projection's width, read off `features` by the
+    model rather than assumed ``d + 1``.
+
+    The domain stays the domain's. A projection *reads* its box, scales and
+    draws; it is not one. That keeps the two jobs apart at the type level: a
+    caller who only samples builds a `Domain` and never meets a projection, and
+    a projection held where a `Domain` is expected is a wiring error instead of
+    a silently accepted one. It also keeps `scale` and `samplers` out of this
+    constructor, where every fitted model would otherwise have restated them.
 
     `features` is the one contract. It is a pure query of the coordinates: the
     same ``(m, d)`` input maps to the same ``(m, w)`` rows, with `w` stable
     across calls for one projection.
     """
+
+    def __init__(self, domain: Domain) -> None:
+        """Bind the domain the geometry reads.
+
+        Args:
+            domain: the box, per-dimension `scale` and draws the projection
+                reads its geometry off - centre, width and which sides are
+                unbounded. Holding one domain rather than being one is what
+                keeps the geometry and the fallback draw measured in the same
+                coordinate unit without two knobs to keep in step. Validated by
+                `Domain`'s own constructor.
+
+        """
+        self.domain = domain
 
     @abc.abstractmethod
     def features(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -132,24 +150,21 @@ class SphereProjection(Projection):
 
     def __init__(
         self,
-        bounds: Bounds,
+        domain: Domain,
         *,
-        scale: jnp.ndarray | Sequence[float] | None = None,
         kappa: float = 0.5,
         mask: jnp.ndarray | Sequence[bool] | None = None,
-        samplers: Sequence[DrawFn | None] | None = None,
     ) -> None:
-        """Bind the box, the scales and the projected subset.
+        """Bind the domain and the projected subset.
 
         Args:
-            bounds: the box the projection normalizes, scipy-style pairs or a
-                ``(d, 2)`` array; a side may be unbounded.
-            scale: per-dimension prior width in coordinate units, a ``(d,)``
-                vector or ``None`` for every dimension at one. Only the ratios
+            domain: the domain the projection normalizes, scipy-style pairs or a
+                ``(d, 2)`` array read off its box; a side may be unbounded. Its
+                `scale` is the prior width in coordinate units - only the ratios
                 between the bent dimensions' entries move the features, since
-                `glob_ls` divides one global lengthscale back out; the common
-                magnitude is what the fallback draw and an unbounded
-                dimension's radius are measured in.
+                `glob_ls` divides one global lengthscale back out, but the common
+                magnitude is what the fallback draw and an unbounded dimension's
+                radius are measured in.
             kappa: the tie between the projection's radius and the domain - a
                 bent dimension's far end lands at ``|z|^2 = 1/kappa`` whatever
                 ``d`` is. Must lie in ``(0, 1)``; without such a tie a
@@ -157,17 +172,16 @@ class SphereProjection(Projection):
                 posterior collapses there.
             mask: which dimensions the projection bends, a ``(d,)`` boolean
                 selector; ``None`` bends all of them.
-            samplers: one optional draw per dimension; see `Domain`.
 
         Raises:
-            ValueError: If `scale` is not a ``(d,)`` vector of finite positive
-                values, or `kappa` is out of range, or `mask` is not a ``(d,)``
-                boolean selector selecting at least one dimension. The box is
-                validated by `Domain`'s constructor.
+            ValueError: If `kappa` is out of range, or `mask` is not a ``(d,)``
+                boolean selector selecting at least one dimension. The domain is
+                validated by its own constructor.
 
         """
-        super().__init__(bounds, scale=scale, samplers=samplers)
-        self.mask = _check_mask(mask, self.d)
+        # Validate before building: the geometry knobs are this constructor's,
+        # the domain was validated when it was made.
+        self.mask = _check_mask(mask, domain.d)
         kappa_v = _check_finite_positive("kappa", kappa)
         if kappa_v >= 1.0:
             msg = (
@@ -175,6 +189,7 @@ class SphereProjection(Projection):
                 f"lie in (0, 1); got {kappa!r}"
             )
             raise ValueError(msg)
+        super().__init__(domain)
         # The global lengthscale is what makes the projection dimension-free: a
         # bent dimension's reference radius, divided by `glob_ls`, is
         # `1/sqrt(kappa)` in total, so `d` raises the features' typical radius
@@ -183,7 +198,11 @@ class SphereProjection(Projection):
         # one has no width, so its radius is one `scale`. Summed over the bent
         # dimensions only - a dimension the projection leaves out has no radius
         # to tie.
-        radius = jnp.where(self.bounded, self.width / (2.0 * self.scale), 1.0)
+        radius = jnp.where(
+            domain.bounded,
+            domain.width / (2.0 * domain.scale),
+            1.0,
+        )
         tied = jnp.sum(jnp.where(self.mask, radius * radius, 0.0))
         self.glob_ls = jnp.sqrt(kappa_v * tied)
 
@@ -196,7 +215,7 @@ class SphereProjection(Projection):
         divided by the global lengthscale; the rest keep that centred, scaled
         coordinate, so a linear head reads them as a plain linear trend.
         """
-        z = (x - self.center) / self.scale
+        z = (x - self.domain.center) / self.domain.scale
         bent = z[:, self.mask] / self.glob_ls
         sq = jnp.sum(bent * bent, axis=-1, keepdims=True)
         sphere = jnp.concatenate([2.0 * bent, sq - 1.0], axis=-1) / (sq + 1.0)
@@ -219,9 +238,9 @@ class IdentityProjection(Projection):
     corners - exactly the behaviour wanted when the truth lives there, and the
     one `SphereProjection` exists to cure when it does not.
 
-    `features` ignores the base class's `scale` and `samplers` outright: the
-    coordinates arrive as they are, and only `draw` reads them, to place the
-    fallback starts.
+    `features` ignores the domain's `scale` outright: the coordinates arrive as
+    they are, and only the domain's `draw` reads it, to place the fallback
+    starts.
     """
 
     def features(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -280,12 +299,12 @@ class BLRGlobalModel(GlobalModel):
                 value.
 
         """
-        # The projection is the geometry's authority: it validated the box and
-        # the geometry knobs at its own construction, and it is the single
-        # source of the run's dimension. `d` is lifted here because the
-        # `GlobalModel` seam asks the model for it.
+        # The domain rides in on the projection rather than being injected
+        # beside it: two arguments could disagree, and the fallback draw and the
+        # geometry would then be measured in different coordinate units.
         self._projection = projection
-        self.d = projection.d
+        self._domain = projection.domain
+        self.d = self._domain.d
         self._minimize = minimize
         self._var_prior = _check_finite_positive("var_prior", var_prior)
         self._noise = _check_finite_positive("noise", noise)
@@ -348,7 +367,7 @@ class BLRGlobalModel(GlobalModel):
             raise ValueError(msg)
         self._key, sub = jax.random.split(self._key)
         if not self._can_fit():
-            return self._projection.draw(sub, n_points)
+            return self._domain.draw(sub, n_points)
         weights, cov = self._posterior()
         best = self._standardize(jnp.asarray(self._fs)).min()
 
@@ -359,7 +378,7 @@ class BLRGlobalModel(GlobalModel):
             return self._acq_value_and_grad(x, weights, cov, best)
 
         starts = jnp.asarray(
-            self._minimize(acquisition, self._projection.bounds, sub, n_points),
+            self._minimize(acquisition, self._domain.bounds, sub, n_points),
         )
         if starts.shape != (n_points, self.d):
             msg = (

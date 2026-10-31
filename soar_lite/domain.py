@@ -41,8 +41,8 @@ class Domain:
     side above its upper, a scale that is not a ``(d,)`` vector of finite
     positive values, or a sampler count that is not ``d`` are refused here
     rather than deep inside a clip or a draw. It is concrete - a caller sampling
-    with no surrogate needs nothing more - and `Projection` subclasses it to add
-    the feature map a fitted model reads.
+    with no surrogate needs nothing more - and `Projection` wraps one to add the
+    feature map a fitted model reads.
 
     A side may be unbounded. The box then declares only the dimension and which
     sides are unbounded; `scale` is what carries a length there, because no
