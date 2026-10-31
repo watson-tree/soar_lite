@@ -115,7 +115,7 @@ def test_features_stay_d_plus_one_wide_whatever_the_mask_bends() -> None:
     """Keep the ridge width fixed: a bent dimension donates one column."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 4)
     xs = jnp.linspace(-1.9, 1.9, 6)[:, None] * jnp.ones(4)[None, :]
-    for mask in (None, [0], [0, 2], [True, False, True, False]):
+    for mask in (None, [True, False, False, False], [True, False, True, False]):
         projection = SphereProjection(bounds, mask=mask)
         assert projection.features(xs).shape == (6, 5)
 
@@ -123,7 +123,7 @@ def test_features_stay_d_plus_one_wide_whatever_the_mask_bends() -> None:
 def test_dimensions_left_out_keep_their_box_coordinate() -> None:
     """Read unmasked dimensions as the plain unit coordinate, with no bowl."""
     bounds = jnp.asarray([[-2.0, 2.0], [0.0, 10.0]])
-    projection = SphereProjection(bounds, mask=[0])
+    projection = SphereProjection(bounds, mask=[True, False])
     xs = jnp.asarray([[-1.0, 2.5], [1.0, 7.5]])
     unit = (xs - projection.lo) / projection.width
     assert jnp.array_equal(projection.features(xs)[:, 2:], unit[:, 1:])
@@ -133,16 +133,16 @@ def test_the_bent_block_alone_still_lies_on_the_unit_sphere() -> None:
     """Keep the variance bound on the bent subset, not the whole row."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 4)
     xs = jnp.linspace(-1.9, 1.9, 6)[:, None] * jnp.ones(4)[None, :]
-    bent = SphereProjection(bounds, mask=[0, 1]).features(xs)[:, :3]
+    bent = SphereProjection(bounds, mask=[True, True, False, False]).features(xs)[:, :3]
     assert np.allclose(np.asarray(jnp.linalg.norm(bent, axis=-1)), 1.0, atol=1e-6)
 
 
 @pytest.mark.parametrize(
     "mask",
-    [[], [4], [-1], [0.0, 1.0], [True, False], [False, False, False, False]],
+    [[], [0, 2], [0.0, 1.0], [True, False], [False, False, False, False]],
 )
 def test_a_mask_that_selects_nothing_usable_is_refused(mask: Sequence[object]) -> None:
-    """Refuse an empty, out-of-range or wrongly-typed selector."""
+    """Refuse an empty, non-boolean, short or all-false selector."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 4)
     with pytest.raises(ValueError, match="mask"):
         # The point of the case is a selector the type says is not a selector.
@@ -196,7 +196,7 @@ def test_a_masked_model_proposes_inside_the_box() -> None:
     """Keep the acquisition path working when only some dimensions bend."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 3)
     model = SphericalLinearModel(
-        SphereProjection(bounds, mask=[0, 2]),
+        SphereProjection(bounds, mask=[True, False, True]),
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
     )
@@ -213,7 +213,10 @@ def test_a_masked_model_proposes_inside_the_box() -> None:
 
 def test_the_injected_projection_is_the_geometry_authority() -> None:
     """Read the run's dimension and box off the projection, not a bounds param."""
-    projection = SphereProjection(jnp.asarray([[-1.0, 1.0]] * 4), mask=[1, 3])
+    projection = SphereProjection(
+        jnp.asarray([[-1.0, 1.0]] * 4),
+        mask=[False, True, False, True],
+    )
     model = SphericalLinearModel(
         projection,
         minimize=_grid_minimize,

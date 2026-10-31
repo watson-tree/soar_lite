@@ -98,7 +98,7 @@ class SphereProjection:
         *,
         ell: jnp.ndarray | None = None,
         kappa: float = 0.5,
-        mask: jnp.ndarray | Sequence[bool] | Sequence[int] | None = None,
+        mask: jnp.ndarray | Sequence[bool] | None = None,
     ) -> None:
         """Bind the box, the lengthscales and the projected subset.
 
@@ -115,14 +115,13 @@ class SphereProjection:
                 pushes every corner past the pole and the posterior collapses
                 there.
             mask: which dimensions the projection bends, a ``(d,)`` boolean
-                selector or the indices of the projected dimensions; ``None``
-                bends all of them.
+                selector; ``None`` bends all of them.
 
         Raises:
             ValueError: If the box is absent, unbounded on any side, or has a
                 NaN side; if `ell` is not a ``(d,)`` vector of finite positive
-                values, or `kappa` is out of range; or if `mask` selects no
-                dimension or names one outside the box.
+                values, or `kappa` is out of range; or if `mask` is not a
+                ``(d,)`` boolean selector selecting at least one dimension.
 
         """
         check_bounds(bounds)
@@ -449,16 +448,18 @@ def _check_finite_positive(name: str, value: float) -> float:
 
 
 def _check_mask(
-    mask: jnp.ndarray | Sequence[bool] | Sequence[int] | None,
+    mask: jnp.ndarray | Sequence[bool] | None,
     d: int,
 ) -> jnp.ndarray:
-    """Normalize `mask` to a ``(d,)`` boolean selector, refusing an empty one.
+    """Normalize `mask` to a ``(d,)`` boolean selector, refusing a bad one.
 
-    Two spellings are accepted - a boolean selector, or the indices of the
-    projected dimensions - because the index form is how a caller names a few
-    dimensions while the boolean form is what the feature gather needs. A
-    floating-point selector is refused rather than rounded into indices: a
-    caller who writes ``[0.0, 1.0]`` means something this cannot guess.
+    Only the boolean spelling is accepted. The integer-index spelling was
+    refused because it was indistinguishable from a boolean vector at runtime:
+    ``bool`` is a subclass of ``int``, so ``asarray`` names the dtype from the
+    values, and a ``[1, 0, 1, 0]`` meant as booleans would be read as indices
+    and project a different set silently. A caller naming a few dimensions
+    writes the boolean vector instead, which is also the form the feature
+    gather consumes.
     """
     if mask is None:
         return jnp.ones(d, dtype=bool)
@@ -469,24 +470,16 @@ def _check_mask(
     if given.shape[0] == 0:
         msg = "mask must project at least one dimension"
         raise ValueError(msg)
-    if given.dtype == jnp.bool_:
-        if given.shape[0] != d:
-            msg = f"mask needs {d} boolean entries, got {given.shape[0]}"
-            raise ValueError(msg)
-        selected = given
-    elif given.dtype.kind in "iu":
-        indices = given.astype(jnp.int32)
-        if bool(jnp.any(indices < 0)) or bool(jnp.any(indices >= d)):
-            msg = f"mask indices must lie in [0, {d}), got {mask!r}"
-            raise ValueError(msg)
-        selected = jnp.zeros(d, dtype=bool).at[indices].set(True)
-    else:
-        msg = f"mask must be a boolean selector or integer indices, got {mask!r}"
+    if given.dtype != jnp.bool_:
+        msg = f"mask must be a boolean selector, got dtype {given.dtype}"
         raise ValueError(msg)
-    if not bool(jnp.any(selected)):
+    if given.shape[0] != d:
+        msg = f"mask needs {d} boolean entries, got {given.shape[0]}"
+        raise ValueError(msg)
+    if not bool(jnp.any(given)):
         msg = "mask must project at least one dimension"
         raise ValueError(msg)
-    return selected
+    return given
 
 
 def _check_lengthscale(ell: jnp.ndarray | None, d: int) -> jnp.ndarray:
