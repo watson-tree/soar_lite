@@ -18,9 +18,8 @@ test or a contributor may still import them, but nothing outside the package is
 meant to.
 """
 
-from soar_lite.domain import Domain, DrawFn
+from soar_lite.domain import Bounds, Domain, DrawFn
 from soar_lite.engine import (
-    Bounds,
     EvalF,
     EvalFG,
     GlobalModel,

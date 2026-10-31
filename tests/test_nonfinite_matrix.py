@@ -38,7 +38,6 @@ import pytest
 
 from soar_lite.domain import Domain
 from soar_lite.engine import (
-    Bounds,
     _argmin_finite,
     _Best,
     _OptimumReached,
@@ -53,10 +52,14 @@ def unit_bounds(d: int = 1) -> jnp.ndarray:
     """Return the engine's box in working coords: x ∈ [0,1]^d."""
     return jnp.stack([jnp.zeros(d), jnp.ones(d)], axis=1)
 
+def unit_domain(d: int = 1) -> Domain:
+    """Return the engine's box in working coords as the `Domain` it is."""
+    return Domain(unit_bounds(d))
+
 
 def flock_kwargs(
     x0: jnp.ndarray,
-    bounds: Bounds,
+    domain: Domain,
     *,
     key: jnp.ndarray | None = None,
 ) -> dict[str, Any]:
@@ -70,7 +73,7 @@ def flock_kwargs(
     return {
         "n_paths": int(x0.shape[0]),
         "global_model": SampleGlobalModel(
-            Domain(bounds),
+            domain,
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),
@@ -182,8 +185,8 @@ def test_a_half_dead_start_stalls_the_path_but_its_value_still_reports() -> None
 
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(jnp.array([[0.5]]), unit_bounds(), key=jax.random.PRNGKey(0)),
-        bounds=unit_bounds(),
+        **flock_kwargs(jnp.array([[0.5]]), unit_domain(), key=jax.random.PRNGKey(0)),
+        domain=unit_domain(),
         max_iters=10,
     )
 
@@ -217,8 +220,8 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
 
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(jnp.array([[0.5]]), unit_bounds(), key=jax.random.PRNGKey(0)),
-        bounds=unit_bounds(),
+        **flock_kwargs(jnp.array([[0.5]]), unit_domain(), key=jax.random.PRNGKey(0)),
+        domain=unit_domain(),
         max_iters=10,
     )
 

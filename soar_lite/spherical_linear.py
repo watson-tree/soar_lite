@@ -46,8 +46,8 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import log_ndtr
 
-from soar_lite.domain import Domain
-from soar_lite.engine import Bounds, GlobalModel
+from soar_lite.domain import Bounds, Domain
+from soar_lite.engine import GlobalModel
 
 # The acquisition `propose` hands the injected minimizer: x rows (m, d) in,
 # (values (m,), gradients (m, d)) out - the engine's `EvalFG` shape with the

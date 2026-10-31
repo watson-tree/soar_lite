@@ -22,6 +22,28 @@ def test_a_domain_needs_a_declared_box() -> None:
         Domain(None)  # pyright: ignore[reportArgumentType]
 
 
+def test_a_malformed_box_is_refused_at_construction() -> None:
+    """A box that is not a box fails here, not inside a clip.
+
+    Both spellings are checked for the same three defects: an inverted dim, a
+    NaN side (which would silently poison every clip instead of failing), and an
+    array whose second axis is not the pair. The domain is built before a run
+    sees it, so this is the one gate every spelling passes.
+    """
+
+    def rejects(bounds: object) -> str:
+        try:
+            Domain(bounds)  # pyright: ignore[reportArgumentType]
+        except ValueError as e:
+            return str(e)
+        msg = f"accepted: {bounds!r}"
+        raise AssertionError(msg)
+
+    assert "lo=1.0 > hi=0.0" in rejects([(1.0, 0.0)])
+    assert "NaN" in rejects([(0.0, float("nan"))])
+    assert "(d, 2)" in rejects(jnp.zeros((3, 3)))
+
+
 @pytest.mark.parametrize(
     "scale",
     [

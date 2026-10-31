@@ -16,7 +16,6 @@ import jax.numpy as jnp
 
 from soar_lite.domain import Domain
 from soar_lite.engine import (
-    Bounds,
     PathPoint,
     n_path_schedule,
 )
@@ -37,7 +36,7 @@ def close(
 
 def flock_kwargs(
     x0: jnp.ndarray,
-    bounds: Bounds,
+    domain: Domain,
     *,
     key: jnp.ndarray | None = None,
 ) -> dict[str, Any]:
@@ -51,7 +50,7 @@ def flock_kwargs(
     return {
         "n_paths": int(x0.shape[0]),
         "global_model": SampleGlobalModel(
-            Domain(bounds),
+            domain,
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),
@@ -351,10 +350,10 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
         eval_f_g,
         **flock_kwargs(
             jnp.array([[0.5, 0.5]]),
-            jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
+            Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
             key=jax.random.PRNGKey(0),
         ),
-        bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
+        domain=Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
         max_iters=50,
         local_solver=DiagonalPreconditioner(theta=0.0),
     )
@@ -438,10 +437,10 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
         eval_f_g,
         **flock_kwargs(
             jnp.array([[0.5, 0.5]]),
-            jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
+            Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
             key=jax.random.PRNGKey(0),
         ),
-        bounds=jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1),
+        domain=Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
         max_iters=50,
         local_solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
     )

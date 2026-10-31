@@ -110,17 +110,18 @@ def run_soar_lite(
         return f, g, None
 
     key, sub = jax.random.split(jax.random.PRNGKey(seed))
+    domain = Domain(problem.bounds)
     x0 = jax.random.uniform(
         sub,
         (n_paths, problem.d),
-        minval=problem.bounds[:, 0],
-        maxval=problem.bounds[:, 1],
+        minval=domain.lo,
+        maxval=domain.hi,
     )
     result = n_path_schedule(
         eval_f_g,
         n_paths=n_paths,
-        bounds=problem.bounds,
-        global_model=SampleGlobalModel(Domain(problem.bounds), key=key, x0=x0),
+        domain=domain,
+        global_model=SampleGlobalModel(domain, key=key, x0=x0),
         max_iters=max_steps,
         budget_check=lambda: n_batches < max_steps,
         local_solver=DiagonalPreconditioner(),
@@ -159,6 +160,7 @@ def surrogate_minimize(
     """
     d = bounds.shape[0]
     lo, hi = bounds[:, 0], bounds[:, 1]
+    domain = Domain(bounds)
 
     def eval_g(x_batch: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         f, g = objective(x_batch)
@@ -171,8 +173,8 @@ def surrogate_minimize(
         result = n_path_schedule(
             eval_g,
             n_paths=1,
-            bounds=bounds,
-            global_model=SampleGlobalModel(Domain(bounds), key=sub, x0=x0),
+            domain=domain,
+            global_model=SampleGlobalModel(domain, key=sub, x0=x0),
             max_iters=_INNER_ITERS,
             local_solver=DiagonalPreconditioner(),
             restart_stalled=False,

@@ -8,6 +8,11 @@ the default the domain admits or one the caller injected. It is the object a
 everything about *where* the model may look and *how* a start is proposed, so a
 model-free restart sampler needs nothing but this and a key.
 
+The box's own spelling lives here too - `Bounds`, and the validation and
+normalization behind it. This module imports nothing from the package, so it is
+the leaf that both the engine's `n_path_schedule` and the model modules read a
+box from; the clip that keeps every proposal inside it stays the engine's.
+
 A side may be unbounded, and there are three cases, not two: a bounded dimension
 draws uniformly, a free one (both sides infinite) draws ``N(0, scale_i^2)``, and
 a half-bounded one (exactly one finite side) draws that same normal *truncated*
@@ -23,7 +28,10 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import ndtr, ndtri
 
-from soar_lite.engine import Bounds, box_bounds, check_bounds
+# The search box in scipy's spelling (which `_box_bounds` normalizes): one
+# `(lb, ub)` pair per dim, a side of None or +-inf meaning unbounded. A `(d, 2)`
+# array is the same data row-wise, for the callers that already hold one.
+Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
 
 # One dimension's draw, injected per dimension so a restart model can sample
 # where a bounded box does not reach: `sampler(key, n)` returns `n` coordinates
@@ -92,8 +100,8 @@ class Domain:
                 ``d`` entries long.
 
         """
-        check_bounds(bounds)
-        box = box_bounds(bounds)
+        _check_bounds(bounds)
+        box = _box_bounds(bounds)
         if box is None:
             msg = (
                 "a domain reads its dimension and its unbounded sides off the "
@@ -102,7 +110,7 @@ class Domain:
             raise ValueError(msg)
         self.lo, self.hi = box
         # The dimension is what `bounds` declares: read it off the argument,
-        # not off `lo`/`hi`, which `box_bounds` just derived from it.
+        # not off `lo`/`hi`, which `_box_bounds` just derived from it.
         self.d = len(bounds)
         self.bounds = bounds
         self.scale = _check_scale(scale, self.d)
@@ -212,6 +220,54 @@ def _check_samplers(
         msg = f"samplers needs {d} entries, got {len(given)}"
         raise ValueError(msg)
     return given
+
+
+def _check_bounds(bounds: Bounds | None) -> None:
+    """Reject a malformed box at construction, not deep inside a clip.
+
+    Both spellings are checked: one `(lb, ub)` pair per dim, or a `(d, 2)`
+    array. A NaN side is rejected too - it would poison every clip silently
+    instead of failing; +-inf sides are legitimate (unbounded dim).
+    """
+    if bounds is None:
+        return
+    pairs: list[tuple[float | None, float | None]]
+    if isinstance(bounds, jnp.ndarray):
+        if bounds.ndim != 2 or bounds.shape[1] != 2:
+            msg = f"bounds as an array needs shape (d, 2), got {bounds.shape}"
+            raise ValueError(msg)
+        pairs = list(zip(bounds[:, 0].tolist(), bounds[:, 1].tolist(), strict=True))
+    else:
+        pairs = []
+        for j, pair in enumerate(bounds):
+            if len(pair) != 2:
+                msg = f"bounds[{j}] must be a (lb, ub) pair, got {pair!r}"
+                raise ValueError(msg)
+            pairs.append((pair[0], pair[1]))
+    for j, (low, high) in enumerate(pairs):
+        lo_f = -math.inf if low is None else float(low)
+        hi_f = math.inf if high is None else float(high)
+        if math.isnan(lo_f) or math.isnan(hi_f):
+            msg = f"bounds[{j}] has a NaN side: ({low!r}, {high!r})"
+            raise ValueError(msg)
+        if lo_f > hi_f:
+            msg = f"bounds[{j}] has lo={lo_f} > hi={hi_f}"
+            raise ValueError(msg)
+
+
+def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
+    """Normalize a box to (lo, hi) arrays; None (no box at all) -> None.
+
+    A `None` side becomes ∓inf, so every downstream consumer sees one spelling
+    of "unbounded". A `(d, 2)` array carries the same pairs one row each.
+    """
+    if bounds is None:
+        return None
+    if isinstance(bounds, jnp.ndarray):
+        return bounds[:, 0], bounds[:, 1]  # (d, 2) array: one pair per row
+    lo = [-math.inf if pair[0] is None else pair[0] for pair in bounds]
+    hi = [math.inf if pair[1] is None else pair[1] for pair in bounds]
+    return jnp.asarray(lo), jnp.asarray(hi)
 
 
 _TRUNCATED_TAIL = 9.0

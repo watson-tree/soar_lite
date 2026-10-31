@@ -2,7 +2,7 @@
 
 The seams' contract is only proven by injection: a stub `LocalSolver` and a stub
 `GlobalModel` are plugged into the engine, which must drive them instead of its
-defaults, and a foreign box (`bounds` as data) plus the caller's own x->θ map
+defaults, and a foreign box (a `Domain`) plus the caller's own x->θ map
 composed into `eval_f_g` must be honoured too. These also pin the documented
 zero-caller hook — a method returning `"give_up"` — and the run with no extra
 gate (`budget_check=None` -> `status == "max_iters"`).
@@ -21,7 +21,6 @@ import jax.numpy as jnp
 
 from soar_lite.domain import Domain
 from soar_lite.engine import (
-    Bounds,
     NPathResult,
     PathPoint,
     Verdict,
@@ -36,6 +35,10 @@ def unit_bounds(d: int = 1) -> jnp.ndarray:
     """Return the engine's box in working coords: x ∈ [0,1]^d."""
     return jnp.stack([jnp.zeros(d), jnp.ones(d)], axis=1)
 
+def unit_domain(d: int = 1) -> Domain:
+    """Return the engine's box in working coords as the `Domain` it is."""
+    return Domain(unit_bounds(d))
+
 
 def flock(n_paths: int, d: int = 1) -> jnp.ndarray:
     """Return n_paths starts spread over the box's interior, one row each."""
@@ -45,7 +48,7 @@ def flock(n_paths: int, d: int = 1) -> jnp.ndarray:
 
 def flock_kwargs(
     x0: jnp.ndarray,
-    bounds: Bounds,
+    domain: Domain,
     *,
     key: jnp.ndarray | None = None,
 ) -> dict[str, Any]:
@@ -59,7 +62,7 @@ def flock_kwargs(
     return {
         "n_paths": int(x0.shape[0]),
         "global_model": SampleGlobalModel(
-            Domain(bounds),
+            domain,
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),
@@ -214,8 +217,8 @@ def test_injected_solver_is_driven() -> None:
     solver = StubSolver()
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(0)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(0)),
+        domain=unit_domain(),
         budget_check=lambda: True,
         max_iters=2,  # iteration 0 places the flock, then one step
         local_solver=solver,
@@ -235,8 +238,8 @@ def test_give_up_stalls_a_path() -> None:
     solver = StubSolver(give_up=True)
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(1)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(1)),
+        domain=unit_domain(),
         budget_check=lambda: True,
         max_iters=2,  # the flock, then the single stalled iteration
         local_solver=solver,
@@ -268,8 +271,8 @@ def test_an_unusable_start_is_refused_before_it_seeds_the_method() -> None:
     solver = StubSolver()
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(flock(2), unit_bounds(), key=jax.random.PRNGKey(3)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(3)),
+        domain=unit_domain(),
         budget_check=lambda: True,
         max_iters=2,  # the flock, then the iteration that finds nothing live
         local_solver=solver,
@@ -313,8 +316,8 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
         res = n_path_schedule(
             eval_f_g,
             eval_f=eval_f,
-            **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(7)),
-            bounds=unit_bounds(),
+            **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(7)),
+            domain=unit_domain(),
             budget_check=lambda: billed < limit,
             max_iters=20,  # not the binding stop: the gate closes first
             local_solver=StubSolver(),
@@ -366,8 +369,8 @@ def test_the_gate_is_asked_before_a_value_only_batch_too() -> None:
     res = n_path_schedule(
         eval_f_g,
         eval_f=eval_f,
-        **flock_kwargs(flock(2), unit_bounds(), key=jax.random.PRNGKey(11)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(11)),
+        domain=unit_domain(),
         budget_check=lambda: f_calls < 2,
         max_iters=10,  # never the binding stop: the caller's gate closes first
         local_solver=RetryingSolver(retries=5),
@@ -386,8 +389,8 @@ def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
     eval_f_g, shapes = evaluator()
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(4)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(4)),
+        domain=unit_domain(),
         max_iters=4,  # the flock plus three steps
         local_solver=StubSolver(),
     )
@@ -417,11 +420,11 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
         theta = x + 1.0
         return jnp.sum((theta - 4.0) ** 2, axis=-1), 2.0 * (theta - 4.0), None
 
-    bounds = jnp.stack([jnp.full(1, lo), jnp.full(1, hi)], axis=1)
+    domain = Domain(jnp.stack([jnp.full(1, lo), jnp.full(1, hi)], axis=1))
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(jnp.array([[1.0], [1.5]]), bounds, key=jax.random.PRNGKey(5)),
-        bounds=bounds,
+        **flock_kwargs(jnp.array([[1.0], [1.5]]), domain, key=jax.random.PRNGKey(5)),
+        domain=domain,
         budget_check=None,
         max_iters=3,
         local_solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
@@ -444,7 +447,7 @@ def test_the_default_model_is_exactly_a_sample_global_model() -> None:
     handed over. Every path gives up on its first trial and is then re-drawn, so
     both sites - the flock's placement and the re-draw - are exercised.
     """
-    box = unit_bounds(2)
+    box = unit_domain(2)
 
     def run(
         global_model: object | None,
@@ -459,7 +462,7 @@ def test_the_default_model_is_exactly_a_sample_global_model() -> None:
         res = n_path_schedule(
             eval_f_g,
             n_paths=2,
-            bounds=box,
+            domain=box,
             global_model=global_model,  # pyright: ignore[reportArgumentType]
             budget_check=None,
             max_iters=3,
@@ -471,7 +474,7 @@ def test_the_default_model_is_exactly_a_sample_global_model() -> None:
 
     default_served, default_x, default_fun, default_points = run(None)
     ours_served, ours_x, ours_fun, ours_points = run(
-        SampleGlobalModel(Domain(box), key=jax.random.PRNGKey(7)),
+        SampleGlobalModel(box, key=jax.random.PRNGKey(7)),
     )
     assert default_served, "nothing was ever served"
     assert len(default_served) == len(ours_served)
@@ -497,8 +500,8 @@ def test_reports_four_counts_on_two_axes() -> None:
         eval_f_g, _shapes = evaluator()
         res = n_path_schedule(
             eval_f_g,
-            **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(8)),
-            bounds=unit_bounds(),
+            **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(8)),
+            domain=unit_domain(),
             budget_check=lambda: True,
             max_iters=2,  # the flock plus one accepted trial
             local_solver=StubSolver(),
@@ -540,8 +543,8 @@ def test_a_flocks_start_is_served_once_fused() -> None:
     res = n_path_schedule(
         eval_f_g,
         eval_f=eval_f,
-        **flock_kwargs(flock(2), unit_bounds(), key=jax.random.PRNGKey(3)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(3)),
+        domain=unit_domain(),
         max_iters=1,  # the flock alone is iteration 0
         local_solver=StubSolver(),
     )
@@ -591,8 +594,8 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
     res = n_path_schedule(
         eval_f_g,
         eval_f=eval_f,
-        **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(3)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(3)),
+        domain=unit_domain(),
         max_iters=2,  # the flock, then this one step
         local_solver=solver,
     )
@@ -636,8 +639,8 @@ def test_one_gradient_batch_per_iteration() -> None:
     res = n_path_schedule(
         eval_f_g,
         eval_f=eval_f,
-        **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(3)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(3)),
+        domain=unit_domain(),
         max_iters=2,  # the flock, then one mixed iteration
         local_solver=StubSolver(),
     )
@@ -693,7 +696,7 @@ def test_the_model_is_fed_at_both_bottoms_of_a_batch() -> None:
             eval_f_g,
             eval_f=eval_f,
             n_paths=2,
-            bounds=unit_bounds(),
+            domain=unit_domain(),
             global_model=model,
             budget_check=None,
             max_iters=2,  # the flock, then one judged step
@@ -748,8 +751,8 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
     res = n_path_schedule(
         eval_f_g,
         eval_f=eval_f,
-        **flock_kwargs(flock(1), unit_bounds(), key=jax.random.PRNGKey(3)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(1), unit_domain(), key=jax.random.PRNGKey(3)),
+        domain=unit_domain(),
         max_iters=2,  # the flock, then this one step
         local_solver=solver,
     )
@@ -774,8 +777,8 @@ def test_a_non_finite_gradient_start_arrives_stalled() -> None:
     solver = StubSolver()
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(flock(2), unit_bounds(), key=jax.random.PRNGKey(4)),
-        bounds=unit_bounds(),
+        **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(4)),
+        domain=unit_domain(),
         max_iters=2,
         local_solver=solver,
     )
@@ -809,8 +812,8 @@ def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
         res = n_path_schedule(
             eval_f_g,
             eval_f=eval_f,
-            **flock_kwargs(flock(k), unit_bounds(), key=jax.random.PRNGKey(7)),
-            bounds=unit_bounds(),
+            **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(7)),
+            domain=unit_domain(),
             max_iters=2,  # the flock plus one step
             local_solver=solver,
         )
@@ -858,8 +861,8 @@ def test_an_unjudged_winner_must_be_finite_to_be_committed() -> None:
         solver = PushTo(0.5)
         n_path_schedule(
             make_eval(bad),
-            **flock_kwargs(flock(1), unit_bounds(), key=jax.random.PRNGKey(3)),
-            bounds=unit_bounds(),
+            **flock_kwargs(flock(1), unit_domain(), key=jax.random.PRNGKey(3)),
+            domain=unit_domain(),
             max_iters=3,
             local_solver=solver,
         )
