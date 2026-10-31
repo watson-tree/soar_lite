@@ -127,13 +127,13 @@ def test_features_stay_d_plus_one_wide_whatever_the_mask_bends() -> None:
         assert projection.features(xs).shape == (6, 5)
 
 
-def test_dimensions_left_out_keep_their_box_coordinate() -> None:
-    """Read unmasked dimensions as the plain unit coordinate, with no bowl."""
+def test_dimensions_left_out_keep_their_centred_coordinate() -> None:
+    """Read unmasked dimensions as a plain trend in their own coordinate unit."""
     bounds = jnp.asarray([[-2.0, 2.0], [0.0, 10.0]])
     projection = SphereProjection(bounds, mask=[True, False])
     xs = jnp.asarray([[-1.0, 2.5], [1.0, 7.5]])
-    unit = (xs - projection.lo) / projection.width
-    assert jnp.array_equal(projection.features(xs)[:, 2:], unit[:, 1:])
+    trend = (xs - projection.center) / projection.scale
+    assert jnp.array_equal(projection.features(xs)[:, 2:], trend[:, 1:])
 
 
 def test_the_bent_block_alone_still_lies_on_the_unit_sphere() -> None:
@@ -157,7 +157,7 @@ def test_a_mask_that_selects_nothing_usable_is_refused(mask: Sequence[object]) -
 
 
 @pytest.mark.parametrize(
-    "ell",
+    "scale",
     [
         jnp.asarray(1.0),
         jnp.asarray([1.0]),
@@ -168,34 +168,34 @@ def test_a_mask_that_selects_nothing_usable_is_refused(mask: Sequence[object]) -
         jnp.asarray([1.0, jnp.inf, 1.0, 1.0]),
     ],
 )
-def test_a_lengthscale_that_is_not_a_d_vector_is_refused(ell: jnp.ndarray) -> None:
+def test_a_scale_that_is_not_a_d_vector_is_refused(scale: jnp.ndarray) -> None:
     """Refuse a scalar, a short vector, a matrix and a non-positive entry.
 
     A scalar or a length-one vector would broadcast into a uniform vector, which
-    is a real projection but never what a caller writing those shapes means, so
-    it is refused rather than guessed at.
+    is a real scale but never what a caller writing those shapes means, so it is
+    refused rather than guessed at.
     """
     bounds = jnp.asarray([[-2.0, 2.0]] * 4)
-    with pytest.raises(ValueError, match="ell"):
-        SphereProjection(bounds, ell=ell)
+    with pytest.raises(ValueError, match="scale"):
+        SphereProjection(bounds, scale=scale)
 
 
-def test_none_lengthscale_bends_every_dimension_alike() -> None:
-    """Read `None` as the uniform default, bit-identical to an explicit unit vector."""
+def test_none_scale_is_the_uniform_default() -> None:
+    """Read `None` as one everywhere, bit-identical to an explicit unit vector."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 3)
     xs = jnp.asarray([[-1.9, 2.7, 0.05], [0.0, 0.0, 0.5]])
     assert jnp.array_equal(
         SphereProjection(bounds).features(xs),
-        SphereProjection(bounds, ell=jnp.ones(3)).features(xs),
+        SphereProjection(bounds, scale=jnp.ones(3)).features(xs),
     )
 
 
-def test_a_non_uniform_lengthscale_moves_the_features() -> None:
+def test_a_non_uniform_scale_moves_the_features() -> None:
     """Carry anisotropy through the ratios between the vector's entries."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 3)
     xs = jnp.asarray([[-1.9, 2.7, 0.05], [1.3, -2.1, 0.8]])
     uniform = SphereProjection(bounds).features(xs)
-    bent = SphereProjection(bounds, ell=jnp.asarray([3.0, 0.5, 2.0])).features(xs)
+    bent = SphereProjection(bounds, scale=jnp.asarray([3.0, 0.5, 2.0])).features(xs)
     assert not bool(jnp.allclose(uniform, bent))
 
 
@@ -384,10 +384,10 @@ def test_minimize_output_shape_is_validated() -> None:
         model.propose(3)
 
 
-def test_the_projection_refuses_an_unbounded_box_and_the_model_a_zero_noise() -> None:
+def test_a_projection_needs_a_declared_box_and_the_model_a_positive_noise() -> None:
     """Split the boundary: the box is the projection's, the noise the fit's."""
-    with pytest.raises(ValueError, match="finite box"):
-        SphereProjection(jnp.asarray([[0.0, math.inf]]))
+    with pytest.raises(ValueError, match="needs one"):
+        SphereProjection(None)  # pyright: ignore[reportArgumentType]
     with pytest.raises(ValueError, match="noise"):
         _model(noise=0.0)
 
@@ -427,7 +427,113 @@ def test_the_identity_model_fits_a_width_d_posterior() -> None:
     assert bool(jnp.all(draws <= 2.0))
 
 
-def test_an_identity_projection_also_refuses_an_unbounded_box() -> None:
-    """The box check moved up to `Projection`, so it guards both subclasses."""
-    with pytest.raises(ValueError, match="finite box"):
-        IdentityProjection(jnp.asarray([[0.0, math.inf]]))
+def test_a_projection_accepts_an_unbounded_side() -> None:
+    """Let stereography bend a line: its domain is all of ``R``."""
+    projection = SphereProjection(jnp.asarray([[0.0, math.inf]]))
+    feats = projection.features(jnp.asarray([[0.0], [1.0], [1e6]]))
+    assert bool(jnp.all(jnp.isfinite(feats)))
+    assert np.allclose(np.asarray(jnp.linalg.norm(feats, axis=-1)), 1.0, atol=1e-5)
+
+
+def test_an_identity_projection_accepts_an_unbounded_side_too() -> None:
+    """The box check no longer demands a finite box, so both subclasses pass."""
+    bounds = jnp.asarray([[0.0, math.inf]])
+    xs = jnp.asarray([[3.0]])
+    assert bool(jnp.array_equal(IdentityProjection(bounds).features(xs), xs))
+
+
+def test_the_default_scale_is_one_not_the_box_width() -> None:
+    """Measure the prior in coordinate units, so no width is taken for a unit."""
+    projection = SphereProjection(jnp.asarray([[-2.0, 2.0], [-10.0, 10.0]]))
+    assert jnp.array_equal(projection.scale, jnp.ones(2))
+    assert jnp.array_equal(projection.center, jnp.zeros(2))
+    assert jnp.array_equal(projection.width, jnp.asarray([4.0, 20.0]))
+
+
+def test_a_uniform_scale_cancels_out_of_the_projection() -> None:
+    """Keep the ratio-only semantics: `glob_ls` divides a uniform scale back out."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 3)
+    xs = jnp.asarray([[-1.9, 0.4, 1.1]])
+    assert jnp.allclose(
+        SphereProjection(bounds).features(xs),
+        SphereProjection(bounds, scale=jnp.full(3, 7.0)).features(xs),
+        atol=1e-6,
+    )
+
+
+@pytest.mark.parametrize("d", [2, 8])
+def test_the_global_lengthscale_holds_the_far_corner_at_one_over_kappa(d: int) -> None:
+    """Tie the far corner to ``|z|^2 = 1/kappa`` whatever the dimension."""
+    projection = SphereProjection(jnp.asarray([[0.0, 1.0]] * d), kappa=0.25)
+    far = (jnp.ones(d) - projection.center) / projection.scale / projection.glob_ls
+    assert float(jnp.sum(far * far)) == pytest.approx(1.0 / 0.25, rel=1e-6)
+
+
+def test_a_mixed_box_draws_the_unbounded_dimension_at_its_own_scale() -> None:
+    """Draw the unbounded column from ``N(0, scale^2)``, not from a zero width."""
+    bounds = jnp.asarray([[0.0, 1.0], [-math.inf, math.inf]])
+    projection = SphereProjection(bounds, scale=jnp.asarray([1.0, 3.0]))
+    draws = projection.draw(jax.random.PRNGKey(0), 256)
+    assert draws.shape == (256, 2)
+    assert bool(jnp.all(jnp.isfinite(draws)))
+    assert bool(jnp.all(draws[:, 0] >= 0.0))
+    assert bool(jnp.all(draws[:, 0] <= 1.0))
+    assert float(jnp.std(draws[:, 1])) == pytest.approx(3.0, rel=0.3)
+
+
+def test_an_unbounded_box_proposes_and_predicts_without_a_width() -> None:
+    """Keep the whole path finite where no side has a width to divide by."""
+    bounds = jnp.asarray([[-math.inf, math.inf]] * 2)
+    model = BLRGlobalModel(
+        SphereProjection(bounds),
+        minimize=_grid_minimize,
+        key=jax.random.PRNGKey(0),
+    )
+    draws = model.propose(4)  # no fit yet: the projection's own draw
+    assert draws.shape == (4, 2)
+    assert bool(jnp.all(jnp.isfinite(draws)))
+    _observe(model, 6)
+    _, sigma = model._predict(jnp.asarray([[0.0, 0.0], [1e3, -1e3]]))
+    assert bool(jnp.all(jnp.isfinite(sigma)))
+    # Far out the bend returns the variance to the prior instead of growing.
+    assert float(sigma[1]) <= math.sqrt(1.01) + 1e-3
+
+
+def test_an_injected_sampler_replaces_that_dimensions_default() -> None:
+    """Take one column's starts from the caller's own distribution."""
+    bounds = jnp.asarray([[-2.0, 2.0], [-math.inf, math.inf]])
+
+    def constant(key: jnp.ndarray, n_points: int) -> jnp.ndarray:
+        del key
+        return jnp.full((n_points,), 7.0)
+
+    draws = SphereProjection(bounds, samplers=[constant, None]).draw(
+        jax.random.PRNGKey(0),
+        5,
+    )
+    assert bool(jnp.all(draws[:, 0] == 7.0))
+    assert bool(jnp.all(jnp.isfinite(draws[:, 1])))
+
+
+@pytest.mark.parametrize("samplers", [[], [None], [None, None, None]])
+def test_a_sampler_list_that_is_not_one_per_dimension_is_refused(
+    samplers: Sequence[object],
+) -> None:
+    """Refuse a short or long list rather than leave the tail on its default."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 2)
+    with pytest.raises(ValueError, match="samplers"):
+        # The point of the case is a list the annotation says is the wrong length.
+        SphereProjection(bounds, samplers=samplers)  # pyright: ignore[reportArgumentType]
+
+
+def test_a_sampler_that_returns_the_wrong_shape_is_refused() -> None:
+    """Refuse a column whose shape would silently widen the stacked draw."""
+    bounds = jnp.asarray([[-2.0, 2.0]] * 2)
+
+    def flat(key: jnp.ndarray, n_points: int) -> jnp.ndarray:
+        del key
+        return jnp.zeros(n_points * 2)
+
+    projection = SphereProjection(bounds, samplers=[flat, None])
+    with pytest.raises(ValueError, match="drawn column"):
+        projection.draw(jax.random.PRNGKey(0), 3)

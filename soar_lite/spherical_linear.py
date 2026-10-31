@@ -11,7 +11,11 @@ dimensions through inverse stereography, and `IdentityProjection` reads the
 coordinates as their own features. The two are two priors over where the
 optimum sits - the bend pulls the corners toward the pole and centres the bowl,
 the identity keeps every coordinate's own scale and puts the centre nowhere
-special - and the caller picks the one the task's belief deserves.
+special - and the caller picks the one the task's belief deserves. A dimension
+may be unbounded: inverse stereography takes all of ``R``, so the same bend
+applies to a line, and `scale` states each dimension's prior width in
+coordinate units rather than reading a box width as if it were a unit of
+measure.
 
 The structure of the sphere is a fixed-hyperparameter port of Doumont, Fan, et
 al., "We Still Don't Understand High-Dimensional Bayesian Optimization" (2025),
@@ -42,13 +46,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import log_ndtr
 
-from soar_lite.engine import (
-    Bounds,
-    GlobalModel,
-    box_bounds,
-    check_bounds,
-    finite_box,
-)
+from soar_lite.engine import Bounds, GlobalModel, box_bounds, check_bounds
 
 # The acquisition `propose` hands the injected minimizer: x rows (m, d) in,
 # (values (m,), gradients (m, d)) out - the engine's `EvalFG` shape with the
@@ -73,6 +71,13 @@ MinimizeFn: TypeAlias = Callable[
     jnp.ndarray,
 ]
 
+# One dimension's fallback start distribution, injected per dimension so a
+# restart model can draw where a finite box does not reach: `sampler(key, n)`
+# returns `n` coordinates for that one dimension. `None` leaves the projection's
+# own default in place - uniform inside a bounded side, ``N(0, scale_i^2)``
+# where the domain is unbounded.
+DrawFn: TypeAlias = Callable[[jnp.ndarray, int], jnp.ndarray]
+
 _HALF_LOG_2PI = 0.5 * jnp.log(2.0 * jnp.pi)
 
 
@@ -82,34 +87,63 @@ class Projection(abc.ABC):
     A projection turns every ``(m, d)`` batch of coordinates into an ``(m, w)``
     batch of posterior feature rows - `w` is this projection's width, read off
     `features` by the model rather than assumed ``d + 1``. The box is shared:
-    `propose` draws its fallback starts and descends the acquisition inside it,
-    so the projection carries the finite box and every subclass gets the same
-    validation. A subclass decides only what the feature rows look like - the
-    geometry, its centre bias or none - not the box bookkeeping.
+    `features` centres and scales against it and `draw` samples from it, so the
+    projection carries the box and every subclass gets the same validation. A
+    subclass decides only what the feature rows look like - the geometry, its
+    centre bias or none - not the box bookkeeping.
+
+    A side may be unbounded. The box then declares only the dimension and which
+    sides are unbounded; `scale` is what carries a length there, because no
+    width exists to read one off. Not even a bounded side's width is treated as
+    a natural unit: `scale` is in coordinate units, so a caller changing a
+    variable from metres to millimetres changes `scale`, never the box.
 
     `features` is the one contract. It is a pure query of the coordinates: the
     same ``(m, d)`` input maps to the same ``(m, w)`` rows, with `w` stable
     across calls for one projection.
     """
 
-    def __init__(self, bounds: Bounds) -> None:
-        """Validate and carry the finite box the model proposes inside.
+    def __init__(
+        self,
+        bounds: Bounds,
+        *,
+        scale: jnp.ndarray | Sequence[float] | None = None,
+        samplers: Sequence[DrawFn | None] | None = None,
+    ) -> None:
+        """Validate and carry the declared box, the scales and the samplers.
 
         Args:
-            bounds: the finite box, scipy-style pairs or a ``(d, 2)`` array;
-                every side must be finite so a fallback draw has a width.
+            bounds: the box, scipy-style pairs or a ``(d, 2)`` array. A side may
+                be ``None`` or ``+-inf`` for an unbounded domain; a NaN side, or
+                a lower side above its upper, is refused. ``None`` as the whole
+                argument is refused too: the box declares the dimension and
+                which sides are unbounded, so a projection has nothing to read
+                without one.
+            scale: per-dimension prior width in coordinate units, a ``(d,)``
+                vector or ``None`` for every dimension at one. Subclasses that
+                normalize compare the entries to each other, but the common
+                magnitude is not free either: `scale` is the length the features
+                and the default draw are measured in, so a dimension whose
+                coordinates span far more or far less than one wants its own
+                entry rather than the default.
+            samplers: one optional draw per dimension, ``d`` entries; a ``None``
+                entry keeps the default - uniform inside a bounded dimension,
+                ``N(0, scale_i^2)`` inside an unbounded one. Dimensions are
+                drawn independently, so a prior that couples them needs its own
+                `GlobalModel`, not a projection.
 
         Raises:
-            ValueError: If the box is absent, unbounded on any side, or has a
-                NaN side.
+            ValueError: If the box is absent or malformed, or `scale` is not a
+                ``(d,)`` vector of finite positive values, or `samplers` is not
+                ``d`` entries long.
 
         """
         check_bounds(bounds)
         box = box_bounds(bounds)
-        if box is None or not finite_box(box):
+        if box is None:
             msg = (
-                "a projection proposes inside its box, so it needs a "
-                f"finite box: got {bounds!r}"
+                "a projection reads its dimension and its unbounded sides off "
+                f"the box it is given, so it needs one: got {bounds!r}"
             )
             raise ValueError(msg)
         self.lo, self.hi = box
@@ -117,6 +151,15 @@ class Projection(abc.ABC):
         # not off `lo`/`hi`, which `box_bounds` just derived from it.
         self.d = len(bounds)
         self.bounds = bounds
+        self.scale = _check_scale(scale, self.d)
+        self._samplers = _check_samplers(samplers, self.d)
+        # The domain's shape per dimension. An unbounded side has no width, so
+        # `width` is zero there and the centre falls back to the origin - the
+        # only centre an unbounded dimension has, and `scale` the only length
+        # a caller can state about it.
+        self.bounded = jnp.isfinite(self.lo) & jnp.isfinite(self.hi)
+        self.width = jnp.where(self.bounded, self.hi - self.lo, 0.0)
+        self.center = jnp.where(self.bounded, self.lo + self.width / 2.0, 0.0)
 
     @abc.abstractmethod
     def features(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -128,6 +171,48 @@ class Projection(abc.ABC):
         """
         ...
 
+    def draw(self, key: jnp.ndarray, n_points: int) -> jnp.ndarray:
+        """Return ``(n_points, d)`` restart starts, one dimension at a time.
+
+        A dimension with an injected `DrawFn` takes its column from that, else
+        from the default its domain admits: uniform inside a bounded side, and
+        ``N(0, scale_i^2)`` inside an unbounded one, where there is no width to
+        be uniform over. That default is also why an injected sampler is the
+        caller's own statement about the dimension's spread - nothing checks the
+        drawn values against `scale`, since a black-box distribution has no
+        readable spread to check them against.
+
+        Raises:
+            ValueError: If `n_points` is below one, or a column does not come
+                back ``(n_points,)`` long.
+
+        """
+        if n_points <= 0:
+            msg = f"a draw needs at least one point, got {n_points}"
+            raise ValueError(msg)
+        columns: list[jnp.ndarray] = []
+        for j, sub in enumerate(jax.random.split(key, self.d)):
+            sampler = self._samplers[j]
+            if sampler is not None:
+                column = sampler(sub, n_points)
+            elif bool(self.bounded[j]):
+                column = jax.random.uniform(
+                    sub,
+                    (n_points,),
+                    minval=self.lo[j],
+                    maxval=self.hi[j],
+                )
+            else:
+                column = self.scale[j] * jax.random.normal(sub, (n_points,))
+            if jnp.shape(column) != (n_points,):
+                msg = (
+                    f"each drawn column must be ({n_points},) long, got "
+                    f"{jnp.shape(column)} for dimension {j}"
+                )
+                raise ValueError(msg)
+            columns.append(column)
+        return jnp.stack(columns, axis=-1)
+
 
 class SphereProjection(Projection):
     """Inverse-stereographic projection of a chosen subset of the box's dims.
@@ -135,8 +220,7 @@ class SphereProjection(Projection):
     The restart models read the box in whatever coordinates the objective takes.
     This maps them onto the unit sphere, ``[2z; |z|^2 - 1] / (|z|^2 + 1)``, where
     ``z`` is the box's coordinates centered, divided by the per-dimension
-    lengthscales and by one global lengthscale. Two properties matter
-    downstream.
+    `scale` and by one global lengthscale. Two properties matter downstream.
 
     Every projected row has norm one, so a linear head read on these features
     has a constant self inner product: its posterior variance stays bounded far
@@ -148,73 +232,87 @@ class SphereProjection(Projection):
 
     `mask` keeps that bowl off dimensions whose natural prior is uniform - an
     angle, say, wants no attraction to the box center. A left-out dimension
-    keeps its box coordinate and enters a linear head as a plain trend, so the
+    keeps its coordinate and enters a linear head as a plain trend, so the
     feature vector is ``d + 1`` wide however many dimensions the projection
     bends.
+
+    A dimension may be unbounded here too: inverse stereography takes all of
+    ``R``, so the same map bends a line, and the far end of it returns to the
+    pole - the variance goes back to the prior instead of growing with ``|x|``,
+    which is what an unbent coordinate does.
     """
 
     def __init__(
         self,
         bounds: Bounds,
         *,
-        ell: jnp.ndarray | None = None,
+        scale: jnp.ndarray | Sequence[float] | None = None,
         kappa: float = 0.5,
         mask: jnp.ndarray | Sequence[bool] | None = None,
+        samplers: Sequence[DrawFn | None] | None = None,
     ) -> None:
-        """Bind the box, the lengthscales and the projected subset.
+        """Bind the box, the scales and the projected subset.
 
         Args:
-            bounds: the finite box the projection normalizes, scipy-style pairs
-                or a ``(d, 2)`` array. Every side must be finite.
-            ell: per-dimension lengthscale in unit-box units, a ``(d,)`` vector
-                or ``None`` for the default, which bends every dimension
-                alike. Only the ratios between the projected dimensions' entries
-                move the features: `glob_ls` divides one global lengthscale back
-                out, so a uniform vector and ``None`` give the same projection.
-            kappa: fraction of the box diagonal the projection radius spans.
-                Must lie in ``(0, 1)``; without that tie a high-dimensional box
-                pushes every corner past the pole and the posterior collapses
-                there.
+            bounds: the box the projection normalizes, scipy-style pairs or a
+                ``(d, 2)`` array; a side may be unbounded.
+            scale: per-dimension prior width in coordinate units, a ``(d,)``
+                vector or ``None`` for every dimension at one. Only the ratios
+                between the bent dimensions' entries move the features, since
+                `glob_ls` divides one global lengthscale back out; the common
+                magnitude is what the fallback draw and an unbounded
+                dimension's radius are measured in.
+            kappa: the tie between the projection's radius and the domain - a
+                bent dimension's far end lands at ``|z|^2 = 1/kappa`` whatever
+                ``d`` is. Must lie in ``(0, 1)``; without such a tie a
+                high-dimensional box pushes every corner past the pole and the
+                posterior collapses there.
             mask: which dimensions the projection bends, a ``(d,)`` boolean
                 selector; ``None`` bends all of them.
+            samplers: one optional draw per dimension; see `Projection`.
 
         Raises:
-            ValueError: If `ell` is not a ``(d,)`` vector of finite positive
+            ValueError: If `scale` is not a ``(d,)`` vector of finite positive
                 values, or `kappa` is out of range, or `mask` is not a ``(d,)``
                 boolean selector selecting at least one dimension. The box is
                 validated by `Projection`'s constructor.
 
         """
-        super().__init__(bounds)
-        self.width = self.hi - self.lo
+        super().__init__(bounds, scale=scale, samplers=samplers)
         self.mask = _check_mask(mask, self.d)
-        self.ell = _check_lengthscale(ell, self.d)
         kappa_v = _check_finite_positive("kappa", kappa)
         if kappa_v >= 1.0:
             msg = (
-                "kappa ties the projection radius to the box diagonal, so it "
-                f"must lie in (0, 1); got {kappa!r}"
+                "kappa ties the projection's radius to the domain, so it must "
+                f"lie in (0, 1); got {kappa!r}"
             )
             raise ValueError(msg)
-        # The global lengthscale is the piece that makes the projection scale-
-        # free: it maps the box's farthest corner to radius sqrt(2*kappa) for any
-        # d, so a wider box does not push every corner to the pole. Summed over
-        # the projected dimensions only - a dimension the projection leaves out
-        # has no radius to tie.
-        self.glob_ls = jnp.sqrt(kappa_v * jnp.sum((0.5 / self.ell[self.mask]) ** 2))
+        # The global lengthscale is what makes the projection dimension-free: a
+        # bent dimension's reference radius, divided by `glob_ls`, is
+        # `1/sqrt(kappa)` in total, so `d` raises the features' typical radius
+        # without ever pushing the farthest point past the pole. A bounded
+        # dimension's radius is half its width in `scale` units; an unbounded
+        # one has no width, so its radius is one `scale`. Summed over the bent
+        # dimensions only - a dimension the projection leaves out has no radius
+        # to tie.
+        radius = jnp.where(self.bounded, self.width / (2.0 * self.scale), 1.0)
+        tied = jnp.sum(jnp.where(self.mask, radius * radius, 0.0))
+        self.glob_ls = jnp.sqrt(kappa_v * tied)
 
     def features(self, x: jnp.ndarray) -> jnp.ndarray:
         """Return the ``(m, d + 1)`` feature rows for ``(m, d)`` coordinates.
 
-        The bent dimensions become their stereographic image on the unit sphere;
-        the rest keep their box coordinate, uncentered and unscaled, so a linear
-        head reads them as a plain linear trend.
+        Every dimension is first read in its own coordinate unit,
+        ``(x - center) / scale``, so no column inherits a box width as its unit.
+        The bent dimensions become their stereographic image on the unit sphere,
+        divided by the global lengthscale; the rest keep that centred, scaled
+        coordinate, so a linear head reads them as a plain linear trend.
         """
-        unit = (x - self.lo) / self.width
-        z = (unit[:, self.mask] - 0.5) / self.ell[self.mask] / self.glob_ls
-        sq = jnp.sum(z * z, axis=-1, keepdims=True)
-        sphere = jnp.concatenate([2.0 * z, sq - 1.0], axis=-1) / (sq + 1.0)
-        return jnp.concatenate([sphere, unit[:, ~self.mask]], axis=-1)
+        z = (x - self.center) / self.scale
+        bent = z[:, self.mask] / self.glob_ls
+        sq = jnp.sum(bent * bent, axis=-1, keepdims=True)
+        sphere = jnp.concatenate([2.0 * bent, sq - 1.0], axis=-1) / (sq + 1.0)
+        return jnp.concatenate([sphere, z[:, ~self.mask]], axis=-1)
 
 
 class IdentityProjection(Projection):
@@ -232,6 +330,10 @@ class IdentityProjection(Projection):
     expected improvement on this arm is extrapolation-dominated, pointing at
     corners - exactly the behaviour wanted when the truth lives there, and the
     one `SphereProjection` exists to cure when it does not.
+
+    `features` ignores the base class's `scale` and `samplers` outright: the
+    coordinates arrive as they are, and only `draw` reads them, to place the
+    fallback starts.
     """
 
     def features(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -276,7 +378,7 @@ class BLRGlobalModel(GlobalModel):
                 dimension and search box - `d`, `bounds` and the fallback
                 draw's corners are read off it, and `Projection`'s constructor
                 already validated the box; a `SphereProjection` further
-                validates its own `ell`, `kappa` and `mask`.
+                validates its own `scale`, `kappa` and `mask`.
             minimize: the acquisition's inner optimizer, shape
                 ``MinimizeFn``. Owned by the caller: the descent recipe is the
                 engine's, not this model's.
@@ -339,11 +441,11 @@ class BLRGlobalModel(GlobalModel):
                 self._fs.append(value)
 
     def propose(self, n_points: int) -> jnp.ndarray:
-        """Return `n_points` restart points: a uniform draw until a fit is possible.
+        """Return `n_points` restart points: a draw until a fit is possible.
 
-        Until the fit has a spread to standardize, the answer is the uniform
-        draw the default model would give - the engine only ever sees the
-        points.
+        Until the fit has a spread to standardize, the answer is the
+        projection's own `draw` - the points the engine's uniform model would
+        give inside a finite box, and the prior's own breadth outside one.
         Afterwards the answer is the injected `minimize`'s local minimizers of
         ``-log EI`` over the box; the log form keeps the acquisition's gradient
         alive in the region where the raw improvement has decayed to zero.
@@ -358,12 +460,7 @@ class BLRGlobalModel(GlobalModel):
             raise ValueError(msg)
         self._key, sub = jax.random.split(self._key)
         if not self._can_fit():
-            return jax.random.uniform(
-                sub,
-                (n_points, self.d),
-                minval=self._projection.lo,
-                maxval=self._projection.hi,
-            )
+            return self._projection.draw(sub, n_points)
         weights, cov = self._posterior()
         best = self._standardize(jnp.asarray(self._fs)).min()
 
@@ -557,24 +654,42 @@ def _check_mask(
     return given
 
 
-def _check_lengthscale(ell: jnp.ndarray | None, d: int) -> jnp.ndarray:
-    """Normalize the per-dimension lengthscale to ``(d,)``, refusing a bad one.
+def _check_scale(scale: jnp.ndarray | Sequence[float] | None, d: int) -> jnp.ndarray:
+    """Normalize the per-dimension prior width to ``(d,)``, refusing a bad one.
 
-    ``None`` is every dimension at one, the projection that bends them alike.
-    Anything but a ``(d,)`` vector is refused rather than broadcast into one: a
-    scalar or a length-one vector would silently become a uniform vector, which
-    is a real projection but never what a caller reaching for those shapes
-    means.
+    ``None`` is every dimension at one, which puts the coordinate unit itself in
+    charge: the caller has either made each variable's spread O(1) or is about
+    to say what it is. Anything but a ``(d,)`` vector is refused rather than
+    broadcast into one: a scalar or a length-one vector would silently become a
+    uniform vector, which is a real scale but never what a caller reaching for
+    those shapes means.
     """
-    if ell is None:
+    if scale is None:
         return jnp.ones(d)
-    lengthscale = jnp.asarray(ell)
-    if lengthscale.ndim != 1 or lengthscale.shape[0] != d:
-        msg = f"ell must be a ({d},) vector or None, got shape {lengthscale.shape}"
+    given = jnp.asarray(scale)
+    if given.ndim != 1 or given.shape[0] != d:
+        msg = f"scale must be a ({d},) vector or None, got shape {given.shape}"
         raise ValueError(msg)
-    if not bool(jnp.all(jnp.isfinite(lengthscale))) or not bool(
-        jnp.all(lengthscale > 0.0),
-    ):
-        msg = f"ell must hold finite positive values, got {ell!r}"
+    if not bool(jnp.all(jnp.isfinite(given))) or not bool(jnp.all(given > 0.0)):
+        msg = f"scale must hold finite positive values, got {scale!r}"
         raise ValueError(msg)
-    return lengthscale
+    return given
+
+
+def _check_samplers(
+    samplers: Sequence[DrawFn | None] | None,
+    d: int,
+) -> tuple[DrawFn | None, ...]:
+    """Normalize the injected draws to one entry per dimension.
+
+    ``None`` is every dimension on its default draw. The length is checked
+    because zipping a short sequence would leave the tail dimensions silently on
+    the default - a wiring error that would look like a working run.
+    """
+    if samplers is None:
+        return (None,) * d
+    given = tuple(samplers)
+    if len(given) != d:
+        msg = f"samplers needs {d} entries, got {len(given)}"
+        raise ValueError(msg)
+    return given

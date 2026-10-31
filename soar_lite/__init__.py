@@ -35,6 +35,7 @@ from soar_lite.local_solver import DiagonalPreconditioner
 from soar_lite.spherical_linear import (
     AcquisitionFn,
     BLRGlobalModel,
+    DrawFn,
     IdentityProjection,
     MinimizeFn,
     Projection,
@@ -46,6 +47,7 @@ __all__ = [
     "BLRGlobalModel",
     "Bounds",
     "DiagonalPreconditioner",
+    "DrawFn",
     "EvalF",
     "EvalFG",
     "GlobalModel",
