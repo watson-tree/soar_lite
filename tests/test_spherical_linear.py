@@ -16,8 +16,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from soar_lite import AcquisitionFn, Bounds, SphericalLinearModel
-from soar_lite.spherical_linear import SphereProjection, _log_h
+from soar_lite import AcquisitionFn, Bounds, SphereProjection, SphericalLinearModel
+from soar_lite.spherical_linear import _log_h
 
 
 def _grid_minimize(
@@ -55,7 +55,7 @@ def _model(d: int = 2, half: float = 2.0, noise: float = 0.01) -> SphericalLinea
     """Build a model over the symmetric ``[-half, half]^d`` box."""
     bounds = jnp.asarray([[-half, half]] * d)
     return SphericalLinearModel(
-        bounds,
+        SphereProjection(bounds),
         minimize=_grid_minimize,
         noise=noise,
         key=jax.random.PRNGKey(0),
@@ -196,9 +196,8 @@ def test_a_masked_model_proposes_inside_the_box() -> None:
     """Keep the acquisition path working when only some dimensions bend."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 3)
     model = SphericalLinearModel(
-        bounds,
+        SphereProjection(bounds, mask=[0, 2]),
         minimize=_grid_minimize,
-        mask=[0, 2],
         key=jax.random.PRNGKey(0),
     )
     xs = jnp.linspace(-1.9, 1.9, 6)[:, None] * jnp.ones(3)[None, :]
@@ -210,6 +209,18 @@ def test_a_masked_model_proposes_inside_the_box() -> None:
     assert bool(jnp.all(jnp.isfinite(starts)))
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
+
+
+def test_the_injected_projection_is_the_geometry_authority() -> None:
+    """Read the run's dimension and box off the projection, not a bounds param."""
+    projection = SphereProjection(jnp.asarray([[-1.0, 1.0]] * 4), mask=[1, 3])
+    model = SphericalLinearModel(
+        projection,
+        minimize=_grid_minimize,
+        key=jax.random.PRNGKey(0),
+    )
+    assert model.d == 4
+    assert model._projection is projection
 
 
 def test_the_acquisition_gradient_is_the_jacobian_diagonal() -> None:
@@ -258,7 +269,7 @@ def test_propose_draws_uniformly_until_a_fit_is_possible() -> None:
 def test_integer_bounds_still_normalize_to_a_unit_box() -> None:
     """Keep the box usable when a caller spells its pairs in integers."""
     model = SphericalLinearModel(
-        [(0, 1), (0, 1)],
+        SphereProjection([(0, 1), (0, 1)]),
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
     )
@@ -354,7 +365,7 @@ def test_minimize_output_shape_is_validated() -> None:
     """Refuse an injected minimizer that answers the wrong shape."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 2)
     model = SphericalLinearModel(
-        bounds,
+        SphereProjection(bounds),
         minimize=_short_minimize,
         key=jax.random.PRNGKey(1),
     )
@@ -363,14 +374,9 @@ def test_minimize_output_shape_is_validated() -> None:
         model.propose(3)
 
 
-def test_an_unbounded_box_or_a_bad_knob_is_refused() -> None:
-    """Refuse an unbounded box and a zero noise, the two that reach the fit."""
-    unbounded = jnp.asarray([[0.0, math.inf]])
+def test_the_projection_refuses_an_unbounded_box_and_the_model_a_zero_noise() -> None:
+    """Split the boundary: the box is the projection's, the noise the fit's."""
     with pytest.raises(ValueError, match="finite box"):
-        SphericalLinearModel(
-            unbounded,
-            minimize=_grid_minimize,
-            key=jax.random.PRNGKey(0),
-        )
+        SphereProjection(jnp.asarray([[0.0, math.inf]]))
     with pytest.raises(ValueError, match="noise"):
         _model(noise=0.0)

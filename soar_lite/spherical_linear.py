@@ -181,58 +181,47 @@ class SphericalLinearModel(GlobalModel):
 
     Every knob is a fixed hyperparameter, not a fitted one; the defaults are the
     reference implementation's starting points rather than its marginal-
-    likelihood optimum. The geometry knobs (`bounds`, `ell`, `kappa`, `mask`)
-    belong to `SphereProjection`; what this class adds on top is the value fit
-    and the acquisition that descends it.
+    likelihood optimum. The search box and the geometry knobs (`ell`, `kappa`,
+    `mask`) live in the injected `SphereProjection`; what this class adds on top
+    is the value fit and the acquisition that descends it.
     """
 
-    def __init__(  # noqa: PLR0913 - each knob is a distinct, independently-swept facet
+    def __init__(
         self,
-        bounds: Bounds,
+        projection: SphereProjection,
         *,
         minimize: MinimizeFn,
-        ell: jnp.ndarray | None = None,
-        kappa: float = 0.5,
-        mask: jnp.ndarray | Sequence[bool] | Sequence[int] | None = None,
         var_prior: float = 1.0,
         noise: float = 0.01,
         key: jnp.ndarray,
     ) -> None:
-        """Bind the box, the injected minimizer and the fixed hyperparameters.
+        """Bind the projection, the injected minimizer and the value fits.
 
         Args:
-            bounds: the finite box the surrogate fits over, scipy-style pairs or
-                a ``(d, 2)`` array. It is normalized to the unit box, so every
-                side must be finite.
+            projection: the `SphereProjection` turning a coordinate into the
+                posterior's feature row. It is the authority for the run's
+                dimension and search box - `d` and `bounds` are read off it,
+                and its own construction already validated the box, `ell`,
+                `kappa` and `mask`.
             minimize: the acquisition's inner optimizer, shape
                 ``MinimizeFn``. Owned by the caller: the descent recipe is the
                 engine's, not this model's.
-            ell: per-dimension lengthscale in unit-box units, a ``(d,)`` vector
-                or ``None`` for every dimension bending alike. Read by
-                `SphereProjection`, which documents where the ratio is what
-                counts.
-            kappa: fraction of the box diagonal the projection radius spans.
-                Must lie in ``(0, 1)``. Read by `SphereProjection`.
-            mask: which dimensions the projection bends, a ``(d,)`` boolean
-                selector or the indices of the projected dimensions; ``None``
-                bends all of them. Read by `SphereProjection`.
             var_prior: weight-prior variance (the ridge scale opposite `noise`).
             noise: observation-noise variance added to the posterior mean's
                 self-covariance.
             key: the PRNG key `propose` splits every ask from.
 
         Raises:
-            ValueError: If the box is absent, unbounded on any side, or has a
-                NaN side; if `ell` is not a ``(d,)`` vector of finite positive
-                values; if any other hyperparameter is out of range; or if the
-                mask bends no dimension.
+            ValueError: If `var_prior` or `noise` is not a finite positive
+                value.
 
         """
-        # The projection is the box's authority: it validates the box, takes `d`
-        # off it, and holds every geometry knob. The one value kept here is `d`,
-        # because the `GlobalModel` seam asks the model for the run's dimension.
-        self._projection = SphereProjection(bounds, ell=ell, kappa=kappa, mask=mask)
-        self.d = self._projection.d
+        # The projection is the geometry's authority: it validated the box and
+        # the geometry knobs at its own construction, and it is the single
+        # source of the run's dimension. `d` is lifted here because the
+        # `GlobalModel` seam asks the model for it.
+        self._projection = projection
+        self.d = projection.d
         self._minimize = minimize
         self._var_prior = _check_finite_positive("var_prior", var_prior)
         self._noise = _check_finite_positive("noise", noise)

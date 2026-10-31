@@ -35,6 +35,7 @@ from soar_lite.local_solver import DiagonalPreconditioner
 from soar_lite.spherical_linear import (
     AcquisitionFn,
     MinimizeFn,
+    SphereProjection,
     SphericalLinearModel,
 )
 
@@ -50,6 +51,7 @@ __all__ = [
     "NPathResult",
     "NPathStatus",
     "PathPoint",
+    "SphereProjection",
     "SphericalLinearModel",
     "UniformGlobalModel",
     "Verdict",
