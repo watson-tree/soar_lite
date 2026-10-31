@@ -19,6 +19,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 
+from soar_lite.domain import Domain
 from soar_lite.engine import (
     Bounds,
     NPathResult,
@@ -26,7 +27,7 @@ from soar_lite.engine import (
     Verdict,
     n_path_schedule,
 )
-from soar_lite.global_model import UniformGlobalModel
+from soar_lite.global_model import SampleGlobalModel
 
 jax.config.update("jax_enable_x64", val=True)
 
@@ -57,8 +58,8 @@ def flock_kwargs(
     """
     return {
         "n_paths": int(x0.shape[0]),
-        "global_model": UniformGlobalModel(
-            bounds,
+        "global_model": SampleGlobalModel(
+            Domain(bounds),
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),
@@ -434,8 +435,8 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
     assert res.status == "max_iters", res
 
 
-def test_the_default_model_is_exactly_a_uniform_global_model() -> None:
-    """Pin that `global_model=None` is `UniformGlobalModel`, not merely uniform.
+def test_the_default_model_is_exactly_a_sample_global_model() -> None:
+    """Pin that `global_model=None` is `SampleGlobalModel`, not merely a draw.
 
     The default is a shipped object a caller can hand over itself, so the two
     spellings have to be the same run to the bit: a finite-box number recorded
@@ -470,7 +471,7 @@ def test_the_default_model_is_exactly_a_uniform_global_model() -> None:
 
     default_served, default_x, default_fun, default_points = run(None)
     ours_served, ours_x, ours_fun, ours_points = run(
-        UniformGlobalModel(box, key=jax.random.PRNGKey(7)),
+        SampleGlobalModel(Domain(box), key=jax.random.PRNGKey(7)),
     )
     assert default_served, "nothing was ever served"
     assert len(default_served) == len(ours_served)

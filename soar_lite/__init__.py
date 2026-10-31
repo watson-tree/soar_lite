@@ -4,7 +4,7 @@ The public face is deliberate and small. The two plugin contracts
 (`LocalSolver`, `GlobalModel`) and the data types they exchange are re-exported
 from the engine so callers can write their own methods and restart-point models
 against them; the concrete implementations (`DiagonalPreconditioner`,
-`UniformGlobalModel`, `BLRGlobalModel`) are re-exported for convenience.
+`SampleGlobalModel`, `BLRGlobalModel`) are re-exported for convenience.
 `n_path_schedule` is the whole algorithm entry point.
 
 Whether a stalled path is re-drawn is the `restart_stalled` knob on
@@ -18,6 +18,7 @@ test or a contributor may still import them, but nothing outside the package is
 meant to.
 """
 
+from soar_lite.domain import Domain, DrawFn
 from soar_lite.engine import (
     Bounds,
     EvalF,
@@ -30,12 +31,11 @@ from soar_lite.engine import (
     Verdict,
     n_path_schedule,
 )
-from soar_lite.global_model import UniformGlobalModel
+from soar_lite.global_model import SampleGlobalModel
 from soar_lite.local_solver import DiagonalPreconditioner
 from soar_lite.spherical_linear import (
     AcquisitionFn,
     BLRGlobalModel,
-    DrawFn,
     IdentityProjection,
     MinimizeFn,
     Projection,
@@ -47,6 +47,7 @@ __all__ = [
     "BLRGlobalModel",
     "Bounds",
     "DiagonalPreconditioner",
+    "Domain",
     "DrawFn",
     "EvalF",
     "EvalFG",
@@ -58,8 +59,8 @@ __all__ = [
     "NPathStatus",
     "PathPoint",
     "Projection",
+    "SampleGlobalModel",
     "SphereProjection",
-    "UniformGlobalModel",
     "Verdict",
     "n_path_schedule",
 ]

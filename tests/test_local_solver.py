@@ -14,12 +14,13 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 
+from soar_lite.domain import Domain
 from soar_lite.engine import (
     Bounds,
     PathPoint,
     n_path_schedule,
 )
-from soar_lite.global_model import UniformGlobalModel
+from soar_lite.global_model import SampleGlobalModel
 from soar_lite.local_solver import DiagonalPreconditioner
 
 jax.config.update("jax_enable_x64", val=True)
@@ -49,8 +50,8 @@ def flock_kwargs(
     """
     return {
         "n_paths": int(x0.shape[0]),
-        "global_model": UniformGlobalModel(
-            bounds,
+        "global_model": SampleGlobalModel(
+            Domain(bounds),
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),

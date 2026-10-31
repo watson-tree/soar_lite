@@ -29,7 +29,8 @@ from experiments.problems import Problem
 from soar_lite import (
     AcquisitionFn,
     DiagonalPreconditioner,
-    UniformGlobalModel,
+    Domain,
+    SampleGlobalModel,
     n_path_schedule,
 )
 
@@ -119,7 +120,7 @@ def run_soar_lite(
         eval_f_g,
         n_paths=n_paths,
         bounds=problem.bounds,
-        global_model=UniformGlobalModel(problem.bounds, key=key, x0=x0),
+        global_model=SampleGlobalModel(Domain(problem.bounds), key=key, x0=x0),
         max_iters=max_steps,
         budget_check=lambda: n_batches < max_steps,
         local_solver=DiagonalPreconditioner(),
@@ -171,7 +172,7 @@ def surrogate_minimize(
             eval_g,
             n_paths=1,
             bounds=bounds,
-            global_model=UniformGlobalModel(bounds, key=sub, x0=x0),
+            global_model=SampleGlobalModel(Domain(bounds), key=sub, x0=x0),
             max_iters=_INNER_ITERS,
             local_solver=DiagonalPreconditioner(),
             restart_stalled=False,

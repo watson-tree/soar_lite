@@ -15,7 +15,7 @@ eval_f_g; the engine owns clip-to-bounds, and the starts are the model's - and
 the two plugins are spelled `global_model`, `local_solver`
 in that order wherever the engine names them. Whether a stall is re-drawn is
 the `restart_stalled` knob, not a plugin. With
-`global_model=None` the engine falls back to a `UniformGlobalModel` drawing
+`global_model=None` the engine falls back to a `SampleGlobalModel` drawing
 i.i.d. uniformly over a finite `bounds`; an unbounded box (or none) without a
 model is a wiring error, since the engine then has nothing of its own to draw
 from. Unbounded means a `None`/±inf side, and `clip` is then the identity.
@@ -37,6 +37,7 @@ from typing import Any, TypeAlias
 import jax
 import jax.numpy as jnp
 
+from soar_lite.domain import Domain
 from soar_lite.engine import (
     Bounds,
     NPathResult,
@@ -45,7 +46,7 @@ from soar_lite.engine import (
     _argmin_finite,
     n_path_schedule,
 )
-from soar_lite.global_model import UniformGlobalModel
+from soar_lite.global_model import SampleGlobalModel
 from soar_lite.local_solver import DiagonalPreconditioner
 
 jax.config.update("jax_enable_x64", val=True)
@@ -85,8 +86,8 @@ def flock_kwargs(
     """
     return {
         "n_paths": int(x0.shape[0]),
-        "global_model": UniformGlobalModel(
-            bounds,
+        "global_model": SampleGlobalModel(
+            Domain(bounds),
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),
@@ -96,7 +97,7 @@ def flock_kwargs(
 class FixedModel:
     """A global model over a fixed list of points: the flock, then the same rows.
 
-    For the runs with no finite box at all: `UniformGlobalModel` needs one to
+    For the runs with no finite box at all: `SampleGlobalModel` needs one to
     draw from, and a model-free test that only needs starts of a known `d` says
     so with a list.
     """
@@ -645,7 +646,7 @@ def test_a_dead_path_never_widens_a_batch() -> None:
     class AskSpy:
         """The flock's model, recording how many starts each ask wanted."""
 
-        def __init__(self, inner: UniformGlobalModel) -> None:
+        def __init__(self, inner: SampleGlobalModel) -> None:
             self.inner = inner
             self.d = inner.d
 
@@ -826,7 +827,7 @@ def test_bounds_spellings_are_the_same_box() -> None:
 def test_the_default_model_needs_a_finite_box() -> None:
     """With no model, a finite box is required: it is where the draws come from.
 
-    `UniformGlobalModel` draws uniformly, so an unbounded side has no
+    `SampleGlobalModel` draws uniformly, so an unbounded side has no
     distribution to draw from - the engine refuses instead of inventing one.
     One-sided is the quiet case: half the box still exists, so the run would
     silently be a different algorithm than the one the caller thinks it wired.

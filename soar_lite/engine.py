@@ -13,7 +13,8 @@ the other way around at module level:
     soar_lite/
       engine.py        <- LocalSolver, GlobalModel, PathPoint, Verdict, Bounds,
                           the box helpers, n_path_schedule
-      global_model.py  <- UniformGlobalModel (implements GlobalModel)
+      global_model.py  <- SampleGlobalModel (implements GlobalModel)
+      domain.py        <- Domain (the box, scales and draws a model samples)
       local_solver.py  <- DiagonalPreconditioner (implements LocalSolver)
 
 Dependency direction: plugins depend on engine types; the engine binds its two
@@ -436,7 +437,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     restart_stalled: bool = False,
     # The two plugins, adjacent and in one order everywhere: where a restart
     # lands (the model is also the run's evidence sink, asked for points only
-    # when a restart fires; None -> UniformGlobalModel over a finite `bounds`,
+    # when a restart fires; None -> SampleGlobalModel over a finite `bounds`,
     # whose first answer is a uniform flock - an unbounded or absent box has
     # nowhere to draw and is rejected below rather than guessed), and the search
     # method.
@@ -476,7 +477,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     arrival instead of being placed, and - having no point - that path restarts
     again next iteration rather than idling forever.
 
-    With `global_model=None` the engine builds a `UniformGlobalModel` over a
+    With `global_model=None` the engine builds a `SampleGlobalModel` over a
     finite `bounds`: i.i.d. uniform starts, no fit, and the box is then the only
     distribution it has - an unbounded box (or none) needs an injected model,
     because the engine has nothing of its own to draw from. `key` seeds that
@@ -552,8 +553,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             a horizon (``None`` means none).
         global_model: the restart-point source and the run's evidence sink: a
             `GlobalModel` that is fed every served batch and asked for points
-            only when a restart fires. ``None`` builds a `UniformGlobalModel`
-            over a finite ``bounds``, which draws uniformly and fits nothing.
+            only when a restart fires. ``None`` builds a `SampleGlobalModel`
+            over a finite ``bounds``, which draws from a plain `Domain` and fits
+            nothing.
             The model's ``d`` is the run's dimension; ``bounds`` must agree with
             it.
         local_solver: the local method (``None`` binds ``DiagonalPreconditioner``).
@@ -581,7 +583,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
             >>> import jax
             >>> import jax.numpy as jnp
-            >>> from soar_lite import UniformGlobalModel, n_path_schedule
+            >>> from soar_lite import Domain, SampleGlobalModel, n_path_schedule
 
             >>> def eval_f_g(x):
             ...     g = 2.0 * (x - 3.0)
@@ -593,8 +595,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             ...     n_paths=4,
             ...     bounds=box,
             ...     # the flock rides the default model's first proposal
-            ...     global_model=UniformGlobalModel(
-            ...         box,
+            ...     global_model=SampleGlobalModel(
+            ...         Domain(box),
             ...         key=jax.random.PRNGKey(0),
             ...         x0=jnp.array(
             ...             [[-1.0, -1.0], [1.0, 1.0], [-4.0, 4.0], [4.0, -4.0]],
@@ -629,10 +631,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     box = box_bounds(bounds)
     clip = box if box is not None else (-math.inf, math.inf)
     if global_model is None:
-        from soar_lite.global_model import UniformGlobalModel  # noqa: PLC0415
+        from soar_lite.domain import Domain  # noqa: PLC0415
+        from soar_lite.global_model import SampleGlobalModel  # noqa: PLC0415
 
-        global_model = UniformGlobalModel(
-            _finite_box_or_raise(bounds),
+        global_model = SampleGlobalModel(
+            Domain(_finite_box_or_raise(bounds)),
             key=jax.random.PRNGKey(0) if key is None else key,
         )
     if local_solver is None:
