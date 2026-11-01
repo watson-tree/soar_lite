@@ -64,9 +64,9 @@ class PathPoint:
         finish on, and a non-finite g is proposed from (`-p.g`) and folded on
         (`best.g - p.g`), so one NaN there poisons that coordinate's magnitude
         EMAs for the rest of the run. The f half is asked first, so a dead value
-        short-circuits before the device sync in `all_finite`.
+        short-circuits before the device sync in `_all_finite`.
         """
-        return math.isfinite(self.f) and all_finite(self.g)
+        return math.isfinite(self.f) and _all_finite(self.g)
 
 
 @dataclass(frozen=True)
@@ -1183,8 +1183,8 @@ class _Paths:
         propose: ProposeFn,
         local_solver: LocalSolver,
         *,
+        x0: jnp.ndarray | None,
         restart_stalled: bool,
-        x0: jnp.ndarray | None = None,
     ) -> None:
         self.n_paths = n_paths
         # Constant for the whole run, so it belongs beside the shape rather than
@@ -1198,14 +1198,14 @@ class _Paths:
         self.evaluator = evaluator
         self.propose = propose
         self.local_solver = local_solver
-        # A knob, not a collaborator: *when* a path restarts is read off
-        # `stalled` below, so the only thing left to decide is whether the
-        # engine acts on it at all.
-        self.restart_stalled = restart_stalled
         # The caller's flock, handed over for the run's first move and consumed
         # there (`_restart_starts` clears it). Not a collaborator: it answers
         # exactly one ask, where a model answers every later one.
         self._x0 = x0
+        # A knob, not a collaborator: *when* a path restarts is read off
+        # `stalled` below, so the only thing left to decide is whether the
+        # engine acts on it at all.
+        self.restart_stalled = restart_stalled
         # A path's point is one object, not three parallel lists: it is what
         # every seam call takes, and a step commits one path at a time (so a
         # list, whose item assignment is the commit, beats a stacked array). The
@@ -1384,7 +1384,7 @@ class _Paths:
                 # whose gradient is not all finite. A value-only trial has none
                 # to gate yet - it is gated by `settle` + `_advance` instead.
                 finite = math.isfinite(f_trial) and (
-                    trial.g is None or all_finite(trial.g)
+                    trial.g is None or _all_finite(trial.g)
                 )
                 if finite and (i not in best or f_trial < best[i].value()):
                     best[i] = trial
@@ -1556,8 +1556,11 @@ def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:
     if pts.shape[0] != n_paths:
         msg = f"x0 holds {pts.shape[0]} starts but n_paths is {n_paths}"
         raise ValueError(msg)
-    if not all_finite(pts):
-        msg = f"x0 needs at least one finite start, got shape {pts.shape}"
+    if not _all_finite(pts):
+        row, dim = (int(v) for v in jnp.argwhere(~jnp.isfinite(pts))[0])
+        msg = (
+            f"x0 row {row} is {float(pts[row, dim]):.6g} in dimension {dim}, not finite"
+        )
         raise ValueError(msg)
     lo, hi = domain.lo, domain.hi
     eps = jnp.finfo(jnp.result_type(pts.dtype, lo.dtype, jnp.float32)).eps
@@ -1579,7 +1582,7 @@ def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:
     return pts
 
 
-def all_finite(a: jnp.ndarray) -> bool:
+def _all_finite(a: jnp.ndarray) -> bool:
     """Report whether every component of an array is finite (all-or-nothing)."""
     return bool(jnp.all(jnp.isfinite(a)))
 

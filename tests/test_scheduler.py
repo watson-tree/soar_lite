@@ -1287,7 +1287,9 @@ def test_a_malformed_flock_is_refused_at_the_entry() -> None:
     assert "x0 must be a (n_paths, 1) array" in rejects(jnp.zeros(3))
     assert "n_paths must be a positive int" in rejects(jnp.zeros((0, 1)))
     assert "x0 must be a (n_paths, 1) array" in rejects(jnp.zeros((2, 0)))
-    assert "at least one finite start" in rejects(jnp.array([[0.0], [jnp.nan]]))
+    assert "x0 row 1 is nan in dimension 0, not finite" in rejects(
+        jnp.array([[0.0], [jnp.nan]]),
+    )
 
 
 def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
