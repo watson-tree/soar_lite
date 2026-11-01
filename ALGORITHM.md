@@ -167,220 +167,151 @@ Euclidean 正交化只给 `⟨m⊥, g⟩ = 0`，那是另一个内积，`⟨m⊥
 `restart` 不碰 `m`，它只把 `has_secant` 置回 False，下一次 `fold`（暖机那次）用新起点的梯度重种——
 和 `s`/`y` 的重种走的是同一条路径，历史因此不跨重启。
 
-## 2. 重启：样本自估计的 EI 判决（SOAR 式）
+## 2. 重启：停滞触发，落点交给模型
 
-### 2.1 为什么不拟合代理模型
+### 2.1 默认不拟合代理模型
 
-n_paths 条路径的起点是 n_paths 个 i.i.d. 抽样。**样本本身就是证据**：一次重启买到多少改进，可以直接用「重启
-事件里那些起点的组最小值」来实测，而不必拟合 `f` 的代理模型。高维下拟合既贵又脆；采样估计的方差
-只随样本数走，与维数无关。这就是 Mathesen et al. 2021 那个「自适应重启」框架的轻量版本。
+一次重启要做的只有一件事：给一条已经停下的路径换一个新起点。这个起点要么从 `Domain` 直接抽
+（`SampleGlobalModel`，默认），要么让一个在已服务样本上拟合出的后验去指（`BLRGlobalModel`，2.3）。
+默认走前者：抽一个点只要一次求值、不拟合任何东西，成本与维数无关。局部方法的甜点是「`d` 对的地貌」，
+在那里重启本来就该少；为它先备一个代理，是拿全局侧的成本换大多数运行用不上的拐杖。
 
-### 2.2 两个 EI 闭式
+### 2.2 三个问题分开：何时、是否、何处
 
-都从同一份证据出发，闭式给出：
+重启由三个互不相同的决定拼成，本实现把它们放在三个不同的地方，谁也不替谁回答：
 
-```text
-EI(f⋆; x, h) = h·[z·Φ(z) + φ(z)],  z = (f⋆ − x)/h        单核高斯 EI（h = 0 → max(f⋆ − x, 0)）
-h(样本)      = 1.06 · MAD(样本)/Φ⁻¹(3/4) · n^(−1/5)    scott_mad 带宽（1.06 = (4/3)^(1/5)）
-EI_continue  = mean_j EI(f⋆; f_k + Δⱼ, h_Δ)              本路径继续一步的期望改进
-EI_restart   = mean_i EI(f⋆; mᵢ, h_m)                   任一路径重来的期望改进
-```
+- **何时**：路径停下是局部方法自己的判断（1.5 的 `τ_rel` 停止测试，或一次没有任何有限样本可赢的判定）。
+  引擎不设第二个停止规则，也不猜「还差多少」。
+- **是否**：`restart_stalled`，一个布尔旋钮，默认 `False`。关着时停下的路径就一直停着——`stalled` 仍
+  记账、仍占位、它的点仍可读——只是不再被移动；开着时它下一轮立刻被重画。
+- **何处**：`global_model.propose(n, domain)`，引擎的第二个插件点（2.3）。
 
-- `Δⱼ` 是**本路径**当前 stage 内的一步变化。stage = 距上次判决以来的若干步。
-- `{mᵢ}` 是**共享 group-min pool**：`mᵢ` 是每个选择事件（初始化或重启）里那些起点的组最小值——每次
-  事件一次性把该事件的组最小值全追加进池子。
-- 两侧**都不假设样本服从单个高斯**：各自用样本本身做高斯核 KDE（一折一核），偏斜的 `Δf` 流也照原
-  样读。带宽取稳健的 MAD 尺度而不是标准差，所以一条长尾顶不爆它。
+这个切法是有意的：*何时* 已经由方法的停止测试说清，*是否* 是一个策略位，只有 *何处* 需要真正的实现，
+所以只有 *何处* 成了一道接缝。上一版把三者揉进一个「重启判定」里（比较继续还是重来的期望改进，再按
+判决重画），代价是一块必须自己攒证据、自己推导节奏的第三机制；现在那层没有存在的必要——停下的路径
+要么原地不动，要么直接换点，中间没有要比较的量。
 
-**池子是全路径共用一个，不是每条路径一份**：一次重启买到多少，是「抽样器 + 当前最优 `f⋆`」的
-全局属性，与哪条路径无关。共用池子用最多样本估计同一个全局核密度，方差最小；按路径切分只会
-用更短的样本估同一个量。
+### 2.3 两个落点臂
 
-### 2.3 判决与节奏：让两侧样本数可比
+**抽样臂（默认）。** `SampleGlobalModel` 不拟合，`observe` 是空操作，`propose` 只是把 `Domain.draw`
+要来的点原样交回：有界侧均匀、自由侧 `N(0, scale²)`、半界侧同正态截断、调用方给了逐维抽样器就按注入
+的来。它同时是「调用方指定羊群」的入口——构造时的 `x0` 是第一次 `propose` 的答案，之后才回到抽样。
+所以一次重启的边际成本是一个点、一次求值，与维数无关。
 
-判决只在路径攒够一个 window 的轮次时问一次，问完就关掉这个 stage（下一个 `Δf` 开新 stage）。
-`window = M + 1`，`M` 是池子里的**样本数**（池子多长就是多少：`+inf`、`nan`、`-inf` 也都是样本）；
-那个 `+ 1` 是 stage 开张的那一轮——它对继续路径是这次判决本身、对重启路径是那次探测——任何 stage
-都要花掉它却不折到样本。这个匹配是承重的：两侧是同一种 scott_mad KDE，
-只有样本数相当，它们的带宽与核均值才在同一个精度上，`EI_restart` 与 `EI_continue` 才是可比的两个
-估计。若继续侧只读最近两三步，它会低估自身展布、把 `EI_continue` 压低，重启就会赢下证据并不支持
-的判决——这种偏差不会报错，只会让最终的 `f⋆` 更差。所以 window 是**推导出来的**，不是暴露给
-调用方的旋钮。
+**代理臂。** `BLRGlobalModel` 在已服务样本上拟合一个 Bayesian 线性后验（特征由注入的 `Projection`
+给出），`propose` 返回 `MinimizeFn` 在盒内对 `−log EI` 求得的局部极小。**EI 在这里的身份是采集函数**
+（Jones et al. 1998），用来回答「代理认为哪里还值得试」，而不是「继续还是重来」的重启判决——它交出
+一个起点，不做任何比较。`−log EI` 的下降用调用方注入的 `MinimizeFn`（通常就是本包自己的 n_paths 引擎），
+所以这一臂是「用一次内层搜索换一个更聪明的起点」，代价是内层那轮求值。
 
-**两侧样本数必须相等，多出来的那一个在继续侧**：stage 开张的那一轮，继续路径折进一个样本、重启
-路径只做一次探测，所以继续路径到下一次判决时手里有 `M + 1` 个 `Δ`。读它的**最近 M 个**（丢掉最早
-那个）是让两侧数目对齐的动作，而不是额外等一轮：window 已经把开张那一轮算进去了，再等一轮才是
-白等。
+### 2.4 重启不额外花一次梯度
 
-**不额外垫长度**：read 是 KDE 上的等权、一折一核，多折进来就是多一条证据、不多也不少；
-窗口不垫到 2（`M = 1` 的退化形式见下）。空池子的 window 是 1，但那条路径由冷启动直接放行、
-永远读不到它。
-停摆路径根本不读 stage：它的继续侧按定义为 0，所以判决退化成单侧 `EI_restart >= 0`——`EI_restart`
-非负，于是这条比较恒真，停摆路径每个窗口到期就重探一次（平局条款）。到期只由一条
-**阶段钟**决定——它数的是轮次而不是折数：引擎对每条路径每轮喂一次 `observe_step`，移动的报 Δ、
-折叠什么都没发生的轮报 `None`（停摆，或重启路径的探测轮）——探测轮既没走一步也没停摆，就按无步轮报。
-一条通道保证每轮每条路径恰好走一格，所以一条路径的判决轮次与它这一程怎么走来无关。中途停摆的路径因此保留它已经等过的轮数，
-不会从停摆那一刻重新起算（否则它会比同 cohort 晚整整一个窗口才到期）；变的只是证据从全比较
-变成单侧。重启路径也一样：少了那一格，它每重启一次就把自己的下一程推后一轮、并与同 cohort
-永久错开（锁相）。
-`M = 1` 时两侧同时落到各自的退化形式（stage 一折、池子一样本，MAD = 0 ⇒ `h = 0`）：唯一的样本已是
-`f⋆`，所以 `EI_restart` 恒为 0；继续侧走平或停摆时也读 0，判决以 `0 ≥ 0` 平局收场、放行
-一次探测——这一次探测正是池子买到第二个样本的方式。窗口因此不需要垫到 2。
+`propose` 的答案被 clip 进 `domain`、包成**两半都欠**的点，和本轮各路径步的赢家一起交给 `settle`，
+所以重启起点不会单独买一个梯度批。接上 f-only 接缝时这份合并更彻底：重启起点的值也留到同一个融合批
+里一次求。一个不可用的起点（`f` 或 `g` 非有限）不落地、路径留在 `stalled`，下一轮再画——它不会变成
+`points[i]`，所以「这条路径站在哪」不会被一个退化点污染。
 
-判决谓词：`EI_restart ≥ EI_continue`；`f⋆` 非有限时不经比较、直接重启（见下）。取等即平局也重启：
-两侧同为 0 意味着「继续买不到东西、重启也买不到」，而一次探测本身还是一条真实的 i.i.d.
-group-min，所以平局时探测是唯一能买到证据的动作。它不会空转：窗口就是池子长度 M，每次探测都往
-池子追加一个样本，同一条路径的下一次问询因此推迟整整一个窗口，间隔按 1, 2, 3, … 增长，探测
-频率衰减到 0。`f⋆` 非有限（`+inf`：至今没服务过任何有限点）时没有可比的量，判决回到冷启动那条
-原则——**无法比较时，探测是唯一能买到证据的动作**——所以到期就重启：否则唯一能重新抽样的那条
-路径恰好被「要先有有限样本」这一步挡住，一次不走运的初始化探测就能把整个 run 锁到地平线。这里的
-`f⋆` 是**全域**最优 `fun_raw`
-（所有有限样本、含不可行点），与 `f_k` 和池子里的 payoff 同口径；结果里报告的 `fun`/`x` 仍是
-可行域最优。池子里的 `+inf`、`nan`、`-inf` 都是**零项**，不是被丢掉的值：它们对改进的贡献恰好是 0
-——`+inf` 是死起步，买不到东西；`nan`/`-inf` 是有限集之外的事件，和 `+inf` 一样不说明重启能买到多少——
-所以它们作为同一个均值的零项进账：`EI_restart` 等于有限子集的 KDE 均值乘以「有限样本占比」
-`|finite| / M`，带宽只在有限子集上算（零项不许把它撑开）。这样重启侧读的也是同一个 M 里的均值，
-全死池子无法伪装成一个更小、更尖、因而更贵的池子。
-
-### 2.4 n_paths=1 的退化
-
-`n_paths = 1` 时池子里只有一个样本 ⇒ 无展布 ⇒ `h = 0` ⇒ `EI_restart` 退化为 `max(f⋆ − r, 0)`，而池子
-里的那个样本正是 `f⋆`（最优必不劣于唯一抽样），所以重启侧恒为 0。判决于是等价于「继续侧是否为
-0」：路径在改进时继续侧为正、单路径就一直下降；走平或停摆时平局、放行一次探测去补第二个样本。
-**要一条纯粹的串行局部下降、一次都不重启，传入 `NoRestartRule`**——纯串行不再依赖 `n_paths = 1`
-的偶然：多起点的纯下降实验（对比重启机制）也走同一个显式规则。
+**要一条一步都不重启的纯多起点下降，把 `restart_stalled` 留在默认 `False`**：停下的路径原地不动，
+不再花预算，也不会被任何量唤醒。
 
 ## 3. n_paths 路径引擎
 
-### 3.1 选择事件不盲降
+### 3.1 一次迭代的日程
 
-初始化与重启都走同一个事件：抽 `n_draws` 批点、每批 `n` 个（`n = n_paths` 或本次重启的路径数），
-**按列**取最小值，得到 `n` 个起点；这些点的梯度直接复用（起点零额外 eval）。
+一轮先分路径，再一批买：
 
-为什么按列取最小：每一列跨批就是从同一抽样器里抽出的一个随机组，组最小值既是「`n_draws`
-个随机点里最好的那个」（比盲降好），它的值又同时是 group-min pool 的一个**真实样本**——一次选择事件
-买到的改进。所以「选起点」与「收集证据」是同一个动作，不额外花预算。`n_draws = 1` 退化为
-朴素初始化，`∞` 退化为随机搜索；默认 1。
+1. **重画集**：没有点（只有 iteration 0 的占位符）或「`stalled` 且 `restart_stalled`」的路径。
+2. **队列**：其余路径。已 `stalled` 但运行不重画的路径留在这里——它这一轮不提案、不产生赢家，但它的
+   点仍然可读（`f⋆` 从它那里读得到）。
+3. **落点**：重画集向 `global_model.propose(len(restarted), domain)` 要一批起点。引擎校验形状、clip 进盒；
+   形状不对直接 `ValueError`——宽度归引擎所有，模型返回别的宽度在批次边界就失败，而不是深埋在广播里。
+4. **步**：队列里的每条路径按 `needs_verdict` 分两条通道（3.2），产出各自这一步的赢家。
+5. **一批结清**：重画起点在前、步赢家按路径序在后，**同一个**批次交给 `settle` 补上仍未买的梯度。
+6. **落地**：起点走 `_place`（不可用则留在 `stalled`、下轮再画），赢家走 `_advance`（不可用则 `stalled`、
+   不 `fold`）。
 
-### 3.2 每次迭代：探测半与步进半
+重画集与队列不相交，所以「先定完再一起买」与「逐条定完就买」是同一日程。
 
-判决与步进同在一轮迭代里是刻意的：一次迭代只推进「一步」，判决读的是本轮自己的 `f⋆`；被拒的探测
-跳过本轮步进，并在请求点抛出私有异常 `_BudgetExhausted`，径直 unwind 到最外层循环的 catch。
+### 3.2 判定通道与不判定通道
 
-重启的路径本轮只做探测、不提交步：一条路径一次迭代要么探测要么步进，不会两头都花预算。两半碰的
-是互不相交的路径，所以「先定完再一起买 g」与「逐个定完就买」是同一个日程。
+`needs_verdict(i, p)` 问的是「这条路径下一步要不要逐候选判定」。默认 `n_alpha = 1` 的整步答 False：
+方法提交即所提，引擎把它的一次提议当作这一步的赢家、**不先读值**，值与梯度留到 `settle` 的融合批里
+一次求。`n_alpha > 1` 的步长网格答 True：方法逐候选 `propose`，引擎 clip 后服务，方法 `verdict` 读
+`retry`/`accept`/`give_up`。
 
-`observe_step` 的样本就是**一次迭代的一步**：每条路径各自计时、互不重叠。重启的路径本轮只探测、
-不步进，它这一次迭代报一个无步轮 `None`、不喂样本（重启把锚点重置到探测点的 f，第一个 Δ 留给下一步），
-所以既不会把探测的收益记成一步，也不会把探测读成零步。任意一次迭代没有折（stall）也报 `None`——那是
-缺席不是值：没有 Δ 可读，但这一轮照样计入阶段钟，所以停摆不会把判决推迟，也不会拿一个横跨停顿的 Δ
-冒充进步。
+判定通道里的失败只有两条出路，两条都由方法给出：`give_up`（它的收敛测试触发）置 `stalled`；`accept`
+但没有服务过任何有限样本也置 `stalled`。引擎侧没有试用上限——枚举多长是方法自己的事，加一个上限
+就是给一个已有决定再加第二个隐形停止规则；代价是一项契约：`verdict` 必须最终返回 `accept` 或
+`give_up`，永不终止的枚举是挂死而不是慢跑。
 
-判决两侧买的东西并不相等，而且**接不接 f-only 接缝会改变这笔账**。真正吃重的是**梯度次数**（g 约为
-f 的 2–5 倍），所以问题总是「这一侧要买几次 g」。两个旋钮的默认值都是 1：`n_draws = 1`（一次探测一抽）、
-`n_alpha = 1`（一步一个候选）。
+接 f-only 接缝时，判定通道的每个 trial 只服务 f（判决只听值），赢家的梯度留到 `settle`；不接接缝时
+每一轮 trial 自己就是融合批，所以 `n_alpha` 个候选直接乘上融合批数（5 节）。
 
-- **不接接缝**：每一抽、每个 trial 都是融合批（值与梯度一起送达），所以一次探测付 `n_draws` 次梯度、
-  一个判定步付 `n_alpha` 次梯度——两侧各由自己的旋钮乘上去，平不平要看两个旋钮之比。引擎核对不了这个
-  比值：它只认 `LocalSolver` 这层契约，一个判定步要花几次梯度是方法自己的选择（`verdict` 契约原文），
-  `n_alpha` 只是具体方法（如预条件方法）的私有成员。它能表达的保守代理就是「没接接缝 ⇒ 探测不比一次
-  梯度贵」，于是 `n_draws > 1` 抛 `ValueError`；默认的 `n_draws = n_alpha = 1` 恰好让两侧各付一次梯度。
-- **接了接缝**：搜索期**只读需要读的值**——探测的抽与**要判定的**步的每个 trial 都只服务 f，判决也只听
-  这些 f（3.3），留到最后的点（每列的探测起点、每条路径步的赢家）在同一批里补 g。于是两侧都恰好一次
-  梯度往返，与 `n_draws`、`n_alpha` 都无关：延迟是接缝的性质，不是抽数的性质。
-
-接缝下多付的只有 f，而单抽连这份都不付——它没有组内可比的候选，起点不必先读值，随补 g 的那一批一起
-求 f 与 g（多抽才需要先把每抽的 f 读出来做 group-min，那次 f 随后被融合批重算，这是用便宜的一半换掉
-一次梯度往返）。完整推导见 `docs/PLAN.md`。
-
-一步只有在方法**要判定**时才读值：`needs_verdict(i)` 一次问清这条路径下一步是否逐候选判定——`n_alpha > 1`
-的步长网格（暖机与稳态同一规则）答 True（每个样本决定下一次移动），默认的整步答 False（提交即所提）。
-答 False 的那一步与单抽探测走同一条延迟通道：引擎不为它服务 f，把提议当作待补点交给 `settle`，值与
-梯度在同一批里各求一次。所以「一步的 f 算一次还是两次」由方法的判定需求决定，不由接缝或抽数决定：
-有 `eval_f` 时，被判定的步付一份 f-only 读值再在融合批里重算同一个 f，不判定的步只付融合批那一次。
-
-探测点要能在优化里用，`f` 和 `g` **两半都得有限**才算数：`f` 有限但梯度非有限的起点会被 `propose`
-读取（`-p.g`）并进 `fold`（`best.g - p.g`），一个 NaN 就能把那个坐标的量级 EMA 永久毒死。这样的
-起点按「死抽」处理、到达即 stalled，等 EI 判决复活。
+一个起点要能在优化里用，`f` 和 `g` **两半都得有限**才算数：`f` 有限但梯度非有限的起点会被
+`propose` 读取（`-p.g`）并进 `fold`（`best.g - p.g`），一个 NaN 就能把那个坐标的量级 EMA 永久毒死。
+这样的起点按「死起步」处理、到达即 `stalled`，由 `restart_stalled` 决定要不要重画（3.4）。
 
 ### 3.3 单一 argmin 所有者与 `fold`
 
-一次 step 里若某方法扫了一个步长网格，引擎把所有被服务的 trial 中 `f` 最低的那个提交。**引擎是
-「谁赢」的唯一所有者**：方法只通过 `fold` 回调得知获胜点，不自己维护第二份 argmin。这样重启/折叠
-的簿记不会与方法的内部状态漂移。
+一次判定步里引擎提交**所有被服务的 trial 中 `f` 最低的那个**，不是最后一个。**引擎是「谁赢」的唯一
+所有者**：方法只通过 `fold(i, step_start, winner)` 得知落点，不自己维护第二份 argmin，重启与折叠的
+簿记因此不会与方法的内部状态漂移。
 
-方法的判定因此只收**坐标与值**（`verdict(i, p, x, f)`：`p` 是这一步的起点，`x` 是夹进 `bounds`
-后实际服务的那一点）：trial 的梯度刻意不在契约里，因为引擎只为赢家买 g，方法拿不到别的 trial 的
-梯度；需要 trial 梯度才能判决的方法不是这个引擎能驱动的对象。相应地，赢家的梯度是**在提交点才
-第一次被看见**的（`f` 先定，g 随收）；不判定的步连 `f` 也是这时才第一次看见（3.2）。所以提交闸
-对**两半**都查：`f` 或 `g` 任一非有限就不提交、按 stalled 处理（与死抽同路）。这样 `fold` 是唯一的
-提交点，方法不会先被告知「落点」再被收回，非有限值也进不了规则的下一个 Δ 与 EI 的池子。
+方法的判定只收**坐标与值**：`verdict(i, p, x, f)`，`p` 是这一步的起点，`x` 是 clip 后实际服务的那一点。
+trial 的梯度刻意不在契约里——引擎只为赢家买 g，方法拿不到别的 trial 的梯度，需要它才能判决的方法
+不是这个引擎能驱动的对象。相应地，赢家的梯度在**提交点才第一次被看见**（`f` 先定，g 随收），不判定的
+步连 `f` 也是这时才第一次看见（3.2）。所以提交闸对**两半**都查：`f` 或 `g` 任一非有限就不提交、按
+`stalled` 处理。这样 `fold` 是唯一的提交点，方法不会先被告知「落点」再被收回。
 
 ### 3.4 `stalled` 是唯一的路径状态
 
-一条路径在某一次迭代「没有任何移动」（既没重启、也没提交步）就叫 stalled——判据只有方法的
-`give_up`：枚举多长是方法自己的事（它的收敛判据、它自己的试用预算），引擎**没有试用上限**。把上限
-留在引擎侧就是给方法已经拥有的决定加第二个隐形停止规则；代价是一项契约：`verdict` 必须最终返回
-`accept` 或 `give_up`，永不终止的枚举是挂死而不是慢跑。stalled 路径和本轮刚重启的路径都不进
-`step`，但每个 stalled 的迭代仍然报一次 `None`（让阶段钟照走，而不是冻结在停摆那一刻），
-直到某次 EI 判决把它唤醒。停摆的继续侧按定义为 0——继续买不到东西——所以它的判决退化成单侧
-`EI_restart >= 0`：`EI_restart` 本身非负，这条比较恒真，于是停摆路径在每个窗口到期时重探一次（2.3 的
-平局条款）。**到期即结阶段**：判决无论读成什么，`deltas` 与阶段钟都在判决点归零（一个窗口换一个阶段，
-阶段何时结束不看答案）；于是回 False 之后要再攒一个窗口才重问，而不是每轮重问同一个问题——既不是
-探测风暴，也不是每轮一次的空判。（停摆路径不存在「判决一直答 False」的停摆：到期要么平局要么没有
-可比的 `f⋆`，两者都重启；真正空转的情形见 3.6。）
+一条路径在一轮里既没被重画、也没提交步，就叫 `stalled`。它的写者只有两个：方法自己的 `give_up`
+（或「接受但没有有限样本」），以及提交闸对非有限起点/赢家的拒绝。一条被拒绝的起点**不会**成为
+`points[i]`——`points[i]` 永远表示「这条路径站在哪」，所以不可用的起点留在 `stalled`、下一轮重抽，
+而不是被 clip 或强塞成一个退化点。
+
+`stalled` 与「没有点」是两件事，且只有后者不由 `restart_stalled` 管：占位符的空 `x` 是机器自己的初始
+状态（iteration 0 借此让所有路径都走一次重画），所以它总是重画；握着一个点但值非有限才是停摆，由
+`restart_stalled` 决定要不要重画。
 
 ### 3.5 停车是三闸门，记账只报告
 
-`max_iters` 是引擎自己的地平线，单位是**迭代**：一次完成的迭代记一笔（迭代 0 就是初始化探测）。
-它是确定性的停车界，不是成本代理——一次迭代服务多少批是方法的自由，从零批（全停滞的一轮）到一次
-探测加上方法自己线搜索的若干试用批。`time_limit` 是同一件事的墙钟版本，给那些「一次迭代多贵说不准」
-的调用方。
-两者至少要给一个，否则入口抛 `ValueError`。`budget_check` 在循环头每次迭代、以及每个 g 批前都会被
-问——一个自己会翻的谓词（墙钟、外部信号）是能停住空转羊群的，但引擎看不见你的谓词是自翻还是批驱动，
-批驱动的谓词会和只服务零批的停摆羊群一起永远不翻。所以停摆的保证仍由引擎自己看得见的
-`max_iters`/`time_limit` 来给。
+`max_iters` 是引擎自己的地平线，单位是**迭代**（iteration 0 是放置羊群的那一轮）。它是确定性的停车
+界，不是成本代理——一轮服务几个批由方法和接缝决定，从零个（全停摆的一轮）到方法的若干试用批。
+`time_limit` 是同一件事的墙钟版本，给「一轮多贵说不准」的调用方。两者至少给一个，否则入口抛
+`ValueError`。`budget_check` 是给引擎看不见的预算（点数、墙钟、钱、外部早停）的额外闸。
 
-`_Budget` 因此合了两个职责：停车计量（`max_iters`、`time_limit`、`budget_check`）与工作量报告
-（`n_batches`、`n_points`）。**只有 value+grad 的融合批（g 批）计入账单**：探测的 `n_draws` 个
-只有值的批便宜，既不记账也不问闸，所以 `n_batches`/`n_points` 正好落在承重轴（梯度次数）上。
-`charge` 只记账，`tick` 只在迭代体完成后记一次迭代；`stop` 是唯一的
-停车查询，三个输入（地平线、墙钟、调用方的闸）报一个拒绝的理由，拒绝不存成状态——否则它就和自己的
-证据脱钩了。
-同一个 `stop` 也是循环头的停车条件：一次完成的迭代可能刚好把地平线走到（或把闸关上），所以在开新一轮
-之前先查一次，不再为用不掉的预算问判决；循环头这一处问的是「要不要开这轮」，属于决策，不是传
-信号。迭代中途被拒则在请求点抛 `_BudgetExhausted`（拒绝理由装在这条异常里）并结束，该迭代不计入
-`n_iters`：中间层
-（`probe_select`、`restart`、`step`）因此不必再检查返回值、也不必上下传任何标志。
+`_Budget` 因此合了两个职责：停车计量与工作量报告。**两对计数都记账**（融合对与 f-only 对，5 节），但
+**计数从不决定停车**：`stop` 只读三个谓词（地平线、墙钟、调用方的闸）。`charge` 只记账，`tick` 在
+一轮完成后记一次迭代，`stop` 是唯一的停车查询——三个输入报一个拒绝的理由，拒绝不存成状态，否则就
+和自己的证据脱钩。
+
+同一个 `stop` 也是循环头的停车条件：一次完成的迭代可能刚好把地平线走到，所以在开新一轮之前先查一次。
+迭代中途被拒则在请求点抛 `_BudgetExhausted`（理由装在这条异常里）并结束，该轮不计入 `n_iters`：
+中间层因此不必检查返回值、也不必上下传任何标志。**每个批之前都问一次闸，融合批与 f-only 批都一样**
+——判定通道的 `while` 可以转很多圈而不回到循环头，没有这一问，一次跨过截止时刻的步骤会一路跑完。
+
 `status` 按 `max_iters` → `time_limit` → `budget_exhausted` 的顺序报第一个成立的闸。另一种停车是
-`unbounded`：某个 **feasible** 点把目标值打到 `-inf`，那里没有下界，任何后续试用都比不过它、任何一步也改不动它，所以该点直接成为答案（`fun = -inf`，`x` 就是它）并结束运行。这是引擎唯一自己能认出的停车条件，
-而且它仍然读 feasibility 掩码：不可行的 `-inf` 不改变任何东西（既不进 `fun`，也不进 `fun_raw`）。
-找到它的那一批已经服务并记账（`n_points`/`n_batches` 计入），但这一轮没跑完，因此和批被拒一样不入账
-`n_iters`。
+`unbounded`：某个 **feasible** 点把目标打到 `-inf`，那里没有下界，任何后续试用都比不过它、任何一步也
+改不动它，所以该点直接成为答案（`fun = -inf`，`x` 就是它）并结束运行。这是引擎唯一自己能认出的停车
+条件，而且它仍然读可行性掩码：不可行的 `-inf` 什么都不改。找到它的那一批已服务并记账，但这一轮没跑
+完，因此和批被拒一样不入 `n_iters`。
 
-`budget_check` 只留给引擎看不见的预算（点数、墙钟、钱、外部早停策略）。它在循环头每次迭代、以及每个
-g 批前被问，所以那类外部预算可能超跑不到一个批大小；f-only 段不查，因此那一段的停车
-（含墙钟）粒度是「不到一个探测/一步」——接了接缝时一次迭代最多只有一个 g 批（3.2 的那个合并批），
-它同时被这道闸计数。这是一个有意接受的代价，靠「f 便宜、g 约为 f 的 2–5 倍」的前提兜底；f 本身贵的
-调用方就不该接 f-only 接缝、也不该开多抽探测。`n_batches`/`n_points` 只报不预算：
-引擎无法在一个不可分的批内部设卡。
+四个计数只报不预算：引擎无法在一个不可分的批内部设卡。所以 `budget_check` 那类外部预算可能超跑不到
+一个批大小——一个有意的代价，靠「g 约为 f 的 2–5 倍、f 便宜」的前提兜底；f 本身贵的调用方就不该接
+f-only 接缝。
 
-### 3.6 全停不早退：空转到下一次判决，或者空转到地平线
+### 3.6 全停：重画，或者空转到地平线
 
-所有路径都 stalled 时，这一轮不服务任何批，但每条路径仍然报一次 `None`（3.4），阶段钟照走。之后去
-哪里，看那条路径到期时有没有判决可给：
+所有路径都 `stalled` 时，这一轮没有任何步，只剩两种结局，由 `restart_stalled` 一个位决定：
 
-- **到期就判（本包的 `EIRestartRule`）**：判决恒真——`f⋆` 有限时是单侧 `EI_restart >= 0`，
-  `f⋆` 非有限时直接重启（2.3），于是每个窗口到期就重探一次、这一轮就有批可服务：空转只在窗口与
-  窗口之间，不贯穿整段。重探的间隔随池子变长（2.3），所以一停到底的羊群变成的是一串越来越稀的
-  探测，不是探测风暴。实测（2 路径、`max_iters=40`、求值永远 NaN）：6 次探测、6 批，不是满额 40 批。
-- **永不让判决到期**：第三方规则可以把窗口设得比地平线还长（`test_stalled_paths_wait_for_ei_then_restart`
-  的对照臂就是这种），那样重启一次都不发生，引擎一路空转到 `max_iters`/`time_limit` 停（`status`
-  报 `max_iters` 或 `time_limit`）——这是引擎空转到地平线的唯一情形，也是本小节标题的后半句。
+- **开着**：停摆的路径下一轮就进重画集，于是每一轮都有批可服务——羊群在停滞与重画之间循环，间隔
+  由局部方法停下的快慢决定，不由引擎的窗口决定。
+- **关着**：停摆的路径一直停着，每一轮都服务零个批，直到 `max_iters`/`time_limit` 停（`status` 报
+  对应的闸）。这是引擎空转到地平线的唯一情形。
 
-没有引擎侧的早退：停车条件只依赖调用方给的数字，不依赖 `restart_rule` 的节奏，所以任何第三方规则都
-不会让循环永不结束。空转的账在 `n_batches` 上是零，在 `n_iters` 上是满额——这就是为什么 `max_iters`
-不是成本数字。
+没有引擎侧的早退：停车条件只依赖调用方给的数字，所以任何插件都不会让循环永不结束。空转的账在批数上
+是零、在 `n_iters` 上是满额——这就是为什么 `max_iters` 不是成本数字。
 
 ## 4. 适用界
 
@@ -388,48 +319,53 @@ g 批前被问，所以那类外部预算可能超跑不到一个批大小；f-o
   保证与 Adam/RMSProp 同级，不追牛顿/拟牛顿。
 - 逐坐标估计忽略耦合项 `Σ_{j≠i} Hᵢⱼ sⱼ`，后者落在 `|yᵢ|` 内使 `d` 成为 `1/Hᵢᵢ` 的有偏估计
   （耦合越强偏差越大，倾向系统性欠步：更稳但更慢）。这是拿「安全」换「潜在快」。
-- 重启频率与 `n_draws`、`β`、`μ`、`θ`、`τ_rel` 相关；文档只给结构，不给某类问题的推荐值——
-  那些值由目标决定。
+- 重启频率由 `restart_stalled` 与局部方法的停止测试（`β`、`μ`、`θ`、`τ_rel`）共同决定；文档只给结构，
+  不给某类问题的推荐值——那些值由目标决定。
 
-## 5. 两条成本轴（成本模型，不是评分）
+## 5. 成本轴：两道接缝 × 两把尺子（成本模型，不是评分）
 
-一次求值服务一批 `(M, d)` 的点，所以同一次运行有两个代价数，它们回答不同的问题，**永远不相等**：
+一次求值服务一批 `(M, d)` 的点，所以同一次运行有两把尺子，它们回答不同的问题、**永远不相等**：
 
-| 字段 | 数什么 | 回答的问题 | 用途 |
-| --- | --- | --- | --- |
-| `n_points` | 被计费的**点**（一个 g 批按其实际点数计点） | 串行效率：一个点买到多少改进 | 串行求值（逐点计费）的计分/门控口径 |
-| `n_batches` | 被计费的**批**（一个 g 批计 1 批） | 并行效率：一次调用买到多少改进 | 批量目标（真 vmap/GPU）的代理口径 |
+| 尺子 | 数什么 | 回答的问题 |
+| --- | --- | --- |
+| `points` | 被计费的**点**（一个批按其实际点数计点） | 串行效率：一个点买到多少改进 |
+| `batches` | 被计费的**批**（一个批计 1） | 并行效率：一次调用买到多少改进 |
 
-两个字段只数 **value+grad 融合批（g 批）**——“被计费”就是这个意思。f-only 的批（探测的抽、被拒的
-trial）是便宜的那一半，既不进这两个数也不问闸（3.5）。**一次迭代花几个 g 批不是常数，由接缝决定**：
+引擎有两道求值接缝（`eval_f_g` 融合批、`eval_f` 只有值），各有一对计数，所以结果是四个字段：
 
-- 接了 `eval_f`：试用只花 f，真正欠的梯度（探测的起点 + 步的赢家）在轮末合成**一个** g 批，所以
-  一次迭代是 0 个（全停滞的一轮，3.6）或 1 个。
-- 不接 `eval_f`：批量求值是拿到值的唯一途径，于是**每个试用轮自己就是一个 g 批**——预条件方法按
-  候选逐个 `retry`/`accept`，`n_alpha` 个候选就是一个判定步花掉 `n_alpha` 个 g 批，探测自带的那一批
-  也在其中。所以 `n_alpha` 直接乘上 g 批数：实测（1 条路径、`n_alpha = 5`、跑 2 次迭代）不接接缝是
-  6 个 g 批（1 个探测批 + 5 个试用轮），接缝下是 2 个（每个非停滞迭代一个合并批）。
-  `n_draws` 不再往上乘——不接接缝时 `n_draws > 1` 直接被拒（3.2），接了接缝时多抽只是 f-only。
+| 字段 | 数什么 |
+| --- | --- |
+| `n_f_g_points` / `n_f_g_batches` | 融合批的点数 / 批数 |
+| `n_f_points` / `n_f_batches` | f-only 批的点数 / 批数 |
 
-因此不接接缝时每个服务的批都是 g 批，`n_batches` 恰好等于服务批数；一旦接了 f-only 接缝，它就变成
-“g 批数”（f 批与它分开数）——而后者才是承重轴（梯度次数）上的真账。
+**两对都记账**——「被计费」就是「真的服务出去了」的意思。旧的「只有 g 批计费、f-only 白送」口径已废：
+调用方可能自带一个只给值的 `eval_f`，那半边的工作量必须如实报出来，否则串行轴在接了接缝的运行里会把
+f 的成本整个抹掉。计数只报不预算：`stop` 从不读它们（3.5）。
 
-两个都要报：串行轴下，n_paths 条路径的收益会被 n_paths 除，多路径的账面上限被压低；并行轴下一次求值
-就是一次并行调用的成本，「多样本 + 自适应重启」的收益才如实显形。两者都不等于墙钟（换底层语言能把
-固定开销压掉，但改变不了「一次求值要服务几个点」这个结构量）。
+**一轮花几个批由接缝决定**：
 
-停车记在迭代上（3.5），两个成本字段只报不预算：`n_batches` 与 `max_iters` 不同轴，所以「跑满
-地平线用了多少批」必须读 `n_batches`，不能拿 `max_iters` 当成本数字去比。
-**不许混写**：同一张表、同一张图只能用一条轴，且必须标注。把 `n_batches` 的数字
-当成 `n_points` 的数字去比较，等于把 n_paths 倍的预算差抹平。
+- **接了 `eval_f`**：trial 与重画起点都先只服务 f，欠的梯度在轮末合成**一个**融合批，所以一轮是 0 个
+  （全停摆的一轮，3.6）或 1 个融合批，外加方法判定所需的 f-only 批。
+- **不接 `eval_f`**：融合批是拿到值的唯一途径，于是**每个 trial 自己就是一个融合批**——预条件方法按
+  候选逐个 `retry`/`accept`，`n_alpha` 个候选就是这一步花掉 `n_alpha` 个融合批，重画起点自带的那一批
+  也在其中。实测（1 条路径、`n_alpha = 5`、跑 2 次迭代）：不接接缝 6 个融合批，接缝下 2 个。
+
+两把尺子都要报：串行轴下 n_paths 条路径的收益会被 n_paths 除，多路径的账面上限被压低；并行轴下一次
+求值就是一次并行调用的成本，「多样本 + 重启」的收益才如实显形。两者都不等于墙钟（换底层语言能把固定
+开销压掉，但改变不了「一次求值要服务几个点」这个结构量）。
+
+停车记在迭代上（3.5），四个字段只报不预算：`batches` 与 `max_iters` 不同轴，所以「跑满地平线用了多少
+批」必须读 `n_*_batches`，不能拿 `max_iters` 当成本数字去比。**不许混写**：同一张表、同一张图只能用一条
+轴、且必须标注，也不能把融合轴的数当成 f-only 轴的数去比。
 
 ## 6. 可换的实现选择 vs 不许破的不变式
 
-参考实现把接缝切成四块：局部方法（`restart/needs_verdict/propose/verdict/fold`）、路径点与 verdict 类型、
-批量目标 callable、重启规则；另外允许注入起点抽样器。**这些签名全是实现选择**，新项目可以：
+参考实现把接缝切成四块：局部方法（`restart/needs_verdict/propose/verdict/fold`）、全局模型
+（`observe/propose`）、路径点与 verdict 类型、批量目标 callable；另外 `Domain` 允许注入逐维抽样器。
+**这些签名全是实现选择**，新项目可以：
 
 - 把局部方法写成纯函数 + 显式状态（不需要协议类）；
-- 把规则写成闭包或普通函数（不需要一个 `_stage_window()` 方法）；
+- 把全局模型写成闭包或普通函数（不需要一个攒样本的 `observe`）；
 - 把批量目标写成任何可 vmap 的 callable，甚至写成一次同步阻塞的远程调用；
 - 把 `PathPoint`/`Verdict` 换成元组/枚举/字符串——只要语义一致。
 
@@ -443,18 +379,15 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）。**�
 2. 单位不变（1.2 之 2），以及旋钮全无量纲（1.2 之 3）。
 3. 地板用 `max`，λ 只在 `Y < λ` 时生效（1.3）。
 4. 两相共用一条 `alpha` 网格，`needs_verdict` 与相位无关；`n_alpha = 1` 时两相都是无护栏整步（1.4）。
-5. 判决两侧的**样本数**相等：继续侧读最近 M 个、重启侧读全部 M 个（M = 池子长度）；空池时两侧都是
-   0 个样本（两条读取都返回 `0.0`，而冷启动在读取之前就放行）。`window = M + 1` 只决定**何时**问，
-   不是样本数；池子全路径共享（2.3）。
-6. 单一 argmin 所有者：引擎决定谁赢，方法只通过 fold 得知（3.3）。
-7. 预算门控在批边界，不切分批次（3.5）。
+5. 单一 argmin 所有者：引擎决定谁赢，方法只通过 `fold` 得知（3.3）。
+6. 预算门控在批边界，不切分批次；每个批之前都问一次闸，不过滤也不合并（3.5）。
 
 ## 7. 测试带走清单
 
-按「测什么」分三层。前两层随算法走，第三层是本仓边界、不带走。括号里是参考实现里的函数名——它们随这些
+按「测什么」分三层。前两层随算法走，第三层是本仓边界、不带走。括号里是当前实现里的函数名——它们随这些
 测试一起搬走，所以在新项目里同样可解析；换名字无所谓，语义在就行。
 
-#### 算法核（跟着局部方法走，`test_solver.py`）
+#### 算法核（跟着局部方法走，`test_local_solver.py`）
 
 - 地板是 floor 而不是加数：`test_diag_floor_is_a_floor_not_an_addend`（构造 `Y = λ` 的交叉 secant，
   断言 `max` 形式、排除加法的 `1/√2` 因子）。
@@ -470,95 +403,78 @@ trial）是便宜的那一半，既不进这两个数也不问闸（3.5）。**�
   `test_diag_gives_up_on_a_nonfinite_trial`、`test_diag_judges_a_trial_on_its_value_alone`（判定只读服务来的值
   `f`——`x` 留在接缝里给需要几何的方法；非有限的梯度根本到不了方法）。
 - 暖机网格丢非有限样本：`test_diag_warmup_grid_drops_a_nonfinite_sample`（非有限值只算 retry，全坏则 `give_up`）。
+- 动量（1.6）：`test_diag_momentum_keeps_the_plain_step_descent_gain`（`μ > 0` 仍满足 `⟨g,g⟩_d > 0`）、
+  `test_diag_momentum_folds_only_at_the_commit_not_in_propose`（历史只在 `fold` 写入，`propose` 是纯读）、
+  `test_diag_mu_zero_keeps_no_momentum_state`（默认路径不维护任何动量状态）、
+  `test_diag_momentum_is_skipped_when_g_has_no_d_support`、`test_diag_restart_drops_the_momentum_history`。
+- 重启复位：`test_diag_restart_rearms_the_warmup_and_reseeds_g0`（`g0` 重新播种、暖机重新武装）。
+- 旋钮校验：`test_diag_knobs_out_of_range_are_rejected`（`β`、`μ`、`n_alpha`、`backtrack` 的边界）。
+- 端到端：`test_diag_drives_a_quadratic_to_its_minimum_through_the_engine`、
+  `test_diag_momentum_runs_through_the_engine`。
 
-#### 引擎（跟着 n_paths 路径框架走，`test_solver_seam.py` / `test_scheduler.py` / `test_restart.py`）
+#### 引擎（跟着 n_paths 路径框架走，`test_scheduler.py` / `test_plugin_seam.py`）
 
-- 接缝真的被驱动（而不是走默认）：`test_injected_solver_is_driven`、`test_injected_rule_is_driven`。
-- f-only 求值器接缝：`test_f_only_probe_computes_one_gradient_per_probe`（`n_draws` 个只有值的抽
-  + 一个赢家批，赢家仍是逐列 group-min；只有赢家批计费）、
-  `test_a_single_draw_probe_reads_its_start_at_the_gradient`（单抽连 f 也不先读：没有可比的组，起点由
-  补 g 的那一批一次求出 f 与 g，f 只算一次）、`test_a_rejected_trial_is_bought_no_gradient`
-  （重试轮只花 f，整轮一步付一个 g 批）、`test_one_gradient_batch_per_iteration`（接缝下重启的起点与
-  步的赢家同乘一个 g 批：形状是 `[(2,1),(2,1)]` 而不是两个宽 1 的批）、
-  `test_multi_draw_probe_is_refused_without_the_f_only_seam`
-  （不接 seam 时多抽必拒）、`test_the_gate_counts_g_batches_not_f_only_draws`（闸只数 g 批，f-only 抽
-  照样发生却不进账）、`test_an_unjudged_step_never_buys_an_f_only_ruling`（不判定的步一次 f-only 读值
-  也不买：值与梯度同在一批里只求一次，计费与判定步相同）。
-- 起点要两半都有限：`test_a_non_finite_gradient_start_arrives_stalled`（`f` 有限、`g` 全 NaN 的
-  group-min 不进线搜索，直接 stalled 等 EI）、`test_a_winner_with_no_usable_gradient_is_not_committed`
-  （赢家只在提交点才被看见梯度：非有限则不 `fold`、按 stalled 报 `None`）、
-  `test_an_unjudged_winner_must_be_finite_to_be_committed`（不判定的赢家连 `f` 也到提交点才被看见：
-  两半任一非有限都不 `fold`）。
-- 非有限事件表（一张表钉住所有局部裁决，`tests/test_nonfinite_matrix.py`）：把
-  {有限, `+inf`, `-inf`, `nan`} × {可行, 不可行, 无 mask} 摊成 `_Best` 的 9 行（含「可行 `-inf` 让
-  `fun_raw` 停在 `inf`」「不可行 `-inf` 什么都不改」两格），加上 `_argmin_finite` 的取值组合
-  （`nan` 排前面不被选中、`-inf` 不算更小的有限值、并列取首个、全非有限返回 `None`）、`feas` 掩码的
-  0/1 校验（`nan`、负裕度、`0.5` 一律 `ValueError`，且拒批时两格都不动）、以及「值好梯度坏」这一维
-  的两条端到端（起步与赢家）。它不重覆上面各条机制测试，而是把它们的裁决合成一张表。
-- 选择事件不盲降 + 批形状：`test_batch_shape_and_point_counting`、
-  `test_probe_group_min_skips_nan`、`test_probe_inf_group_min_does_not_silence_restarts`。
-- `stalled` 语义：`test_give_up_stalls_a_path`、
-  `test_stalled_paths_wait_for_ei_then_restart`（到期就重探；窗口设到地平线之外的对照臂
-  则一路空转到 `max_iters`）、
-  `test_a_step_serves_as_many_trials_as_the_method_asks_for`（引擎不设试用上限：方法要 31 个 trial
-  就给它 31 个）、`test_nonfinite_start_waits_for_ei_instead_of_stepping`。
-- 单一 argmin 所有者：`test_diag_line_search_walks_the_grid_and_folds_the_argmin`、
-  `test_diag_line_search_gives_up_when_no_sample_is_finite`。
-- 判决节奏与可比样本数：`test_window_is_the_pool_plus_its_opening_round`、
-  `test_the_two_sides_read_the_same_samples_the_same_way`、
-  `test_the_continue_side_reads_only_the_newest_m_folds`、
-  `test_verdict_is_due_once_per_window_and_closes_the_stage`。
-- 停摆是缺席不是值、`+inf` 是死起步：`test_a_stall_supplies_no_delta_and_counts_the_iteration`、
-  `test_a_stall_clears_a_partial_stage_and_keeps_its_wait`、`test_a_nonfinite_delta_is_rejected_at_the_seam`、
-  `test_an_empty_pool_seeds_and_a_dead_pool_re_probes_once_per_window`。
-- 池子共享 / stage 独立 / 锁相 / 重启保留池子：`test_group_min_pool_is_shared_across_paths`、
-  `test_per_path_stage_is_independent`、`test_a_path_that_restarts_at_every_verdict_keeps_its_cohorts_rounds`
-  （重启路径的探测轮也算一格，否则它每重启一次就落后同 cohort 一轮）、
-  `test_restart_keeps_the_shared_group_min_pool`。
-- 平局也重启（买第二个样本）、`n_paths = 1` 的退化与纯下降出口：
-  `test_a_zero_payoff_tie_restarts_to_buy_a_second_sample` 覆盖「两侧同读 0 ⇒ 放行一次探测」,
-  `test_no_best_still_restarts_at_a_due_gate` 与 `test_no_best_waits_for_the_gate_before_reprobing`
-  覆盖 `f⋆` 缺失（到期即重探，不停在每轮），
-  `test_a_dead_initialization_probe_does_not_freeze_the_run` 端到端地验证这一条：同一条死起步，
-  换 `EIRestartRule` 能重新抽到有限点并收敛、换 `NoRestartRule` 则 `fun` 停在 `inf`，
-  `test_no_restart_rule_seeds_once_then_never` 覆盖纯下降出口（`NoRestartRule` 只播种、之后永不再问），
-  `test_restart_beats_pure_multistart_on_multimodal` 与 `test_k_start_beats_single_path_on_multimodal`
-  则端到端地拿「同起点数、换规则」验证重启机制本身。
-- 多抽 probe 只有单测覆盖：`test_probe_group_min_skips_nan`、
-  `test_multi_draw_probe_is_refused_without_the_f_only_seam`、`test_the_gate_counts_g_batches_not_f_only_draws`。
-  实验按 `n_draws=1`、不接 seam 跑（`f_only` 不计费，接入会白送评估），所以图里没有这条路径。
-- EI 闭式：`test_normal_functions_match_known_values`、`test_ei_continue_degenerate_at_zero_bandwidth`、
-  `test_ei_continue_is_a_mean_of_per_sample_ei`、`test_ei_restart_matches_kde_literal`、
-  `test_ei_restart_is_a_mean_of_per_sample_ei`、`test_ei_restart_tail_below_all_observations`、
-  `test_ei_restart_prices_every_nonfinite_start_as_a_zero_term`、`test_stage_read_is_a_kde_over_its_deltas`。
-- **两条成本轴**：`test_reports_points_and_batches_separately`（`n_batches` 与 `n_paths` 无关；
-  `n_points = n_batches × n_paths` 只在每个 g 批都是满 n_paths 批时成立，该测试正是这种全满批场景）。
-- 停车在闸门上：`test_budget_exhaustion_stops_everything`、
-  `test_a_run_without_an_extra_gate_reports_max_iters`、
-  `test_the_gate_counts_g_batches_not_f_only_draws`（批级闸：重启风暴也超不过闸给的批数）、
-  `test_every_path_feeds_once_per_iteration`（每迭代恰好一个样本，停摆的那个报 `None`）。
-- 盒是数据：`test_box_is_data_not_a_unit_cube_assumption`、`test_bounds_spellings_are_the_same_box`、
-  `test_unbounded_or_absent_box_needs_an_injected_sampler`、
-  `test_the_sampler_is_the_only_authority_on_d`、`test_an_injected_sampler_searches_outside_the_old_box`。
+- 接缝真的被驱动（而不是走默认）：`test_injected_solver_is_driven`、
+  `test_the_default_model_is_exactly_a_sample_global_model`。
+- 停摆与重画：`test_give_up_stalls_a_path`（`give_up` 置 `stalled`）、
+  `test_a_dead_start_is_redrawn_without_asking_the_rule`（不可用的起点不落地，下一轮重画）、
+  `test_a_stall_hands_a_redraw_to_the_global_model`（开着 `restart_stalled` 时停摆的路径向模型要起点）。
+- 起点与赢家两半有限：`test_an_unusable_start_is_refused_before_it_seeds_the_method`、
+  `test_a_non_finite_gradient_start_arrives_stalled`（`f` 有限、`g` 全 NaN 的起点到达即 `stalled`）、
+  `test_a_winner_with_no_usable_gradient_is_not_committed`（非有限则不 `fold`）,
+  `test_an_unjudged_winner_must_be_finite_to_be_committed`（不判定的赢家连 `f` 也到提交点才被看见）。
+- 一次迭代一个融合批：`test_one_gradient_batch_per_iteration`（重画起点与步的赢家同乘一个批：形状是
+  `[(2,1),(2,1)]` 而不是两个宽 1 的批）、`test_a_flocks_start_is_served_once_fused`、
+  `test_a_rejected_trial_is_bought_no_gradient`、`test_an_unjudged_step_never_buys_an_f_only_ruling`。
+- 四字段记账：`test_reports_four_counts_on_two_axes`、`test_batch_shape_and_point_counting`。
+- 闸：`test_budget_exhaustion_stops_everything`、`test_a_run_without_an_extra_gate_reports_max_iters`、
+  `test_the_gate_is_asked_before_a_value_only_batch_too`、
+  `test_the_gate_counts_g_batches_not_f_only_draws`（调用方自记的账单仍以融合批为准；f-only 照样被数、
+  被报，只是不闭合闸）。
+- 不设试用上限：`test_a_step_serves_as_many_trials_as_the_method_asks_for`（方法要 31 个 trial 就给它 31 个）。
+- 非有限事件表（一张表钉住所有局部裁决，`tests/test_nonfinite_matrix.py`）：`_Best` 的可行性 × 有限性
+  （`test_best_counts_a_value_only_when_it_is_feasible_and_finite`）、`_argmin_finite` 的取值组合
+  （`test_argmin_finite_never_returns_a_non_finite_candidate`）、`feas` 掩码的 0/1 校验
+  （`test_a_mask_flag_that_is_not_zero_or_one_is_refused`、`test_a_mask_of_zero_and_one_flags_is_accepted`），
+  以及「值好梯度坏」这一维的两条端到端（`test_a_half_dead_start_stalls_the_path_but_its_value_still_reports`
+  与 `test_a_half_dead_winner_is_refused_before_it_becomes_a_start`）。
+- 盒是数据、不是单位立方体假设：`test_box_is_data_not_a_unit_cube_assumption`、
+  `test_bounds_spellings_are_the_same_box`、`test_the_domain_is_the_runs_only_authority_on_d`、
+  `test_an_unbounded_box_is_really_unbounded`、`test_a_model_that_oversteps_is_clipped_into_the_runs_box`。
+- `Domain` 抽样（`test_domain.py`）：`test_the_default_scale_is_one_not_the_box_width`、
+  `test_a_mixed_box_draws_the_unbounded_dimension_at_its_own_scale`、
+  `test_a_half_bounded_draw_is_the_half_normal_not_the_full_one`、
+  `test_an_injected_sampler_replaces_that_dimensions_default`、
+  `test_a_sampler_that_returns_the_wrong_shape_is_refused`。
+- 模型契约（`test_global_model.py`）：`test_x0_is_the_first_proposal_and_only_the_first`、
+  `test_a_start_outside_the_box_is_refused_not_clipped`、`test_the_box_test_reads_only_the_declared_sides`。
+- 代理臂（`test_spherical_linear.py`）：`test_propose_draws_uniformly_until_a_fit_is_possible`、
+  `test_propose_descends_the_acquisition_into_the_box`、`test_posterior_variance_stays_under_the_prior_far_from_data`、
+  `test_log_h_matches_its_definition_where_it_can_be_written_down`、`test_the_model_carries_no_box_of_its_own`。
+- 入口校验：`test_out_of_range_knobs_are_rejected_at_the_entry`、`test_a_nonpositive_width_is_refused_at_the_entry`、
+  `test_a_malformed_flock_is_refused_by_the_model`、`test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry`、
+  `test_a_seam_object_without_its_methods_is_a_type_error`。
 
 #### 本仓边界（不带走）
 
-`test_shell.py` / `test_shell_seam.py` / `test_submission.py`（dfbench shell 接缝、official-validator
-冒烟）、数值指纹逐位比对、提交归档静态校验。这些依赖 dfbench 或交付包，与算法无关。
+dfbench 的 shell 接缝与 official-validator 冒烟、数值指纹逐位比对、提交归档静态校验。它们依赖 dfbench 或
+交付包，与算法无关，所以不在本包里。
 
 ## 8. 与 SOAR 的关系
 
-名字里的 "soar" 向 Mathesen et al. 2021 的**自适应重启**框架致敬，借的是它的**三分法**：全局侧（买
-哪种起点划算）与局部方法各管一段，两者之间的重启/转移由第三个判定决定，而不是让局部搜索独自承担
-全局多样性。后缀 `-lite` 指本包只做这三块的最小实现，且其中全局侧是**不拟合任何模型**的抽样池：重启
-能买到多少，用起点组最小值**实测**（第 2.1 节），而不是先拟合一个 `f` 的代理模型再去问它。其余部分
-是两回事：
+名字里的 "soar" 向 Mathesen et al. 2021 的**自适应重启**框架致敬：它主张全局侧（买哪种起点划算）与
+局部方法各管一段，两者之间的重启/转移由第三个机制决定，而不是让局部搜索独自承担全局多样性。`-lite`
+指本包只做这套骸架的最小实现：重启起点由 `GlobalModel` 给，默认那一臂不拟合任何模型，直接按 `Domain`
+抽样（2.1、2.3）。其余部分是两回事：
 
-- SOAR 是一个**全局–局部协同的优化框架**（文献含代理/集成模型与统计接受检验等成分）；本包不拟合
-  任何 `f` 的模型、没有多保真，只有一个局部方法 + 一个重启判定。
-- 重启判据不是 SOAR 的统计接受检验，而是共享 group-min pool 上 `EI_restart ≥ EI_continue` 的闭式比较
-  （第 2.3 节）。
+- SOAR 是一个**全局–局部协同的优化框架**（文献含代理/集成模型与统计接受检验等成分）；本包默认不拟合
+  任何 `f` 的模型、没有多保真，只有一个局部方法 + 一个起点模型接缝。
+- SOAR 的第三机制判「继续还是重来」并自带证据积累；本包把它拆成 `restart_stalled` 一个位（是否）与
+  `GlobalModel.propose`（何处），停下的判定留给局部方法自己的停止测试（2.2）。代理臂的 `−log EI` 是
+  采集函数，服务于「哪里值得再试」，不是重启判决（2.3）。
 - 局部方法默认是逐坐标 secant 幅值比预条件（第 1 节），一阶，无 Hessian、无曲率模型。
+
+本包**不是** SOAR 的移植、子集或简化实现，引用它仅为归属与差异定位（2.1）；不暗示接口兼容或结果可复现。
 
 本包**不是** SOAR 的移植、子集或简化实现，引用它仅为归属与差异定位（第 2.1 节正文）；不暗示接口
 兼容或结果可复现。
