@@ -11,8 +11,8 @@ Three seams, no dependencies beyond JAX and the standard library:
 
 - **`n_path_schedule`** — the engine: runs `n_paths` paths in lockstep, one
   batched evaluation per iteration, and owns the domain, the shared horizon and the
-  stall state machine. A stalled path is re-drawn only when `restart_stalled=True`,
-  the run's one restart knob.
+  stall state machine. A stalled path is re-drawn unless the run sets
+  `restart_stalled=False`, the run's one restart knob.
 - **`DiagonalPreconditioner`** — the default local method: a per-coordinate
   diagonal secant step `-d ⊙ g`, EMA-smoothed, with a gradient-norm floor and an
   optional alpha grid (`n_alpha`) whose argmin the engine commits. No matrix, no

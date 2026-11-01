@@ -232,6 +232,7 @@ def test_batch_shape_and_point_counting() -> None:
         max_iters=50,
         budget_check=rec.limit_check(500),
         local_solver=HalfStep(),
+        restart_stalled=False,
     )
     assert isinstance(res, NPathResult)
     assert res.n_f_g_points == rec.evals, (res.n_f_g_points, rec.evals)
@@ -240,10 +241,10 @@ def test_batch_shape_and_point_counting() -> None:
     # own trial cap bounds one iteration), so it stays far below the eval
     # count and never passes the horizon.
     assert 0 < res.n_iters <= 50
-    # With no rule firing, a path serves at most one g point per iteration, and
-    # every g batch serves at least one: the two counts bracket each other.
-    assert res.n_f_g_points <= res.n_iters * 4, (res.n_f_g_points, res.n_iters)
+    # Every batch serves at least one point and never more than one point per
+    # path: the flock is the widest a batch can be, and the counts nest.
     assert res.n_f_g_batches <= res.n_f_g_points, (res.n_f_g_batches, res.n_f_g_points)
+    assert all(m <= 4 for (m, _d) in rec.batch_shapes), rec.batch_shapes
     # batched concurrency: at least one call served >1 point at once
     assert any(m > 1 for (m, _d) in rec.batch_shapes), rec.batch_shapes
     # all batches carry the same width d
@@ -445,6 +446,42 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
     assert float(frozen.x[0]) == shallow
     assert revived.fun == -8.0, revived.fun  # the model's re-draws landed deep
     assert float(revived.x[0]) == deep
+
+
+def test_a_frozen_flock_that_fully_stalls_ends_the_run() -> None:
+    """Every path stalled with restarts off stops the run, not the horizon.
+
+    The single path is placed on the quadratic's own minimiser, so its method
+    finds no strict decrease, spends its trial cap and gives up - and with
+    `restart_stalled=False` nothing can un-stall it. The run names that state and
+    returns instead of idling out `max_iters`. The same flock left on the
+    default (restarts on) keeps being re-drawn, so the horizon stops it instead.
+    """
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        d = theta - 0.5
+        return jnp.sum(d**2), 2.0 * d
+
+    frozen = n_path_schedule(
+        Recorder(quad),
+        **flock_kwargs(jnp.array([[0.5]]), unit_domain(), key=jax.random.PRNGKey(0)),
+        max_iters=50,
+        restart_stalled=False,
+        local_solver=HalfStep(),
+    )
+    assert frozen.status == "all_stalled"
+    assert frozen.n_iters == 2, frozen  # the flock, then the one refused step
+    assert frozen.n_f_g_batches < 50  # it stopped early, not on the horizon
+    assert frozen.fun == 0.0
+
+    revived = n_path_schedule(
+        Recorder(quad),
+        **flock_kwargs(jnp.array([[0.5]]), unit_domain(), key=jax.random.PRNGKey(0)),
+        max_iters=50,
+        local_solver=HalfStep(),
+    )
+    assert revived.status == "max_iters"  # the re-draws keep it alive to the horizon
+    assert revived.n_iters == 50
 
 
 def test_projected_descent_reaches_wall_optimum() -> None:
@@ -683,6 +720,7 @@ def test_a_dead_path_never_widens_a_batch() -> None:
         max_iters=n_iterations + 1,
         budget_check=lambda: len(widths) < 100,
         local_solver=HalfStep(),
+        restart_stalled=False,
     )
     assert res.n_iters == n_iterations + 1, res
     assert widths[0] == n_paths, widths  # iteration 0 serves the whole flock

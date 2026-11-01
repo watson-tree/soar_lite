@@ -3,7 +3,7 @@
 A first-order multi-path optimizer: value and gradient come back together from
 the caller; `n_paths` independent descent paths advance in lockstep under one shared
 budget, each re-drawn from a global model once its own stopping test stalls it
-(opt-in, behind `restart_stalled`).
+(the `restart_stalled` knob, on by default).
 
 ## Language
 
@@ -29,10 +29,10 @@ _Avoid_: population size, swarm size
 One pass of the engine's main loop, counted in `n_iters`. Per iteration the engine
 splits the paths into a redraw set (no point yet, or stalled with
 `restart_stalled` on) and a cohort that steps: a path either redraws or steps
-this iteration, never both. The parallel wall-clock unit; an iteration may
-serve zero batches (a fully stalled flock that is not redrawing) or several (the
-redraw starts plus the steppers' trials, and the settle batch that grades what
-they kept).
+this iteration, never both. The parallel wall-clock unit; an iteration serves
+one or more batches (the redraw starts plus the steppers' trials, and the settle
+batch that grades what they kept). A flock with nothing left to do ends the run
+on `all_stalled` instead of entering a batchless iteration.
 Iteration 0 is the flock's placement: an empty `x` redraws unconditionally,
 so starting the flock is the same operation as any later redraw. `n_iters`
 counts finished iterations only — one cut short by a refused batch is not
@@ -79,11 +79,13 @@ A path that moved nowhere this iteration — it neither redrew nor committed a
 step: its local method signalled `give_up` (its own stopping test fired), it
 accepted with no finite sample to win, or the sample it did win had a
 non-finite value or gradient.
-Stalled is not dead: when the run opted into `restart_stalled`, the path is
-re-drawn by the global model on the next iteration; otherwise it stays parked —
-still counted, still readable for `best` — but never moved again. A path with
-no point at all (an empty `x`) is a redraw that ignores `restart_stalled`: it
-is the machine's own initial state, not a stall.
+Stalled is not dead: unless the run turned `restart_stalled` off, the path is
+re-drawn by the global model on the next iteration; with the knob off it stays
+parked — still counted, still readable for `best` — but never moved again. A
+turn of the loop with every path parked that way is `all_stalled`: no path can
+move and none is owed a start, so the run stops. A path with no point at all (an
+empty `x`) is a redraw that ignores `restart_stalled`: it is the machine's own
+initial state, not a stall.
 _Avoid_: paused, idle, dead
 
 ### Evaluation
@@ -181,10 +183,12 @@ restart verdict.
 _Avoid_: restart rule, sampler (the sampler is a per-dimension draw inside the domain)
 
 **restart_stalled**:
-The run's one restart bit, deciding *whether* a stall restarts: on, the stalled
-path is re-drawn by the global model next iteration; off (the default), it stays
-parked. It is orthogonal to *when* (the local method's own stopping test) and
-*where* (the global model). A run that never restarts needs no model:
+The run's one restart bit, deciding *whether* a stall restarts: on (the
+default), the stalled path is re-drawn by the global model next iteration; off,
+it stays parked, and a flock that is all parked is a deadlock — the run ends on
+`all_stalled` rather than idling to its horizon. It is orthogonal to *when* (the
+local method's own stopping test) and *where* (the global model). A run that
+never restarts needs no model:
 `restart_stalled=False` with the default `SampleGlobalModel` is pure descent
 from the initial flock.
 _Avoid_: restart check, reset decision
@@ -212,12 +216,12 @@ _Avoid_: commit batch, gradient round
 **horizon (`max_iters`)**:
 The engine's own stop, counted in iterations: every completed iteration costs
 one, and iteration 0 places the flock. A deterministic bound, not a cost
-proxy — one iteration serves anywhere from no batch (a fully stalled flock that
-is not redrawing) to the redraw starts plus however many trials the method's own
-search serves, so the four counters report what a run
-actually billed. At least one of `max_iters`/`time_limit` must be given: a
-`budget_check` alone stops nothing, because a stalled iteration asks for no
-batch.
+proxy — one iteration serves the redraw starts plus however many trials the
+method's own search serves, while a flock with nothing left to do stops the run
+(`all_stalled`) instead of billing a batchless iteration — so the four counters
+report what a run actually billed. At least one of `max_iters`/`time_limit` must
+be given: a `budget_check` alone stops nothing, because a gate consulted only
+before a batch is never consulted on a run that serves none.
 _Avoid_: eval budget, cost estimate, time limit
 
 **deadline (`time_limit`)**:

@@ -207,6 +207,9 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
     and is allowed to enter the report, but the point is never committed as the
     path's next start - the batch is the run's last. With the gate missing, the
     path would step from an unusable point and serve at least one more batch.
+    The arm is the frozen flock (`restart_stalled=False`): the path stalls and
+    nothing can un-stall it, so the run ends on `all_stalled` rather than idling
+    out the horizon.
     """
     n_batches = [0]
 
@@ -223,8 +226,9 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
         eval_f_g,
         **flock_kwargs(jnp.array([[0.5]]), unit_domain(), key=jax.random.PRNGKey(0)),
         max_iters=10,
+        restart_stalled=False,
     )
 
     assert res.n_f_g_batches == 2, res.n_f_g_batches  # the flock + the one refused step
-    assert res.status == "max_iters"
+    assert res.status == "all_stalled"  # and nothing can un-stall the frozen path
     assert math.isfinite(float(res.fun))

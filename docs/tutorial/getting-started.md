@@ -60,13 +60,16 @@ print(result.x, result.fun, result.status)
 
 The status says only why the loop stopped, never that it converged: it is
 `max_iters` here because the run reached the horizon you gave it - and the
-horizon counts iterations, not work. The four paths converge within the first
-few iterations; with the default `restart_stalled=False` a converged path then
-stalls and stays parked: it holds its point and still counts toward `best`, but
-never moves again, so the tail of the run is idle. (Turn `restart_stalled` on
-to have a stalled path reload a fresh start from the global model every time it
-stops.) The four counters report that mix - the passes
-actually served - which is why they, not `n_iters`, are the cost.
+horizon counts iterations, not work. The four paths reach the minimiser within
+the first few iterations, and every later stop is a fresh start: by default
+(`restart_stalled=True`) a stalled path reloads a draw from the global model each
+time its own stopping test fires, so the flock keeps working until the horizon.
+Ask for the frozen version instead and the same run ends much sooner: with
+`restart_stalled=False` a converged path is parked for good - it holds its point
+and still counts toward `best`, but never moves again - and once every path is
+parked the run has nothing left to do and stops with status `all_stalled`. The
+four counters report what either run actually served, which is why they, not
+`n_iters`, are the cost.
 
 ## 3. Read the result
 
@@ -100,7 +103,7 @@ than a criterion the search converged to.
 | `eval_f` | the optional value-only seam: points in, f values out, no gradient |
 | `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
 | `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
-| `restart_stalled` | whether a stalled path is re-drawn (default `False`) |
+| `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` freezes the flock, and the run ends on `all_stalled` once every path parks |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |
 
@@ -114,14 +117,16 @@ Three gotchas worth knowing up front:
   The method reads each trial's f cheaply, then the single winner's gradient is
   bought once. Without `eval_f` every trial is itself a fused batch, so the
   count lands on the `f_g` pair instead of the `f` pair.
-- **`n_paths = 1` is the single-path baseline.** Same code, one path, and the
-  default is already pure descent: `restart_stalled=False` never reloads a
-  start. Pass `restart_stalled=True` to let the lone path reload once it
-  stalls.
+- **`n_paths = 1` is the single-path baseline.** Same code, one path - and with
+  one path the parallelism is gone while the default restart bit still fires:
+  every stop becomes a random redraw, which on a unimodal problem is a restart
+  into the same basin until the horizon. Pass `restart_stalled=False` for the
+  single chain that stops where it stalled.
 - **The horizon counts iterations, not work.** What one iteration costs is the
-  method's business: it serves from zero batches (a fully stalled flock that is
-  not redrawing) up to the redraw starts plus however many trials the method's
-  own line search serves. So `max_iters` is a deterministic stop, not
+  method's business: it serves the redraw starts plus however many trials the
+  method's own line search serves, and a flock with nothing left to do ends the
+  run (`all_stalled`) instead of entering a batchless iteration. So `max_iters`
+  is a deterministic stop, not
   a cost estimate - read the four counters for what the run actually
   did, and pass `time_limit` if wall-clock is what you care about. `budget_check`
   is an extra gate consulted at the loop head each iteration and again before

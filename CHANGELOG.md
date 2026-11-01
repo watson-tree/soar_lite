@@ -70,6 +70,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `restart_stalled` defaults to `True`. The multistart restart is the cadence a
+  parallel run wants: when a path's own stopping test fires, the global model
+  hands it a fresh start and the flock keeps buying work until the horizon,
+  instead of the converged paths parking while the live ones carry the run.
+  `restart_stalled=False` keeps the frozen flock as an explicit opt-out - the
+  pure-descent arm, and still the right answer for a single-basin problem,
+  where a redraw is a restart into the same basin.
+- A run with every path parked now ends as `all_stalled` instead of idling to
+  its horizon. With restarts off, a fully parked flock is self-locking: no path
+  can move and none is owed a start, so the iteration had nothing to ask for
+  and each further turn only ticked `n_iters`. The engine names that state and
+  returns; the turn that finds it serves no batch, so it is not counted in
+  `n_iters` either (the same treatment as `unbounded` and a refused batch).
+  Unreachable with restarts on, where a parked path is always owed a redraw.
 - `n_path_schedule`'s `domain` is a required argument, and the run owns the
   box. `GlobalModel` no longer carries a `domain` or a `d`: `propose` is
   `propose(n_points, domain)`, handed the run's `Domain` at each ask, and the

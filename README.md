@@ -27,7 +27,9 @@ and the standard library:
 - **`restart_stalled`** — the *whether* of a restart, a boolean on
   `n_path_schedule`. *When* a path has stopped is the local solver's own
   stopping test; *where* it goes is the model's, so there is no third seam.
-  `False` (the default) keeps the flock the caller starts as the whole run.
+  `True` (the default) re-draws a stalled path; `False` keeps the flock the
+  caller starts as the whole run, and the run then ends on `all_stalled` once
+  every path parks.
 - **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep: an
   iteration decides every move on values and buys the gradients it kept in one
   batch. Owns the domain, the shared horizon and the stall state machine.

@@ -3,13 +3,14 @@
 Two panels per method family, following the design in `DESIGN.md`:
 
 * smooth + headline (preconditioning proposition): soar-lite n_paths=1
-  (NoRestart), n_paths=16 (NoRestart), n_paths=16 (StallRestart), Adam,
+  (restart off), n_paths=16 (restart off), n_paths=16 (restart on), Adam,
   L-BFGS-B (ceiling reference);
 * multimodal (escape proposition): the same three soar-lite arms, Adam.
 
 Both n_paths=16 arms are plotted because one curve would move width and rule
-at once: NoRestart 1 -> NoRestart 16 is the parallelism step, NoRestart 16 ->
-EIRestart 16 the restart step. Colour encodes the rule (C0 none, C1 EI),
+at once: n_paths=1 -> n_paths=16 (both restart off) is the parallelism step,
+n_paths=16 restart off -> restart on the restart step. Colour encodes the
+restart bit (C0 off, C1 on),
 linestyle encodes width (solid one path, dashed sixteen), so each of the two
 steps is a single visual attribute.
 
@@ -89,7 +90,7 @@ def _parallel_no_restart(prob: problems.Problem, **kw: int) -> Trace:
 def _parallel_restart(prob: problems.Problem, **kw: int) -> Trace:
     """soar-lite n_paths=16 with restart on the first stall.
 
-    Passed explicitly rather than leaning on the engine default, so the panel
+    Passed explicitly rather than left to the engine default, so the panel
     states whether it measured restart; paired with `_parallel_no_restart` it
     isolates restart at fixed width.
     """

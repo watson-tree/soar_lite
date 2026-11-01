@@ -332,16 +332,16 @@ EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | Non
 ObserveFn: TypeAlias = Callable[[jnp.ndarray, list[float], jnp.ndarray | None], None]
 ProposeFn: TypeAlias = Callable[[int, Domain], jnp.ndarray]
 
-# Four names for four ways to end a run: the three gates, in the order they are
+# Five names for five ways to end a run: the three gates, in the order they are
 # checked (iteration horizon, wall-clock deadline, the caller's extra batch
-# gate), plus the objective bottoming out at -inf. A stalled flock has no fifth
-# stop - every report still advances a stage clock, so the verdicts keep coming
-# until the horizon or the deadline ends the run.
+# gate), the objective bottoming out at -inf, and a flock that can no longer
+# move with restarts off.
 NPathStatus: TypeAlias = Literal[
     "max_iters",
     "time_limit",
     "budget_exhausted",
     "unbounded",
+    "all_stalled",
 ]
 
 
@@ -371,9 +371,11 @@ class NPathResult:
     handed no `eval_f` seam simply reports zero on the f pair.
 
     Two deliberate differences from `OptimizeResult`: `success`/`message` are
-    absent because the engine has no convergence criterion of its own - the one
-    thing it watches for is an objective with no floor, which ends the run with
-    `status="unbounded"` - and `fun` is the best over *feasible* points only, so
+    absent because the engine has no convergence criterion of its own - it ends
+    a run before its horizon only for an objective with no floor
+    (`status="unbounded"`) or for a flock every path of which has stalled with
+    restarts off (`status="all_stalled"`) - and `fun` is the
+    best over *feasible* points only, so
     it is `inf` when nothing feasible was ever served and `-inf` when a feasible
     point priced the objective at `-inf` (the trajectory still moves on the
     penalized objective, but `f⋆` does not). scipy's `fun` has no such filter.
@@ -405,9 +407,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # The run's horizon, counted in iterations: the engine completes at most
     # max_iters iterations. An iteration is one move per path (iteration 0
     # places `x0` instead), not one eval, so this is a reproducible stop, not a
-    # cost or wall-clock proxy - one iteration may serve from zero batches (a
-    # stalled one) up to a restart's starts plus however many trials the
-    # method's own search serves. None leaves the horizon to `time_limit`.
+    # cost or wall-clock proxy - one iteration serves one or more batches (a
+    # restart's starts and the method's own trials, never zero), so a batch
+    # budget and an iteration budget are different caps. None leaves the
+    # horizon to `time_limit`.
     max_iters: int | None = None,
     # A wall-clock deadline in seconds, for the caller who budgets time rather
     # than iterations. None means none. A run needs a horizon: at least one of
@@ -417,17 +420,19 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # budget the engine cannot see (points, dollars, an external clock). It is
     # one of `_Budget.stop`'s three inputs, asked at the loop head every
     # iteration and again before each served batch, fused or value-only.
-    # None means "no extra gate". It is additional, never a horizon: a gate
-    # that advances only on served batches spins forever under a stalled flock,
-    # and the engine cannot see which kind this is, so a horizon is required.
+    # None means "no extra gate". It is additional, never a horizon: the engine
+    # asks it only before a batch, so it cannot tell a gate that closes on its
+    # own from one that never does, and a horizon is required.
     budget_check: Callable[[], bool] | None = None,
     # Whether a stalled path is re-drawn. The stall itself is the engine's own
     # bit (`_Paths.stalled`), set when a path's method gives up or its point is
     # not usable; this knob only decides whether the model is then asked for a
-    # fresh point. False keeps the flock frozen (`_Paths` never re-seeds it),
-    # True is the stall-restart cadence. The default is False, so the flock a
-    # caller hands in is the whole run unless it opts in.
-    restart_stalled: bool = False,
+    # fresh point. False keeps the flock frozen (`_Paths` never re-seeds it) and
+    # a flock that freezes entirely ends the run (`all_stalled`); True is the
+    # stall-restart cadence, and the default, since a frozen path is idle
+    # parallelism. A caller who wants pure multi-start descent from its flock
+    # turns it off.
+    restart_stalled: bool = True,
     # The two plugins, adjacent and in one order everywhere: where a restart
     # lands (the model is also the run's evidence sink, asked for points only
     # when a restart fires; None -> SampleGlobalModel, which draws whatever the
@@ -456,8 +461,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     (the engine reads the stall it produced), so a restart is two seams and one
     flag - a model that proposes points (a surrogate maximising expected
     improvement, an out-of-tree adapter) never touches the verdict, and a run
-    that never restarts (`restart_stalled=False`, the default) needs no model
-    of its own at all.
+    that never restarts (`restart_stalled=False`, the pure-descent arm) needs no
+    model of its own at all. It is on by default, because a stalled path with
+    restarts off is idle parallelism; a caller finishing a flock it handed in
+    turns it off and lets an entirely stalled flock end the run.
 
     `n_paths` is the run's width and nothing else; the dimension `d` is the
     model's (see below), so a run never spells it twice. Iteration 0 is the
@@ -500,12 +507,15 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     The run's own stop is the horizon: at most `max_iters` iterations (status
     "max_iters"), or, if `time_limit` is
     given, the wall-clock deadline (status "time_limit"); at least one of the
-    two must be passed. Iterations are the unit on purpose - an iteration is one
+    two must be passed. A flock that can no longer move stops the run too: every
+    path stalled with `restart_stalled=False` means nothing can un-stall it, so
+    the engine ends the run with status "all_stalled" instead of idling out the
+    horizon. Iterations are the unit on purpose - an iteration is one
     move per path (iteration 0 places the flock instead), so the same number
     reproduces on any machine and does not change when the method's per-step
     trial count changes the per-iteration batch count. It is not a cost bound:
-    one iteration serves from zero batches (a fully stalled one) up to a
-    restart's starts plus however many trials the method's own search serves, so
+    one iteration serves one or more batches - a restart's starts and the
+    method's own trials, at least one of the two - so
     migrating a batch budget to `max_iters` can multiply the work done by that
     per-iteration spread. budget_check() is the caller's extra stop - one of the
     three inputs the run's one query (`_Budget.stop`) asks, at the loop head
@@ -569,7 +579,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         local_solver: the local method (``None`` binds ``DiagonalPreconditioner``).
         restart_stalled: whether a path the engine marks stalled (its method gave
             up, or its point was not usable) is re-drawn from the global model.
-            ``False`` keeps the flock frozen.
+            ``True`` (the default) is the stall-restart cadence; ``False`` keeps
+            the flock frozen, and a flock that stalls entirely then ends the run
+            with ``status="all_stalled"``.
         key: the PRNG seed of the default model's draws; ``None`` uses the
             fixed default, so unseeded runs are deterministic.
 
@@ -697,6 +709,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             # or ticked either.
             status = "unbounded"
             break
+        except _AllStalled:
+            # Every path is stalled and none restarts: nothing left to move, and
+            # no batch was served this iteration, so it is not ticked.
+            status = "all_stalled"
+            break
         budget.tick()  # counted after the body: only finished iterations
 
     return NPathResult(
@@ -802,6 +819,19 @@ class _OptimumReached(Exception):  # noqa: N818 - a signal, not an error
     """
 
 
+class _AllStalled(Exception):  # noqa: N818 - a signal, not an error
+    """Every path has stalled and the run cannot re-draw any of them.
+
+    Raised inside `_Paths.move` when no path restarts and every path is stalled
+    - only reachable with `restart_stalled=False`, since a stalled path restarts
+    otherwise. Nothing can un-stall a path but `_place`, which only ever sees
+    the restarted paths, so this state is terminal rather than transient: the
+    iteration would serve nothing, and repeating it would idle out the horizon
+    (the wall-clock one especially). The run stops on it, naming the state in
+    `status` instead of ticking away the remaining iterations.
+    """
+
+
 class _Budget:
     """The run's stop meter and work report.
 
@@ -810,9 +840,9 @@ class _Budget:
     extra gate (`budget_check`). `stop` asks all three as one query - at the
     loop head every iteration, and again before each served batch - and names the
     reason it refuses. At least one of the first two is required at entry,
-    because they are the only stops the engine can see advance on its own: a
-    `budget_check` that flips only on served batches spins forever under a
-    stalled flock, and the engine cannot tell it from one that flips alone.
+    because they are the only stops the engine can see advance on its own: it
+    asks a `budget_check` only before a batch, so it cannot tell a gate that
+    closes on its own from one that never does.
 
     The four counters are pure reports, not caps, and not one of them gates: the
     fused pass counts on its pair (`n_f_g_points` / `n_f_g_batches`, one batch per
@@ -1111,7 +1141,8 @@ class _Paths:
     - A path is stalled when it did not move at all this iteration - its method
       gave up on every trial, or its fresh start or its winner was not a usable
       point. A stalled path does not step, so it serves nothing that iteration:
-      its method's stage clock therefore keeps pace with its live cohort.
+      the method's own state therefore stands still while its live cohort's
+      advances.
     - A start or a winner is committed only when it is `usable` - finite in
       both halves - one gate defined once on the point type.
     - A path holds a point or it does not. "No point" (an empty `x`, which only
@@ -1188,6 +1219,10 @@ class _Paths:
         and every call into a collaborator here is per path, so deciding all
         moves before placing any of them is the same schedule as placing each
         move as it is decided.
+
+        A flock with nothing left to do ends the run instead of idling: when no
+        path restarts and every path is stalled, `_AllStalled` is raised before
+        any batch is asked for.
         """
         # "No point" is the machine's own state, never a stall to weigh, so it
         # is read off the point's shape and not off its value: only the
@@ -1200,6 +1235,14 @@ class _Paths:
             for i in range(self.n_paths)
             if self.points[i].x.size == 0 or (self.restart_stalled and self.stalled[i])
         ]
+        # Nothing is going to move again: no path restarts, and every path is
+        # stalled. `_place` is the only writer that clears a stall bit and it
+        # only ever sees the restarted paths, so an empty `restarted` beside a
+        # fully stalled flock is terminal - the iteration would serve nothing.
+        # Only reachable with `restart_stalled=False`; the run ends here rather
+        # than idling out the horizon.
+        if not restarted and all(self.stalled):
+            raise _AllStalled
         # Every path that did not restart. A stalled path is in here only when
         # the run never restarts: it proposes nothing, but it still holds its
         # place in the cohort so its point stays readable.
@@ -1423,9 +1466,8 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
         msg = (
             "a run needs a horizon: pass max_iters (iterations) or "
             "time_limit (seconds); budget_check is asked at the loop head and "
-            "before each batch, but a gate that advances only on served batches "
-            "spins forever under a stalled flock, and the engine cannot see "
-            "which kind it is"
+            "before each batch, so a gate that closes on its own cannot be "
+            "distinguished from one that never does"
         )
         raise ValueError(msg)
 
