@@ -2,9 +2,11 @@
 
 `DiagonalPreconditioner` descends along ``-d ⊙ g``, where the per-coordinate
 scale ``d`` is the magnitude ratio of one secant pair (|Δx|/|Δy| in ``abs``
-mode, √(Δx²/Δy²) in ``rms`` mode), smoothed over the path's history. It
-implements the engine's `LocalSolver` contract and owns only direction, step
-size and acceptance - no curvature model, no Hessian.
+mode, √(Δx²/Δy²) in ``rms`` mode), smoothed over the path's history. With
+``mu > 0`` the direction is smoothed over the path's gradient history as well,
+projected so the step stays a descent direction. It implements the engine's
+`LocalSolver` contract and owns only direction, step size and acceptance - no
+curvature model, no Hessian.
 """
 
 import math
@@ -39,6 +41,23 @@ class DiagonalPreconditioner(LocalSolver):
     descent direction and needs no acceptance test. Named "diagonal
     preconditioner", not "diagonal Newton": coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside
     |y_i| and makes d a biased estimator of 1/Hᵢᵢ.
+
+    With ``mu > 0`` the direction is also smoothed over the path's gradient
+    history: an EMA of the step-start gradients ``m`` is blended in as
+    ``g + m⊥``, where ``m⊥ = m - (<m,g>_d/<g,g>_d)·g`` projects m onto g's
+    orthogonal complement under the **d-weighted** inner product
+    ``<a,b>_d = Σ d_i a_i b_i``. The weighting is load-bearing: Euclidean
+    orthogonalisation makes ``<m⊥,g> = 0``, but the step's descent is
+    ``<d⊙(g+m⊥), g>``, and that is not the same inner product - the step would
+    silently stop descending. As written, ``<d⊙(g+m⊥), g> = <g,g>_d > 0``
+    exactly, so the no-acceptance-test claim above holds with momentum on. The
+    knob is opt-in (``mu = 0`` is off, bit for bit the plain direction) because
+    momentum costs accuracy where the diagonal estimate is already right: near
+    a minimiser ``g → 0`` but ``m`` does not, so the direction stops vanishing
+    and the gradient-norm stopping test loses its anchor. It buys progress only
+    where ``d`` is structurally wrong (a rotated Hessian, which no
+    per-coordinate ratio can represent) and there only patchily - a mitigation,
+    not a fix.
 
     Two phases per path, one step mechanic. Every step samples the alpha grid
     {alpha0, alpha0·backtrack, alpha0·backtrack², …} along its own direction and
@@ -95,6 +114,7 @@ class DiagonalPreconditioner(LocalSolver):
         self,
         *,
         beta: float = 0.95,  # EMA decay; the window is ≈ 1/(1-β) steps
+        mu: float = 0.0,  # gradient-EMA decay for the momentum blend; 0 = off
         theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
         tau_rel: float = 1e-6,  # gradient-norm stopping test vs ‖g_0‖
         moment: Literal["abs", "rms"] = "rms",  # mean ratio / mean-square ratio
@@ -115,6 +135,8 @@ class DiagonalPreconditioner(LocalSolver):
         Args:
             beta: EMA decay for the secant-magnitude smooth (window ≈ 1/(1-β)
                 steps), in (0, 1).
+            mu: EMA decay for the gradient-history smooth that feeds the
+                momentum blend; 0 disables it (the default), in [0, 1).
             theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
                 ``θ·g_i²`` for "rms"), >= 0.
             tau_rel: relative gradient-norm stopping threshold, tested against
@@ -130,6 +152,7 @@ class DiagonalPreconditioner(LocalSolver):
         """
         for name, value, ok, want in (
             ("beta", beta, 0.0 < beta < 1.0, "in (0, 1)"),
+            ("mu", mu, 0.0 <= mu < 1.0, "in [0, 1)"),
             ("theta", theta, theta >= 0.0, ">= 0"),
             ("tau_rel", tau_rel, tau_rel > 0.0, "> 0"),
             ("moment", moment, moment in ("abs", "rms"), '"abs" or "rms"'),
@@ -141,6 +164,7 @@ class DiagonalPreconditioner(LocalSolver):
                 msg = f"{name} must be {want}, got {value!r}"
                 raise ValueError(msg)
         self.beta = beta
+        self.mu = mu
         self.theta = theta
         self.tau_rel = tau_rel
         self.moment = moment
@@ -152,6 +176,8 @@ class DiagonalPreconditioner(LocalSolver):
         self.has_secant: dict[int, bool] = {}  # per path: first pair in hand?
         self.s_ema: dict[int, jnp.ndarray] = {}  # per path: S₁ ("abs") or S₂ ("rms")
         self.y_ema: dict[int, jnp.ndarray] = {}  # per path: Y₁ ("abs") or Y₂ ("rms")
+        self.m: dict[int, jnp.ndarray] = {}  # per path: gradient EMA (mu > 0 only)
+        self.m_fresh: dict[int, bool] = {}  # per path: m folded for this step yet?
         self.alpha_sample: dict[int, int] = {}  # per path: samples served this step
         self.saw_finite: dict[int, bool] = {}  # per path: any finite sample this step?
 
@@ -167,6 +193,8 @@ class DiagonalPreconditioner(LocalSolver):
         self.has_secant[i] = False
         self.s_ema[i] = jnp.zeros_like(p.g)
         self.y_ema[i] = jnp.zeros_like(p.g)
+        if self.mu > 0.0:
+            self.m[i] = p.g  # the gradient history never crosses a restart
         self._reset_step(i)
 
     def needs_verdict(self, i: int, p: PathPoint) -> bool:
@@ -189,14 +217,28 @@ class DiagonalPreconditioner(LocalSolver):
         return self.n_alpha > 1 or self._stationary(i, p)
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
-        """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - d⊙g."""
+        """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - alpha·d⊙w.
+
+        w is g, or g + m⊥ when mu > 0 (see `_blend_momentum`).
+        """
         if not self.has_secant[i]:
             return p.x + self.alpha[i] * (-p.g)
+        d = self._diag(i, p.g)
+        w = p.g
+        if self.mu > 0.0:
+            # Only the steady step folds: `restart` already seeded m with the
+            # warm-up's own gradient, so folding it here would be a no-op.
+            self._smooth_gradient(i, p.g)
+            w = self._blend_momentum(i, p.g, d)
+        return p.x - self.alpha[i] * (d * w)
+
+    def _diag(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
+        """Return the per-coordinate inverse curvature d_i for path i at gradient g."""
         # λ anchors to the current gradient's own magnitude, so a coordinate
         # with no usable secant (y_i = 0) still steps instead of 0/0. It is a
         # floor (max), not an addend: where Y ≥ λ the estimate is the faithful
         # S/Y ratio, and λ only caps d below that.
-        floor = self.theta * (jnp.abs(p.g) if self.moment == "abs" else jnp.square(p.g))
+        floor = self.theta * (jnp.abs(g) if self.moment == "abs" else jnp.square(g))
         den = jnp.maximum(self.y_ema[i], floor)
         # den_i == 0 means y_i = 0 *and* g_i = 0: no curvature information and
         # already stationary in i, so step nowhere there rather than NaN. One
@@ -204,9 +246,40 @@ class DiagonalPreconditioner(LocalSolver):
         # differentiated, so an inf/nan in the unselected lane cannot leak
         # anywhere; a derivative of this line would see it, so revisit then.
         d = jnp.where(den > 0.0, self.s_ema[i] / den, 0.0)
-        if self.moment == "rms":
-            d = jnp.sqrt(d)
-        return p.x - self.alpha[i] * (d * p.g)
+        return jnp.sqrt(d) if self.moment == "rms" else d
+
+    def _smooth_gradient(self, i: int, g: jnp.ndarray) -> None:
+        """Fold one step-start gradient into path i's momentum EMA, once per step.
+
+        ``restart`` seeds m with the start's own gradient, so this only ever
+        blends. ``propose`` runs once per alpha-grid sample, not once per step,
+        so the `m_fresh` flag `_reset_step` clears keeps a retried step from
+        folding the same gradient twice - that would shorten the window ``mu``
+        buys.
+        """
+        if self.m_fresh[i]:
+            return
+        self.m[i] = self.mu * self.m[i] + (1.0 - self.mu) * g
+        self.m_fresh[i] = True
+
+    def _blend_momentum(self, i: int, g: jnp.ndarray, d: jnp.ndarray) -> jnp.ndarray:
+        """Blend path i's smoothed gradient into g, keeping g·step a descent gain.
+
+        m is projected onto g's orthogonal complement under the d-weighted inner
+        product, so the step ``-alpha·d⊙(g + m⊥)`` has ``<d⊙(g+m⊥), g> =
+        <g,g>_d > 0`` exactly - the along-g part of the momentum cancels, and
+        what is added is orthogonal to g *in the metric the step is measured
+        in*. Projecting in the Euclidean metric instead leaves that gain free to
+        go negative.
+
+        ``<g,g>_d == 0`` means g has no support where d > 0: there is nothing to
+        precondition, so no momentum is mixed in and the step is zero rather
+        than a push along m.
+        """
+        gg = float(jnp.sum(d * g * g))
+        if gg <= 0.0:
+            return g
+        return g + (self.m[i] - (jnp.sum(d * self.m[i] * g) / gg) * g)
 
     def verdict(
         self,
@@ -274,6 +347,7 @@ class DiagonalPreconditioner(LocalSolver):
         self.alpha[i] = self.alpha0
         self.alpha_sample[i] = 0
         self.saw_finite[i] = False
+        self.m_fresh[i] = False  # the next propose folds the new step's gradient
 
     def _step_verdict(self, i: int, f: float) -> Verdict:
         """Judge one alpha-grid sample on its value; never fold here.

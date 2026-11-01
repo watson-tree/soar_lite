@@ -338,6 +338,110 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     assert close(solver.propose(0, fresh), fresh.x + 1.0 * (-fresh.g), 1e-12)
 
 
+# --- momentum blend (opt-in, mu > 0) ---
+
+S_MOM = jnp.array([2.0, -1.0])
+Y_MOM = jnp.array([1.0, 3.0])
+
+
+def _solver_with_secant(
+    mu: float,
+    g: jnp.ndarray,
+    *,
+    s: jnp.ndarray = S_MOM,
+    y: jnp.ndarray = Y_MOM,
+    n_alpha: int = 1,
+) -> tuple[DiagonalPreconditioner, PathPoint]:
+    """Return a solver holding one folded secant (s, y) and the point it sits on.
+
+    The step start's gradient is ``g - y``, so the committed point's gradient is
+    exactly ``g``: the same secant the engine would have folded after a step of
+    ``s``.
+    """
+    solver = DiagonalPreconditioner(mu=mu, theta=0.0, n_alpha=n_alpha)
+    start = PathPoint(x=jnp.zeros_like(g), f=1.0, g=g - y)
+    best = PathPoint(x=start.x + s, f=0.5, g=g)
+    solver.restart(0, start)
+    solver.fold(0, start, best)
+    return solver, best
+
+
+def _direction(solver: DiagonalPreconditioner, p: PathPoint) -> jnp.ndarray:
+    """Return the proposed direction d⊙w, with the alpha multiplier divided out."""
+    return (p.x - solver.propose(0, p)) / solver.alpha[0]
+
+
+def test_diag_momentum_keeps_the_plain_step_descent_gain() -> None:
+    """The blend only rotates: <d⊙w, g> is exactly the plain step's <d⊙g, g>.
+
+    This is what the d-weighted projection buys. The momentum does change the
+    direction (it must, or nothing was blended), yet the direction's descent
+    gain on g - the quantity the no-acceptance-test claim rests on - is
+    untouched, so the step stays a descent direction by construction.
+    """
+    g = jnp.array([0.5, -1.5])
+    plain, at_plain = _solver_with_secant(0.0, g)
+    mom, at_mom = _solver_with_secant(0.5, g)
+    d_plain = _direction(plain, at_plain)
+    d_mom = _direction(mom, at_mom)
+    gain_plain = float(jnp.vdot(d_plain, g))
+    gain_mom = float(jnp.vdot(d_mom, g))
+    assert gain_plain > 0.0  # d ≥ 0 ⇒ the plain step always descends
+    assert close(gain_mom, gain_plain, 1e-9)  # exact in the d-metric
+    assert not close(d_mom, d_plain, 1e-9)  # the momentum really was blended in
+
+
+def test_diag_momentum_folds_once_per_step_not_per_sample() -> None:
+    """A retried grid sample moves only alpha; the EMA must not fold again."""
+    g = jnp.array([0.5, -1.5])
+    solver, at = _solver_with_secant(0.5, g, n_alpha=2)
+    first = solver.propose(0, at)
+    m_after_first = solver.m[0]
+    assert solver.verdict(0, at, first, 1.0) == "retry"  # alpha *= backtrack
+    second = solver.propose(0, at)
+    assert jnp.array_equal(solver.m[0], m_after_first)  # not folded twice
+    # Same step direction; only the grid's alpha differs.
+    assert close((at.x - second) / solver.alpha[0], (at.x - first) / 1.0, 1e-12)
+
+
+def test_diag_restart_drops_the_momentum_history() -> None:
+    """A restart re-seeds the momentum EMA from the new start's gradient."""
+    g = jnp.array([0.5, -1.5])
+    solver, at = _solver_with_secant(0.5, g)
+    solver.propose(0, at)  # fold the steady step's gradient into m
+    assert not close(solver.m[0], at.g, 1e-9)  # the history is not the current g
+    fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
+    solver.restart(0, fresh)
+    assert close(solver.m[0], fresh.g, 1e-12)
+
+
+def test_diag_mu_zero_keeps_no_momentum_state() -> None:
+    """The default pays nothing: no history is stored, no direction is blended."""
+    g = jnp.array([0.5, -1.5])
+    solver, at = _solver_with_secant(0.0, g)
+    solver.propose(0, at)
+    assert solver.m == {}
+    assert not any(solver.m_fresh.values())  # nothing was ever folded
+
+
+def test_diag_momentum_is_skipped_when_g_has_no_d_support() -> None:
+    """<g,g>_d == 0 means nothing to precondition: a zero step, not a push on m.
+
+    d is nonzero only where the secant has curvature and g is nonzero only
+    where the coordinate is flat (d = 0), so every ``d_i·g_i²`` is 0 and the
+    projection's denominator vanishes. The step must collapse to the plain one
+    (zero there), not turn into d⊙m.
+    """
+    start = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 0.5]))
+    solver = DiagonalPreconditioner(mu=0.5, theta=0.0)
+    solver.restart(0, start)  # m seeds to start.g; coordinate 0's history survives
+    # y = [-1, 0] against s = [1, 0] leaves d = [1, 0]; g lives on coordinate 1.
+    at = PathPoint(x=start.x + jnp.array([1.0, 0.0]), f=0.5, g=jnp.array([0.0, 0.5]))
+    solver.fold(0, start, at)
+    # m = ½·start.g + ½·at.g keeps a nonzero coordinate 0, where d is 1 and g is 0.
+    assert close(solver.propose(0, at), at.x, 1e-12)
+
+
 def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
     """Engine round-trip: warm-up plus one diagonal step lands on the argmin."""
     h = jnp.array([2.0, 4.0])
@@ -362,6 +466,36 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
     # best, which is what `fun`/`x` report.
     assert close(result.x, center, 1e-9)
     assert result.fun < 1e-12
+
+
+def test_diag_momentum_runs_through_the_engine() -> None:
+    """Engine round-trip with momentum on: it runs, descends, stays finite.
+
+    Not a convergence claim - near the argmin g → 0 while m does not, so the
+    gradient-norm stopping test loses its anchor (that is why mu is opt-in).
+    What this pins is the engine's own restart→propose→fold gluing: ``restart``
+    must have seeded the path's momentum, or the steady propose raises.
+    """
+    h = jnp.array([2.0, 4.0])
+    center = jnp.array([0.3, 0.4])
+    x0 = jnp.array([[0.5, 0.5]])
+
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        """Return value and gradient of f = ½Σhᵢ(xᵢ-cᵢ)², grad = h⊙(x-c)."""
+        return jnp.sum(0.5 * h * (x - center) ** 2, axis=1), h * (x - center), None
+
+    result = n_path_schedule(
+        eval_f_g,
+        **flock_kwargs(
+            x0,
+            Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
+            key=jax.random.PRNGKey(0),
+        ),
+        max_iters=60,
+        local_solver=DiagonalPreconditioner(theta=0.0, mu=0.9),
+    )
+    assert math.isfinite(result.fun)
+    assert result.fun < 0.5 * float(jnp.sum(h * (x0[0] - center) ** 2))
 
 
 def test_diag_line_search_walks_the_grid_and_folds_the_argmin() -> None:
