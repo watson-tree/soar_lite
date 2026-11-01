@@ -3,11 +3,12 @@
 [![CI](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml/badge.svg)](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/watson-tree/soar_lite/blob/main/notebooks/quickstart.ipynb)
 
-First-order diagonal-preconditioned n-path descent with sample-based
-(expected-improvement) restarts, for minimizing objectives that are expensive
+First-order diagonal-preconditioned n-path descent with stalled-path restarts
+drawn from a `GlobalModel`, for minimizing objectives that are expensive
 enough to make the evaluation budget the binding constraint. Value and gradient
-come back together from the caller; no Hessian, no curvature model, no surrogate
-model.
+come back together from the caller; no Hessian and no curvature model — the
+default restarts are sampled from the domain, and a surrogate is opt-in
+(`BLRGlobalModel`).
 
 Three seams, a few modules (`soar_lite/engine.py`, `soar_lite/local_solver.py`,
 `soar_lite/domain.py`, `soar_lite/global_model/`), no dependencies beyond JAX
@@ -19,7 +20,7 @@ and the standard library:
   matrix, no linear solve, no scalar learning rate, unit-invariant.
 - **`SampleGlobalModel`** / **`BLRGlobalModel`** — the restart points. A model
   supplies **where** a restart lands and is the run's evidence sink; the engine
-  asks it for one fresh point per restarting path and clips it into the box. The
+  asks it for one fresh point per restarting path and clips it into the domain. The
   default `SampleGlobalModel` draws whatever the `domain` admits (uniform inside
   a bounded dimension, `N(0, scale²)` where it is free); `BLRGlobalModel` is the
   Bayesian linear-regression surrogate for the same contract.
@@ -29,7 +30,7 @@ and the standard library:
   `False` (the default) keeps the flock the caller starts as the whole run.
 - **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep: an
   iteration decides every move on values and buys the gradients it kept in one
-  batch. Owns the box (`domain`), the shared horizon and the stall state machine.
+  batch. Owns the domain, the shared horizon and the stall state machine.
   `n_paths = 1` is the single-path baseline.
 
 `ALGORITHM.md` is the derivation: what each piece does, why the floor is a floor

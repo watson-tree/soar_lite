@@ -1,15 +1,16 @@
 # soar-lite
 
-First-order diagonal-preconditioned n-path descent with sample-based
-(expected-improvement) restarts, for objectives expensive enough that the
+First-order diagonal-preconditioned n-path descent with stalled-path restarts
+drawn from a `GlobalModel`, for objectives expensive enough that the
 evaluation budget is the binding constraint. The caller returns value and
-gradient together; the library fits no Hessian, no curvature model and no
-surrogate.
+gradient together; the library fits no Hessian and no curvature model — the
+default restarts are sampled from the domain, a surrogate is opt-in
+(`BLRGlobalModel`).
 
 Three seams, no dependencies beyond JAX and the standard library:
 
 - **`n_path_schedule`** — the engine: runs `n_paths` paths in lockstep, one
-  batched evaluation per iteration, and owns the box, the shared horizon and the
+  batched evaluation per iteration, and owns the domain, the shared horizon and the
   stall state machine. A stalled path is re-drawn only when `restart_stalled=True`,
   the run's one restart knob.
 - **`DiagonalPreconditioner`** — the default local method: a per-coordinate

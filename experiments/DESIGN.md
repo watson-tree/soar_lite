@@ -13,9 +13,9 @@ reporting wins — R5):
 - **P② — local method.** Per-coordinate secant preconditioning (`soar-lite`,
   unit-aware, no scalar learning rate) vs Adam's adaptive single-`α` step.
   Tested on scale / conditioning / unit-mixing.
-- **P① — restart.** Principled EI restart (payoff *measured* on sampled-starts
-  group-min) vs single-chain Adam. Tested on
-  multimodality.
+- **P① — restart.** Re-drawing stalled paths (`restart_stalled=True`, a fresh
+  start from the `SampleGlobalModel`) vs leaving them parked (`False`), and vs
+  single-chain Adam. Tested on multimodality.
 
 Design rule (from the start): problems must be **high-dimensional, d≈50–200** —
 low dimension favors SOAR-style surrogate restart methods, which is someone
@@ -47,7 +47,7 @@ Five groups, one role each:
    (or the headline in its single-basin regime): re-measure in two unit
    systems (here `x' = 10x`, see `INVARIANCE_SCALE` in `compare_baselines.py`),
    **zero retune**. Claim is **outcome-level, not trajectory-level**:
-   the best-so-far vs nfev curves overlap in both unit systems, while Adam's
+   the best-so-far-vs-cost curves overlap in both unit systems, while Adam's
    separate (one system needs a different `α`). Exact per-step covariance
    (`x̃=c·x ⇒ d̃=c²d, Δx̃=c·Δx`) is real but holds only for the secant-based
    steady state: the **warmup step is by design not coordinate-invariant** (a
@@ -79,28 +79,30 @@ Five groups, one role each:
 
 Curves differ per panel; each curve has one role:
 
-- **Panel "preconditioning"** (groups 2+3, **P②**): `soar-lite n_paths=1` (pinned to
-  `NoRestartRule`), `Adam`,
+- **Panel "preconditioning"** (groups 2+3, **P②**): `soar-lite n_paths=1`
+  (restart off), `Adam`,
   `L-BFGS-B` (ceiling *reference*, not a head-to-head baseline — full-memory +
   serial line search vs our per-coordinate + batched n_paths), plus both
-  `soar-lite n_paths=16` curves — `NoRestartRule` and `EIRestartRule` — as
-  supplementary "what parallelism buys" / "what restart buys" curves.
-- **Panel "escape"** (group 4, **P①**): `soar-lite n_paths=16` under both rules,
-  `soar-lite n_paths=1`, `Adam`.
+  `soar-lite n_paths=16` curves — restart off (`restart_stalled=False`) and on
+  (`True`) — as supplementary "what parallelism buys" / "what restart buys"
+  curves.
+- **Panel "escape"** (group 4, **P①**): `soar-lite n_paths=16` with restart on
+  and off, `soar-lite n_paths=1`, `Adam`.
 - **Invariance panel** (group 5): `soar-lite` (n_paths=1) vs `Adam`, two unit
   systems, overlaid after the coordinate transform.
 
 Both n_paths=16 curves are drawn so neither step hides the other: `n_paths=1` →
-`n_paths=16` at a fixed rule is the parallelism step, `NoRestartRule` →
-`EIRestartRule` at a fixed width the restart step. A single n_paths=16 curve
-moves both knobs at once and charges the whole gap to "parallelism".
+`n_paths=16` at restart off is the parallelism step, restart off → on at a fixed
+width the restart step. A single n_paths=16 curve moves both knobs at once and
+charges the whole gap to "parallelism".
 
 L-BFGS-B appears only on the P② panels. Its role there is the *ceiling
 reference* — how close soar-lite's diagonal secant gets to a full-memory
 second-order method on smooth, convex landscape. That role does not exist on
-the P① panel: the question there is whether EI restart beats a *first-order,
-non-restarting single chain* (Adam; soar-lite n_paths=1 with `NoRestartRule` is
-the same method minus restart). L-BFGS-B is second-order and restart-free — on Ackley/Rastrigin
+the P① panel: the question there is whether stalled-path restart beats a
+*first-order, non-restarting single chain* (Adam; soar-lite n_paths=1 with
+restart off is the same method minus the restart knob). L-BFGS-B is
+second-order and restart-free — on Ackley/Rastrigin
 it would dive deterministically into the nearest local minimum and stay there
 at second-order precision, so its curve could only show "a second-order method
 also gets stuck", which discriminates nothing about restart. It is also serial
@@ -111,7 +113,7 @@ NAAdam (Adam + `σ_t = σ0/√t` decaying Gaussian noise) was measured and
 **dropped**: on ackley/rastrigin at d=100 the noise never separates from plain
 Adam — larger `σ0` is flat (rastrigin) to worse (ackley) — so it would only be
 a redundant, exactly-overlapping curve. The escape panel is therefore
-`n_paths=16` under both rules vs `n_paths=1` vs Adam, which is the honest
+`n_paths=16` with restart on and off vs `n_paths=1` vs Adam, which is the honest
 contrast for P①.
 
 Adam learning rate is **per-problem grid-tuned**: the optimal lr spans
@@ -192,10 +194,11 @@ not a universal theorem about the method.
 ## Budget, statistics, outputs
 
 - Every method gets the same number of **batches**: `--max-steps 3000` (one
-  batch = one round of parallel evaluations; a single chain spends one point per
-  round). The engine charges every batch it serves against that budget, probes
-  included, so the ceiling is exact — a run that restarts buys fewer rounds, not
-  more work. Runs stop earlier on their own criterion (the engine's
+  batch = one pass of parallel evaluations; a single chain spends one point per
+  batch). The engine charges every batch it serves against that budget, redraws
+  included, so the ceiling is exact — a restart draws fresh starts inside the
+  same budget, never beyond it. Runs stop earlier on their own criterion (the
+  engine's
   gradient-norm test, L-BFGS-B's tolerance), so 3000 is an upper bound, not a
   fixed cost. `L-BFGS-B` takes the same cap as `maxfun`/`maxiter` and is a serial
   reference, not the same cost axis.
@@ -232,10 +235,10 @@ not a universal theorem about the method.
 2. `experiments/problems.py` — the five groups + a thin oracle wrapper matching
    the soar-lite seam `x_batch → (loss, grad, feas)`.
 3. `experiments/methods.py` — drivers: soar-lite n_paths=1 and n_paths=16 (the
-   latter under `NoRestartRule` and `EIRestartRule`), Adam, L-BFGS-B.
+   latter restart off and on), Adam, L-BFGS-B.
 4. `experiments/compare_baselines.py` — harness over `N=20` seeds, collects
-   per-round best-so-far.
-5. Plot + dump `results.json`. **Self-check first**: two curves on the diag
+   per-batch best-so-far.
+5. Plot + dump `results_{group}.json`. **Self-check first**: two curves on the diag
    quadratic (soar-lite n_paths=1 vs Adam) before running everything.
 6. `experiments/README.md` — run instructions, written alongside the code.
 
@@ -258,93 +261,18 @@ two-curve self-check decides before the full run.
 
 The figures were re-run on the refactored engine (20 seeds, 3000 batches). Adam
 and L-BFGS-B came back bit-identical — the harness did not move — so every
-shift below is engine-side. Three readings should travel with the plots.
+shift below is engine-side.
 
-Those panels predate the KDE restart rule described under the first reading:
-they show the single-Gaussian fit, which is what makes the diagnosis legible.
-They have since been re-run on the current engine, and that rerun is the other
-change behind the numbers below: `n_paths=16` is now drawn twice, pinned to
-`NoRestartRule` and to the shipped rule, so the width and the restart are two
-single-attribute steps instead of one. Adam and L-BFGS-B come back bit-identical
-again, the single-path arm moves by at most 4.5% (on Ackley not at all), and the
-restart arm moves the most - which is why the first reading below is restated
-against the separated curves.
-
-### Restart loses on a single-basin problem; the width does not
-
-Oscillator F20, 20 seeds x 3000 batches, median final best: `n_paths=1`
-`7.7e-6`, `n_paths=16` without restart `2.2e-7` (35x better), `n_paths=16` with
-the shipped rule `5.3e-5` - 239x worse than the same width, 6.8x worse than a
-single path. Widening the pool pays here; the loss belongs to the restart. Until
-the arm was drawn twice both knobs moved together, which is why the earlier
-reading of this panel blamed the width (the pre-refactor run had the same
-direction, `4.4e-6` vs `1.6e-5`). The rotated quadratic, same seeds, repeats the
-split at smaller size: `61.0` one path, `33.9` sixteen without restart, `217.0`
-sixteen with it - 1.8x bought by the width, 6.4x lost to the rule.
-
-With 16 paths the group-min pool holds 16 i.i.d. start values (`lo 1.7`,
-`hi 39`) while the best is `f⋆ = 0.054`.
-That pool is a **mixture** - one draw per path - and the rule used to fold it
-into a single Gaussian (`mu_r 7.0`, `sigma_r 9.0`), which put
-`z = (f⋆ - mu_r)/sigma_r = -0.77` near the EI hump and priced one restart at
-`1.14`: a 20x improvement offered by an action whose entire observed history was
-30x worse than `f⋆`. Fitting one Gaussian to a wide mix inflates the tail, so
-`EI_restart` stayed large precisely because n_paths is large. `EI_continue`
-meanwhile decays with the path's own stage (`3.2 -> 0.02` as it converges), and
-an iteration restarts a path or advances it, never both. Measured under that
-fit: 292 restarts in 3000 batches (one every ~10 iterations, 116 of the batches
-spent on probes), final best 17x worse than one path - the reading that opened
-this question, and the one the separated curves replace.
-
-This is model mis-specification, not a bad decision rule: the pool samples
-"what a random start is worth", which is a property of the landscape, and it is
-not one Gaussian. Both sides of the verdict now model their samples with a
-scott_mad KDE (one Gaussian kernel per sample,
-`h = 1.06 * MAD/Phi^-1(3/4) * n^-1/5`) instead of a single Gaussian each - the
-continue side's Δ stream is no more guaranteed Gaussian than the pool is.
-
-Measured on the estimator alone (one 8-draw pool, `f⋆ = 0.054`): the
-single-Gaussian fit prices `EI_restart` at `0.83` against the KDE's `0.30`, a
-2.8x inflated tail. That is the mechanism, with no run behind it.
-
-The rerun carries the whole interval between the two panels - the KDE, but also
-the unified alpha grid and the phase-locked stage clock - so it prices that
-interval rather than the fit alone: `1.3e-4` under the single Gaussian, `5.3e-5`
-now. The direction the estimator predicted survives; the loss does not shrink to
-nothing. A restart counter is not instrumented, so how many of the current arm's
-3000 batches still go to probes is not measured here.
-
-End to end the picture is not settled. A 3-seed diagnostic on the same
-oscillator (`n_paths=16`, canonical 3000-batch, **not** the 20-seed panel) puts
-the shipped rule at median `9.1e-5` (range `2.0e-5` to `2.0e-4`) and a
-Sheather-Jones restart side at `5.6e-5` (`5.6e-5` to `6.9e-5`): with the
-continue side a KDE too, SJ is ahead on the median and ~8x tighter across three
-seeds. Three seeds cannot settle that. Nor can the older diagnostic's
-single-Gaussian arm be reused to settle it: that arm inherited the shipped KDE
-when the shipped rule changed, so it now *is* the shipped rule. scott_mad is
-shipped on cost - `O(n ln n)`, ten lines, degenerating cleanly to `h = 0` - not
-because it was shown to beat SJ.
-
-The single-path curve is the degenerate corner, not the control: a pool of one
-sample gives no spread, so `h = 0` and `EI_restart = max(f⋆ - r, 0) = 0` exactly,
-and the verdict then turns on whether the continue side also reads 0 - which a
-flat or stalled chain does. The panel pins that arm to `NoRestartRule` so the
-curve stays the pure serial descent it was measured as, instead of picking up a
-probe whenever the chain flattens; `n_paths=16` is the configuration where the
-verdict is actually exercised. Restart is isolated at fixed width by drawing
-that arm under both rules, and independently by
-`test_restart_beats_pure_multistart_on_multimodal` (same starts, same budget,
-rule swapped).
-
-Resolved: the verdict's best used to be the min over feasible points only (`inf`
-when none was served), while both verdict alternatives are free to sample
-infeasible points. The engine
-now keeps two bests — `fun`/`x` (feasible, the reported answer) and `fun_raw`
-(every finite point) — and hands `fun_raw` to the verdict, so both sides of one
-comparison are unfiltered. Moving it was the only consistent direction: a probe
-group-min cannot be filtered by feasibility without dropping the restart event
-itself. No panel number moves, because every problem here is box-only (`feas` is
-`None`) and the two bests coincide.
+The restart arm is now `restart_stalled=True` with a `SampleGlobalModel`: a
+stalled path is re-drawn to a fresh start from the domain — no EI, no kernel
+density estimate, no shared pool. The width and the restart are two
+single-attribute steps (`n_paths=1` → `n_paths=16` at restart off is
+parallelism; restart off → on at fixed width is the restart). Adam and L-BFGS-B
+come back bit-identical again, the single-path arm moves by at most 4.5% (on
+Ackley not at all), and the restart arm moves the most. A reading of that
+restart arm on these figures is **not written here**: the EI-era diagnosis was
+deleted together with the rule, and a replacement must be re-derived from the
+regenerated plots, not asserted. The two readings below travel with the plots.
 
 ### Ackley is a failure for every curve, not a loss for the preconditioner
 

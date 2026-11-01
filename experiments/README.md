@@ -41,7 +41,7 @@ uv run --group exp python -m experiments.compare_baselines \
 
 CPU wall-clock ≈ 105 min (headline ≈ 27 min, smooth ≈ 38 min, multimodal ≈
 37 min, invariance ≈ 1.5 min; measured, CPU-only). `--max-steps` is **batches
-per method**; the per-round chart re-reads the same runs on the "objective
+per method**; the per-point chart re-reads the same runs on the "objective
 points served" axis, so both billing notions come from one execution.
 
 Run one panel to save time, e.g. `--groups smooth`; any subset works, and each
@@ -87,11 +87,11 @@ All in `experiments/` (gitignored — regenerated, not source):
 - **Zero knobs on soar-lite**: its two start lengths / grid sizes ship inert
   (`n_alpha=1`, `alpha0=1`); the formal runs use factory defaults end to end.
   Adam pays the per-problem lr grid each time — that asymmetry is the point.
-- **No probe-side knobs either**: `n_draws=1` and no `eval_f` seam, so
-  every batch the axis counts is a full f + g. Multi-draw probes and the f-only
-  seam are user-side exploration, off the comparison: `f_only` batches are
-  deliberately not budget events, so enabling the seam would let soar-lite buy
-  evaluations the batch axis never charges.
+- **No seam on soar-lite either**: the comparison runs the factory defaults
+  with no `eval_f` (value-only) seam, so every batch the axis counts is a full
+  value+gradient batch billed on the `f_g` pair. The seams (`eval_f`,
+  `restart_stalled`, a `GlobalModel`) are user-side exploration, off this
+  comparison.
 - **Canvas only in-repo**: `experiments/DESIGN.md` is the design and the
   story; figures are drawn from the JSON, never hand-tuned.
 

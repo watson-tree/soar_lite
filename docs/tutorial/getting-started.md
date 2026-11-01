@@ -11,14 +11,14 @@ you both.
 
 | Position | Shape | Meaning |
 | --- | --- | --- |
-| input `x` | `(M, d)` | `M` points, `d` coordinates, already inside the box |
+| input `x` | `(M, d)` | `M` points, `d` coordinates, already inside the domain |
 | output 1 | `(M,)` | f values |
 | output 2 | `(M, d)` | gradients `∂f/∂x` |
 | output 3 | `(M,)` or `None` | feasibility mask: 0/1 (or booleans); `None` means all feasible |
 
 Constraints reach the engine by two independent routes:
 
-- **The box.** `domain` declares the box every proposal is clipped into
+- **The domain.** `domain` declares the region every proposal is clipped into
   *before* it is served, so the objective never sees a point outside it.
 - **The mask.** A point masked `False` is still served - its f value and gradient
   come back normally and are used - but it never becomes the best. So
@@ -41,8 +41,8 @@ def eval_f_g(x):
 
 `eval_f_g` is the only positional argument; everything else is keyword-only.
 `domain` and `n_paths` are required, and a run needs a horizon - at least one
-of `max_iters` or `time_limit`. `eval_f` is optional (the value-only seam for
-a probe). Each missing required argument is refused by `ValueError` rather
+of `max_iters` or `time_limit`. `eval_f` is optional (the value-only seam).
+Each missing required argument is refused by `ValueError` rather
 than guessed.
 
 ```python
@@ -61,15 +61,12 @@ print(result.x, result.fun, result.status)
 The status says only why the loop stopped, never that it converged: it is
 `max_iters` here because the run reached the horizon you gave it - and the
 horizon counts iterations, not work. The four paths converge within the first
-few iterations; most of what runs afterwards is the restart rule. A converged
-path stalls, its verdict comes due a window later, and restarting still prices
-better than continuing - a stalled path has no continuation evidence, so
-continuing is worth 0 - which means the path is re-probed with a fresh start and
-descends back to the same 3. The tail of the run idles because the window is the
-pool's own sample count plus the round the stage opened in: each probe grows it,
-so the remaining iterations cannot bring another verdict due. `n_batches` and `n_points` report that mix - the
-value+gradient passes actually served - which is why they, not `n_iters`, are
-the cost.
+few iterations; with the default `restart_stalled=False` a converged path then
+stalls and stays parked: it holds its point and still counts toward `best`, but
+never moves again, so the tail of the run is idle. (Turn `restart_stalled` on
+to have a stalled path reload a fresh start from the global model every time it
+stops.) The four counters report that mix - the passes
+actually served - which is why they, not `n_iters`, are the cost.
 
 ## 3. Read the result
 
@@ -96,9 +93,7 @@ than a criterion the search converged to.
 
 | Knob | What it buys |
 | --- | --- |
-| Knob | What it buys |
-| --- | --- |
-| `domain` | the search box, a `Domain`: the box, its per-dimension `scale`, and its injected draws (a side may be unbounded) |
+| `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
 | `n_paths` | engine width: paths advanced in lockstep each iteration |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | a wall-clock horizon in seconds, for when an iteration's cost is too uneven to budget in iterations |
@@ -111,27 +106,27 @@ than a criterion the search converged to.
 
 Three gotchas worth knowing up front:
 
-- **Unbounded boxes need a sampler.** With `bounds=None` or infinite sides there
-  is no uniform prior to draw starts from, so pass `sample=`; the engine rejects
-  the run rather than guessing.
-- **A probe depth above one needs `eval_f`.** Each extra draw would compute
-  its own gradient against a step's single one, so the engine refuses the depth
-  unless you also supply the value-only `eval_f`; with it the probe computes
-  one gradient, at its winners.
-- **`n_paths = 1` is the single-path baseline.** Same code, one path; pass
-  `restart_rule=NoRestartRule()` to pin it to a pure descent, since the default
-  rule still probes a chain whose continue side comes up empty.
+- **Sides may be unbounded.** A `Domain` side of `(None, None)` draws from
+  `N(0, scale²)`, a half-side draws the same normal truncated, and any side can
+  take its own injected sampler. There is no uniform prior over an infinite
+  side, so the engine never invents one - it falls back to those draws.
+- **`eval_f` splits judged steps into value-only trials and one fused settle.**
+  The method reads each trial's f cheaply, then the single winner's gradient is
+  bought once. Without `eval_f` every trial is itself a fused batch, so the
+  count lands on the `f_g` pair instead of the `f` pair.
+- **`n_paths = 1` is the single-path baseline.** Same code, one path, and the
+  default is already pure descent: `restart_stalled=False` never reloads a
+  start. Pass `restart_stalled=True` to let the lone path reload once it
+  stalls.
 - **The horizon counts iterations, not work.** What one iteration costs is the
-  method's business: it serves from zero batches (a fully stalled flock) up to a
-  probe plus however many trials the method's own line search serves. So
-  `max_iters` is a deterministic stop, not
-  a cost estimate - read `n_batches` and `n_points` for what the run actually
+  method's business: it serves from zero batches (a fully stalled flock that is
+  not redrawing) up to the redraw starts plus however many trials the method's
+  own line search serves. So `max_iters` is a deterministic stop, not
+  a cost estimate - read the four counters for what the run actually
   did, and pass `time_limit` if wall-clock is what you care about. `budget_check`
   is an extra gate consulted at the loop head each iteration and again before
-  every billed batch, so an external budget derived from batches or points can
-  over-run by less than one batch, never more (inside a multi-draw probe the
-  blind spot is one probe: its f-only draws are cheap and are neither gated nor
-  counted).
+  every billed batch (value-only included), so an external budget derived from
+  batches or points can over-run by less than one batch, never more.
 
 ## 5. What a batch and a point cost
 
@@ -140,15 +135,14 @@ on whether your objective is really parallel:
 
 - **On a GPU.** A batch's wall-clock is dominated by kernel launches, so it
   barely grows as the batch widens, up to the device's parallel limit. Set
-  `n_paths` to that limit and measure progress in `n_batches`: it is very nearly
-  your wall-clock. Wider paths are then almost free, so raising `n_paths` (and
-  `n_draws` with it, which needs `eval_f`) shrinks the spread of the
-  best and buys a larger
-  improvement for the same number of batches.
+  `n_paths` to that limit and measure progress in batches: it is very nearly
+  your wall-clock. Wider paths are then almost free, so raising `n_paths` (and,
+  with `eval_f`, buying trial values by cheap value-only passes) shrinks the
+  spread of the best and buys a larger improvement for the same number of
+  batches.
 - **On a CPU.** Batches run mostly serially, so the sampling work per point is
-  what costs, and `n_points` is the honest number: raising `n_paths` or
-  `n_draws` improves the best per point far less than it improves it
-  per batch.
+  what costs, and the point count is the honest number: raising `n_paths`
+  improves the best per point far less than it improves it per batch.
 
 One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
 **point** is one row of data (serial cost, CPU) - and a batch is a
@@ -156,7 +150,8 @@ One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
 
 ## 6. Swap a piece
 
-The engine owns the schedule; the method and the restart decision are plugins.
+The engine owns the schedule; the method and the restart-point source are
+plugins.
 Both defaults are bound lazily, so you replace either one by name:
 
 ```python
@@ -173,16 +168,16 @@ result = n_path_schedule(
 
 To replace one outright, implement its protocol and pass the instance:
 
-- **`LocalSolver`** — the search method: `restart`, `propose`, `verdict`,
-  `fold`. You own direction, step size and acceptance; the engine owns
+- **`LocalSolver`** — the search method: `restart`, `needs_verdict`, `propose`,
+  `verdict`, `fold`. You own direction, step size and acceptance; the engine owns
   projection, the horizon and the per-step argmin. `verdict` is handed a
   trial's coords and value, not its gradient — the engine buys gradients only
   for the points it keeps, and `fold` is where a step lands. `restart` is the
   only cold-start call, so it runs at initialization and after every restart.
-- **`RestartRule`** — the continue-versus-restart decision: `observe_step`,
-  `observe_restart`, `should_restart`, `restart`. The shipped pair is
-  `EIRestartRule` (the sample-based EI verdict) and `NoRestartRule` (nothing
-  after the initialization probe).
+- **`GlobalModel`** — the restart-point source and evidence sink: `observe`,
+  `propose`. The shipped pair is `SampleGlobalModel` (draws starts from the
+  domain, fits nothing — the default) and `BLRGlobalModel` (fits a Bayesian
+  linear posterior and proposes the `-log EI` minimum).
 
 Both protocols are documented in the [API Reference](../reference/api.md), which
 is the contract to code against.
@@ -190,5 +185,5 @@ is the contract to code against.
 ## 7. Next
 
 `ALGORITHM.md` in the repository is the derivation: why the floor is a floor and
-not an addend, the two cost axes, what may be redesigned freely, and the
+not an addend, the cost counters, what may be redesigned freely, and the
 invariants that must survive a redesign.
