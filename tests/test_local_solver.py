@@ -356,7 +356,9 @@ def _solver_with_secant(
 
     The step start's gradient is ``g - y``, so the committed point's gradient is
     exactly ``g``: the same secant the engine would have folded after a step of
-    ``s``.
+    ``s``. That first fold also seeds the momentum EMA with the step start's
+    gradient, so ``propose`` here sees ``m = g - y`` - history only, never the
+    ``g`` it is about to precondition.
     """
     solver = DiagonalPreconditioner(mu=mu, theta=0.0, n_alpha=n_alpha)
     start = PathPoint(x=jnp.zeros_like(g), f=1.0, g=g - y)
@@ -391,15 +393,24 @@ def test_diag_momentum_keeps_the_plain_step_descent_gain() -> None:
     assert not close(d_mom, d_plain, 1e-9)  # the momentum really was blended in
 
 
-def test_diag_momentum_folds_once_per_step_not_per_sample() -> None:
-    """A retried grid sample moves only alpha; the EMA must not fold again."""
+def test_diag_momentum_folds_only_at_the_commit_not_in_propose() -> None:
+    """``propose`` reads the momentum and never writes it; only ``fold`` folds.
+
+    The old grid hazard - one EMA update per alpha sample - cannot arise: a
+    retried sample re-reads the same history, so the two directions differ only
+    by the grid's alpha.
+    """
     g = jnp.array([0.5, -1.5])
     solver, at = _solver_with_secant(0.5, g, n_alpha=2)
+    m_before = solver.m[0]
+    # The history is the folded pair's step start, (g - y) - not the g of the
+    # step this propose is about to take.
+    assert close(m_before, at.g - Y_MOM, 1e-12)
     first = solver.propose(0, at)
-    m_after_first = solver.m[0]
+    assert jnp.array_equal(solver.m[0], m_before)  # propose wrote nothing
     assert solver.verdict(0, at, first, 1.0) == "retry"  # alpha *= backtrack
     second = solver.propose(0, at)
-    assert jnp.array_equal(solver.m[0], m_after_first)  # not folded twice
+    assert jnp.array_equal(solver.m[0], m_before)  # still nothing
     # Same step direction; only the grid's alpha differs.
     assert close((at.x - second) / solver.alpha[0], (at.x - first) / 1.0, 1e-12)
 
@@ -408,11 +419,14 @@ def test_diag_restart_drops_the_momentum_history() -> None:
     """A restart re-seeds the momentum EMA from the new start's gradient."""
     g = jnp.array([0.5, -1.5])
     solver, at = _solver_with_secant(0.5, g)
-    solver.propose(0, at)  # fold the steady step's gradient into m
-    assert not close(solver.m[0], at.g, 1e-9)  # the history is not the current g
+    assert close(solver.m[0], at.g - Y_MOM, 1e-12)  # history is the step start
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
     solver.restart(0, fresh)
-    assert close(solver.m[0], fresh.g, 1e-12)
+    # `restart` only disarms the secant; the re-seed is the next fold's, exactly
+    # as S and Y are re-seeded by the warm-up pair rather than by restart.
+    landed = PathPoint(x=fresh.x + S_MOM, f=0.5, g=fresh.g + Y_MOM)
+    solver.fold(0, fresh, landed)
+    assert close(solver.m[0], fresh.g, 1e-12)  # nothing crossed the restart
 
 
 def test_diag_mu_zero_keeps_no_momentum_state() -> None:
@@ -421,7 +435,6 @@ def test_diag_mu_zero_keeps_no_momentum_state() -> None:
     solver, at = _solver_with_secant(0.0, g)
     solver.propose(0, at)
     assert solver.m == {}
-    assert not any(solver.m_fresh.values())  # nothing was ever folded
 
 
 def test_diag_momentum_is_skipped_when_g_has_no_d_support() -> None:
@@ -430,15 +443,15 @@ def test_diag_momentum_is_skipped_when_g_has_no_d_support() -> None:
     d is nonzero only where the secant has curvature and g is nonzero only
     where the coordinate is flat (d = 0), so every ``d_i·g_i²`` is 0 and the
     projection's denominator vanishes. The step must collapse to the plain one
-    (zero there), not turn into d⊙m.
+    (zero there), not turn into d⊙m - the history has a live coordinate 0 here.
     """
     start = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 0.5]))
     solver = DiagonalPreconditioner(mu=0.5, theta=0.0)
-    solver.restart(0, start)  # m seeds to start.g; coordinate 0's history survives
+    solver.restart(0, start)
     # y = [-1, 0] against s = [1, 0] leaves d = [1, 0]; g lives on coordinate 1.
     at = PathPoint(x=start.x + jnp.array([1.0, 0.0]), f=0.5, g=jnp.array([0.0, 0.5]))
-    solver.fold(0, start, at)
-    # m = ½·start.g + ½·at.g keeps a nonzero coordinate 0, where d is 1 and g is 0.
+    solver.fold(0, start, at)  # seeds m = start.g, nonzero on coordinate 0
+    assert close(solver.m[0], start.g, 1e-12)
     assert close(solver.propose(0, at), at.x, 1e-12)
 
 

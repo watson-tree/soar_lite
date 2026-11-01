@@ -46,20 +46,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seam for a value-only objective: a function JAX cannot differentiate cannot be
   `objective` at all.
 - `DiagonalPreconditioner(mu=...)`: an opt-in momentum blend. With `mu > 0` the
-  direction smooths a second history - an EMA of the step-start gradients - and
-  blends it in as `g + m_perp`, where `m_perp = m - (<m,g>_d / <g,g>_d)*g`
+  direction smooths a second history - an EMA `m` of the **past** steps' start
+  gradients, the current step's joining it only once that step has committed -
+  and blends it in as `g + m_perp`, where `m_perp = m - (<m,g>_d / <g,g>_d)*g`
   projects onto g's orthogonal complement in the **d-weighted** inner product
   `<a,b>_d = sum d_i a_i b_i`. The weighting is what keeps the invariant:
   `<d*(g+m_perp), g> = <g,g>_d > 0`, so the step still descends by construction
   and still needs no acceptance test - Euclidean orthogonality (`<m_perp,g> = 0`)
   is the wrong inner product and would void that silently while looking like a
-  proof. Default 0 (off) is not caution: near a minimiser `g -> 0` while `m`
-  lags a whole window behind, so the direction stops vanishing and the
-  `||g|| <= tau_rel*||g_0||` stopping test never fires. `mu` is independent of
-  `beta` - that one smooths the secant pair, i.e. curvature, and `s`/`y` keep
-  sharing it - and the secant pair keeps reading raw `g` differences, so the two
-  knobs never entangle. One EMA fold per step, not per alpha-grid sample;
-  `restart` re-seeds `m` from the new start; `mu = 0` stores no history at all.
+  proof. History only is the other half of it: the projection is linear, so
+  folding this step's `g` into `m` before projecting it would leave `mu*m_perp`,
+  the along-`g` part being annihilated - `mu` would then scale the window and the
+  transverse term at once. Default 0 (off) is not caution: near a minimiser
+  `g -> 0` while `m` lags a whole window behind, so the direction stops vanishing
+  and the `||g|| <= tau_rel*||g_0||` stopping test never fires. `mu` is
+  independent of `beta` - that one smooths the secant pair, i.e. curvature, and
+  `s`/`y` keep sharing it - and the secant pair keeps reading raw `g`
+  differences, so the two knobs never entangle. The fold has one site, `fold`
+  (the step's commit), so `propose` only ever reads `m` and an alpha-grid retry
+  cannot fold the same gradient twice; `restart` disarms the secant and the next
+  fold re-seeds `m` exactly as it re-seeds `s`/`y`, so no history crosses one;
+  `mu = 0` stores no history at all.
 
 ### Changed
 
