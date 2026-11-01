@@ -176,7 +176,8 @@ _Avoid_: converge, stop, terminate
 The engine's second seam, owner of *where* a redrawn path starts. It observes
 every served batch (`observe(x, f, g?)`) and answers `propose(n, domain)` with
 `n` fresh starts. The default `SampleGlobalModel` fits nothing: it draws starts
-from the `domain` (with the caller's `x0` as the first answer). `BLRGlobalModel`
+from the `domain`. The run's first flock is not its business — the entry's `x0`
+states it directly. `BLRGlobalModel`
 fits a Bayesian linear posterior and proposes the local minimum of `-log EI` —
 EI there is an acquisition function deciding *where is worth trying*, not a
 restart verdict.

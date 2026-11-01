@@ -12,7 +12,7 @@ Every driver returns a :class:`Trace` - best-so-far against both cost axes:
 
 All single-chain drivers start from one uniform draw over the box; soar-lite
 draws its n_paths starts the same way - uniformly over the box, in the driver -
-and hands them to the engine as the default model's first proposal, so no method
+and hands them to the engine as the entry's `x0`, so no method
 gets a start it did not pay for.
 """
 
@@ -30,7 +30,6 @@ from soar_lite import (
     AcquisitionFn,
     DiagonalPreconditioner,
     Domain,
-    SampleGlobalModel,
     n_path_schedule,
 )
 
@@ -87,9 +86,9 @@ def run_soar_lite(
 
     The flock is drawn here, uniformly over the box, so the experiment's
     distribution is the caller's: the engine only ever places the points it is
-    handed. It arrives as the default model's first proposal (`x0`), which is
-    also why the key is split once - the flock takes one half and the restarts
-    the other, so the two do not share a stream.
+    handed. It arrives as the entry's `x0`, which is also why the key is split
+    once - the flock's half draws the starts and the other half seeds the
+    model's restarts, so the two do not share a stream.
     """
     trace = Trace()
     n_points = 0
@@ -121,11 +120,12 @@ def run_soar_lite(
         eval_f_g,
         n_paths=n_paths,
         domain=domain,
-        global_model=SampleGlobalModel(key=key, x0=x0),
+        x0=x0,
         max_iters=max_steps,
         budget_check=lambda: n_batches < max_steps,
         local_solver=DiagonalPreconditioner(),
         restart_stalled=restart_stalled,
+        key=key,
     )
     trace.fun = float(result.fun)
     return trace
@@ -174,10 +174,11 @@ def surrogate_minimize(
             eval_g,
             n_paths=1,
             domain=domain,
-            global_model=SampleGlobalModel(key=sub, x0=x0),
+            x0=x0,
             max_iters=_INNER_ITERS,
             local_solver=DiagonalPreconditioner(),
             restart_stalled=False,
+            key=sub,
         )
         outs.append(result.x)
     return jnp.stack(outs)

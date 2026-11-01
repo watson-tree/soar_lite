@@ -70,6 +70,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The run's starting flock is the entry's argument: `n_path_schedule(..., x0=...)`
+  places it as handed, and `None` leaves the draw to the global model as before.
+  `SampleGlobalModel` is now a pure draw - its `x0` is gone. The flock is where a
+  control arm states a fixed start set, so it belongs beside `n_paths` and
+  `domain`, not inside one of the two plugins: with it on the entry, any
+  `GlobalModel` (the sampler, `BLRGlobalModel`, a caller's own) inherits it, and
+  the model is asked only when a path actually restarts. The starts are validated
+  once at the entry (shape against `n_paths` and `domain.d`, finiteness, and
+  inside the closed box to machine precision) instead of on the model's first
+  `propose`.
 - `restart_stalled` defaults to `True`. The multistart restart is the cadence a
   parallel run wants: when a path's own stopping test fires, the global model
   hands it a fresh start and the flock keeps buying work until the horizon,

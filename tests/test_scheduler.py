@@ -26,8 +26,8 @@ argument, so an unbounded run spells its unbounded sides in the `Domain`.
 `test_plugin_seam.py`'s evaluator is that composed form.
 
 Every run below plants its flock through `flock_kwargs`, i.e. through the
-shipped default model's first proposal: the engine has no start argument, and a
-test that wants known starts hands them to a model.
+entry's `x0`: the engine places exactly the starts it is handed and asks no
+model for them, so a test that wants known starts says so at the entry.
 """
 
 # pyright: reportPrivateUsage=false
@@ -89,19 +89,16 @@ def flock_kwargs(
     """Return the entry's flock kwargs: width, starts and the box they live in.
 
     The engine takes its width as `n_paths`, every point a path starts from as
-    the global model's first proposal, and the one box the run searches as
-    `domain` - so a test that chooses its flock says all three here, and the
-    box it names is the box the run clips into. The model is the shipped default
-    one: it hands `x0` back on the first `propose` and draws any later re-draw
-    from `key`.
+    the entry's `x0`, and the one box the run searches as `domain` - so a test
+    that chooses its flock says all three here, and the box it names is the box
+    the run clips into. `key` seeds the default model's restarts, so it is
+    passed on as the entry's own knob rather than through a model.
     """
     return {
         "n_paths": int(x0.shape[0]),
         "domain": domain,
-        "global_model": SampleGlobalModel(
-            key=jax.random.PRNGKey(0) if key is None else key,
-            x0=x0,
-        ),
+        "x0": x0,
+        "key": jax.random.PRNGKey(0) if key is None else key,
     }
 
 
@@ -128,6 +125,20 @@ class FixedModel:
         rows = int(self.points.shape[0])
         reps = -(-n_points // rows)
         return jnp.concatenate([self.points] * reps)[:n_points]
+
+
+class AskingModel(FixedModel):
+    """A `FixedModel` that records every ask, so a test can prove one was skipped."""
+
+    def __init__(self, points: jnp.ndarray) -> None:
+        """Store the rows and start an empty ask log."""
+        super().__init__(points)
+        self.asks: list[int] = []
+
+    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
+        """Record the ask, then answer it from the stored rows."""
+        self.asks.append(n_points)
+        return super().propose(n_points, domain)
 
 
 class HalfStep:
@@ -678,9 +689,7 @@ def test_a_dead_path_never_widens_a_batch() -> None:
     n_paths, n_iterations = 2, 3
     widths: list[int] = []
     asks: list[int] = []
-    inner = flock_kwargs(flock(n_paths), unit_domain(), key=jax.random.PRNGKey(0))[
-        "global_model"
-    ]
+    inner = SampleGlobalModel(key=jax.random.PRNGKey(0))
 
     class AskSpy:
         """The flock's model, recording how many starts each ask wanted."""
@@ -716,6 +725,7 @@ def test_a_dead_path_never_widens_a_batch() -> None:
         eval_f_g,
         n_paths=n_paths,
         domain=unit_domain(),
+        x0=flock(n_paths),
         global_model=AskSpy(inner),
         max_iters=n_iterations + 1,
         budget_check=lambda: len(widths) < 100,
@@ -725,9 +735,10 @@ def test_a_dead_path_never_widens_a_batch() -> None:
     assert res.n_iters == n_iterations + 1, res
     assert widths[0] == n_paths, widths  # iteration 0 serves the whole flock
     assert all(w == 1 for w in widths[1:]), widths  # then the live path alone
-    # One ask for the flock, then one re-draw per iteration for the dead row: the
-    # start it is owed, never merged into the live row's batch.
-    assert asks == [n_paths, *([1] * n_iterations)], asks
+    # The flock is the entry's `x0`, so the model is never asked for it: every
+    # ask is the dead row's single re-draw, never merged into the live row's
+    # batch.
+    assert asks == [1] * n_iterations, asks
 
 
 def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
@@ -1050,13 +1061,212 @@ def test_a_nonpositive_width_is_refused_at_the_entry() -> None:
     assert "n_paths" in rejects(width=True)
 
 
-def test_a_malformed_flock_is_refused_by_the_model() -> None:
-    """A flock a model cannot hand back is refused where it is handed over.
+def test_the_caller_places_the_flock_and_the_model_is_not_asked_for_it() -> None:
+    """`x0` is the flock: iteration 0 places it without asking any model.
 
-    Three defects reach the model - not a batch, no dims, a non-finite start -
-    and it names the d it wanted, because the run's `domain` is what tells it the
-    dimension. An empty flock never gets that far: `n_paths` comes from the
-    flock's row count, so the entry's own width check refuses it first.
+    The model is the restart-point source, not the flock's source. A caller that
+    hands in its own starts says exactly where the flock begins, so a model that
+    would answer differently is never consulted for it - it is asked again only
+    when a path actually restarts.
+    """
+    served: list[jnp.ndarray] = []
+
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        served.append(theta)
+        return jnp.sum(theta**2, axis=1), 2.0 * theta, None
+
+    x0 = jnp.asarray([[0.1], [0.9]])
+    model = AskingModel(flock(2))
+    n_path_schedule(
+        eval_f_g,
+        n_paths=2,
+        domain=unit_domain(),
+        x0=x0,
+        global_model=model,
+        max_iters=1,
+        restart_stalled=False,
+    )
+    assert len(served) == 1, served  # iteration 0 is one batch and nothing more
+    assert jnp.array_equal(served[0], x0)
+    assert model.asks == [], model.asks
+
+
+def test_without_x0_the_model_places_the_flock() -> None:
+    """No `x0` leaves the flock to the model's first answer, as before."""
+    served: list[jnp.ndarray] = []
+
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        served.append(theta)
+        return jnp.sum(theta**2, axis=1), 2.0 * theta, None
+
+    model = AskingModel(flock(2))
+    n_path_schedule(
+        eval_f_g,
+        n_paths=2,
+        domain=unit_domain(),
+        global_model=model,
+        max_iters=1,
+        restart_stalled=False,
+    )
+    assert model.asks == [2], model.asks
+    assert jnp.array_equal(served[0], flock(2))
+
+
+def test_x0_is_placed_once_and_every_later_restart_is_a_draw() -> None:
+    """The flock is the first start and only the first: a restart asks the model.
+
+    Iteration 0 places `x0`; a path that then stalls and restarts is re-drawn
+    from the model, because `x0` answered its one ask already.
+    """
+    served: list[jnp.ndarray] = []
+
+    def flat(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        served.append(theta)
+        return jnp.zeros(theta.shape[0]), jnp.zeros_like(theta), None
+
+    x0 = jnp.asarray([[0.1], [0.9]])
+    model = AskingModel(flock(2))
+    n_path_schedule(
+        flat,
+        n_paths=2,
+        domain=unit_domain(),
+        x0=x0,
+        global_model=model,
+        max_iters=3,
+        local_solver=HalfStep(trial_cap=1),  # a flat surface stalls on one reject
+        restart_stalled=True,
+    )
+    assert jnp.array_equal(served[0], x0)
+    assert model.asks == [2], model.asks
+    assert jnp.array_equal(served[-1], flock(2))
+
+
+def test_a_flock_of_the_wrong_shape_is_refused_at_the_entry() -> None:
+    """A flock whose rows or columns disagree with the run is a wiring error."""
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    with pytest.raises(ValueError, match=r"x0 must be a \(n_paths, 3\) array"):
+        n_path_schedule(
+            Recorder(quad),
+            n_paths=2,
+            domain=unit_domain(3),
+            x0=jnp.zeros((2, 2)),
+            max_iters=1,
+        )
+    with pytest.raises(ValueError, match="x0 holds 3 starts but n_paths is 2"):
+        n_path_schedule(
+            Recorder(quad),
+            n_paths=2,
+            domain=unit_domain(1),
+            x0=jnp.zeros((3, 1)),
+            max_iters=1,
+        )
+
+
+def test_a_start_on_the_wall_is_inside_the_box() -> None:
+    """The box is closed: a start at a side is legal, not a contradiction."""
+    served: list[jnp.ndarray] = []
+
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        served.append(theta)
+        return jnp.sum(theta**2, axis=1), 2.0 * theta, None
+
+    x0 = jnp.asarray([[0.0, 1.0], [1.0, 0.0]])
+    n_path_schedule(
+        eval_f_g,
+        n_paths=2,
+        domain=unit_domain(2),
+        x0=x0,
+        max_iters=1,
+        restart_stalled=False,
+    )
+    assert jnp.array_equal(served[0], x0)
+
+
+def test_a_start_outside_the_box_is_refused_not_clipped() -> None:
+    """An authored start outside the box contradicts the box, so it is named.
+
+    Clipping it would slide the start onto a wall and hide the contradiction, so
+    the refusal names the row, the dimension and both sides instead.
+    """
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    with pytest.raises(
+        ValueError,
+        match=r"x0 row 1 is 3 in dimension 1, outside the box",
+    ):
+        n_path_schedule(
+            Recorder(quad),
+            n_paths=2,
+            domain=unit_domain(2),
+            x0=jnp.asarray([[0.5, 0.5], [0.5, 3.0]]),
+            max_iters=1,
+        )
+
+
+def test_only_roundoff_past_a_wall_is_tolerated() -> None:
+    """A boundary computed in another frame rounds by a step, not by a gap.
+
+    The tolerance is read off the dtypes in play, not a fixed one, so a start a
+    few representable steps past the wall is accepted while a real gap is not.
+    """
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    box = unit_domain(1)
+    eps = float(jnp.finfo(box.lo.dtype).eps)
+    n_path_schedule(
+        Recorder(quad),
+        n_paths=1,
+        domain=box,
+        x0=jnp.asarray([[1.0 + eps]]),  # a few representable steps past: accepted
+        max_iters=1,
+    )
+    with pytest.raises(ValueError, match="outside the box"):
+        n_path_schedule(
+            Recorder(quad),
+            n_paths=1,
+            domain=box,
+            x0=jnp.asarray([[1.0 + 1e-3]]),
+            max_iters=1,
+        )
+
+
+def test_the_box_test_reads_only_the_declared_sides() -> None:
+    """A free side never refuses; a half-bounded one still does."""
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum(theta**2), 2.0 * theta
+
+    n_path_schedule(
+        Recorder(quad),
+        n_paths=1,
+        domain=Domain([(None, None)]),
+        x0=jnp.asarray([[-1e6]]),
+        max_iters=1,
+    )
+    with pytest.raises(ValueError, match="outside the box"):
+        n_path_schedule(
+            Recorder(quad),
+            n_paths=1,
+            domain=Domain([(0.0, jnp.inf)]),
+            x0=jnp.asarray([[-1.0]]),
+            max_iters=1,
+        )
+
+
+def test_a_malformed_flock_is_refused_at_the_entry() -> None:
+    """A flock the run cannot place is refused at the entry, once per run.
+
+    Three defects - not a batch, no dims, a non-finite start - are named by the
+    entry, which knows the run's d from `domain`. An empty flock never gets that
+    far: `n_paths` comes from the flock's row count, so the entry's own width
+    check refuses it first.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:

@@ -195,7 +195,7 @@ Euclidean 正交化只给 `⟨m⊥, g⟩ = 0`，那是另一个内积，`⟨m⊥
 
 **抽样臂（默认）。** `SampleGlobalModel` 不拟合，`observe` 是空操作，`propose` 只是把 `Domain.draw`
 要来的点原样交回：有界侧均匀、自由侧 `N(0, scale²)`、半界侧同正态截断、调用方给了逐维抽样器就按注入
-的来。它同时是「调用方指定羊群」的入口——构造时的 `x0` 是第一次 `propose` 的答案，之后才回到抽样。
+的来。羊群不归它管：第一轮的起点由入口的 `x0` 直接给出，它只在路径真的重启时才被问到。
 所以一次重启的边际成本是一个点、一次求值，与维数无关。
 
 **代理臂。** `BLRGlobalModel` 在已服务样本上拟合一个 Bayesian 线性后验（特征由注入的 `Projection`
@@ -453,13 +453,18 @@ f 的成本整个抹掉。计数只报不预算：`stop` 从不读它们（3.5�
   `test_a_half_bounded_draw_is_the_half_normal_not_the_full_one`、
   `test_an_injected_sampler_replaces_that_dimensions_default`、
   `test_a_sampler_that_returns_the_wrong_shape_is_refused`。
-- 模型契约（`test_global_model.py`）：`test_x0_is_the_first_proposal_and_only_the_first`、
-  `test_a_start_outside_the_box_is_refused_not_clipped`、`test_the_box_test_reads_only_the_declared_sides`。
+- 模型契约（`test_global_model.py`）：`test_a_model_free_domain_draws_its_unbounded_dimension`、
+  `test_the_draws_are_the_handed_domains_own`——抽样臂只证明它照盒抽样，第一轮的羊群不在它的契约里。
+- 羊群（`test_scheduler.py`）：`test_the_caller_places_the_flock_and_the_model_is_not_asked_for_it`、
+  `test_without_x0_the_model_places_the_flock`、`test_x0_is_placed_once_and_every_later_restart_is_a_draw`、
+  `test_a_start_on_the_wall_is_inside_the_box`、`test_a_start_outside_the_box_is_refused_not_clipped`、
+  `test_only_roundoff_past_a_wall_is_tolerated`、`test_the_box_test_reads_only_the_declared_sides`。
 - 代理臂（`test_spherical_linear.py`）：`test_propose_draws_uniformly_until_a_fit_is_possible`、
   `test_propose_descends_the_acquisition_into_the_box`、`test_posterior_variance_stays_under_the_prior_far_from_data`、
   `test_log_h_matches_its_definition_where_it_can_be_written_down`、`test_the_model_carries_no_box_of_its_own`。
 - 入口校验：`test_out_of_range_knobs_are_rejected_at_the_entry`、`test_a_nonpositive_width_is_refused_at_the_entry`、
-  `test_a_malformed_flock_is_refused_by_the_model`、`test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry`、
+  `test_a_flock_of_the_wrong_shape_is_refused_at_the_entry`、`test_a_malformed_flock_is_refused_at_the_entry`、
+  `test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry`、
   `test_a_seam_object_without_its_methods_is_a_type_error`。
 
 #### 本仓边界（不带走）

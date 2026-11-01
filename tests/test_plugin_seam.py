@@ -56,18 +56,16 @@ def flock_kwargs(
     """Return the entry's flock kwargs: width, starts and the box they live in.
 
     The engine takes its width as `n_paths`, every point a path starts from as
-    the global model's first proposal, and the one box the run searches as
-    `domain` - so a test that chooses its flock says all three here. The model
-    is the shipped default one: it hands `x0` back on the first `propose` and
-    draws any later re-draw from `key`.
+    the entry's `x0`, and the one box the run searches as `domain` - so a test
+    that chooses its flock says all three here. `key` seeds the default model's
+    restarts, so it is passed on as the entry's own knob rather than through a
+    model.
     """
     return {
         "n_paths": int(x0.shape[0]),
         "domain": domain,
-        "global_model": SampleGlobalModel(
-            key=jax.random.PRNGKey(0) if key is None else key,
-            x0=x0,
-        ),
+        "x0": x0,
+        "key": jax.random.PRNGKey(0) if key is None else key,
     }
 
 
