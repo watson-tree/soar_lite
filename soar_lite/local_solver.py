@@ -114,14 +114,14 @@ class DiagonalPreconditioner(LocalSolver):
     def __init__(  # noqa: PLR0913 - each knob is a distinct, independently-swept facet
         self,
         *,
-        beta: float = 0.95,  # EMA decay; the window is ≈ 1/(1-β) steps
-        mu: float = 0.0,  # history-EMA decay for the momentum blend; 0 = off
-        theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
-        tau_rel: float = 1e-6,  # gradient-norm stopping test vs ‖g_0‖
         moment: Literal["abs", "rms"] = "rms",  # mean ratio / mean-square ratio
+        beta: float = 0.95,  # EMA decay; the window is ≈ 1/(1-β) steps
+        theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
+        mu: float = 0.0,  # history-EMA decay for the momentum blend; 0 = off
         alpha0: float = 1.0,  # the full step's length, in units of the natural step
         n_alpha: int = 1,  # alpha samples per step; 1 = no line search
         backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
+        tau_rel: float = 1e-6,  # gradient-norm stopping test vs ‖g_0‖
     ) -> None:
         """Store the knobs; per-path state is seeded by restart.
 
@@ -134,53 +134,58 @@ class DiagonalPreconditioner(LocalSolver):
         once per object; nothing downstream re-checks it.
 
         Args:
+            moment: which magnitude ratio to smooth, ``"abs"`` (mean of |s|,
+                |y|) or ``"rms"`` (mean of s², y²).
             beta: EMA decay for the secant-magnitude smooth (window ≈ 1/(1-β)
                 steps), in (0, 1).
+            theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
+                ``θ·g_i²`` for "rms"), >= 0.
             mu: EMA decay for the gradient history that feeds the momentum
                 blend - it sets how far back the history reaches and nothing
                 else; 0 disables it (the default), in [0, 1).
-            theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
-                ``θ·g_i²`` for "rms"), >= 0.
-            tau_rel: relative gradient-norm stopping threshold, tested against
-                ``‖g_0‖``, > 0.
-            moment: which magnitude ratio to smooth, ``"abs"`` (mean of |s|,
-                |y|) or ``"rms"`` (mean of s², y²).
             alpha0: step length every path is armed at; the full step's
                 length, > 0.
             n_alpha: alpha samples per step along the step's direction; 1 means
                 no line search, >= 1.
             backtrack: the alpha-grid spacing, in (0, 1).
+            tau_rel: relative gradient-norm stopping threshold, tested against
+                ``‖g_0‖``, > 0.
 
         """
         for name, value, ok, want in (
-            ("beta", beta, 0.0 < beta < 1.0, "in (0, 1)"),
-            ("mu", mu, 0.0 <= mu < 1.0, "in [0, 1)"),
-            ("theta", theta, theta >= 0.0, ">= 0"),
-            ("tau_rel", tau_rel, tau_rel > 0.0, "> 0"),
             ("moment", moment, moment in ("abs", "rms"), '"abs" or "rms"'),
+            ("beta", beta, 0.0 < beta < 1.0, "in (0, 1)"),
+            ("theta", theta, theta >= 0.0, ">= 0"),
+            ("mu", mu, 0.0 <= mu < 1.0, "in [0, 1)"),
             ("alpha0", alpha0, alpha0 > 0.0, "> 0"),
             ("n_alpha", n_alpha, n_alpha >= 1, ">= 1"),
             ("backtrack", backtrack, 0.0 < backtrack < 1.0, "in (0, 1)"),
+            ("tau_rel", tau_rel, tau_rel > 0.0, "> 0"),
         ):
             if not ok:
                 msg = f"{name} must be {want}, got {value!r}"
                 raise ValueError(msg)
-        self.beta = beta
-        self.mu = mu
-        self.theta = theta
-        self.tau_rel = tau_rel
         self.moment = moment
+        self.beta = beta
+        self.theta = theta
+        self.mu = mu
+
         self.alpha0 = alpha0
         self.n_alpha = n_alpha
         self.backtrack = backtrack
-        self.alpha: dict[int, float] = {}  # per path: current step multiplier
-        self.g0: dict[int, jnp.ndarray] = {}  # per path: the stopping test's anchor
+
+        self.tau_rel = tau_rel
+
         self.has_secant: dict[int, bool] = {}  # per path: first pair in hand?
         self.s_ema: dict[int, jnp.ndarray] = {}  # per path: S₁ ("abs") or S₂ ("rms")
         self.y_ema: dict[int, jnp.ndarray] = {}  # per path: Y₁ ("abs") or Y₂ ("rms")
         self.m: dict[int, jnp.ndarray] = {}  # per path: past-gradient EMA (mu > 0 only)
+
+        self.alpha: dict[int, float] = {}  # per path: current step multiplier
         self.alpha_sample: dict[int, int] = {}  # per path: samples served this step
         self.saw_finite: dict[int, bool] = {}  # per path: any finite sample this step?
+
+        self.g0: dict[int, jnp.ndarray] = {}  # per path: the stopping test's anchor
 
     def restart(self, i: int, p: PathPoint) -> None:
         """Seed path i at p: warm-up armed at alpha0, g0 kept, no estimate yet.
@@ -227,48 +232,6 @@ class DiagonalPreconditioner(LocalSolver):
         d = self._diag(i, p.g)
         w = p.g if self.mu == 0.0 else self._blend_momentum(i, p.g, d)
         return p.x - self.alpha[i] * (d * w)
-
-    def _diag(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
-        """Return the per-coordinate inverse curvature d_i for path i at gradient g."""
-        # λ anchors to the current gradient's own magnitude, so a coordinate
-        # with no usable secant (y_i = 0) still steps instead of 0/0. It is a
-        # floor (max), not an addend: where Y ≥ λ the estimate is the faithful
-        # S/Y ratio, and λ only caps d below that.
-        floor = self.theta * (jnp.abs(g) if self.moment == "abs" else jnp.square(g))
-        den = jnp.maximum(self.y_ema[i], floor)
-        # den_i == 0 means y_i = 0 *and* g_i = 0: no curvature information and
-        # already stationary in i, so step nowhere there rather than NaN. One
-        # guard is enough - `where` is a total select and d is never
-        # differentiated, so an inf/nan in the unselected lane cannot leak
-        # anywhere; a derivative of this line would see it, so revisit then.
-        d = jnp.where(den > 0.0, self.s_ema[i] / den, 0.0)
-        return jnp.sqrt(d) if self.moment == "rms" else d
-
-    def _blend_momentum(self, i: int, g: jnp.ndarray, d: jnp.ndarray) -> jnp.ndarray:
-        """Blend path i's momentum history into g, keeping g·step a descent gain.
-
-        m is projected onto g's orthogonal complement under the d-weighted inner
-        product, so the step ``-alpha·d⊙(g + m⊥)`` has ``<d⊙(g+m⊥), g> =
-        <g,g>_d > 0`` exactly - the along-g part of the momentum cancels, and
-        what is added is orthogonal to g *in the metric the step is measured
-        in*. Projecting in the Euclidean metric instead leaves that gain free to
-        go negative.
-
-        m is history only - the past step-start gradients, folded by ``fold``
-        once each step has committed - so this step's own g enters exactly once,
-        as g. Folding g into m before projecting would put it in the projected
-        quantity too, where it is along g and so contributes nothing but a
-        factor mu on the part that was wanted: the blend would quietly run at
-        mu·m instead of m.
-
-        ``<g,g>_d == 0`` means g has no support where d > 0: there is nothing to
-        precondition, so no momentum is mixed in and the step is zero rather
-        than a push along m.
-        """
-        gg = float(jnp.sum(d * g * g))
-        if gg <= 0.0:
-            return g
-        return g + (self.m[i] - (jnp.sum(d * self.m[i] * g) / gg) * g)
 
     def verdict(
         self,
@@ -326,6 +289,54 @@ class DiagonalPreconditioner(LocalSolver):
             self.m[i] = p.g if first else self.mu * self.m[i] + (1.0 - self.mu) * p.g
         self._reset_step(i)
 
+    def _reset_step(self, i: int) -> None:
+        """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
+        self.alpha[i] = self.alpha0
+        self.alpha_sample[i] = 0
+        self.saw_finite[i] = False
+
+    def _diag(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
+        """Return the per-coordinate inverse curvature d_i for path i at gradient g."""
+        # λ anchors to the current gradient's own magnitude, so a coordinate
+        # with no usable secant (y_i = 0) still steps instead of 0/0. It is a
+        # floor (max), not an addend: where Y ≥ λ the estimate is the faithful
+        # S/Y ratio, and λ only caps d below that.
+        floor = self.theta * (jnp.abs(g) if self.moment == "abs" else jnp.square(g))
+        den = jnp.maximum(self.y_ema[i], floor)
+        # den_i == 0 means y_i = 0 *and* g_i = 0: no curvature information and
+        # already stationary in i, so step nowhere there rather than NaN. One
+        # guard is enough - `where` is a total select and d is never
+        # differentiated, so an inf/nan in the unselected lane cannot leak
+        # anywhere; a derivative of this line would see it, so revisit then.
+        d = jnp.where(den > 0.0, self.s_ema[i] / den, 0.0)
+        return jnp.sqrt(d) if self.moment == "rms" else d
+
+    def _blend_momentum(self, i: int, g: jnp.ndarray, d: jnp.ndarray) -> jnp.ndarray:
+        """Blend path i's momentum history into g, keeping g·step a descent gain.
+
+        m is projected onto g's orthogonal complement under the d-weighted inner
+        product, so the step ``-alpha·d⊙(g + m⊥)`` has ``<d⊙(g+m⊥), g> =
+        <g,g>_d > 0`` exactly - the along-g part of the momentum cancels, and
+        what is added is orthogonal to g *in the metric the step is measured
+        in*. Projecting in the Euclidean metric instead leaves that gain free to
+        go negative.
+
+        m is history only - the past step-start gradients, folded by ``fold``
+        once each step has committed - so this step's own g enters exactly once,
+        as g. Folding g into m before projecting would put it in the projected
+        quantity too, where it is along g and so contributes nothing but a
+        factor mu on the part that was wanted: the blend would quietly run at
+        mu·m instead of m.
+
+        ``<g,g>_d == 0`` means g has no support where d > 0: there is nothing to
+        precondition, so no momentum is mixed in and the step is zero rather
+        than a push along m.
+        """
+        gg = float(jnp.sum(d * g * g))
+        if gg <= 0.0:
+            return g
+        return g + (self.m[i] - (jnp.sum(d * self.m[i] * g) / gg) * g)
+
     def _stationary(self, i: int, p: PathPoint) -> bool:
         """Return whether path i's gradient has hit its floor: ‖g‖ ≤ τ_rel·‖g_0‖.
 
@@ -336,12 +347,6 @@ class DiagonalPreconditioner(LocalSolver):
         in ``verdict`` can never disagree.
         """
         return bool(jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self.g0[i]))
-
-    def _reset_step(self, i: int) -> None:
-        """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
-        self.alpha[i] = self.alpha0
-        self.alpha_sample[i] = 0
-        self.saw_finite[i] = False
 
     def _step_verdict(self, i: int, f: float) -> Verdict:
         """Judge one alpha-grid sample on its value; never fold here.
