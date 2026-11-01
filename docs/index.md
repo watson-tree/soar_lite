@@ -6,23 +6,20 @@ evaluation budget is the binding constraint. The caller returns value and
 gradient together; the library fits no Hessian, no curvature model and no
 surrogate.
 
-Three pieces, no dependencies beyond JAX and the standard library:
+Three seams, no dependencies beyond JAX and the standard library:
 
 - **`n_path_schedule`** — the engine: runs `n_paths` paths in lockstep, one
-  batched evaluation per iteration, and owns the box, the shared horizon, the restart
-  verdicts and the stall state machine.
+  batched evaluation per iteration, and owns the box, the shared horizon and the
+  stall state machine. A stalled path is re-drawn only when `restart_stalled=True`,
+  the run's one restart knob.
 - **`DiagonalPreconditioner`** — the default local method: a per-coordinate
   diagonal secant step `-d ⊙ g`, EMA-smoothed, with a gradient-norm floor and an
   optional alpha grid (`n_alpha`) whose argmin the engine commits. No matrix, no
   linear solve, no scalar learning rate.
-- **`EIRestartRule`** — the default restart rule: compares the expected
-  improvement of continuing a path against the expected improvement of
-  restarting it, both read off the path's own recent f changes and a pool of
-  group-mins. Each side is a scott_mad Gaussian-kernel KDE over its own
-  samples, so neither assumes a single Gaussian.
-- **`NoRestartRule`** — the same seam with the probes turned off after the
-  initialization one: a run is pure multi-start, or a plain serial chain at
-  `n_paths = 1`.
+- **`SampleGlobalModel`** / **`BLRGlobalModel`** — the restart-point source and the
+  run's evidence sink: the engine asks it for one fresh point per restarting path.
+  The default `SampleGlobalModel` draws whatever the `domain` admits; `BLRGlobalModel`
+  is the Bayesian linear-regression surrogate for the same contract.
 
 ## Install
 
@@ -34,7 +31,7 @@ pip install soar-lite
 
 ```python
 import jax.numpy as jnp
-from soar_lite import n_path_schedule
+from soar_lite import Domain, n_path_schedule
 
 
 def eval_f_g(x):
@@ -44,7 +41,7 @@ def eval_f_g(x):
 
 result = n_path_schedule(
     eval_f_g,
-    bounds=[(-5.0, 5.0), (-5.0, 5.0)],
+    domain=Domain([(-5.0, 5.0), (-5.0, 5.0)]),
     n_paths=4,
     max_iters=30,
 )

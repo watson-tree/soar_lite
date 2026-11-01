@@ -18,8 +18,8 @@ you both.
 
 Constraints reach the engine by two independent routes:
 
-- **The box.** `bounds` clips every candidate into the box *before* it is
-  served, so the objective never sees a point outside it.
+- **The box.** `domain` declares the box every proposal is clipped into
+  *before* it is served, so the objective never sees a point outside it.
 - **The mask.** A point masked `False` is still served - its f value and gradient
   come back normally and are used - but it never becomes the best. So
   `result.fun` is a minimum over feasible points only, and is `inf` if nothing
@@ -39,19 +39,18 @@ def eval_f_g(x):
 
 ## 2. Run it
 
-`eval_f_g` is the only positional argument. Everything else is a keyword,
-and three of them are conditionally required: the engine draws its starts from a
-uniform prior over a finite `bounds`, so an unbounded or absent box needs your
-own `sample=`; a probe deeper than one draw needs an `eval_f=`; and a run
-needs a horizon, `max_iters` or `time_limit`. Each is refused by `ValueError`
-rather than guessed.
+`eval_f_g` is the only positional argument; everything else is keyword-only.
+`domain` and `n_paths` are required, and a run needs a horizon - at least one
+of `max_iters` or `time_limit`. `eval_f` is optional (the value-only seam for
+a probe). Each missing required argument is refused by `ValueError` rather
+than guessed.
 
 ```python
-from soar_lite import n_path_schedule
+from soar_lite import Domain, n_path_schedule
 
 result = n_path_schedule(
     eval_f_g,
-    bounds=[(-5.0, 5.0), (-5.0, 5.0)],
+    domain=Domain([(-5.0, 5.0), (-5.0, 5.0)]),
     n_paths=4,
     max_iters=30,
 )
@@ -81,9 +80,11 @@ correspond:
 | --- | --- |
 | `x` | argmin, in the coordinates you handed the engine |
 | `fun` | its value: the best over feasible points, `inf` if none, `-inf` if the objective has no floor |
-| `n_points` | points billed - the serial-cost count |
-| `n_batches` | batches billed, one per `eval_f_g` call - the parallel-cost count |
-| `n_iters` | engine iterations completed (iteration 0 is the initialization probe); one iteration may serve several batches |
+| `n_f_g_points` | fused points billed - the serial-cost count |
+| `n_f_g_batches` | fused batches billed, one per `eval_f_g` call - the parallel-cost count |
+| `n_f_points` | value-only points billed (the `eval_f` seam) |
+| `n_f_batches` | value-only batches billed (the `eval_f` seam) |
+| `n_iters` | engine iterations completed (iteration 0 places the flock); one iteration may serve several batches |
 | `status` | `max_iters`, `time_limit`, `budget_exhausted` or `unbounded` |
 
 There is no `success` or `message`: the engine has no convergence criterion of
@@ -95,12 +96,16 @@ than a criterion the search converged to.
 
 | Knob | What it buys |
 | --- | --- |
-| `bounds` | the search box, scipy-style `(lb, ub)` pairs per dim; `None`/`±inf` is unbounded |
-| `n_paths` | engine width: paths advanced in lockstep each iteration (default 16) |
-| `max_iters` | the horizon, counted in iterations (iteration 0 is the init probe); at least one of `max_iters`/`time_limit` must be given |
+| Knob | What it buys |
+| --- | --- |
+| `domain` | the search box, a `Domain`: the box, its per-dimension `scale`, and its injected draws (a side may be unbounded) |
+| `n_paths` | engine width: paths advanced in lockstep each iteration |
+| `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | a wall-clock horizon in seconds, for when an iteration's cost is too uneven to budget in iterations |
-| `n_draws` | probe depth: draws per start (default 1); above 1 requires `eval_f` |
-| `sample` | your own prior `(key, n_points) -> (n_points, d)`; required when the box is unbounded |
+| `eval_f` | the optional value-only seam: points in, f values out, no gradient |
+| `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
+| `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
+| `restart_stalled` | whether a stalled path is re-drawn (default `False`) |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |
 
@@ -155,14 +160,14 @@ The engine owns the schedule; the method and the restart decision are plugins.
 Both defaults are bound lazily, so you replace either one by name:
 
 ```python
-from soar_lite import DiagonalPreconditioner, EIRestartRule, n_path_schedule
+from soar_lite import DiagonalPreconditioner, Domain, n_path_schedule
 
 result = n_path_schedule(
     eval_f_g,
-    bounds=[(-5.0, 5.0), (-5.0, 5.0)],
+    domain=Domain([(-5.0, 5.0), (-5.0, 5.0)]),
     max_iters=30,
-    solver=DiagonalPreconditioner(n_alpha=4, backtrack=0.5),
-    restart_rule=EIRestartRule(),
+    local_solver=DiagonalPreconditioner(n_alpha=4, backtrack=0.5),
+    restart_stalled=True,
 )
 ```
 

@@ -9,25 +9,28 @@ enough to make the evaluation budget the binding constraint. Value and gradient
 come back together from the caller; no Hessian, no curvature model, no surrogate
 model.
 
-Three pieces, three modules (`soar_lite/engine.py`, `soar_lite/solver.py`,
-`soar_lite/restart.py`), no dependencies beyond JAX and the standard library:
+Three seams, a few modules (`soar_lite/engine.py`, `soar_lite/local_solver.py`,
+`soar_lite/domain.py`, `soar_lite/global_model/`), no dependencies beyond JAX
+and the standard library:
 
 - **`DiagonalPreconditioner`** — the local method. Reads the secant equation one
   coordinate at a time, `d_i = 1/B_ii = s_i/y_i`, smooths the secant pair with an
   EMA, floors the denominator with a gradient-norm term, and steps `-d ⊙ g`. No
   matrix, no linear solve, no scalar learning rate, unit-invariant.
-- **`EIRestartRule`** — sample-based restarts. Compares the expected improvement of
-  continuing a path against the expected improvement of restarting it, both read
-  off the path's own recent f changes and a pool of group-mins shared by every
-  path. Each side is a scott_mad Gaussian-kernel KDE over its own samples,
-  so neither assumes a single Gaussian; no surrogate model of `f` is fitted.
-- **`NoRestartRule`** — the same seam with the probes turned off after the
-  initialization one: a run is pure multi-start, or a plain serial chain at
-  `n_paths = 1`.
+- **`SampleGlobalModel`** / **`BLRGlobalModel`** — the restart points. A model
+  supplies **where** a restart lands and is the run's evidence sink; the engine
+  asks it for one fresh point per restarting path and clips it into the box. The
+  default `SampleGlobalModel` draws whatever the `domain` admits (uniform inside
+  a bounded dimension, `N(0, scale²)` where it is free); `BLRGlobalModel` is the
+  Bayesian linear-regression surrogate for the same contract.
+- **`restart_stalled`** — the *whether* of a restart, a boolean on
+  `n_path_schedule`. *When* a path has stopped is the local solver's own
+  stopping test; *where* it goes is the model's, so there is no third seam.
+  `False` (the default) keeps the flock the caller starts as the whole run.
 - **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep: an
   iteration decides every move on values and buys the gradients it kept in one
-  batch. Owns the box, the shared horizon, the restart verdicts and the stall
-  state machine. `n_paths = 1` is the single-path baseline.
+  batch. Owns the box (`domain`), the shared horizon and the stall state machine.
+  `n_paths = 1` is the single-path baseline.
 
 `ALGORITHM.md` is the derivation: what each piece does, why the floor is a floor
 and not an addend, the two cost axes, what may be redesigned freely, the
@@ -41,18 +44,18 @@ pip install soar-lite
 ```
 
 ```python
-from soar_lite import DiagonalPreconditioner, EIRestartRule, n_path_schedule
+from soar_lite import DiagonalPreconditioner, SampleGlobalModel, n_path_schedule
 ```
 
 ## Run
 
 ```bash
 uv sync                       # jax
-uv run python -m tests.test_solver        # the local method
-uv run python -m tests.test_restart       # the restart rule
-uv run python -m tests.test_scheduler     # the engine, driven by a stub method
-uv run python -m tests.test_solver_seam   # the injection seams
-uv run --no-sync python -m pytest -q   # or all 77 in one go
+uv run python -m tests.test_local_solver   # the local method
+uv run python -m tests.test_global_model   # the restart-point models
+uv run python -m tests.test_scheduler      # the engine, driven by a stub method
+uv run python -m tests.test_plugin_seam    # the injection seams
+uv run --no-sync python -m pytest -q   # or all tests in one go
 uv run ruff check && uv run pyright
 ```
 
