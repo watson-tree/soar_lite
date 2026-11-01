@@ -10,6 +10,7 @@ consumes them, which is the specification here rather than an oversight.
 
 import math
 from collections.abc import Sequence
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -59,11 +60,15 @@ def _short_minimize(
     return jnp.zeros((max(n_points - 1, 0), jnp.asarray(bounds).shape[0]))
 
 
-def _model(d: int = 2, half: float = 2.0, noise: float = 0.01) -> BLRGlobalModel:
-    """Build a model over the symmetric ``[-half, half]^d`` box."""
-    bounds = jnp.asarray([[-half, half]] * d)
+def _box(d: int = 2, half: float = 2.0) -> Domain:
+    """Name the symmetric ``[-half, half]^d`` box a test hands to an ask."""
+    return Domain(jnp.asarray([[-half, half]] * d))
+
+
+def _model(noise: float = 0.01) -> BLRGlobalModel:
+    """Build a model that reads its geometry off whatever box an ask hands in."""
     return BLRGlobalModel(
-        SphereProjection(Domain(bounds)),
+        SphereProjection,
         minimize=_grid_minimize,
         noise=noise,
         key=jax.random.PRNGKey(0),
@@ -115,7 +120,7 @@ def test_log_h_is_continuous_across_the_mills_seam() -> None:
 def test_features_lie_on_the_unit_sphere() -> None:
     """Bind the posterior variance through unit-norm feature rows."""
     xs = jnp.asarray([[-1.9, 1.9], [0.0, 0.0], [1.3, -0.4]])
-    norms = jnp.linalg.norm(_model()._projection.features(xs), axis=-1)
+    norms = jnp.linalg.norm(SphereProjection(_box()).features(xs), axis=-1)
     assert np.allclose(np.asarray(norms), 1.0, atol=1e-5)
 
 
@@ -184,37 +189,40 @@ def test_a_non_uniform_scale_moves_the_features() -> None:
 
 def test_a_masked_model_proposes_inside_the_box() -> None:
     """Keep the acquisition path working when only some dimensions bend."""
-    bounds = jnp.asarray([[-2.0, 2.0]] * 3)
+    box = Domain(jnp.asarray([[-2.0, 2.0]] * 3))
     model = BLRGlobalModel(
-        SphereProjection(Domain(bounds), mask=[True, False, True]),
+        partial(SphereProjection, mask=[True, False, True]),
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
     )
     xs = jnp.linspace(-1.9, 1.9, 6)[:, None] * jnp.ones(3)[None, :]
     center = jnp.asarray([0.3, -0.2, 0.1])
     model.observe(xs, [float(jnp.sum((row - center) ** 2)) for row in xs], None)
-    starts = model.propose(2)
+    starts = model.propose(2, box)
     assert starts.shape == (2, 3)
-    mean, sigma = model._predict(starts)
+    mean, sigma = model._predict(starts, box)
     assert bool(jnp.all(jnp.isfinite(starts)))
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
 
 
-def test_the_injected_projection_brings_the_geometry_and_its_domain() -> None:
-    """Read the run's dimension and box off the projection's domain."""
-    projection = SphereProjection(
-        Domain(jnp.asarray([[-1.0, 1.0]] * 4)),
-        mask=[False, True, False, True],
-    )
-    model = BLRGlobalModel(
-        projection,
-        minimize=_grid_minimize,
-        key=jax.random.PRNGKey(0),
-    )
-    assert model.d == 4
-    assert model._projection is projection
-    assert model._domain is projection.domain
+def test_the_model_carries_no_box_of_its_own() -> None:
+    """Hold the recipe, not a box: the space is handed in at each ask.
+
+    The point of dropping `d` and `domain` from the contract: a second box can
+    no longer be silently reconciled with the run's, because the model never
+    holds one to disagree with.
+    """
+    model = _model()
+    assert not hasattr(model, "domain")
+    assert not hasattr(model, "d")
+    _observe(model, 8)
+    tight = model.propose(2, _box(half=1.0))
+    roomy = model.propose(2, _box(half=100.0))
+    assert tight.shape == (2, 2)
+    assert roomy.shape == (2, 2)
+    assert bool(jnp.all(jnp.abs(tight) <= 1.0)), tight.tolist()
+    assert bool(jnp.all(jnp.abs(roomy) <= 100.0)), roomy.tolist()
 
 
 def test_the_acquisition_gradient_is_the_jacobian_diagonal() -> None:
@@ -227,17 +235,19 @@ def test_the_acquisition_gradient_is_the_jacobian_diagonal() -> None:
     in the reverse-mode path shows up as a mismatch.
     """
     model = _model()
+    box = _box()
+    projection = SphereProjection(box)
     _observe(model, 8)
     xs = jnp.asarray([[-1.4, 0.7], [0.3, -1.1], [1.6, 0.9]])
-    weights, cov = model._posterior()
+    weights, cov = model._posterior(projection)
     best = model._standardize(jnp.asarray(model._fs)).min()
 
     def values(x: jnp.ndarray) -> jnp.ndarray:
-        mean, sigma = model._posterior_at(x, weights, cov)
+        mean, sigma = model._posterior_at(projection, x, weights, cov)
         z = (best - mean) / sigma
         return -(jnp.log(sigma) + _log_h(z))
 
-    value, grad = model._acq_value_and_grad(xs, weights, cov, best)
+    value, grad = model._acq_value_and_grad(projection, xs, weights, cov, best)
     jac = jax.jacfwd(values)(xs)
     diagonal = jnp.stack([jac[i, i] for i in range(xs.shape[0])])
 
@@ -253,7 +263,7 @@ def test_propose_draws_uniformly_until_a_fit_is_possible() -> None:
     for n_observed in (0, 1):
         if n_observed:
             model.observe(jnp.asarray([[0.5, -0.5]]), [1.0], None)
-        draws = model.propose(4)
+        draws = model.propose(4, _box())
         assert draws.shape == (4, 2)
         assert bool(jnp.all(jnp.isfinite(draws)))
         assert bool(jnp.all(draws >= -2.0))
@@ -262,16 +272,17 @@ def test_propose_draws_uniformly_until_a_fit_is_possible() -> None:
 
 def test_integer_bounds_still_normalize_to_a_unit_box() -> None:
     """Keep the box usable when a caller spells its pairs in integers."""
+    box = Domain([(0, 1), (0, 1)])
     model = BLRGlobalModel(
-        SphereProjection(Domain([(0, 1), (0, 1)])),
+        SphereProjection,
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
     )
-    draws = model.propose(3)
+    draws = model.propose(3, box)
     assert bool(jnp.all(draws >= 0.0))
     assert bool(jnp.all(draws <= 1.0))
     model.observe(jnp.asarray([[0.2, 0.3], [0.8, 0.9]]), [1.0, 2.0], None)
-    mean, sigma = model._predict(jnp.asarray([[0.5, 0.5]]))
+    mean, sigma = model._predict(jnp.asarray([[0.5, 0.5]]), box)
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
 
@@ -281,7 +292,7 @@ def test_predict_refuses_a_fit_it_cannot_standardize() -> None:
     model = _model()
     model.observe(jnp.asarray([[0.5, -0.5]]), [1.0], None)
     with pytest.raises(ValueError, match="spread to standardize"):
-        model._predict(jnp.asarray([[0.0, 0.0]]))
+        model._predict(jnp.asarray([[0.0, 0.0]]), _box())
 
 
 def test_a_flat_batch_has_no_spread_to_fit() -> None:
@@ -289,23 +300,23 @@ def test_a_flat_batch_has_no_spread_to_fit() -> None:
     model = _model()
     model.observe(jnp.asarray([[0.5, -0.5], [-0.5, 0.5]]), [3.0, 3.0], None)
     assert not model._can_fit()
-    draws = model.propose(4)
+    draws = model.propose(4, _box())
     assert draws.shape == (4, 2)
     assert bool(jnp.all(draws >= -2.0))
     assert bool(jnp.all(draws <= 2.0))
     with pytest.raises(ValueError, match="spread to standardize"):
-        model._predict(jnp.asarray([[0.0, 0.0]]))
+        model._predict(jnp.asarray([[0.0, 0.0]]), _box())
 
 
 def test_posterior_deviation_never_dips_below_the_observation_noise() -> None:
     """Keep the root defined by construction: noise plus a non-negative form."""
     model = _model()
     _observe(model, 6)
-    _, sigma = model._predict(jnp.stack(model._xs))
+    _, sigma = model._predict(jnp.stack(model._xs), _box())
     assert float(jnp.min(sigma)) >= math.sqrt(model._noise) - 1e-6
 
 
-@pytest.mark.parametrize("bad", [(3, 2, 2), (3, 3)])
+@pytest.mark.parametrize("bad", [(3, 2, 2)])
 def test_observe_and_predict_demand_a_two_dimensional_batch(
     bad: tuple[int, ...],
 ) -> None:
@@ -315,7 +326,15 @@ def test_observe_and_predict_demand_a_two_dimensional_batch(
     with pytest.raises(ValueError, match="needs a"):
         model.observe(jnp.zeros(bad), [0.0] * bad[0], None)
     with pytest.raises(ValueError, match="needs a"):
-        model._predict(jnp.zeros(bad))
+        model._predict(jnp.zeros(bad), _box())
+
+
+def test_a_later_batch_cannot_redeclare_the_width() -> None:
+    """The first batch fixes the width; the model holds no `d` to check against."""
+    model = _model()
+    _observe(model, 4)
+    with pytest.raises(ValueError, match="fixed the width at 2, got 3"):
+        model.observe(jnp.zeros((3, 3)), [0.0] * 3, None)
 
 
 def test_posterior_variance_stays_under_the_prior_far_from_data() -> None:
@@ -324,8 +343,8 @@ def test_posterior_variance_stays_under_the_prior_far_from_data() -> None:
     # A >= (noise/var_prior) I, so sigma^2 <= noise + var_prior everywhere.
     model = _model()
     _observe(model, 6)
-    near, near_sigma = model._predict(jnp.asarray([[1.9, -1.9]]))
-    far, far_sigma = model._predict(jnp.asarray([[1.9, 1.9]]))
+    near, near_sigma = model._predict(jnp.asarray([[1.9, -1.9]]), _box())
+    far, far_sigma = model._predict(jnp.asarray([[1.9, 1.9]]), _box())
     assert bool(jnp.all(jnp.isfinite(near)))
     assert bool(jnp.all(jnp.isfinite(far)))
     assert float(far_sigma[0]) <= math.sqrt(1.01) + 1e-3  # noise + var_prior
@@ -335,13 +354,14 @@ def test_posterior_variance_stays_under_the_prior_far_from_data() -> None:
 def test_propose_descends_the_acquisition_into_the_box() -> None:
     """Return the minimizer's starts, finite and inside the box."""
     model = _model()
+    box = _box()
     _observe(model, 12)
-    starts = model.propose(3)
+    starts = model.propose(3, box)
     assert starts.shape == (3, 2)
     assert bool(jnp.all(jnp.isfinite(starts)))
     assert bool(jnp.all(starts >= -2.0))
     assert bool(jnp.all(starts <= 2.0))
-    mean, sigma = model._predict(starts)
+    mean, sigma = model._predict(starts, box)
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
 
@@ -357,15 +377,15 @@ def test_observe_drops_non_finite_values_and_checks_its_rows() -> None:
 
 def test_minimize_output_shape_is_validated() -> None:
     """Refuse an injected minimizer that answers the wrong shape."""
-    bounds = jnp.asarray([[-2.0, 2.0]] * 2)
+    box = _box()
     model = BLRGlobalModel(
-        SphereProjection(Domain(bounds)),
+        SphereProjection,
         minimize=_short_minimize,
         key=jax.random.PRNGKey(1),
     )
     _observe(model, 4)
     with pytest.raises(ValueError, match=r"\(3, 2\) array"):
-        model.propose(3)
+        model.propose(3, box)
 
 
 def test_the_model_demands_a_positive_noise() -> None:
@@ -396,17 +416,17 @@ def test_an_identity_projection_is_a_projection_and_neither_is_a_domain() -> Non
 
 def test_the_identity_model_fits_a_width_d_posterior() -> None:
     """The feature width is read off `features`, not hardcoded ``d + 1``."""
-    bounds = jnp.asarray([[-2.0, 2.0]] * 2)
+    box = _box()
     model = BLRGlobalModel(
-        IdentityProjection(Domain(bounds)),
+        IdentityProjection,
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
     )
     _observe(model, 4)
-    mean, sigma = model._predict(jnp.asarray([[0.5, -0.5]]))
+    mean, sigma = model._predict(jnp.asarray([[0.5, -0.5]]), box)
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
-    draws = model.propose(3)
+    draws = model.propose(3, box)
     assert draws.shape == (3, 2)
     assert bool(jnp.all(jnp.isfinite(draws)))
     assert bool(jnp.all(draws >= -2.0))
@@ -453,17 +473,17 @@ def test_the_global_lengthscale_holds_the_far_corner_at_one_over_kappa(d: int) -
 
 def test_an_unbounded_box_proposes_and_predicts_without_a_width() -> None:
     """Keep the whole path finite where no side has a width to divide by."""
-    bounds = jnp.asarray([[-math.inf, math.inf]] * 2)
+    box = Domain(jnp.asarray([[-math.inf, math.inf]] * 2))
     model = BLRGlobalModel(
-        SphereProjection(Domain(bounds)),
+        SphereProjection,
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
     )
-    draws = model.propose(4)  # no fit yet: the domain's own draw
+    draws = model.propose(4, box)  # no fit yet: the domain's own draw
     assert draws.shape == (4, 2)
     assert bool(jnp.all(jnp.isfinite(draws)))
     _observe(model, 6)
-    _, sigma = model._predict(jnp.asarray([[0.0, 0.0], [1e3, -1e3]]))
+    _, sigma = model._predict(jnp.asarray([[0.0, 0.0], [1e3, -1e3]]), box)
     assert bool(jnp.all(jnp.isfinite(sigma)))
     # Far out the bend returns the variance to the prior instead of growing.
     assert float(sigma[1]) <= math.sqrt(1.01) + 1e-3

@@ -40,17 +40,18 @@ def flock_kwargs(
     *,
     key: jnp.ndarray | None = None,
 ) -> dict[str, Any]:
-    """Return the entry's two flock kwargs: the run's width and its starts.
+    """Return the entry's flock kwargs: width, starts and the box they live in.
 
-    The engine takes its width as `n_paths` and every point a path starts from as
-    the global model's first proposal, so a test that chooses its flock says both
-    here. The model is the shipped default one: it hands `x0` back on the first
-    `propose` and draws any later re-draw from `key`.
+    The engine takes its width as `n_paths`, every point a path starts from as
+    the global model's first proposal, and the one box the run searches as
+    `domain` - so a test that chooses its flock says all three here. The model
+    is the shipped default one: it hands `x0` back on the first `propose` and
+    draws any later re-draw from `key`.
     """
     return {
         "n_paths": int(x0.shape[0]),
+        "domain": domain,
         "global_model": SampleGlobalModel(
-            domain,
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),
@@ -353,7 +354,6 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
             Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
             key=jax.random.PRNGKey(0),
         ),
-        domain=Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
         max_iters=50,
         local_solver=DiagonalPreconditioner(theta=0.0),
     )
@@ -440,7 +440,6 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
             Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
             key=jax.random.PRNGKey(0),
         ),
-        domain=Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
         max_iters=50,
         local_solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
     )

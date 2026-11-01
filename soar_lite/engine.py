@@ -118,6 +118,13 @@ class GlobalModel(Protocol):
     `propose` with random search until its evidence arrives, and the engine has
     no opinion either way, since it only ever sees the points.
 
+    A model carries no search space of its own. The run has one box and the
+    engine owns it, so `propose` is handed that `Domain` at every ask and a
+    model may not remember it: the box is what the answer must land in, not a
+    property of the thing answering. That is what keeps a fitted model's
+    geometry and its fallback draw measured in the same coordinate unit as the
+    clip, without a second box to reconcile - there is only ever one.
+
     One instance serves the whole run (like `LocalSolver`), so whatever the
     model accumulates lives inside it; the engine never reads
     it. The methods are called by the engine on its own schedule - `observe`
@@ -125,8 +132,6 @@ class GlobalModel(Protocol):
     they trust their arguments: `n_path_schedule` validates the object once at
     the entry (that it carries this contract), and nothing here re-checks.
     """
-
-    d: int  # the run's dimension: the model's own property, read once at entry
 
     def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
         """Fold one served batch into the model's evidence.
@@ -149,18 +154,17 @@ class GlobalModel(Protocol):
         """
         ...
 
-    def propose(self, n_points: int) -> jnp.ndarray:
+    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
         """Return ``n_points`` fresh restart starts, shape ``(n_points, d)``.
 
         Called with the number of paths that restart this iteration - on
         iteration 0 that is every path, and every path holds no point yet, so
-        the first call places the flock. The engine clips the result into
-        `bounds`, so a model may propose outside the box; it is asked for points
-        in the same coordinates the objective takes.
-
-        The engine clips the result into the run's `domain`, so a model may
-        propose outside the box it was built over, and only the points it
-        returns are clipped.
+        the first call places the flock - and with the run's own `Domain`,
+        which is the box the answer must land in and the one statement of the
+        dimension (`domain.d`). Asked in the same coordinates the objective
+        takes. The engine still clips what comes back into that box, as the
+        defensive seam for a model that oversteps the box it was handed, not as
+        a way of reconciling two of them.
 
         The model owns its randomness (an instance holds its key), which is what
         makes a seeded model reproducible.
@@ -313,6 +317,15 @@ EvalFG: TypeAlias = Callable[
 # for their values alone and buy gradients only for its winners, in one batch.
 EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | None]"]
 
+# The two halves of a `GlobalModel`, as the components that call them see them.
+# The model itself never crosses into `_Evaluator` or `_Paths`: each takes the
+# one method it uses, so neither holds a god object whose other half it ignores.
+# `ObserveFn` is the command that folds a served batch into the evidence;
+# `ProposeFn` is the query for fresh starts, handed the run's box because the
+# box is the engine's and a model carries none.
+ObserveFn: TypeAlias = Callable[[jnp.ndarray, list[float], jnp.ndarray | None], None]
+ProposeFn: TypeAlias = Callable[[int, Domain], jnp.ndarray]
+
 # Four names for four ways to end a run: the three gates, in the order they are
 # checked (iteration horizon, wall-clock deadline, the caller's extra batch
 # gate), plus the objective bottoming out at -inf. A stalled flock has no fifth
@@ -374,17 +387,15 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # after the one positional seam: one name per dial beats a config object here)
     eval_f_g: EvalFG,
     *,
-    # The run's width: how many chains the engine drives. Its dimension is the
-    # global model's (`d`), and the domain has to agree with it.
+    # The run's width: how many chains the engine drives.
     n_paths: int,
-    eval_f: EvalF | None = None,
     # The run's box, a `Domain`: every proposal is clipped into it - the global
-    # model's fresh starts and the local method's steps alike - and, with no
-    # model injected, it is also where the default model draws from. `None`
-    # means no clip at all (the identity), which is a run only beside an
-    # injected model: a domain is also what the default draws, so its absence
-    # leaves the engine nothing of its own.
-    domain: Domain | None = None,
+    # model's fresh starts and the local method's steps alike - and it is the
+    # one statement of the dimension (`domain.d`) and of each coordinate's
+    # prior `scale`. The engine owns it; a model is handed it per ask rather
+    # than carrying one, so there is never a second box to reconcile.
+    domain: Domain,
+    eval_f: EvalF | None = None,
     # The run's horizon, counted in iterations: the engine completes at most
     # max_iters iterations. An iteration is one move per path (iteration 0
     # places `x0` instead), not one eval, so this is a reproducible stop, not a
@@ -413,10 +424,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     restart_stalled: bool = False,
     # The two plugins, adjacent and in one order everywhere: where a restart
     # lands (the model is also the run's evidence sink, asked for points only
-    # when a restart fires; None -> SampleGlobalModel drawing whatever the
-    # `domain` admits, so only an absent domain is rejected below - a declared
-    # unbounded side is a prior the domain itself already states, not a draw
-    # the engine has to invent), and the search method.
+    # when a restart fires; None -> SampleGlobalModel, which draws whatever the
+    # `domain` admits - a declared unbounded side is a prior the domain itself
+    # already states, not a draw the engine has to invent), and the search
+    # method.
     global_model: GlobalModel | None = None,
     local_solver: LocalSolver | None = None,  # None -> DiagonalPreconditioner
     # The random source of the restart points, last and optional (optax's `key`
@@ -465,7 +476,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     `domain` is the run's box and the coordinate space the engine works in, a
     `Domain` the caller built (its constructor refused a malformed one already);
     the engine clips into it and knows nothing about any map from these
-    coordinates to the caller's physical ones.
+    coordinates to the caller's physical ones. It is the model's box too, so an
+    injected model - which carries it as `GlobalModel.domain` - makes the
+    argument optional, and a *different* box is refused at the entry rather than
+    clipped across: two boxes with equal bounds are still two `scale` and
+    sampler stories, i.e. two search problems wearing one width.
 
     Work is reported as four counts, never mixed. The fused value+gradient seam
     is the expensive one, and `n_f_g_points` is the g points it served (the
@@ -524,8 +539,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             its winners, in one batch.
         domain: the run's box, a `Domain`: every proposal is clipped into it,
             and with ``global_model=None`` it is also what the default model
-            draws from. ``None`` means no clip at all (the identity), which
-            needs an injected model.
+            draws from. An injected model carries the box itself
+            (``GlobalModel.domain``), so this is optional then - and given, it
+            must be that same object: a rebuilt box is two `scale`/sampler
+            stories behind equal-looking bounds. ``None`` with no model is
+            refused, there being nothing to draw from.
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
@@ -535,11 +553,13 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             a horizon (``None`` means none).
         global_model: the restart-point source and the run's evidence sink: a
             `GlobalModel` that is fed every served batch and asked for points
-            only when a restart fires. ``None`` builds a `SampleGlobalModel`
-            over ``domain`` - bounded, free or half-bounded, wherever the
-            domain's own draw reaches - which fits nothing.
-            The model's ``d`` is the run's dimension; ``domain`` must agree with
-            it.
+            only when a restart fires. It also carries the run's box
+            (``GlobalModel.domain``), which is why ``domain`` is optional beside
+            it and cannot be a different one. ``None`` builds a
+            `SampleGlobalModel` over ``domain`` - bounded, free or half-bounded,
+            wherever the domain's own draw reaches - which fits nothing.
+            A model's ``d`` and its ``domain.d`` are the run's dimension, and the
+            two are checked against each other.
         local_solver: the local method (``None`` binds ``DiagonalPreconditioner``).
         restart_stalled: whether a path the engine marks stalled (its method gave
             up, or its point was not usable) is re-drawn from the global model.
@@ -578,7 +598,6 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             ...     domain=box,
             ...     # the flock rides the default model's first proposal
             ...     global_model=SampleGlobalModel(
-            ...         box,
             ...         key=jax.random.PRNGKey(0),
             ...         x0=jnp.array(
             ...             [[-1.0, -1.0], [1.0, 1.0], [-4.0, 4.0], [4.0, -4.0]],
@@ -609,21 +628,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     _check_seam(global_model, GlobalModel, "global_model")
     _check_seam(local_solver, LocalSolver, "local_solver")
 
-    # The clip is the domain's own box, so the two cannot disagree: `None` is
-    # the identity, which is a run only beside an injected model.
-    clip = (domain.lo, domain.hi) if domain is not None else (-math.inf, math.inf)
     if global_model is None:
-        if domain is None:
-            msg = (
-                "global_model=None needs a `domain` to draw the flock from - "
-                "pass one, or inject a `global_model` that proposes its own "
-                "starts"
-            )
-            raise ValueError(msg)
         from soar_lite.global_model import SampleGlobalModel  # noqa: PLC0415
 
         global_model = SampleGlobalModel(
-            domain,
             key=jax.random.PRNGKey(0) if key is None else key,
         )
     if local_solver is None:
@@ -631,25 +639,28 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
         local_solver = DiagonalPreconditioner()
 
-    # The model is the run's statement of dimension, so the domain is checked
-    # against it here - the one place both are in hand - rather than per batch.
-    d = _check_model_d(global_model, domain)
+    # The run's one box, and the only place it is read for the clip; the
+    # dimension comes with it.
+    d = domain.d
     budget = _Budget(max_iters, time_limit, budget_check)
     best = _Best(d)
+    # Each component gets the one half of the model it calls, not the object: an
+    # evaluator folds evidence, a path stepper asks for starts, and neither has
+    # any business holding the other's method.
     evaluator = _Evaluator(
         eval_f_g,
         eval_f,
         budget=budget,
         best=best,
-        global_model=global_model,
+        observe=global_model.observe,
     )
     # Last, because it takes the resolved seams and their collaborators: the
     # state machine drives them rather than receiving them per call.
     paths = _Paths(
         n_paths,
-        clip,
+        domain,
         evaluator,
-        global_model,
+        global_model.propose,
         local_solver,
         restart_stalled=restart_stalled,
     )
@@ -888,13 +899,13 @@ class _Evaluator:
         *,
         budget: _Budget,
         best: _Best,
-        global_model: GlobalModel,
+        observe: ObserveFn,
     ) -> None:
         self._eval_f_g = eval_f_g
         self._eval_f = eval_f
         self._budget = budget
         self._best = best
-        self._global_model = global_model
+        self._observe = observe
 
     def pending_unread(self, x_batch: jnp.ndarray) -> list[_Pending]:
         """Return one unread point per row: both halves owed to `settle`.
@@ -979,7 +990,7 @@ class _Evaluator:
         # The model first: a feasible -inf below raises `_OptimumReached`, and
         # the batch was served and charged either way, so the model still sees
         # it even though the run keeps nothing else from this pass.
-        self._global_model.observe(x_batch, f_vals, g_batch)
+        self._observe(x_batch, f_vals, g_batch)
         self._best.observe(x_batch, f_vals, feas)
         return f_vals, g_batch
 
@@ -1007,7 +1018,7 @@ class _Evaluator:
         f_vals = f_batch.tolist()
         # No gradient in hand: the f half alone. The same point is reported
         # again with `g` if it wins its step and `settle` buys the gradient.
-        self._global_model.observe(x_batch, f_vals, None)
+        self._observe(x_batch, f_vals, None)
         self._best.observe(x_batch, f_vals, feas)
         return f_vals
 
@@ -1046,22 +1057,24 @@ class _Paths:
     def __init__(  # noqa: PLR0913 - the run's collaborators, built once
         self,
         n_paths: int,
-        clip: tuple[jnp.ndarray | float, jnp.ndarray | float],
+        domain: Domain,
         evaluator: _Evaluator,
-        global_model: GlobalModel,
+        propose: ProposeFn,
         local_solver: LocalSolver,
         *,
         restart_stalled: bool,
     ) -> None:
         self.n_paths = n_paths
         # Constant for the whole run, so it belongs beside the shape rather than
-        # in `move`'s signature: every proposal below is clipped into this box.
-        self.clip = clip
+        # in `move`'s signature: every proposal below is clipped into this box,
+        # and this is the only copy of it - the model is handed it per ask
+        # rather than carrying one.
+        self.domain = domain
         # The collaborators this state machine drives. Held rather than handed
         # in per call: every method below uses at least one of them, and a step
         # would otherwise thread them only to pass them straight back.
         self.evaluator = evaluator
-        self.global_model = global_model
+        self.propose = propose
         self.local_solver = local_solver
         # A knob, not a collaborator: *when* a path restarts is read off
         # `stalled` below, so the only thing left to decide is whether the
@@ -1138,15 +1151,27 @@ class _Paths:
         self._advance(wins)
 
     def _restart_starts(self, n_points: int) -> list[_Pending]:
-        """Ask the global model for n_points fresh starts, clipped into the box.
+        """Ask the model for n_points fresh starts, clipped into the run's box.
 
-        Ask, clip, place: the model proposes in the engine's own coordinates but
-        knows nothing of the box, so the clip is the engine's (the same one every
-        step proposal passes). Both halves stay owed - a start has nothing to be
-        judged on - so `settle` buys them in the same batch as the step winners,
-        which is what keeps a restart from costing its own gradient pass.
+        Ask, check, clip, place: the model is handed the box it must land in and
+        its answer is refused unless it is ``(n_points, domain.d)`` - the engine
+        owns the width now, so a model that returns another one fails here,
+        naming the shape, instead of deep in a broadcast during the clip. The
+        clip itself stays as the defensive seam for a model that oversteps the
+        box - the same one every step proposal passes. Both halves stay owed - a
+        start has nothing to be judged on - so `settle` buys them in the same
+        batch as the step winners, which is what keeps a restart from costing
+        its own gradient pass.
         """
-        x_cand = jnp.clip(self.global_model.propose(n_points), *self.clip)
+        d = self.domain.d
+        proposed = self.propose(n_points, self.domain)
+        if proposed.shape != (n_points, d):
+            msg = (
+                f"the global model must propose a ({n_points}, {d}) array, "
+                f"got {proposed.shape}"
+            )
+            raise ValueError(msg)
+        x_cand = jnp.clip(proposed, self.domain.lo, self.domain.hi)
         return self.evaluator.pending_unread(x_cand)
 
     def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
@@ -1173,7 +1198,7 @@ class _Paths:
         if not cohort:
             # Every path restarted this iteration: the cohort is empty.
             return {}
-        lo, hi = self.clip
+        lo, hi = self.domain.lo, self.domain.hi
         # A path already stalled only reports its sample this iteration, so it
         # stays out of both lanes; `stalled` also gates the exit observation
         # below without a second membership list.
@@ -1251,7 +1276,7 @@ class _Paths:
         makes the iteration serve this point's value once rather than twice.
         """
         raw = jnp.stack([self.local_solver.propose(i, self.points[i]) for i in paths])
-        clipped = jnp.clip(raw, *self.clip)
+        clipped = jnp.clip(raw, self.domain.lo, self.domain.hi)
         return dict(zip(paths, self.evaluator.pending_unread(clipped), strict=True))
 
     def _place(self, placed: dict[int, PathPoint]) -> None:
@@ -1302,7 +1327,7 @@ def _check_seam(obj: object | None, proto: type, what: str) -> None:
     function: the isinstance is redundant to a type checker and needs saying once.
     """
     if obj is not None and not isinstance(obj, proto):
-        msg = f"{what} does not implement {proto.__name__} (a method is missing)"
+        msg = f"{what} does not implement {proto.__name__} (a member is missing)"
         raise TypeError(msg)
 
 
@@ -1386,22 +1411,6 @@ def _feas_flags(feas: jnp.ndarray) -> list[bool]:
         )
         raise ValueError(msg)
     return [bool(v) for v in feas.tolist()]
-
-
-def _check_model_d(model: GlobalModel, domain: Domain | None) -> int:
-    """Read the run's dimension off the model, making the domain agree with it.
-
-    The model is the authority because it is the one proposing points: a
-    surrogate is built on a d-dimensional objective and knows d before the run
-    starts, while `domain` may be absent entirely. The domain is still checked
-    against it, so a mismatched pair fails here rather than as a batch-shape
-    error a frame later.
-    """
-    d = _check_positive_int(getattr(model, "d", None), "global_model.d")
-    if domain is not None and domain.d != d:
-        msg = f"the global model has d={d} but the domain has d={domain.d}"
-        raise ValueError(msg)
-    return d
 
 
 def _check_positive_int(value: object, name: str) -> int:

@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `n_path_schedule`'s `domain` is a required argument, and the run owns the
+  box. `GlobalModel` no longer carries a `domain` or a `d`: `propose` is
+  `propose(n_points, domain)`, handed the run's `Domain` at each ask, and the
+  run's dimension is `domain.d`. Two boxes are therefore type-level
+  unrepresentable rather than merely cross-checked, and the clip stays what it
+  always was - the defensive seam for a model that oversteps the box it was
+  handed, plus the load-bearing one for the local method's trial points.
+  `BLRGlobalModel` follows the same seam: it takes a `projection_factory`
+  (`Domain -> Projection`) instead of a projection instance, because the
+  geometry (`glob_ls`) is a pure function of the domain and the model's
+  hyperparameters, so shaping it per ask is more honest than storing one
+  built from a box the model would otherwise have to carry.
 - With no `global_model`, an unbounded `domain` is accepted instead of
   refused. The engine's default `SampleGlobalModel` draws whatever the domain
   admits - uniform inside a bounded dimension, `N(0, scale_i^2)` inside a free
@@ -45,8 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old refusal (which claimed a uniform default had nothing to draw there)
   contradicted the model's own contract. Measured on a free dimension, the
   default flock's spread tracks `domain.scale` (std/scale 1.028 at 400 starts,
-  mean 0), so nothing about the draw comes from a box width. Only `domain=None`
-  with no model stays a `ValueError`: there is then nothing at all to sample.
+  mean 0), so nothing about the draw comes from a box width. An unbounded run
+  spells its unbounded sides in the `Domain`; there is no `domain=None` left to
+  refuse.
 - The seams are checked for being callable, not only the two Protocol objects.
   `eval_f_g`, `eval_f`, `sample` and `budget_check` are refused with a
   `TypeError` naming the argument before any batch is served; before this a

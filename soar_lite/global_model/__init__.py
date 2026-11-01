@@ -6,9 +6,10 @@ is the Bayesian linear-regression surrogate (`BLRGlobalModel`) together with the
 engine's `GlobalModel` protocol, which stays in `engine.py` because the engine
 owns its seams.
 
-`soar_lite/domain.py` - the box these models draw from - deliberately stays
-outside this package: the engine reads the same domain for its clip, so the
-domain is a shared leaf, not a member of the model family.
+`soar_lite/domain.py` - the box these models draw from and carry as their
+`domain` - deliberately stays outside this package: the engine reads that same
+object for its clip, so the domain is a shared leaf, not a member of the model
+family.
 """
 
 from soar_lite.global_model.sample import SampleGlobalModel

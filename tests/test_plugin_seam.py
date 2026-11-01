@@ -35,6 +35,7 @@ def unit_bounds(d: int = 1) -> jnp.ndarray:
     """Return the engine's box in working coords: x ∈ [0,1]^d."""
     return jnp.stack([jnp.zeros(d), jnp.ones(d)], axis=1)
 
+
 def unit_domain(d: int = 1) -> Domain:
     """Return the engine's box in working coords as the `Domain` it is."""
     return Domain(unit_bounds(d))
@@ -52,17 +53,18 @@ def flock_kwargs(
     *,
     key: jnp.ndarray | None = None,
 ) -> dict[str, Any]:
-    """Return the entry's two flock kwargs: the run's width and its starts.
+    """Return the entry's flock kwargs: width, starts and the box they live in.
 
-    The engine takes its width as `n_paths` and every point a path starts from as
-    the global model's first proposal, so a test that chooses its flock says both
-    here. The model is the shipped default one: it hands `x0` back on the first
-    `propose` and draws any later re-draw from `key`.
+    The engine takes its width as `n_paths`, every point a path starts from as
+    the global model's first proposal, and the one box the run searches as
+    `domain` - so a test that chooses its flock says all three here. The model
+    is the shipped default one: it hands `x0` back on the first `propose` and
+    draws any later re-draw from `key`.
     """
     return {
         "n_paths": int(x0.shape[0]),
+        "domain": domain,
         "global_model": SampleGlobalModel(
-            domain,
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),
@@ -182,13 +184,11 @@ class RecordingModel:
     A real `GlobalModel`, not a stub: it holds its own key (the engine draws for
     no model), so its answers are reproducible from the seed alone, and it
     records both channels - one ask per restarting path, one observe per served
-    batch.
+    batch. It carries no box: each ask hands it the run's `domain`.
     """
 
-    def __init__(self, box: jnp.ndarray, *, key: jnp.ndarray | None = None) -> None:
-        """Store the box every draw lands in and the stream it is drawn from."""
-        self.box = box
-        self.d = int(box.shape[0])
+    def __init__(self, *, key: jnp.ndarray | None = None) -> None:
+        """Store the stream every draw comes from."""
         self.calls: list[int] = []  # one entry per ask, holding n_points
         self.observed: list[int] = []  # one entry per served batch, its width
         self._key = jax.random.PRNGKey(0) if key is None else key
@@ -198,15 +198,15 @@ class RecordingModel:
         del f, g
         self.observed.append(int(x.shape[0]))
 
-    def propose(self, n_points: int) -> jnp.ndarray:
-        """Draw n_points uniform points over the stored box."""
+    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
+        """Draw n_points uniform points over the box this ask hands in."""
         self.calls.append(n_points)
         self._key, sub = jax.random.split(self._key)
         return jax.random.uniform(
             sub,
-            (n_points, self.d),
-            minval=self.box[:, 0],
-            maxval=self.box[:, 1],
+            (n_points, domain.d),
+            minval=domain.lo,
+            maxval=domain.hi,
         )
 
 
@@ -218,7 +218,6 @@ def test_injected_solver_is_driven() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(0)),
-        domain=unit_domain(),
         budget_check=lambda: True,
         max_iters=2,  # iteration 0 places the flock, then one step
         local_solver=solver,
@@ -239,7 +238,6 @@ def test_give_up_stalls_a_path() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(1)),
-        domain=unit_domain(),
         budget_check=lambda: True,
         max_iters=2,  # the flock, then the single stalled iteration
         local_solver=solver,
@@ -272,7 +270,6 @@ def test_an_unusable_start_is_refused_before_it_seeds_the_method() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(3)),
-        domain=unit_domain(),
         budget_check=lambda: True,
         max_iters=2,  # the flock, then the iteration that finds nothing live
         local_solver=solver,
@@ -317,7 +314,6 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
             eval_f_g,
             eval_f=eval_f,
             **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(7)),
-            domain=unit_domain(),
             budget_check=lambda: billed < limit,
             max_iters=20,  # not the binding stop: the gate closes first
             local_solver=StubSolver(),
@@ -370,7 +366,6 @@ def test_the_gate_is_asked_before_a_value_only_batch_too() -> None:
         eval_f_g,
         eval_f=eval_f,
         **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(11)),
-        domain=unit_domain(),
         budget_check=lambda: f_calls < 2,
         max_iters=10,  # never the binding stop: the caller's gate closes first
         local_solver=RetryingSolver(retries=5),
@@ -390,7 +385,6 @@ def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(4)),
-        domain=unit_domain(),
         max_iters=4,  # the flock plus three steps
         local_solver=StubSolver(),
     )
@@ -424,7 +418,6 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(jnp.array([[1.0], [1.5]]), domain, key=jax.random.PRNGKey(5)),
-        domain=domain,
         budget_check=None,
         max_iters=3,
         local_solver=StubSolver(),  # step = x - 0.5·g = 3 exactly: outside the box
@@ -474,7 +467,7 @@ def test_the_default_model_is_exactly_a_sample_global_model() -> None:
 
     default_served, default_x, default_fun, default_points = run(None)
     ours_served, ours_x, ours_fun, ours_points = run(
-        SampleGlobalModel(box, key=jax.random.PRNGKey(7)),
+        SampleGlobalModel(key=jax.random.PRNGKey(7)),
     )
     assert default_served, "nothing was ever served"
     assert len(default_served) == len(ours_served)
@@ -501,7 +494,6 @@ def test_reports_four_counts_on_two_axes() -> None:
         res = n_path_schedule(
             eval_f_g,
             **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(8)),
-            domain=unit_domain(),
             budget_check=lambda: True,
             max_iters=2,  # the flock plus one accepted trial
             local_solver=StubSolver(),
@@ -544,7 +536,6 @@ def test_a_flocks_start_is_served_once_fused() -> None:
         eval_f_g,
         eval_f=eval_f,
         **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(3)),
-        domain=unit_domain(),
         max_iters=1,  # the flock alone is iteration 0
         local_solver=StubSolver(),
     )
@@ -595,7 +586,6 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
         eval_f_g,
         eval_f=eval_f,
         **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(3)),
-        domain=unit_domain(),
         max_iters=2,  # the flock, then this one step
         local_solver=solver,
     )
@@ -640,7 +630,6 @@ def test_one_gradient_batch_per_iteration() -> None:
         eval_f_g,
         eval_f=eval_f,
         **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(3)),
-        domain=unit_domain(),
         max_iters=2,  # the flock, then one mixed iteration
         local_solver=StubSolver(),
     )
@@ -664,9 +653,9 @@ def test_the_model_is_fed_at_both_bottoms_of_a_batch() -> None:
     class Loud(RecordingModel):
         """A recording model that also logs the order of its own feeds."""
 
-        def __init__(self, box: jnp.ndarray) -> None:
+        def __init__(self) -> None:
             """Start the recorder with an empty feed log."""
-            super().__init__(box)
+            super().__init__()
             self.log: list[str] = []
 
         def observe(
@@ -680,7 +669,8 @@ def test_the_model_is_fed_at_both_bottoms_of_a_batch() -> None:
             super().observe(x, f, g)
 
     def run(*, give_up: bool) -> tuple[Loud, NPathResult]:
-        model = Loud(unit_bounds())
+        domain = unit_domain()
+        model = Loud()
 
         def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
             model.log.append("eval:f_g")
@@ -696,7 +686,7 @@ def test_the_model_is_fed_at_both_bottoms_of_a_batch() -> None:
             eval_f_g,
             eval_f=eval_f,
             n_paths=2,
-            domain=unit_domain(),
+            domain=domain,
             global_model=model,
             budget_check=None,
             max_iters=2,  # the flock, then one judged step
@@ -752,7 +742,6 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
         eval_f_g,
         eval_f=eval_f,
         **flock_kwargs(flock(1), unit_domain(), key=jax.random.PRNGKey(3)),
-        domain=unit_domain(),
         max_iters=2,  # the flock, then this one step
         local_solver=solver,
     )
@@ -778,7 +767,6 @@ def test_a_non_finite_gradient_start_arrives_stalled() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(4)),
-        domain=unit_domain(),
         max_iters=2,
         local_solver=solver,
     )
@@ -813,7 +801,6 @@ def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
             eval_f_g,
             eval_f=eval_f,
             **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(7)),
-            domain=unit_domain(),
             max_iters=2,  # the flock plus one step
             local_solver=solver,
         )
@@ -862,7 +849,6 @@ def test_an_unjudged_winner_must_be_finite_to_be_committed() -> None:
         n_path_schedule(
             make_eval(bad),
             **flock_kwargs(flock(1), unit_domain(), key=jax.random.PRNGKey(3)),
-            domain=unit_domain(),
             max_iters=3,
             local_solver=solver,
         )

@@ -5,11 +5,12 @@ searches
 
     eval_f_g(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
     budget_check() -> bool
-    domain -> the run's box as a `Domain`, or None for no clip at all
+    domain -> the run's box as a `Domain`, required: every proposal is clipped
+        into it, and its `d` is the run's dimension
     n_paths -> the run's width, the engine's own structure
     global_model -> the restart-point source and the evidence sink: fed every
-        served batch, asked for points only when a restart fires; its `d` is
-        the run's dimension
+        served batch, and asked for points only when a restart fires - handed the
+        run's `domain` at each ask rather than carrying one
 
 The caller composes x->θ and the chain rule grad_x = grad_θ * dθ_dx(x) into
 eval_f_g; the engine owns clip-to-domain, and the starts are the model's - and
@@ -17,12 +18,11 @@ the two plugins are spelled `global_model`, `local_solver`
 in that order wherever the engine names them. Whether a stall is re-drawn is
 the `restart_stalled` knob, not a plugin. With
 `global_model=None` the engine falls back to a `SampleGlobalModel` drawing what
-the `domain` it was handed admits - uniform inside a bounded dimension, its own
+`domain` admits - uniform inside a bounded dimension, its own
 `N(0, scale_i^2)` inside a free one, that normal truncated inside a
 half-bounded one - so a declared unbounded side is a prior the domain already
-states, not a wiring error. Only `domain=None` (with no model) is refused: there
-is then nothing at all to draw from. `domain=None` also means no clip
-(`clip` is the identity), which is a run only beside an injected model.
+states, not a wiring error. There is no `domain=None`: the box is a required
+argument, so an unbounded run spells its unbounded sides in the `Domain`.
 `test_plugin_seam.py`'s evaluator is that composed form.
 
 Every run below plants its flock through `flock_kwargs`, i.e. through the
@@ -86,17 +86,19 @@ def flock_kwargs(
     *,
     key: jnp.ndarray | None = None,
 ) -> dict[str, Any]:
-    """Return the entry's two flock kwargs: the run's width and its starts.
+    """Return the entry's flock kwargs: width, starts and the box they live in.
 
-    The engine takes its width as `n_paths` and every point a path starts from as
-    the global model's first proposal, so a test that chooses its flock says both
-    here. The model is the shipped default one: it hands `x0` back on the first
-    `propose` and draws any later re-draw from `key`.
+    The engine takes its width as `n_paths`, every point a path starts from as
+    the global model's first proposal, and the one box the run searches as
+    `domain` - so a test that chooses its flock says all three here, and the
+    box it names is the box the run clips into. The model is the shipped default
+    one: it hands `x0` back on the first `propose` and draws any later re-draw
+    from `key`.
     """
     return {
         "n_paths": int(x0.shape[0]),
+        "domain": domain,
         "global_model": SampleGlobalModel(
-            domain,
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),
@@ -106,9 +108,10 @@ def flock_kwargs(
 class FixedModel:
     """A global model over a fixed list of points: the flock, then the same rows.
 
-    For the runs with no finite box at all: `SampleGlobalModel` needs one to
-    draw from, and a model-free test that only needs starts of a known `d` says
-    so with a list.
+    For the runs with no finite box at all: a model-free test that only needs
+    starts of a known `d` says so with a list. Its points tumble around a well
+    rather than living in a box, and the run's box is the caller's - the model
+    is handed it at each ask and carries none of its own.
     """
 
     def __init__(self, points: jnp.ndarray) -> None:
@@ -119,8 +122,9 @@ class FixedModel:
     def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
         """Ignore the evidence: this model fits nothing."""
 
-    def propose(self, n_points: int) -> jnp.ndarray:
+    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
         """Return n_points of the stored rows, tiling them if more are asked."""
+        del domain
         rows = int(self.points.shape[0])
         reps = -(-n_points // rows)
         return jnp.concatenate([self.points] * reps)[:n_points]
@@ -225,7 +229,6 @@ def test_batch_shape_and_point_counting() -> None:
     res = n_path_schedule(
         rec,
         **flock_kwargs(flock(4), unit_domain(), key=jax.random.PRNGKey(0)),
-        domain=unit_domain(),
         max_iters=50,
         budget_check=rec.limit_check(500),
         local_solver=HalfStep(),
@@ -257,7 +260,6 @@ def test_budget_exhaustion_stops_everything() -> None:
     res = n_path_schedule(
         rec,
         **flock_kwargs(flock(8), unit_domain(), key=jax.random.PRNGKey(1)),
-        domain=unit_domain(),
         max_iters=100,
         budget_check=rec.limit_check(30),
         local_solver=HalfStep(),
@@ -272,7 +274,6 @@ def test_budget_exhaustion_stops_everything() -> None:
     res0 = n_path_schedule(
         rec0,
         **flock_kwargs(flock(4), unit_domain(), key=jax.random.PRNGKey(2)),
-        domain=unit_domain(),
         max_iters=100,
         budget_check=rec0.limit_check(0),
         local_solver=HalfStep(),
@@ -288,7 +289,6 @@ def test_budget_exhaustion_stops_everything() -> None:
     res1 = n_path_schedule(
         rec1,
         **flock_kwargs(flock(4), unit_domain(), key=jax.random.PRNGKey(3)),
-        domain=unit_domain(),
         max_iters=1,
         local_solver=HalfStep(),
     )
@@ -310,7 +310,6 @@ def test_fun_is_true_min_over_history() -> None:
     res = n_path_schedule(
         rec,
         **flock_kwargs(flock(4), unit_domain(), key=jax.random.PRNGKey(3)),
-        domain=unit_domain(),
         max_iters=50,
         budget_check=rec.limit_check(500),
         local_solver=HalfStep(),
@@ -365,7 +364,6 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
     res_k = n_path_schedule(
         rec_k,
         **flock_kwargs(flock(16), unit_domain(), key=jax.random.PRNGKey(2)),
-        domain=unit_domain(),
         max_iters=100,
         budget_check=rec_k.limit_check(budget),
         local_solver=DiagonalPreconditioner(),
@@ -378,7 +376,6 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
             unit_domain(),
             key=jax.random.PRNGKey(2),
         ),  # planted in the shallow well
-        domain=unit_domain(),
         max_iters=100,
         budget_check=rec_1.limit_check(budget),
         local_solver=DiagonalPreconditioner(),
@@ -410,11 +407,11 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
     class FirstShallowThenDeep:
         """Answer ask 0 with the shallow well, every later ask with the deep one."""
 
-        d = 1
-
         def __init__(self) -> None:
             """Start on the shallow first ask."""
             self.asked = 0
+            self.domain = Domain([(0.0, 1.0)])
+            self.d = self.domain.d
 
         def observe(
             self,
@@ -424,8 +421,9 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
         ) -> None:
             """Ignore the evidence: this model fits nothing."""
 
-        def propose(self, n_points: int) -> jnp.ndarray:
+        def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
             """Return n_points of the well this ask is assigned to."""
+            del domain
             centre = shallow if self.asked == 0 else deep
             self.asked += 1
             return jnp.full((n_points, 1), centre)
@@ -434,7 +432,7 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
         return n_path_schedule(
             eval_f_g,
             n_paths=2,
-            domain=unit_domain(),
+            domain=Domain([(None, None)]),
             max_iters=6,
             local_solver=HalfStep(),
             restart_stalled=restart_stalled,
@@ -468,7 +466,6 @@ def test_projected_descent_reaches_wall_optimum() -> None:
     res = n_path_schedule(
         rec,
         **flock_kwargs(flock(1, 2), unit_domain(2), key=jax.random.PRNGKey(4)),
-        domain=unit_domain(2),
         max_iters=100,
         budget_check=rec.limit_check(500),
         local_solver=HalfStep(),
@@ -510,7 +507,6 @@ def test_feasible_only_best() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(4), unit_domain(), key=jax.random.PRNGKey(5)),
-        domain=unit_domain(),
         max_iters=100,
         budget_check=budget_check,
         local_solver=HalfStep(),
@@ -547,7 +543,6 @@ def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
             unit_domain(),
             key=jax.random.PRNGKey(0),
         ),
-        domain=unit_domain(),
         max_iters=50,
         local_solver=HalfStep(),
     )
@@ -585,7 +580,6 @@ def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
             unit_domain(),
             key=jax.random.PRNGKey(0),
         ),
-        domain=unit_domain(),
         max_iters=20,
         local_solver=HalfStep(),
     )
@@ -618,7 +612,6 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(6)),
-        domain=unit_domain(),
         max_iters=5,
         budget_check=lambda: served[0] < 40,
         local_solver=HalfStep(),
@@ -657,7 +650,6 @@ def test_a_dead_path_never_widens_a_batch() -> None:
 
         def __init__(self, inner: SampleGlobalModel) -> None:
             self.inner = inner
-            self.d = inner.d
 
         def observe(
             self,
@@ -667,9 +659,9 @@ def test_a_dead_path_never_widens_a_batch() -> None:
         ) -> None:
             self.inner.observe(x, f, g)
 
-        def propose(self, n_points: int) -> jnp.ndarray:
+        def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
             asks.append(n_points)
-            return self.inner.propose(n_points)
+            return self.inner.propose(n_points, domain)
 
     def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         widths.append(int(theta.shape[0]))
@@ -686,8 +678,8 @@ def test_a_dead_path_never_widens_a_batch() -> None:
     res = n_path_schedule(
         eval_f_g,
         n_paths=n_paths,
-        global_model=AskSpy(inner),
         domain=unit_domain(),
+        global_model=AskSpy(inner),
         max_iters=n_iterations + 1,
         budget_check=lambda: len(widths) < 100,
         local_solver=HalfStep(),
@@ -733,7 +725,6 @@ def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
         return n_path_schedule(
             make_evaluator(),
             **flock_kwargs(flock(1), unit_domain(), key=jax.random.PRNGKey(0)),
-            domain=unit_domain(),
             max_iters=20,
             local_solver=DiagonalPreconditioner(),
             restart_stalled=restart_stalled,
@@ -792,7 +783,6 @@ def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
             unit_domain(),
             key=jax.random.PRNGKey(11),
         ),  # one path: a single batch per trial keeps the count exact
-        domain=unit_domain(),
         max_iters=2,  # iteration 0 places x0, then this one step
         local_solver=Patient(),
     )
@@ -824,7 +814,6 @@ def test_bounds_spellings_are_the_same_box() -> None:
                 Domain(bounds),
                 key=jax.random.PRNGKey(3),
             ),
-            domain=Domain(bounds),
             budget_check=rec.limit_check(80),
             max_iters=10,
             local_solver=HalfStep(),
@@ -837,31 +826,19 @@ def test_bounds_spellings_are_the_same_box() -> None:
     assert fun_pairs == fun_arr
 
 
-def test_the_default_model_needs_a_domain_to_draw_from() -> None:
-    """With no model, an absent domain is refused - an unbounded one is not.
+def test_the_default_model_draws_every_shape_a_domain_admits() -> None:
+    """With no model, the default draws whatever the domain admits.
 
     The default `SampleGlobalModel` draws whatever the domain admits, so a
     declared unbounded side is a prior the domain already states rather than a
     distribution the engine has to invent: free dimensions draw the domain's
-    own `N(0, scale_i^2)`, half-bounded ones that normal truncated. Only
-    `domain=None` leaves the engine nothing to sample at all. The check is
-    eager - the model is built before any point is served, because the first
-    restart is iteration 0's placement.
+    own `N(0, scale_i^2)`, half-bounded ones that normal truncated. There is no
+    absent-domain case left to refuse: `domain` is a required argument, so an
+    unbounded run spells its unbounded sides in the `Domain` itself.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum(theta**2), 2.0 * theta
-
-    rec = Recorder(quad)
-    with pytest.raises(ValueError, match="needs a `domain`"):
-        n_path_schedule(
-            rec,
-            n_paths=2,
-            domain=None,
-            max_iters=1,
-            local_solver=HalfStep(),
-        )
-    assert rec.evals == 0  # rejected before any point was served
 
     # Both unbounded shapes draw: the run places its flock and every placed
     # start is finite, which the old bounded-only refusal would have prevented.
@@ -879,47 +856,37 @@ def test_the_default_model_needs_a_domain_to_draw_from() -> None:
         assert bool(jnp.all(jnp.isfinite(res.x)))
 
 
-def test_the_model_is_the_only_authority_on_d() -> None:
-    """With no box at all, d is the model's to declare.
+def test_the_domain_is_the_runs_only_authority_on_d() -> None:
+    """`d` is the domain's, and the model is told it at each ask.
 
-    A surrogate knows d before the run starts and `domain` may be absent
-    entirely, so the model is the authority and the domain only cross-checks it.
-    `domain=None` and an all-unbounded domain are the same run: the clip is the
-    identity either way.
+    A model is handed the run's box and derives its own width from it, so the
+    run has exactly one `d`: the domain's. The model here declares its own `d`
+    off its stored rows; what the engine serves is still the domain's width, and
+    a mismatch fails at the ask rather than being reconciled.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum((theta - 0.7) ** 2), 2.0 * (theta - 0.7)
 
     starts = jax.random.logistic(jax.random.PRNGKey(4), (2, 3))
+    box_free = Domain([(None, None)] * 3)
 
-    rec_none = Recorder(quad)
+    rec = Recorder(quad)
     res = n_path_schedule(
-        rec_none,
+        rec,
         n_paths=2,
-        domain=None,
+        domain=box_free,
         global_model=FixedModel(starts),
-        budget_check=rec_none.limit_check(60),
+        budget_check=rec.limit_check(60),
         max_iters=3,
         local_solver=HalfStep(),
     )
-    assert all(d == 3 for _m, d in rec_none.batch_shapes), rec_none.batch_shapes
+    assert all(d == 3 for _m, d in rec.batch_shapes), rec.batch_shapes
     assert res.x.shape == (3,)
 
-    rec_pairs = Recorder(quad)
-    n_path_schedule(
-        rec_pairs,
-        n_paths=2,
-        domain=Domain([(None, None)] * 3),
-        global_model=FixedModel(starts),
-        budget_check=rec_pairs.limit_check(60),
-        max_iters=3,
-        local_solver=HalfStep(),
-    )
-    assert rec_pairs.all_f_vals == rec_none.all_f_vals
-
-    # a model and a box that disagree on d is the wiring bug this catches
-    try:
+    # A model whose rows are the wrong width is refused at the ask: the engine
+    # owns the width now, and says so instead of failing inside the clip.
+    with pytest.raises(ValueError, match=r"must propose a \(2, 2\) array"):
         n_path_schedule(
             Recorder(quad),
             n_paths=2,
@@ -928,11 +895,33 @@ def test_the_model_is_the_only_authority_on_d() -> None:
             max_iters=1,
             local_solver=HalfStep(),
         )
-    except ValueError:
-        pass
-    else:  # pragma: no cover - the raise is the assertion
-        msg = "a d=3 model was accepted against a d=2 domain"
-        raise AssertionError(msg)
+
+
+def test_a_model_that_oversteps_is_clipped_into_the_runs_box() -> None:
+    """The run clips every proposal into its own box, model promises aside.
+
+    A model states nothing about the space: it proposes, and the engine clips
+    into the `domain` the caller handed the run. Clipping is what makes that
+    promise mean something for a model that oversteps it - here a proposal of
+    3.0 in a `[0,1]` run never reaches the objective unclipped.
+    """
+    served: list[float] = []
+
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        served.extend(float(v) for v in x[:, 0])
+        return jnp.sum(x**2, axis=-1), 2.0 * x, None
+
+    res = n_path_schedule(
+        eval_f_g,
+        n_paths=2,
+        domain=Domain([(0.0, 1.0)]),
+        global_model=FixedModel(jnp.full((2, 1), 3.0)),  # oversteps the box
+        max_iters=1,
+        local_solver=HalfStep(),
+    )
+    assert served, "nothing was ever served"
+    assert max(served) <= 1.0 + 1e-12, served
+    assert float(res.x[0]) <= 1.0 + 1e-12, res.x
 
 
 def test_an_unbounded_box_is_really_unbounded() -> None:
@@ -949,12 +938,13 @@ def test_an_unbounded_box_is_really_unbounded() -> None:
         return jnp.sum((x - 3.0) ** 2, axis=-1), 2.0 * (x - 3.0), None
 
     starts = jax.random.logistic(jax.random.PRNGKey(5), (4, 1)) + 3.0
+    box_free = Domain([(None, None)])
 
     res = n_path_schedule(
         eval_f_g,
         n_paths=4,
-        domain=Domain([(None, None)]),
-        global_model=FixedModel(starts),  # starts near the well, box-free
+        domain=box_free,
+        global_model=FixedModel(starts),  # starts near the well
         budget_check=lambda: True,
         max_iters=40,
         local_solver=HalfStep(),
@@ -980,7 +970,6 @@ def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
             n_path_schedule(
                 Recorder(quad),
                 **flock_kwargs(flock(1), Domain([(0.0, 1.0)])),  # pyright: ignore[reportArgumentType]
-                domain=Domain([(0.0, 1.0)]),
                 **knobs,  # pyright: ignore[reportArgumentType]
             )
         except ValueError as e:
@@ -1026,9 +1015,10 @@ def test_a_nonpositive_width_is_refused_at_the_entry() -> None:
 def test_a_malformed_flock_is_refused_by_the_model() -> None:
     """A flock a model cannot hand back is refused where it is handed over.
 
-    Four defects, one place, in the model that carries it: not a batch, no
-    paths, no dims, and a non-finite start. The shape check names the d it
-    wanted, because the model is what knows the run's dimension.
+    Three defects reach the model - not a batch, no dims, a non-finite start -
+    and it names the d it wanted, because the run's `domain` is what tells it the
+    dimension. An empty flock never gets that far: `n_paths` comes from the
+    flock's row count, so the entry's own width check refuses it first.
     """
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -1039,7 +1029,6 @@ def test_a_malformed_flock_is_refused_by_the_model() -> None:
             n_path_schedule(
                 Recorder(quad),
                 **flock_kwargs(x0, Domain([(0.0, 1.0)])),
-                domain=Domain([(0.0, 1.0)]),
                 max_iters=1,
             )
         except ValueError as e:
@@ -1048,7 +1037,7 @@ def test_a_malformed_flock_is_refused_by_the_model() -> None:
         raise AssertionError(msg)
 
     assert "x0 must be a (n_paths, 1) array" in rejects(jnp.zeros(3))
-    assert "at least one finite start" in rejects(jnp.zeros((0, 1)))
+    assert "n_paths must be a positive int" in rejects(jnp.zeros((0, 1)))
     assert "x0 must be a (n_paths, 1) array" in rejects(jnp.zeros((2, 0)))
     assert "at least one finite start" in rejects(jnp.array([[0.0], [jnp.nan]]))
 
@@ -1070,7 +1059,6 @@ def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
             n_path_schedule(
                 first,  # pyright: ignore[reportArgumentType]
                 **flock_kwargs(flock(1), Domain([(0.0, 1.0)])),  # pyright: ignore[reportArgumentType]
-                domain=Domain([(0.0, 1.0)]),
                 max_iters=1,
                 **knobs,  # pyright: ignore[reportArgumentType]
             )
@@ -1100,7 +1088,6 @@ def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
             n_path_schedule(
                 Recorder(quad),
                 **flock_kwargs(flock(1), Domain([(0.0, 1.0)])),  # pyright: ignore[reportArgumentType]
-                domain=Domain([(0.0, 1.0)]),
                 max_iters=1,
                 **knobs,  # pyright: ignore[reportArgumentType]
             )

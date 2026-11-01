@@ -52,6 +52,7 @@ def unit_bounds(d: int = 1) -> jnp.ndarray:
     """Return the engine's box in working coords: x ∈ [0,1]^d."""
     return jnp.stack([jnp.zeros(d), jnp.ones(d)], axis=1)
 
+
 def unit_domain(d: int = 1) -> Domain:
     """Return the engine's box in working coords as the `Domain` it is."""
     return Domain(unit_bounds(d))
@@ -63,17 +64,18 @@ def flock_kwargs(
     *,
     key: jnp.ndarray | None = None,
 ) -> dict[str, Any]:
-    """Return the entry's two flock kwargs: the run's width and its starts.
+    """Return the entry's flock kwargs: width, starts and the box they live in.
 
-    The engine takes its width as `n_paths` and every point a path starts from as
-    the global model's first proposal, so a test that chooses its flock says both
-    here. The model is the shipped default one: it hands `x0` back on the first
-    `propose` and draws any later re-draw from `key`.
+    The engine takes its width as `n_paths`, every point a path starts from as
+    the global model's first proposal, and the one box the run searches as
+    `domain` - so a test that chooses its flock says all three here. The model
+    is the shipped default one: it hands `x0` back on the first `propose` and
+    draws any later re-draw from `key`.
     """
     return {
         "n_paths": int(x0.shape[0]),
+        "domain": domain,
         "global_model": SampleGlobalModel(
-            domain,
             key=jax.random.PRNGKey(0) if key is None else key,
             x0=x0,
         ),
@@ -186,7 +188,6 @@ def test_a_half_dead_start_stalls_the_path_but_its_value_still_reports() -> None
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(jnp.array([[0.5]]), unit_domain(), key=jax.random.PRNGKey(0)),
-        domain=unit_domain(),
         max_iters=10,
     )
 
@@ -221,7 +222,6 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(jnp.array([[0.5]]), unit_domain(), key=jax.random.PRNGKey(0)),
-        domain=unit_domain(),
         max_iters=10,
     )
 

@@ -72,6 +72,14 @@ MinimizeFn: TypeAlias = Callable[
     jnp.ndarray,
 ]
 
+# The projection `propose` builds for the box it is handed. Geometry is a pure
+# function of the domain - a centre, a width, one lengthscale - so the model
+# carries the recipe rather than one projection bound to one box:
+# `partial(SphereProjection, kappa=..., mask=...)` for the bent arm,
+# `IdentityProjection` itself for the unbent one (it takes nothing but the
+# domain).
+ProjectionFactory: TypeAlias = Callable[[Domain], "Projection"]
+
 _HALF_LOG_2PI = 0.5 * jnp.log(2.0 * jnp.pi)
 
 
@@ -260,32 +268,34 @@ class BLRGlobalModel(GlobalModel):
 
     Every knob is a fixed hyperparameter, not a fitted one; the defaults are the
     reference implementation's starting points rather than its marginal-
-    likelihood optimum. The geometry lives in the injected `Projection` -
-    `SphereProjection` for the centre-biased bend of the reference model,
-    `IdentityProjection` for no prior on where the optimum sits - and the box
-    comes with it. What this class adds on top is the value fit and the
-    acquisition that descends it; the feature width is read off `features`, so
-    any projection width fits.
+    likelihood optimum. The geometry lives in the `Projection` this model builds
+    for each ask - `SphereProjection` for the centre-biased bend of the reference
+    model, `IdentityProjection` for no prior on where the optimum sits - and it
+    is built from the domain that ask hands in. So the model carries the recipe
+    and not a box: one instance asked inside a different box has no stale
+    geometry and no second normalization drifting behind it. What this class adds
+    on top is the value fit and the acquisition that descends it; the feature
+    width is read off `features`, so any projection width fits.
     """
 
     def __init__(
         self,
-        projection: Projection,
+        projection_factory: ProjectionFactory,
         *,
         minimize: MinimizeFn,
         var_prior: float = 1.0,
         noise: float = 0.01,
         key: jnp.ndarray,
     ) -> None:
-        """Bind the projection, the injected minimizer and the value fits.
+        """Bind the geometry recipe, the injected minimizer and the value fits.
 
         Args:
-            projection: the `Projection` turning a coordinate into the
-                posterior's feature row. It is the authority for the run's
-                dimension and search box - `d`, `bounds` and the fallback
-                draw's corners are read off it, and `Projection`'s constructor
-                already validated the box; a `SphereProjection` further
-                validates its own `scale`, `kappa` and `mask`.
+            projection_factory: builds the `Projection` a given `Domain` is read
+                through - ``partial(SphereProjection, kappa=..., mask=...)`` for
+                the bent arm, `IdentityProjection` itself for the unbent one.
+                Called once per `propose`, so the geometry is always the box that
+                ask was handed, and `Projection`'s own constructor validates
+                the domain.
             minimize: the acquisition's inner optimizer, shape
                 ``MinimizeFn``. Owned by the caller: the descent recipe is the
                 engine's, not this model's.
@@ -299,12 +309,7 @@ class BLRGlobalModel(GlobalModel):
                 value.
 
         """
-        # The domain rides in on the projection rather than being injected
-        # beside it: two arguments could disagree, and the fallback draw and the
-        # geometry would then be measured in different coordinate units.
-        self._projection = projection
-        self._domain = projection.domain
-        self.d = self._domain.d
+        self._projection_factory = projection_factory
         self._minimize = minimize
         self._var_prior = _check_finite_positive("var_prior", var_prior)
         self._noise = _check_finite_positive("noise", noise)
@@ -329,33 +334,45 @@ class BLRGlobalModel(GlobalModel):
         same coordinate is worth.
 
         Raises:
-            ValueError: If `x` is not an ``(m, d)`` batch, or if the batch has a
-                different number of rows than values.
+            ValueError: If `x` is not a two-dimensional batch, has a different
+                number of rows than values, or is wider or narrower than the
+                first batch folded in.
 
         """
         del g
 
         rows = jnp.asarray(x)
-        if rows.ndim != 2 or rows.shape[1] != self.d:
-            msg = f"observe needs a (m, {self.d}) batch, got {rows.shape}"
+        if rows.ndim != 2:
+            msg = f"observe needs an (m, d) batch, got shape {rows.shape}"
             raise ValueError(msg)
         if rows.shape[0] != len(f):
             msg = f"observe got {rows.shape[0]} rows but {len(f)} values"
+            raise ValueError(msg)
+        # The model holds no `d` to check against: the first batch is what fixes
+        # the fit's width, and a later batch of another width would otherwise
+        # only fail at `jnp.stack` inside the fit.
+        if self._xs and rows.shape[1] != self._xs[0].shape[0]:
+            msg = (
+                "observe's first batch fixed the width at "
+                f"{self._xs[0].shape[0]}, got {rows.shape[1]}"
+            )
             raise ValueError(msg)
         for row, value in zip(rows, f, strict=True):
             if math.isfinite(value):
                 self._xs.append(row)
                 self._fs.append(value)
 
-    def propose(self, n_points: int) -> jnp.ndarray:
+    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
         """Return `n_points` restart points: a draw until a fit is possible.
 
-        Until the fit has a spread to standardize, the answer is the
-        projection's own `draw` - the points the engine's uniform model would
-        give inside a finite box, and the prior's own breadth outside one.
-        Afterwards the answer is the injected `minimize`'s local minimizers of
-        ``-log EI`` over the box; the log form keeps the acquisition's gradient
-        alive in the region where the raw improvement has decayed to zero.
+        The box is the caller's, handed in per ask: the geometry is rebuilt from
+        it here, and nothing about it is remembered between calls. Until the fit
+        has a spread to standardize, the answer is the domain's own `draw` - the
+        points the engine's uniform model would give inside a finite box, and the
+        prior's own breadth outside one. Afterwards the answer is the injected
+        `minimize`'s local minimizers of ``-log EI`` over the box; the log form
+        keeps the acquisition's gradient alive in the region where the raw
+        improvement has decayed to zero.
 
         Raises:
             ValueError: If `n_points` is below one, or if `minimize` returns
@@ -366,52 +383,60 @@ class BLRGlobalModel(GlobalModel):
             msg = f"propose needs at least one point, got {n_points}"
             raise ValueError(msg)
         self._key, sub = jax.random.split(self._key)
+        projection = self._projection_factory(domain)
         if not self._can_fit():
-            return self._domain.draw(sub, n_points)
-        weights, cov = self._posterior()
+            return domain.draw(sub, n_points)
+        weights, cov = self._posterior(projection)
         best = self._standardize(jnp.asarray(self._fs)).min()
 
         # shortcut: the minimizers are independent, so a flat acquisition can
         # return a cluster on one face. Upgrade to greedy conditioning on the
         # points already picked when a cohort asks for many at once.
         def acquisition(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-            return self._acq_value_and_grad(x, weights, cov, best)
+            return self._acq_value_and_grad(projection, x, weights, cov, best)
 
         starts = jnp.asarray(
-            self._minimize(acquisition, self._domain.bounds, sub, n_points),
+            self._minimize(acquisition, domain.bounds, sub, n_points),
         )
-        if starts.shape != (n_points, self.d):
+        if starts.shape != (n_points, domain.d):
             msg = (
                 "minimize must return a "
-                f"({n_points}, {self.d}) array, got shape {starts.shape}"
+                f"({n_points}, {domain.d}) array, got shape {starts.shape}"
             )
             raise ValueError(msg)
         return starts
 
-    def _predict(self, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def _predict(
+        self,
+        x: jnp.ndarray,
+        domain: Domain,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Return the posterior mean and standard deviation at `x` rows.
 
         A read-only diagnostic kept `_`-private for the tests: the engine never
         calls it, and `propose` reaches the posterior directly rather than
         through this method, so it is not part of the `GlobalModel` contract a
-        caller implements. It also answers only in the *standardized* value
-        scale - the fit centers and scales the observed values - which is one
-        more reason it stays off the public face.
+        caller implements. The domain is asked for on the spot, exactly as
+        `propose` asks for it, since the model holds no box. It also answers only
+        in the *standardized* value scale - the fit centers and scales the
+        observed values - which is one more reason it stays off the public face.
 
         Raises:
             ValueError: If the fit has no spread to standardize by yet, or if
-                `x` is not an ``(m, d)`` batch.
+                `x` is not a batch of the fit's width.
 
         """
         if not self._can_fit():
             msg = "a posterior read needs a spread to standardize by"
             raise ValueError(msg)
         batch = jnp.asarray(x)
-        if batch.ndim != 2 or batch.shape[1] != self.d:
-            msg = f"a posterior read needs a (m, {self.d}) batch, got {batch.shape}"
+        width = self._xs[0].shape[0]
+        if batch.ndim != 2 or batch.shape[1] != width:
+            msg = f"a posterior read needs a (m, {width}) batch, got {batch.shape}"
             raise ValueError(msg)
-        weights, cov = self._posterior()
-        return self._posterior_at(batch, weights, cov)
+        projection = self._projection_factory(domain)
+        weights, cov = self._posterior(projection)
+        return self._posterior_at(projection, batch, weights, cov)
 
     def _can_fit(self) -> bool:
         """Return whether the values have a spread to standardize by.
@@ -430,18 +455,19 @@ class BLRGlobalModel(GlobalModel):
         """
         return (f - f.mean()) / f.std()
 
-    def _posterior(self) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def _posterior(self, projection: Projection) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Return the weight posterior's mean and covariance.
 
         Written as the precision it is: ``P^T P / noise + I / var_prior`` is
         likelihood plus prior, and one inversion gives the covariance matrix
         itself - not an inverse scaled afterwards - with
-        ``weights = cov @ P^T y / noise`` its mean.
+        ``weights = cov @ P^T y / noise`` its mean. `projection` is the geometry
+        built for this ask's domain; nothing about it is remembered.
         """
         x_obs = jnp.stack(self._xs)
         f_obs = jnp.asarray(self._fs, dtype=x_obs.dtype)
         values = self._standardize(f_obs)
-        features = self._projection.features(x_obs)
+        features = projection.features(x_obs)
         precision = (
             features.T @ features / self._noise
             + jnp.eye(features.shape[1], dtype=features.dtype) / self._var_prior
@@ -452,6 +478,7 @@ class BLRGlobalModel(GlobalModel):
 
     def _posterior_at(
         self,
+        projection: Projection,
         x: jnp.ndarray,
         weights: jnp.ndarray,
         cov: jnp.ndarray,
@@ -461,13 +488,14 @@ class BLRGlobalModel(GlobalModel):
         The variance is the observation noise plus the covariance's quadratic
         form, so it stays above `noise` and its root needs no floor.
         """
-        features = self._projection.features(x)
+        features = projection.features(x)
         mean = features @ weights
         var = self._noise + jnp.einsum("ij,jk,ik->i", features, cov, features)
         return mean, jnp.sqrt(var)
 
     def _acq_value_and_grad(
         self,
+        projection: Projection,
         x: jnp.ndarray,
         weights: jnp.ndarray,
         cov: jnp.ndarray,
@@ -483,7 +511,7 @@ class BLRGlobalModel(GlobalModel):
         """
 
         def scalar(row: jnp.ndarray) -> jnp.ndarray:
-            mean, sigma = self._posterior_at(row[None, :], weights, cov)
+            mean, sigma = self._posterior_at(projection, row[None, :], weights, cov)
             z = (best - mean[0]) / sigma[0]
             return -(jnp.log(sigma[0]) + _log_h(z))
 
