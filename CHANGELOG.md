@@ -49,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   geometry (`glob_ls`) is a pure function of the domain and the model's
   hyperparameters, so shaping it per ask is more honest than storing one
   built from a box the model would otherwise have to carry.
+- `SampleGlobalModel` refuses an `x0` that lies outside the box, rather than
+  letting the clip slide it onto a wall. An authored start outside the declared
+  box is the caller saying "search this box" and "begin there" at once, so it
+  is named (row, dimension, both sides) instead of silently relocated to a
+  degenerate point. The test carries a machine-precision tolerance scaled by
+  the dtypes in play, so a boundary recomputed in another frame is not an
+  error; free sides never trigger it. The clip keeps its own job - clamping
+  proposals the model *generates* - because a generated proposal and an
+  authored start are different claims.
 - With no `global_model`, an unbounded `domain` is accepted instead of
   refused. The engine's default `SampleGlobalModel` draws whatever the domain
   admits - uniform inside a bounded dimension, `N(0, scale_i^2)` inside a free

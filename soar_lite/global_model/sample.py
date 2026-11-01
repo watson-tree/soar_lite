@@ -47,8 +47,9 @@ class SampleGlobalModel(GlobalModel):
             key: the PRNG key the draws are split from.
             x0: the first ``propose``'s answer, shape ``(n, d)`` - n the run's
                 number of paths. Ignored after that; ``None`` draws the first
-                points like any other. Its width is checked against the domain
-                on that first ask, which is when this model first learns `d`.
+                points like any other. It is checked against the run's domain
+                on that first ask - the moment this model is first told both
+                the dimension and the box.
 
         """
         self._key = key
@@ -62,12 +63,13 @@ class SampleGlobalModel(GlobalModel):
 
         Raises:
             ValueError: If `x0`, on the first ask, is not a finite ``(n, d)``
-                array whose d is the handed domain's; or if it holds a different
-                number of starts than this ask wants.
+                array whose d is the handed domain's, if it holds a different
+                number of starts than this ask wants, or if a start lies
+                outside the box.
 
         """
         if self._x0 is not None:
-            x_first = _check_x0(self._x0, domain.d)
+            x_first = _check_x0(self._x0, domain)
             self._x0 = None
             if x_first.shape[0] != n_points:
                 msg = (
@@ -80,19 +82,55 @@ class SampleGlobalModel(GlobalModel):
         return domain.draw(sub, n_points)
 
 
-def _check_x0(x0: jnp.ndarray, d: int) -> jnp.ndarray:
-    """Reject a flock a model cannot hand back: wrong shape, or not finite.
+def _check_x0(x0: jnp.ndarray, domain: Domain) -> jnp.ndarray:
+    """Reject a flock a model cannot hand back: bad shape, not finite, outside.
 
     Called on the first ask, the first moment this model is told the run's
-    dimension: a coordinate is not an objective that went non-finite, and no clip
-    or proposal repairs one, so a bad start is refused here rather than left to
-    stall a path on arrival.
+    `Domain` - before that it knows neither the dimension nor the box. Three
+    refusals, each a defect no clip or proposal repairs:
+
+    - not a two-dimensional batch, or the wrong width;
+    - no starts, or a start that is not all finite (a coordinate is not an
+      objective that went non-finite);
+    - a start outside the box.
+
+    The third is the one that is not interchangeable with the engine's clip. An
+    out-of-box start is the caller saying "search this box" and "begin there" at
+    once; clipping it would silently slide the start onto a wall - a degenerate
+    point - and hide the contradiction, so it is refused and named instead. The
+    clip keeps its own job: proposals the model *generates* may overstep, and
+    clamping those is the defensive seam. Generated proposals and an authored
+    start are different claims, so they get different treatment.
+
+    The box test carries a machine-precision tolerance: a start computed at a
+    boundary rounds by a few representable steps, so a coordinate within
+    ``16 * eps * max(1, |bound|)`` of a finite side counts as on it. Anything
+    further out is a caller error, not roundoff. Free dimensions never trigger
+    it - an infinite side is compared against itself.
     """
     pts = jnp.asarray(x0)
+    d = domain.d
     if pts.ndim != 2 or pts.shape[1] != d:
         msg = f"x0 must be a (n_paths, {d}) array, got shape {pts.shape}"
         raise ValueError(msg)
     if pts.shape[0] < 1 or not all_finite(pts):
         msg = f"x0 needs at least one finite start, got shape {pts.shape}"
+        raise ValueError(msg)
+    lo, hi = domain.lo, domain.hi
+    eps = jnp.finfo(jnp.result_type(pts.dtype, lo.dtype, jnp.float32)).eps
+    # The tolerance's own scale comes from the finite sides only: taking it from
+    # an infinite side would carry it to inf and disarm the other, finite one.
+    span = jnp.maximum(
+        jnp.where(jnp.isfinite(lo), jnp.abs(lo), 0.0),
+        jnp.where(jnp.isfinite(hi), jnp.abs(hi), 0.0),
+    )
+    tol = 16.0 * eps * jnp.maximum(1.0, span)
+    outside = (pts < lo - tol) | (pts > hi + tol)
+    if bool(jnp.any(outside)):
+        row, dim = (int(v) for v in jnp.argwhere(outside)[0])
+        msg = (
+            f"x0 row {row} is {float(pts[row, dim]):.6g} in dimension {dim}, "
+            f"outside the box [{float(lo[dim]):.6g}, {float(hi[dim]):.6g}]"
+        )
         raise ValueError(msg)
     return pts
