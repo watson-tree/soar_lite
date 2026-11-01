@@ -34,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value is first computed by that same batch.
   Without the seam every trial keeps its fused pass, and the engine refuses
   `n_draws > 1` with a `ValueError`.
+- `pointwise`: build both eval seams from one per-point objective. It takes the
+  scalar ``(d,) -> ()`` function a caller already wrote - the shape
+  `jax.value_and_grad` differentiates - plus an optional per-point feasibility
+  predicate, and returns `(eval_f_g, eval_f)` with the `vmap` done on this side.
+  Feasibility is vmapped separately because it cannot ride inside
+  `value_and_grad`, which differentiates a scalar output. Both halves are lazy
+  closures, so building them runs nothing and a fused-only caller discards the
+  second; the f-only half is the fused objective's own forward pass, which is
+  what makes the engine's cheap-trial path reachable for free. It is not the
+  seam for a value-only objective: a function JAX cannot differentiate cannot be
+  `objective` at all.
 
 ### Changed
 

@@ -29,6 +29,7 @@ from soar_lite.engine import (
     PathPoint,
     Verdict,
     n_path_schedule,
+    pointwise,
 )
 from soar_lite.global_model import (
     AcquisitionFn,
@@ -62,4 +63,5 @@ __all__ = [
     "SphereProjection",
     "Verdict",
     "n_path_schedule",
+    "pointwise",
 ]

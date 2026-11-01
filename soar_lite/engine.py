@@ -711,6 +711,68 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     )
 
 
+def pointwise(
+    objective: Callable[[jnp.ndarray], jnp.ndarray],
+    *,
+    feasible: Callable[[jnp.ndarray], jnp.ndarray] | None = None,
+) -> tuple[EvalFG, EvalF]:
+    """Build both eval seams from one per-point objective.
+
+    `objective` is a scalar function of a single point, ``(d,) -> ()`` - the
+    shape `jax.value_and_grad` differentiates - and `feasible` is the per-point
+    predicate that marks a point viable, ``(d,) -> ()`` of a boolean. Both are
+    vmapped here, so the caller writes neither `jax.vmap` nor
+    `jax.value_and_grad`. The fused gradient is the per-row one,
+    ``vmap(value_and_grad(objective))``, not `value_and_grad` of a summed
+    batch, which would couple the rows through the sum.
+
+    Feasibility is vmapped on its own because it cannot ride inside
+    `value_and_grad`: that transformer differentiates a scalar output, so a
+    function returning ``(f, feas)`` would be differentiated as a pair. Keeping
+    `feasible` a separate point predicate leaves both halves scalar.
+
+    The pair comes back fused-first, matching `n_path_schedule`'s argument
+    order, and both halves are lazy closures: building them runs nothing, so a
+    caller who wants only the fused seam discards the other with
+    ``eval_f_g, _ = pointwise(objective)``.
+
+    The f-only half is the fused objective's own forward pass,
+    ``vmap(objective)``, not a second model of it. Returning it therefore costs
+    nothing and buys the engine's cheap-trial path: a judged step serves its
+    trials for values alone and buys gradients only for the winners. That does
+    not make this the seam for a *value-only* objective: a function JAX cannot
+    differentiate cannot be `objective` here at all, so a caller who holds
+    values and no gradient needs an f-only adapter of its own.
+
+    Args:
+        objective: the per-point objective, ``(d,) -> ()``; a function
+            `jax.value_and_grad` can differentiate, which is what makes the
+            fused half exist.
+        feasible: the per-point feasibility predicate, ``(d,) -> ()`` of a
+            boolean; None (the default) marks every point viable, the same
+            `None` both seams accept.
+
+    Returns:
+        ``(eval_f_g, eval_f)``: the two seam shapes `n_path_schedule` takes,
+        a fused ``(f, g, feas)`` batch and its value-only ``(f, feas)`` sibling.
+
+    """
+
+    def feas_at(x: jnp.ndarray) -> jnp.ndarray | None:
+        return None if feasible is None else jax.vmap(feasible)(x)
+
+    def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray | None]:
+        return jax.vmap(objective)(x), feas_at(x)
+
+    def eval_f_g(
+        x: jnp.ndarray,
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]:
+        f, g = jax.vmap(jax.value_and_grad(objective))(x)
+        return f, g, feas_at(x)
+
+    return eval_f_g, eval_f
+
+
 class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
     """A batch was requested past a closed gate, the reason carried along.
 
