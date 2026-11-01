@@ -58,6 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error; free sides never trigger it. The clip keeps its own job - clamping
   proposals the model *generates* - because a generated proposal and an
   authored start are different claims.
+- `BLRGlobalModel`'s `projection_factory` is optional. Left unset, it builds
+  `SphereProjection` with its own defaults - the reference model's centre-biased
+  bend - so the common case names no projection at all, and the factory drops
+  back to being the override seam for a mask, another `kappa`, or no bend.
+  `IdentityProjection` stays a first-class alternate prior rather than a
+  stand-in for "no projection", and its docstring now says so. The two
+  extension seams are documented where they are crossed: `GlobalModel`
+  (`observe` + `propose`) is what a surrogate of another family implements, and
+  `Projection.features` is the shared feature map such a surrogate may read
+  without reusing any of this model's fit.
 - With no `global_model`, an unbounded `domain` is accepted instead of
   refused. The engine's default `SampleGlobalModel` draws whatever the domain
   admits - uniform inside a bounded dimension, `N(0, scale_i^2)` inside a free

@@ -101,6 +101,12 @@ class Projection(abc.ABC):
     `features` is the one contract. It is a pure query of the coordinates: the
     same ``(m, d)`` input maps to the same ``(m, w)`` rows, with `w` stable
     across calls for one projection.
+
+    It is also the seam a *different* head reads. A surrogate of another family
+    - a Gaussian process, say - turns coordinates into `features` rows the same
+    way and fits its own kernel there, because nothing in a projection is
+    specific to `BLRGlobalModel`'s posterior: it carries geometry, not fit
+    state.
     """
 
     def __init__(self, domain: Domain) -> None:
@@ -276,11 +282,17 @@ class BLRGlobalModel(GlobalModel):
     geometry and no second normalization drifting behind it. What this class adds
     on top is the value fit and the acquisition that descends it; the feature
     width is read off `features`, so any projection width fits.
+
+    The projection is optional. Left unset, the bent arm is the default, because
+    that is the reference model - the one whose geometry cures the corner-
+    seeking pathology. `IdentityProjection` stays the explicit alternate arm, for
+    a task whose optimum lives on a boundary; it is a different prior, not a
+    stand-in for "no projection".
     """
 
     def __init__(
         self,
-        projection_factory: ProjectionFactory,
+        projection_factory: ProjectionFactory | None = None,
         *,
         minimize: MinimizeFn,
         var_prior: float = 1.0,
@@ -291,11 +303,12 @@ class BLRGlobalModel(GlobalModel):
 
         Args:
             projection_factory: builds the `Projection` a given `Domain` is read
-                through - ``partial(SphereProjection, kappa=..., mask=...)`` for
-                the bent arm, `IdentityProjection` itself for the unbent one.
-                Called once per `propose`, so the geometry is always the box that
-                ask was handed, and `Projection`'s own constructor validates
-                the domain.
+                through - ``partial(SphereProjection, mask=..., kappa=...)`` for
+                a custom bend, `IdentityProjection` itself for the unbent arm.
+                ``None`` (the default) is `SphereProjection` with its own
+                defaults: the reference model's centre-biased bend. Called once
+                per `propose`, so the geometry is always the box that ask was
+                handed, and `Projection`'s own constructor validates the domain.
             minimize: the acquisition's inner optimizer, shape
                 ``MinimizeFn``. Owned by the caller: the descent recipe is the
                 engine's, not this model's.
@@ -383,7 +396,7 @@ class BLRGlobalModel(GlobalModel):
             msg = f"propose needs at least one point, got {n_points}"
             raise ValueError(msg)
         self._key, sub = jax.random.split(self._key)
-        projection = self._projection_factory(domain)
+        projection = self._projection_for(domain)
         if not self._can_fit():
             return domain.draw(sub, n_points)
         weights, cov = self._posterior(projection)
@@ -434,9 +447,21 @@ class BLRGlobalModel(GlobalModel):
         if batch.ndim != 2 or batch.shape[1] != width:
             msg = f"a posterior read needs a (m, {width}) batch, got {batch.shape}"
             raise ValueError(msg)
-        projection = self._projection_factory(domain)
+        projection = self._projection_for(domain)
         weights, cov = self._posterior(projection)
         return self._posterior_at(projection, batch, weights, cov)
+
+    def _projection_for(self, domain: Domain) -> Projection:
+        """Build this ask's geometry: the caller's recipe, or the bent default.
+
+        `None` at construction is the reference model's centre-biased bend -
+        `SphereProjection` with its own defaults - so the common case names no
+        projection at all. A caller who wants a mask, a different `kappa`, or no
+        bend at all passes a factory and gets exactly that.
+        """
+        if self._projection_factory is None:
+            return SphereProjection(domain)
+        return self._projection_factory(domain)
 
     def _can_fit(self) -> bool:
         """Return whether the values have a spread to standardize by.

@@ -225,6 +225,21 @@ def test_the_model_carries_no_box_of_its_own() -> None:
     assert bool(jnp.all(jnp.abs(roomy) <= 100.0)), roomy.tolist()
 
 
+def test_leaving_the_projection_unset_is_the_bent_arm() -> None:
+    """`None` is `SphereProjection`, not a third behaviour: same seed, same ask."""
+    box = _box()
+    default = BLRGlobalModel(minimize=_grid_minimize, key=jax.random.PRNGKey(0))
+    explicit = BLRGlobalModel(
+        SphereProjection,
+        minimize=_grid_minimize,
+        key=jax.random.PRNGKey(0),
+    )
+    _observe(default, 6)
+    _observe(explicit, 6)
+
+    assert jnp.array_equal(default.propose(4, box), explicit.propose(4, box))
+
+
 def test_the_acquisition_gradient_is_the_jacobian_diagonal() -> None:
     """Read off the per-row gradient the batch Jacobian would only keep on its diagonal.
 

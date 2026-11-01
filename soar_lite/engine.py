@@ -131,6 +131,12 @@ class GlobalModel(Protocol):
     once per served batch, `propose` once per cohort of restarting paths - so
     they trust their arguments: `n_path_schedule` validates the object once at
     the entry (that it carries this contract), and nothing here re-checks.
+
+    Implementing this pair is the whole extension point. A surrogate of another
+    family - a Gaussian process, say - needs nothing else from the engine, and
+    the engine needs nothing else from it; a caller who wants a shared feature
+    map reads `global_model.spherical_linear.Projection` from inside its own
+    `propose`, which is a utility, not part of this contract.
     """
 
     def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
