@@ -27,8 +27,10 @@ pip install -e .
 uv run --group exp python -m experiments.compare_baselines --quick
 ```
 
-Two seeds per method, ~35 s, writes the same figures as the full run. Use it
-to confirm the environment before committing to the full schedule.
+The quick gate runs only the `smooth` panel — the diag control and the rotated
+quadratic — with 2 seeds and `--max-steps 300` per method, so it writes just
+that panel's figures (seconds, not minutes). Use it to confirm the environment
+before committing to the full schedule.
 
 ## Canonical run
 
@@ -46,6 +48,12 @@ points served" axis, so both billing notions come from one execution.
 
 Run one panel to save time, e.g. `--groups smooth`; any subset works, and each
 panel writes its files as it finishes.
+
+The restart-model panel is run separately and on purpose: `--groups blr` draws
+rastrigin alone (all arms `n_paths=16`) — `Sample` vs `BLR identity` vs `BLR
+sphere` — as its own single-subplot figure. It is left out of the default list
+because a fitted BLR restart walks an acquisition descent on every redraw, so
+it is the most expensive panel per batch.
 
 ## The Adam learning-rate grid
 
@@ -87,11 +95,13 @@ All in `experiments/` (gitignored — regenerated, not source):
 - **Zero knobs on soar-lite**: its two start lengths / grid sizes ship inert
   (`n_alpha=1`, `alpha0=1`); the formal runs use factory defaults end to end.
   Adam pays the per-problem lr grid each time — that asymmetry is the point.
-- **No seam on soar-lite either**: the comparison runs the factory defaults
-  with no `eval_f` (value-only) seam, so every batch the axis counts is a full
-  value+gradient batch billed on the `f_g` pair. The seams (`eval_f`,
-  `restart_stalled`, a `GlobalModel`) are user-side exploration, off this
-  comparison.
+- **No seam on soar-lite either**: the comparison runs the factory
+  `value_and_grad` path — no `eval_f` (value-only) seam — so every batch the
+  axis counts is a full value+gradient batch. The only attributes stepped are
+  `n_paths` (1 → 16) and `mu` (0 → 0.9); `restart_stalled` stays at its engine
+  default (on) in every arm, and the blr panel injects its restart model
+  through the public `model=` factory (`BLRGlobalModel`; the other arms use the
+  default `SampleGlobalModel`).
 - **Canvas only in-repo**: `experiments/DESIGN.md` is the design and the
   story; figures are drawn from the JSON, never hand-tuned.
 
