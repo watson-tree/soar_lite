@@ -117,7 +117,7 @@ def rotated_quadratic(d: int = 100, cond: float = 1e6, seed: int = 1) -> Problem
     )
 
 
-# --- the multimodal panel: escape on a funnel / a lattice ---------------------
+# --- the multimodal panel: momentum drift on a funnel / a lattice -------------
 
 
 def ackley(d: int = 100) -> Problem:
@@ -252,7 +252,7 @@ def oscillator_chain(
 def build(group: str) -> list[Problem]:
     """Return the problems of one design group.
 
-    group: "smooth" (preconditioning), "multimodal" (escape), "headline"
+    group: "smooth" (preconditioning), "multimodal" (momentum drift), "headline"
     (mixed units + non-convex response), "blr" (restart model: rastrigin, the
     one problem where a restart has a stage), or "all".
     """

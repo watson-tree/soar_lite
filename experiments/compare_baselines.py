@@ -1,11 +1,11 @@
 """Run the soar-lite / baseline comparison and emit figures plus results.json.
 
-Two panels per method family, following the design in `DESIGN.md`:
+The panels, following the design in `DESIGN.md`:
 
 * smooth + headline (preconditioning proposition): soar-lite n_paths=1,
   n_paths=1 with direction momentum (mu=0.9), n_paths=16, Adam, L-BFGS-B
   (ceiling reference);
-* multimodal (escape proposition): the same soar-lite arms, Adam;
+* multimodal (momentum-drift proposition): the same soar-lite arms, Adam;
 * blr (restart-model proposition): n_paths=16 whose starts come from the
   uniform sample or from a BLR posterior under the identity /
   inverse-stereographic projection.
@@ -90,7 +90,11 @@ def _parallel(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
 def _serial_momentum(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
     """soar-lite n_paths=1 with direction momentum at mu=0.9 (Adam's beta_1)."""
     return run_soar_lite(
-        prob, n_paths=1, mu=0.9, max_steps=max_steps, seed=seed,
+        prob,
+        n_paths=1,
+        mu=0.9,
+        max_steps=max_steps,
+        seed=seed,
     )
 
 
@@ -186,8 +190,8 @@ SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
 
 # NAAdam (Adam + sigma_t = sigma0/sqrt(t) noise) was measured and dropped: the
 # decaying noise never separates from plain Adam on ackley/rastrigin, so it is
-# a redundant curve. The escape panel is soar-lite n_paths=16 vs n_paths=1 vs
-# Adam, with the momentum arm added to read whether the sideways push changes
+# a redundant curve. The multimodal panel is soar-lite n_paths=16 vs n_paths=1
+# vs Adam, with the momentum arm added to read whether the sideways push changes
 # where a stalled chain drifts (ackley never stalls, rastrigin does).
 MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
@@ -256,7 +260,10 @@ def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
     lr_grid = [1e-4, 1e-3, 1e-2, 1e-1, 2e-1, 5e-1, 1.0, 2.0]
     probs = problems.build("all")
     fig, axes = plt.subplots(
-        1, len(probs), figsize=(6.4 * len(probs), 4.6), squeeze=False,
+        1,
+        len(probs),
+        figsize=(6.4 * len(probs), 4.6),
+        squeeze=False,
     )
     for ax, prob in zip(axes[0], probs, strict=True):
         fins = [
@@ -379,7 +386,9 @@ def run_invariance(out_dir: Path, n_seeds: int, max_steps: int) -> None:
 
 
 def run_panel(
-    group: str, n_seeds: int, max_steps: int,
+    group: str,
+    n_seeds: int,
+    max_steps: int,
 ) -> tuple[dict[str, dict[str, CurveEntry]], dict[str, str]]:
     """Run every problem in ``group`` across every method and seed."""
     methods = PANELS[group]
@@ -439,7 +448,10 @@ def plot(
     methods = PANELS[group]
     names = list(curves)
     fig, axes = plt.subplots(
-        1, len(names), figsize=(6.4 * len(names), 4.6), squeeze=False,
+        1,
+        len(names),
+        figsize=(6.4 * len(names), 4.6),
+        squeeze=False,
     )
     for ax, name in zip(axes[0], names, strict=True):
         for label, _, style in methods:
@@ -553,11 +565,16 @@ def main() -> None:
     parser.add_argument("--quick", action="store_true", help="2-seed smoke check")
     parser.add_argument("--seeds", type=int, default=20)
     parser.add_argument(
-        "--max-steps", type=int, default=3000, help="batches per method",
+        "--max-steps",
+        type=int,
+        default=3000,
+        help="batches per method",
     )
     parser.add_argument("--groups", default="headline,smooth,multimodal,invariance")
     parser.add_argument(
-        "--lr-sweep", action="store_true", help="emit the Adam lr sensitivity figure",
+        "--lr-sweep",
+        action="store_true",
+        help="emit the Adam lr sensitivity figure",
     )
     parser.add_argument(
         "--plot-only",
