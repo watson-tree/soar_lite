@@ -44,6 +44,7 @@ from typing import TypeAlias
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.scipy.special import log_ndtr
 
 from soar_lite.domain import Bounds, Domain
@@ -327,11 +328,22 @@ class BLRGlobalModel(GlobalModel):
         self._var_prior = _check_finite_positive("var_prior", var_prior)
         self._noise = _check_finite_positive("noise", noise)
         self._key = key
-        # Folded per batch, not per row: every ask concatenates this list once,
-        # and one element per served batch instead of one per point keeps that
-        # concatenation cheap on a long run.
+        # Folded per batch, not per row: every ask walks this list once, and one
+        # element per served batch instead of one per point keeps that walk cheap
+        # on a long run.
         self._xs: list[jnp.ndarray] = []
         self._fs: list[jnp.ndarray] = []
+        # The value moments as scalars, merged per batch. Held as numbers rather
+        # than as the arrays they summarize so that standardizing costs one
+        # fixed-shape read: an array whose length grows with the run recompiles
+        # the fit on every ask instead of reusing it. Three of the four are what
+        # they say over the kept rows - their sum, their squared deviation about
+        # that sum's mean, the smallest - and the count is what each is read
+        # against.
+        self._n = 0
+        self._sum = 0.0
+        self._m2 = 0.0
+        self._min = math.inf
 
     def observe(
         self,
@@ -378,6 +390,7 @@ class BLRGlobalModel(GlobalModel):
         if bool(keep.any()):
             self._xs.append(rows[keep])
             self._fs.append(values[keep])
+            self._fold_moments(values[keep])
 
     def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
         """Return `n_points` restart points: a draw until a fit is possible.
@@ -404,7 +417,7 @@ class BLRGlobalModel(GlobalModel):
         if not self._can_fit():
             return domain.draw(sub, n_points)
         weights, cov = self._posterior(projection)
-        best = self._standardize(self._values()).min()
+        best = self._standardize(jnp.asarray(self._min))
 
         # shortcut: the minimizers are independent, so a flat acquisition can
         # return a cluster on one face. Upgrade to greedy conditioning on the
@@ -474,23 +487,54 @@ class BLRGlobalModel(GlobalModel):
         equal values: both leave nothing to divide by and no improvement to
         measure against.
         """
-        return self._n_rows() > 1 and bool(self._values().std() > 0)
-
-    def _n_rows(self) -> int:
-        """Return how many observations the fit holds."""
-        return sum(batch.shape[0] for batch in self._xs)
+        return self._n > 1 and self._m2 > 0
 
     def _values(self) -> jnp.ndarray:
         """Return every kept value, in the order the batches were folded in."""
         return jnp.concatenate(self._fs)
 
-    def _standardize(self, f: jnp.ndarray) -> jnp.ndarray:
-        """Return `f` centered and scaled to unit variance.
+    def _fold_moments(self, kept: jnp.ndarray) -> None:
+        """Merge one batch's count, sum, spread and minimum into the fit's.
 
+        Chan's parallel merge, so each batch's spread is measured against its own
+        mean before the two are combined. The one-pass ``mean of squares minus
+        square of mean`` loses the spread exactly where a converged run spends
+        its batches - values that agree to most of their digits - and can come
+        out negative there. The value sum needs no such care: it is carried raw,
+        and the center is that sum over the count. Computed on the host: these
+        are four scalars a batch, and the point of holding them is to keep the
+        fit's shapes fixed.
+        """
+        batch = np.asarray(kept, dtype=np.float64)
+        count = batch.size
+        batch_mean = float(batch.mean())
+        batch_m2 = float(((batch - batch_mean) ** 2).sum())
+        total = self._n + count
+        delta = batch_mean - (self._sum / self._n if self._n else 0.0)
+        self._sum += float(batch.sum())
+        self._m2 = self._m2 + batch_m2 + delta**2 * self._n * count / total
+        self._n = total
+        self._min = min(self._min, float(batch.min()))
+
+    def _moments(self) -> tuple[float, float]:
+        """Return the fit's value center and spread, both as Python floats.
+
+        Both are read off the same pair of sums - center is the kept values'
+        mean, spread their population standard deviation - so neither field
+        carries a normalization the other does not.
+        """
+        return self._sum / self._n, math.sqrt(self._m2 / self._n)
+
+    def _standardize(self, f: jnp.ndarray) -> jnp.ndarray:
+        """Return `f` on the fit's standardized scale.
+
+        The center and spread are the accumulated moments', not `f`'s own: the
+        fit has one value scale, and everything read off it answers in that one.
         Only reached once `_can_fit` has found a non-zero spread, so the divisor
         never is zero and no floor is needed to keep it finite.
         """
-        return (f - f.mean()) / f.std()
+        center, spread = self._moments()
+        return (f - center) / spread
 
     def _posterior(self, projection: Projection) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Return the weight posterior's mean and covariance.
@@ -500,18 +544,43 @@ class BLRGlobalModel(GlobalModel):
         itself - not an inverse scaled afterwards - with
         ``weights = cov @ P^T y / noise`` its mean. `projection` is the geometry
         built for this ask's domain; nothing about it is remembered.
+
+        The rows are walked one served batch at a time and the three sums kept,
+        rather than concatenated into one array and multiplied once. The products
+        are the same - a sum of per-batch products is the product over all rows -
+        but their shapes stop growing with the run, and a shape that changes is a
+        fresh compilation of the whole fit. Standardizing cannot ride along in the
+        same accumulation, since the center and spread are the fit's rather than
+        the batch's, so the values cross is carried raw and shifted here: the
+        spread divides outside the sum, and the center scales the column sums.
         """
-        x_obs = jnp.concatenate(self._xs, axis=0)
-        f_obs = self._values().astype(x_obs.dtype)
-        values = self._standardize(f_obs)
-        features = projection.features(x_obs)
+        gram, cross, colsum = self._fold_gram(projection)
         precision = (
-            features.T @ features / self._noise
-            + jnp.eye(features.shape[1], dtype=features.dtype) / self._var_prior
+            gram / self._noise
+            + jnp.eye(gram.shape[0], dtype=gram.dtype) / self._var_prior
         )
         cov = jnp.linalg.inv(precision)
-        weights = cov @ features.T @ values / self._noise
+        center, spread = self._moments()
+        weights = cov @ ((cross - center * colsum) / spread) / self._noise
         return weights, cov
+
+    def _fold_gram(
+        self,
+        projection: Projection,
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """Return ``P^T P``, ``P^T y`` and ``P^T 1`` over the whole evidence."""
+        blocks = zip(self._xs, self._fs, strict=True)
+        x_0, f_0 = next(blocks)
+        first = projection.features(x_0)
+        gram = first.T @ first
+        cross = first.T @ f_0.astype(first.dtype)
+        colsum = first.sum(axis=0)
+        for x_b, f_b in blocks:
+            features = projection.features(x_b)
+            gram = gram + features.T @ features
+            cross = cross + features.T @ f_b.astype(features.dtype)
+            colsum = colsum + features.sum(axis=0)
+        return gram, cross, colsum
 
     def _posterior_at(
         self,
