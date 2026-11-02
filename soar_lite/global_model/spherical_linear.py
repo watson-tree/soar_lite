@@ -327,8 +327,11 @@ class BLRGlobalModel(GlobalModel):
         self._var_prior = _check_finite_positive("var_prior", var_prior)
         self._noise = _check_finite_positive("noise", noise)
         self._key = key
+        # Folded per batch, not per row: every ask concatenates this list once,
+        # and one element per served batch instead of one per point keeps that
+        # concatenation cheap on a long run.
         self._xs: list[jnp.ndarray] = []
-        self._fs: list[float] = []
+        self._fs: list[jnp.ndarray] = []
 
     def observe(
         self,
@@ -364,16 +367,17 @@ class BLRGlobalModel(GlobalModel):
         # The model holds no `d` to check against: the first batch is what fixes
         # the fit's width, and a later batch of another width would otherwise
         # only fail at `jnp.stack` inside the fit.
-        if self._xs and rows.shape[1] != self._xs[0].shape[0]:
+        if self._xs and rows.shape[1] != self._xs[0].shape[-1]:
             msg = (
                 "observe's first batch fixed the width at "
-                f"{self._xs[0].shape[0]}, got {rows.shape[1]}"
+                f"{self._xs[0].shape[-1]}, got {rows.shape[1]}"
             )
             raise ValueError(msg)
-        for row, value in zip(rows, f, strict=True):
-            if math.isfinite(value):
-                self._xs.append(row)
-                self._fs.append(value)
+        values = jnp.asarray(f, dtype=rows.dtype)
+        keep = jnp.isfinite(values)
+        if bool(keep.any()):
+            self._xs.append(rows[keep])
+            self._fs.append(values[keep])
 
     def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
         """Return `n_points` restart points: a draw until a fit is possible.
@@ -400,7 +404,7 @@ class BLRGlobalModel(GlobalModel):
         if not self._can_fit():
             return domain.draw(sub, n_points)
         weights, cov = self._posterior(projection)
-        best = self._standardize(jnp.asarray(self._fs)).min()
+        best = self._standardize(self._values()).min()
 
         # shortcut: the minimizers are independent, so a flat acquisition can
         # return a cluster on one face. Upgrade to greedy conditioning on the
@@ -443,7 +447,7 @@ class BLRGlobalModel(GlobalModel):
             msg = "a posterior read needs a spread to standardize by"
             raise ValueError(msg)
         batch = jnp.asarray(x)
-        width = self._xs[0].shape[0]
+        width = self._xs[0].shape[-1]
         if batch.ndim != 2 or batch.shape[1] != width:
             msg = f"a posterior read needs a (m, {width}) batch, got {batch.shape}"
             raise ValueError(msg)
@@ -470,7 +474,15 @@ class BLRGlobalModel(GlobalModel):
         equal values: both leave nothing to divide by and no improvement to
         measure against.
         """
-        return len(self._xs) > 1 and bool(jnp.asarray(self._fs).std() > 0)
+        return self._n_rows() > 1 and bool(self._values().std() > 0)
+
+    def _n_rows(self) -> int:
+        """Return how many observations the fit holds."""
+        return sum(batch.shape[0] for batch in self._xs)
+
+    def _values(self) -> jnp.ndarray:
+        """Return every kept value, in the order the batches were folded in."""
+        return jnp.concatenate(self._fs)
 
     def _standardize(self, f: jnp.ndarray) -> jnp.ndarray:
         """Return `f` centered and scaled to unit variance.
@@ -489,8 +501,8 @@ class BLRGlobalModel(GlobalModel):
         ``weights = cov @ P^T y / noise`` its mean. `projection` is the geometry
         built for this ask's domain; nothing about it is remembered.
         """
-        x_obs = jnp.stack(self._xs)
-        f_obs = jnp.asarray(self._fs, dtype=x_obs.dtype)
+        x_obs = jnp.concatenate(self._xs, axis=0)
+        f_obs = self._values().astype(x_obs.dtype)
         values = self._standardize(f_obs)
         features = projection.features(x_obs)
         precision = (

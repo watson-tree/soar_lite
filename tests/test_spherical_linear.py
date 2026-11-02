@@ -255,7 +255,7 @@ def test_the_acquisition_gradient_is_the_jacobian_diagonal() -> None:
     _observe(model, 8)
     xs = jnp.asarray([[-1.4, 0.7], [0.3, -1.1], [1.6, 0.9]])
     weights, cov = model._posterior(projection)
-    best = model._standardize(jnp.asarray(model._fs)).min()
+    best = model._standardize(model._values()).min()
 
     def values(x: jnp.ndarray) -> jnp.ndarray:
         mean, sigma = model._posterior_at(projection, x, weights, cov)
@@ -327,7 +327,7 @@ def test_posterior_deviation_never_dips_below_the_observation_noise() -> None:
     """Keep the root defined by construction: noise plus a non-negative form."""
     model = _model()
     _observe(model, 6)
-    _, sigma = model._predict(jnp.stack(model._xs), _box())
+    _, sigma = model._predict(jnp.concatenate(model._xs, axis=0), _box())
     assert float(jnp.min(sigma)) >= math.sqrt(model._noise) - 1e-6
 
 
@@ -385,7 +385,7 @@ def test_observe_drops_non_finite_values_and_checks_its_rows() -> None:
     """Drop a value the fit cannot use and refuse a ragged batch."""
     model = _model()
     model.observe(jnp.asarray([[0.0, 0.0], [1.0, 1.0]]), [1.0, -math.inf], None)
-    assert len(model._fs) == 1
+    assert model._values().size == 1
     with pytest.raises(ValueError, match="rows but"):
         model.observe(jnp.asarray([[0.0, 0.0]]), [1.0, 2.0], None)
 
