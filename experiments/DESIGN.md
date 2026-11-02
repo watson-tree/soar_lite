@@ -1,29 +1,57 @@
 # Experiment design: `compare_baselines`
 
-The canonical reproducible comparison artifact. One script, five problem
-groups, two falsifiable propositions. This document is the lossless handoff:
-read it before touching `compare_baselines.py` so no settled detail is
-re-derived from memory.
+The canonical reproducible comparison artifact. One script, four problem
+groups (`headline`, `smooth`, `multimodal`, `blr`) plus two appendix panels
+(unit-rescaling invariance, Adam's lr sweep), three propositions. This
+document is the lossless handoff: read it before touching
+`compare_baselines.py` so no settled detail is re-derived from memory.
 
 ## Goal
 
-Prove two propositions by **drawing their win/lose boundaries** (never only
+Prove three propositions by **drawing their win/lose boundaries** (never only
 reporting wins — R5):
 
-- **P② — local method.** Per-coordinate secant preconditioning (`soar-lite`,
-  unit-aware, no scalar learning rate) vs Adam's adaptive single-`α` step.
-  Tested on scale / conditioning / unit-mixing.
-- **P① — restart.** Re-drawing stalled paths (`restart_stalled=True`, a fresh
-  start from the `SampleGlobalModel`) vs leaving them parked (`False`), and vs
-  single-chain Adam. Tested on multimodality.
+- **P② — direction repair (smooth + headline).** The per-coordinate secant's
+  error is in the *direction* `-d ⊙ g`: it drops off-diagonal curvature. Two
+  questions: does the preconditioner still beat Adam's adaptive step on scale /
+  conditioning / unit-mixing, and does direction momentum (`mu=0.9`) repair the
+  dropped part — a residual folded back from the search history — where the
+  rotation coupling (rotated quadratic) and interaction coupling (oscillator)
+  live? `L-BFGS-B` is the ceiling reference (full-memory + exact line search),
+  so the panel shows how much of any gap is "diagonal vs full second order"
+  rather than a tuning failure.
+- **P① — momentum drift / stall shape (multimodal).** Reframes the old "escape
+  the saddle" question without answering it: these panels do not test whether
+  `mu=0.9` escapes a saddle — that needs a landscape whose discriminator is
+  saddle-vs-minimum, and escaping is just what momentum terms are usually
+  hoped to buy in deep-network optimizers. What the panels do test is whether
+  the sideways push changes *where a stalled chain ends up*. Rastrigin chains
+  converge into a lattice basin and stall; Ackley chains freeze outside the
+  funnel. The momentum arm reads whether `mu=0.9` moves either stall, against
+  serial, parallel and Adam.
+- **Restart model — centre bias (rastrigin alone).** Where a restart lands: a
+  BLR posterior centred on the observed best vs a uniform re-draw. Only
+  rastrigin gives a restart a stage — chains stall in local basins, and the
+  sample's re-draws provably never improve the best. No external baseline: a
+  BLR restart serves no objective points, so on the points/batches axes its
+  cost is invisible and a shared plot would sell a free lunch. Its figure is
+  separate, all arms `n_paths=16`.
 
 Design rule (from the start): problems must be **high-dimensional, d≈50–200** —
-low dimension favors SOAR-style surrogate restart methods, which is someone
-else's home turf.
+in low dimension the sampled paths entangle: with few coordinates to spread
+them apart, several starts converge into the same basin, so the width `n_paths`
+buys little and soar's multi-path advantage is dulled there, not sharpened.
 
-## Problem set (plan A: "borrow the recipe")
+Every arm leaves `restart_stalled` at the engine default (**on**). A probe
+showed stalls fire only where a method converges into a basin — the diagonal
+quadratic (~step 4) and rastrigin (~batch 700) — never on the rotated
+quadratic, Ackley or the oscillator, so the restart bit is not a step any
+panel takes. The two single-attribute steps are the width (`n_paths` 1 → 16)
+and the momentum (`mu` 0 → 0.9); each curve moves exactly one.
 
-Five groups, one role each:
+## Problem set
+
+Four run groups plus two appendix panels, one role each:
 
 1. **Headline — broadband device design (borrowed recipe).** A N-stage
    coupled-oscillator / vibration-isolation network. Per-stage parameters carry
@@ -33,33 +61,43 @@ Five groups, one role each:
    `H` the (banded, linear) frequency response. Synthetic target design → known
    `f* = 0`; boxes are physical ranges. Serves **P② + unit-invariance**.
    Landscape: non-convex via resonance/interference — *not* a funnel (see Risk).
-2. **Positive control / ceiling — axis-aligned ill-conditioned quadratic**
-   `diag(10^i)`, d=100. Diagonal `H`, so soar-lite is Newton-exact in ~1 step
-   (existing test already proves it). Checksum that the mechanism works in the
-   ideal regime. Serves **P②**.
-3. **Honest boundary — random-rotated quadratic**, d=100, condition ~1e6. Dense
-   `H` breaks the diagonal assumption; shows the *cost* of diagonal approx, read
-   against the L-BFGS reference. Serves **P② boundary** — the case we expect to
-   lose on some axis, reported anyway.
-4. **Multimodal — Ackley / Rastrigin**, d=100 (drop to 50 if cost bites). A
-   lattice/funnel of local minima. Serves **P①**.
-5. **Invariance panel — unit-rescaling consistency.** Run on the diag control
-   (or the headline in its single-basin regime): re-measure in two unit
-   systems (here `x' = 10x`, see `INVARIANCE_SCALE` in `compare_baselines.py`),
-   **zero retune**. Claim is **outcome-level, not trajectory-level**:
-   the best-so-far-vs-cost curves overlap in both unit systems, while Adam's
-   separate (one system needs a different `α`). Exact per-step covariance
-   (`x̃=c·x ⇒ d̃=c²d, Δx̃=c·Δx`) is real but holds only for the secant-based
-   steady state: the **warmup step is by design not coordinate-invariant** (a
-   scalar `α` applied uniformly across mixed-unit coords), so the first secant
-   pair — and anything seeded by it — is not the transformed pair
-   (`ALGORITHM.md` §1.4/§7). On the diagonal quadratic this self-corrects in
-   one step (`d` reads `1/Hᵢ` exactly, independent of the seed pair's scale),
-   so the diag control gives clean overlap; a general/multimodal problem would
-   **not** guarantee same basin, so never use one for this panel. The exact
-   claim is asserted at the step level (injected secant pair, as in
+2. **Smooth — the preconditioner's home and its boundary.**
+   - **Diagonal control**: axis-aligned ill-conditioned quadratic `diag(10^i)`,
+     d=100. Diagonal `H`, so soar-lite is Newton-exact in ~1 step (existing
+     test already proves it). Checksum that the mechanism works in the ideal
+     regime.
+   - **Rotated honesty boundary**: random-rotated quadratic, d=100, condition
+     ~1e6. Dense `H` breaks the diagonal assumption; shows the *cost* of the
+     diagonal approximation. This is where direction momentum is asked whether
+     it can buy any of the dropped coupling back.
+   Serves **P②**.
+3. **Multimodal — Ackley / Rastrigin**, d=100 (drop to 50 if cost bites). A
+   funnel / lattice of local minima. Serves **P①**.
+4. **BLR — Rastrigin alone.** The one problem where a restart has a stage:
+   chains converge into local basins and stall, and Sample's re-draws provably
+   never improve the best. Serves the **restart-model** proposition.
+
+Two appendix panels, property demos rather than races:
+
+5. **Invariance — unit-rescaling consistency.** Run on the diag control:
+   re-measure in two unit systems (here `x' = 10x`, see `INVARIANCE_SCALE` in
+   `compare_baselines.py`), **zero retune**. Claim is **outcome-level, not
+   trajectory-level**: the best-so-far-vs-cost curves overlap in both unit
+   systems, while Adam's separate (one system needs a different `α`). Exact
+   per-step covariance (`x̃=c·x ⇒ d̃=c²d, Δx̃=c·Δx`) is real but holds only for
+   the secant-based steady state: the **warmup step is by design not
+   coordinate-invariant** (a scalar `α` applied uniformly across mixed-unit
+   coords), so the first secant pair — and anything seeded by it — is not the
+   transformed pair (`ALGORITHM.md` §1.4/§7). On the diagonal quadratic this
+   self-corrects in one step (`d` reads `1/Hᵢ` exactly, independent of the seed
+   pair's scale), so the diag control gives clean overlap; a general/multimodal
+   problem would **not** guarantee same basin, so never use one for this panel.
+   The exact claim is asserted at the step level (injected secant pair, as in
    `test_diag_step_scales_with_the_coordinate_unit`); the end-to-end claim is
    asserted statistically. A *property demo*, not a race.
+6. **Adam lr sweep.** Log-scan of `lr` per problem, marking the panel pick
+   (`ADAM_LR`) — the evidence that soar-lite has no learning rate where Adam
+   pays a grid. Emitted by `--lr-sweep`.
 
 ## dfbench (Learn2Design-2026) relationship
 
@@ -77,44 +115,53 @@ Five groups, one role each:
 
 ## Methods × panels
 
-Curves differ per panel; each curve has one role:
+Curves differ per panel; each curve has one role, and each single-attribute
+step moves exactly one knob (`n_paths` or `mu`); restart stays at the engine
+default (on) in every arm:
 
-- **Panel "preconditioning"** (groups 2+3, **P②**): `soar-lite n_paths=1`
-  (restart off), `Adam`,
-  `L-BFGS-B` (ceiling *reference*, not a head-to-head baseline — full-memory +
-  serial line search vs our per-coordinate + batched n_paths), plus both
-  `soar-lite n_paths=16` curves — restart off (`restart_stalled=False`) and on
-  (`True`) — as supplementary "what parallelism buys" / "what restart buys"
-  curves.
-- **Panel "escape"** (group 4, **P①**): `soar-lite n_paths=16` with restart on
-  and off, `soar-lite n_paths=1`, `Adam`.
-- **Invariance panel** (group 5): `soar-lite` (n_paths=1) vs `Adam`, two unit
-  systems, overlaid after the coordinate transform.
+- **Smooth + headline** (**P②**): `soar-lite n_paths=1`, `soar-lite
+  n_paths=16`, `soar-lite n_paths=1, mu=0.9`, `Adam` (grid lr), `L-BFGS-B`
+  (ceiling *reference*, not a head-to-head baseline — full-memory + serial
+  line search vs our per-coordinate + batched n_paths).
+- **Multimodal** (**P①**): `soar-lite n_paths=1`, `soar-lite n_paths=16`,
+  `soar-lite n_paths=1, mu=0.9`, `Adam` (grid lr).
+- **BLR** (**restart model**, rastrigin alone, its own figure, all
+  `n_paths=16`): `Sample draws`, `BLR identity`, `BLR sphere` — one method,
+  three restart models, so nothing but where a restart lands differs.
+- **Invariance**: `soar-lite` (n_paths=1) vs `Adam`, two unit systems, overlaid
+  after the coordinate transform.
 
-Both n_paths=16 curves are drawn so neither step hides the other: `n_paths=1` →
-`n_paths=16` at restart off is the parallelism step, restart off → on at a fixed
-width the restart step. A single n_paths=16 curve moves both knobs at once and
-charges the whole gap to "parallelism".
+The width step (`n_paths` 1 → 16) and the momentum step (`mu` 0 → 0.9) are the
+two single-attribute knobs; a single `n_paths=16` curve that also flipped
+restart would charge the whole gap to "parallelism". Restart is not a step the
+panels take: a probe showed stalls fire only where a method has already settled
+into a basin (the diagonal quadratic, rastrigin), never on the rotated
+quadratic, Ackley or the oscillator.
+
+The headline BLR panel is **cancelled**: a BLR restart needs a stalled stage to
+act on, and the oscillator's non-convexity is resonance-type — not the funnel
+that stalls a chain. The BLR proposition lives on rastrigin, where Sample's
+re-draws provably never improve the best and a fitted restart is the question.
 
 L-BFGS-B appears only on the P② panels. Its role there is the *ceiling
 reference* — how close soar-lite's diagonal secant gets to a full-memory
 second-order method on smooth, convex landscape. That role does not exist on
-the P① panel: the question there is whether stalled-path restart beats a
-*first-order, non-restarting single chain* (Adam; soar-lite n_paths=1 with
-restart off is the same method minus the restart knob). L-BFGS-B is
-second-order and restart-free — on Ackley/Rastrigin
-it would dive deterministically into the nearest local minimum and stay there
-at second-order precision, so its curve could only show "a second-order method
-also gets stuck", which discriminates nothing about restart. It is also serial
-(not the batched cost axis; see Budget) and its line search is fragile on
-Rastrigin's cos oscillation.
+the P① panel: the question there is whether direction momentum changes a
+stalled chain's resting place, not whether a full second-order method stalls.
+L-BFGS-B is second-order and restart-free — on Ackley/Rastrigin it would dive
+deterministically into the nearest local minimum and stay there at
+second-order precision, so its curve could only show "a second-order method
+also gets stuck", which discriminates nothing about drift or stall. It is also
+serial (not the batched cost axis; see Budget) and its line search is fragile
+on Rastrigin's cos oscillation.
 
 NAAdam (Adam + `σ_t = σ0/√t` decaying Gaussian noise) was measured and
 **dropped**: on ackley/rastrigin at d=100 the noise never separates from plain
 Adam — larger `σ0` is flat (rastrigin) to worse (ackley) — so it would only be
-a redundant, exactly-overlapping curve. The escape panel is therefore
-`n_paths=16` with restart on and off vs `n_paths=1` vs Adam, which is the honest
-contrast for P①.
+a redundant, exactly-overlapping curve. The multimodal panel is therefore
+`soar-lite` n_paths=1 / 16 / (1, mu=0.9) vs `Adam`, which is the honest
+contrast: momentum is read as a *drift* on these landscapes, not asserted to be
+an escape mechanism in general.
 
 Adam learning rate is **per-problem grid-tuned**: the optimal lr spans
 over two orders of magnitude (diag 1e-2 → rotated 2.0), and a wrong lr costs
@@ -214,9 +261,13 @@ not a universal theorem about the method.
   dip below the log axis.
 - Outputs: `experiments/results_{group}_{batches,points}.png` +
   `results_{group}.json` per group, plus `results_invariance.png` and
-  `results_lr_sweep.png`. The JSON holds the per-seed best-so-far curves per
-  problem×method for both axes (grid + one curve per seed, outside-range steps
-  as NaN), keyed by `max_steps`; figures rebuild from it with `--plot-only`.
+  `results_lr_sweep.png`. The default run is
+  `headline,smooth,multimodal,invariance`; `--groups blr` adds the restart-model
+  panel (a single rastrigin subplot). The JSON holds the per-seed best-so-far
+  curves per problem×method for both axes (grid + one curve per seed,
+  outside-range steps as NaN), keyed by `max_steps`; figures rebuild from it
+  with `--plot-only`. The invariance panel writes no JSON — it is re-run (fast)
+  rather than re-plotted.
 
 ## Reproducibility contract
 
@@ -232,12 +283,15 @@ not a universal theorem about the method.
 
 0. **Wait for explicit go-ahead before heavy coding.**
 1. Add experiment deps via a dependency group (`optax`, `matplotlib`).
-2. `experiments/problems.py` — the five groups + a thin oracle wrapper matching
-   the soar-lite seam `x_batch → (loss, grad, feas)`.
-3. `experiments/methods.py` — drivers: soar-lite n_paths=1 and n_paths=16 (the
-   latter restart off and on), Adam, L-BFGS-B.
+2. `experiments/problems.py` — the four groups (`headline`, `smooth`,
+   `multimodal`, `blr`) + the invariance and `all` builders, each problem
+   exposing the soar-lite seam `x_batch → (loss, grad, feas)`.
+3. `experiments/methods.py` — drivers: soar-lite n_paths=1 / 16 / (1, mu=0.9),
+   Adam, L-BFGS-B, and the three BLR arms (`surrogate_minimize` + the identity
+   / sphere projections).
 4. `experiments/compare_baselines.py` — harness over `N=20` seeds, collects
-   per-batch best-so-far.
+   per-batch best-so-far; panels: headline / smooth / multimodal / blr, plus
+   invariance and the lr sweep.
 5. Plot + dump `results_{group}.json`. **Self-check first**: two curves on the diag
    quadratic (soar-lite n_paths=1 vs Adam) before running everything.
 6. `experiments/README.md` — run instructions, written alongside the code.
@@ -258,6 +312,11 @@ exact" banded coupling actually lands the discriminator on soar-lite's side — 
 two-curve self-check decides before the full run.
 
 ## Reading the 0.1.0 rerun
+
+**This section reads the previous figures — the restart on/off lineup — and is
+kept only for its Ackley and unit-rescaling readings. The momentum and BLR
+panels above supersede it: the lineup this document now specifies is what
+`compare_baselines.py` runs.**
 
 The figures were re-run on the refactored engine (20 seeds, 3000 batches). Adam
 and L-BFGS-B came back bit-identical — the harness did not move — so every
