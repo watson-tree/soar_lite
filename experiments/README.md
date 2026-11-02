@@ -57,18 +57,22 @@ it is the most expensive panel per batch.
 ## The Adam learning-rate grid
 
 Adam pays a per-problem lr chosen by an offline sweep
-(`ADAM_LR` in `compare_baselines.py`), the grid argmin of the figure below.
+(`ADAM_LR` in `compare_baselines.py`); the figure below draws that sweep.
 Reproduce the sweep figure with:
 
 ```bash
 uv run --group exp python -m experiments.compare_baselines --lr-sweep --max-steps 3000
 ```
 
-The C0 diamond in that figure marks the lr the panels actually use (`ADAM_LR`),
-the grid argmin. On the rotated quadratic and the oscillator the curve is still
-falling at the right edge — `lr=2.0` — so there the diamond is the best
-*sampled* point, not an interior minimum; on rastrigin the floor is flat over
-`1e-4..1e-1`, so its argmin is a ~5% noise-level nudge.
+The C0 diamond marks the lr the panels actually use (`ADAM_LR`). It coincides
+with the sweep's lowest point on the rotated quadratic, the oscillator and
+rastrigin, but it is not a strict argmin everywhere: on the diagonal quadratic
+and Ackley every grid point from `1e-2` up sits on the same floor or plateau,
+so the pick is one point of that tie (`lr=1e-4` costs 52 orders of magnitude on
+the diagonal quadratic against it). On the rotated quadratic and the oscillator
+the curve is still falling at the right edge — `lr=2.0` — so there the diamond
+is the best *sampled* point, not an interior minimum; on rastrigin the floor is
+flat over `1e-3..2e-1` and the pick sits ~5% below it.
 
 ## Outputs
 

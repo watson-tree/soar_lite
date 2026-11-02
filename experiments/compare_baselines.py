@@ -34,11 +34,13 @@ shaded the [Q1, Q3] interquartile band, log y (mean +/- std would model a
 skewed spread as symmetric and dip below the axis).
 
 Adam carries a per-problem learning rate, grid-tuned per problem
-(reproduce the sweep with --lr-sweep): the best lr spans over two orders of
-magnitude across smooth problems and a wrong lr costs ~68 orders of magnitude
-on the diagonal quadratic. That tuning is budget the axis never shows -- every
-trial is more objective points served, and it is manual rather than adaptive.
-soar-lite has no learning rate to tune.
+(reproduce the sweep with --lr-sweep): the picks span over two orders of
+magnitude across the panels, and lr=1e-4 costs 52 orders of magnitude on the
+diagonal quadratic against its pick. On the diagonal quadratic and Ackley the
+whole grid from 1e-2 up is one floor or plateau, so those two picks are one
+point of a tie rather than a strict argmin. That tuning is budget the axis
+never shows -- every trial is more objective points served, and it is manual
+rather than adaptive. soar-lite has no learning rate to tune.
 
 Usage:
     python -m experiments.compare_baselines --quick     # 2-seed smoke check
@@ -123,14 +125,16 @@ def _blr(projection: type) -> Runner:
 
 CurveEntry: TypeAlias = dict[str, list[float] | list[list[float | None]]]
 
-# Per-problem Adam learning rate, the grid-tuned optimum (see --lr-sweep).
-# The optimal lr spans over two orders of magnitude across the smooth problems,
-# and a wrong lr costs ~68 orders of magnitude on the diagonal quadratic.
+# Per-problem Adam learning rate, the pick the panels use (see --lr-sweep).
+# The picks span over two orders of magnitude across the panels, and lr=1e-4
+# costs 52 orders of magnitude on the diagonal quadratic against its pick.
 # Tuning is itself budget the y axis never shows -- every trial is more
 # objective points served, and it is manual, not adaptive; soar-lite has no
 # learning rate at all. Two optima sit at the sweep grid's right edge (the
-# rotated quadratic and the oscillator keep improving to lr=2.0), and rastrigin
-# is flat over 1e-4..5e-1 so its argmin (0.5) is a ~5% noise-level nudge.
+# rotated quadratic and the oscillator keep improving to lr=2.0). On the
+# diagonal quadratic and Ackley every grid point from 1e-2 up is a floor or a
+# plateau, so those two picks are one point of a tie, not a strict argmin; on
+# rastrigin the floor is flat over 1e-3..2e-1 and 0.5 sits ~5% below it.
 ADAM_LR: dict[str, float] = {
     "oscillator_n20_F20": 2.0,
     "diag_quad_d100_cond10000": 1e-2,
@@ -252,10 +256,13 @@ def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
 
     Shows the optimal lr drifting across problems and a wrong lr costing many
     orders of magnitude. The C0 diamond marks the lr actually used in the
-    panels (``ADAM_LR``), the grid argmin of this sweep. On the rotated
+    panels (``ADAM_LR``). It agrees with the sweep's argmin on the rotated
+    quadratic, the oscillator and rastrigin; on the diagonal quadratic and
+    Ackley every grid point sits at the same floor or plateau, so the pick is
+    one point of that tie rather than a strict argmin. On the rotated
     quadratic and the oscillator the curve is still falling at the grid edge
     (lr=2.0 is the best *sampled* point, not an interior minimum); on rastrigin
-    the floor is flat over 1e-4..1e-1, so its argmin is a noise-level nudge.
+    the floor is flat over 1e-4..2e-1, so its argmin is a noise-level nudge.
     """
     lr_grid = [1e-4, 1e-3, 1e-2, 1e-1, 2e-1, 5e-1, 1.0, 2.0]
     probs = problems.build("all")
@@ -277,6 +284,10 @@ def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
             )
             for lr in lr_grid
         ]
+        print(
+            f"{prob.name:26s} pick={ADAM_LR.get(prob.name)}",
+            " ".join(f"{lr:g}:{f:.6g}" for lr, f in zip(lr_grid, fins, strict=True)),
+        )
         ax.plot(lr_grid, np.maximum(fins, 1e-16), marker="o", lw=1.5, color="C3")
         best_lr = ADAM_LR.get(prob.name)
         best_idx = lr_grid.index(best_lr) if best_lr in lr_grid else None
@@ -295,8 +306,9 @@ def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
         ax.set_title(prob.name, fontsize=9)
         ax.grid(alpha=0.25, which="both")
     fig.suptitle(
-        "Adam lr sensitivity - C0 diamond = panel pick (grid argmin); "
-        "rot & oscillator still falling at lr=2.0 (edge); rastrigin flat < 1e-1",
+        "Adam lr sensitivity - C0 diamond = the lr the panels use; on diag and "
+        "Ackley it is one point of a floor/plateau tie, not a strict argmin; "
+        "rot & oscillator still falling at lr=2.0 (edge); rastrigin flat < 2e-1",
     )
     fig.tight_layout()
     fig.savefig(out, dpi=150)

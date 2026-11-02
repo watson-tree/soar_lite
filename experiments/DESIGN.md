@@ -163,12 +163,16 @@ a redundant, exactly-overlapping curve. The multimodal panel is therefore
 contrast: momentum is read as a *drift* on these landscapes, not asserted to be
 an escape mechanism in general.
 
-Adam learning rate is **per-problem grid-tuned**: the optimal lr spans
-over two orders of magnitude (diag 1e-2 → rotated 2.0), and a wrong lr costs
-~68 orders of magnitude on diag. The grid and picks live in `ADAM_LR` /
-`--lr-sweep` in `compare_baselines.py`; soar-lite has no learning rate. Tuning
-is itself budget — every trial is more objective points, and it is manual, not
-adaptive.
+Adam learning rate is **per-problem grid-tuned**: the picks span over two
+orders of magnitude (diag and Ackley 1e-2 → rotated quadratic and oscillator
+2.0), and on diag `lr=1e-4` costs 52 orders of magnitude against the pick
+(`6.6e3` against `8.8e-49`). On diag and Ackley every grid point from 1e-2 up
+sits on the same floor or plateau, so those two picks are one point of that tie
+rather than a strict argmin — the figure's diamond marks the pick, not a
+minimum. The grid and picks live in `ADAM_LR` / `--lr-sweep` in
+`compare_baselines.py`, which prints the table it draws; soar-lite has no
+learning rate. Tuning is itself budget — every trial is more objective points,
+and it is manual, not adaptive.
 
 ### Step-length calibration (done: the knob is real, the win is not)
 
