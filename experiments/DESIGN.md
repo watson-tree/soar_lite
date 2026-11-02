@@ -6,6 +6,11 @@ groups (`headline`, `smooth`, `multimodal`, `blr`) plus two appendix panels
 document is the lossless handoff: read it before touching
 `compare_baselines.py` so no settled detail is re-derived from memory.
 
+This document states no measured numbers. Every figure and table an experiment
+produced lives in `RESULTS.md`, tagged with the lineup and budget that produced
+it, so an old reading cannot age in place here; what follows is the design, the
+budget contract and the conclusions those readings support.
+
 ## Goal
 
 Prove three propositions by **drawing their win/lose boundaries** (never only
@@ -174,14 +179,14 @@ minimum. The grid and picks live in `ADAM_LR` / `--lr-sweep` in
 learning rate. Tuning is itself budget — every trial is more objective points,
 and it is manual, not adaptive.
 
-### Step-length calibration (done: the knob is real, the win is not)
+### Step-length calibration (settled: the knob is real, the win is not)
 
-**Provenance: the numbers below were measured on the engine as it stood before
-the 0.1.0 refactor and have not been re-measured since.** They are the evidence
-behind the verdict, not current benchmarks — the canonical command reproduces
-none of them, and the sweeps behind them were ad hoc. The verdict they support
+**Provenance: the sweeps behind this verdict ran on the engine as it stood
+before the 0.1.0 refactor, and they are not reproducible any more — their
+`alpha0` sweep driver is gone.** They are recorded in `RESULTS.md` under
+`pre-2026-10`: evidence behind the verdict, not current benchmarks. The verdict
 is architectural (direction, not length), so a stale number does not retract
-it; treat any figure here as a floor on effort, not as a reproducible result.
+it.
 
 The verdict, measured on one landscape before any library default moved: **on
 the rotated quadratic the full step is already the right length, and no scalar
@@ -191,20 +196,11 @@ step rescaling helps.**
   suggested engine rounds) is the `alpha`-grid size, used by both phases: at
   `n_alpha >= 2` it samples `alpha0 · backtrack^j` along the step's own
   direction (`-g` in the warm-up, `-d ⊙ g` after) and the engine's per-step
-  argmin commits the winner. `n_alpha=1` is inert (default).
-- **Grid sweep** (300 batches, 3 seeds, rotated `cond=1e6` d=100): `n_alpha`
-  larger is strictly worse — `n_paths=1` at `backtrack=0.5`:
-  `1285 → 4220 → 7382 → 12535`. `backtrack` then also mattered at `n_alpha=1`
-  (`1285 → 1056` at 0.1) because it shrank the **warm-up Armijo** backtrack — a
-  different first step (path shift), not a grid effect. That sweep predates the
-  removal of the warm-up guard: with neither a guard nor a grid at `n_alpha=1`,
-  `backtrack` is now inert there and only sets the grid's spacing.
-- **`alpha0` damping** (the "small step along the wrong direction might pay"
-  hypothesis, `alpha0 ∈ {0.125, 0.25, 0.5, 1.0, 2.0}`, `n_paths ∈ {1,16}`,
-  rot+diag): damping is strictly worse on the rotated case
-  (`1285 → 1976 → 3211 → 5356`) and `alpha0 > 1` is catastrophic (`8e5`);
-  on diag, `1.0` is the one-shot win (`3.5e-65` in 20 points) and any
-  damping only slows it.
+  argmin commits the winner. `n_alpha=1` is inert (default): with neither a
+  guard nor a grid there, `backtrack` only sets the spacing of a grid that is
+  never sampled.
+- Both sweeps — the `n_alpha` grid and the `alpha0` damping — are in
+  `RESULTS.md`.
 
 Why, once seen: the residual error is in the **direction** `-d ⊙ g` (the
 diagonal secant ignores off-diagonal curvature), not in its length — no scalar
@@ -225,9 +221,10 @@ headline panel is *not* exempt from the direction error: whether soar-lite
 still wins there while dropping real coupling is what that panel measures, not
 something asserted up front.
 
-Scope, to avoid over-claiming: the sweeps above ran on **one landscape** (the
-rotated and diagonal quadratics). That landscape isolates the *off-diagonal,
-direction* error, to which any scalar step knob is structurally immune —
+Scope, to avoid over-claiming: the sweeps in `RESULTS.md` ran on **one
+landscape** (the rotated and diagonal quadratics). That landscape isolates the
+*off-diagonal, direction* error, to which any scalar step knob is structurally
+immune —
 measured for rotation coupling only; that the headline's interaction coupling
 is equally immune is an **analogy from this, not a separate measurement**. It
 is silent on a different failure — the **diagonal part of the error**, where the
@@ -315,66 +312,16 @@ slot. Watch whether the diagonal approximation's "approximately right, not
 exact" banded coupling actually lands the discriminator on soar-lite's side — a
 two-curve self-check decides before the full run.
 
-## Reading the 0.1.0 rerun
+The funnel slot has a known blind spot, and it is deliberate: no
+saddle/vanishing-gradient handling is built in. A Zhang-Li power iteration
+triggered on a small gradient norm was considered and rejected — multi-path
+sampling plus restart already cover that regime, so the extra complexity would
+buy nothing. Ackley is where that shows; `RESULTS.md` holds the numbers.
 
-**This section reads the previous figures — the restart on/off lineup — and is
-kept only for its Ackley and unit-rescaling readings. The momentum and BLR
-panels above supersede it: the lineup this document now specifies is what
-`compare_baselines.py` runs.**
+## Readings live elsewhere
 
-The figures were re-run on the refactored engine (20 seeds, 3000 batches). Adam
-and L-BFGS-B came back bit-identical — the harness did not move — so every
-shift below is engine-side.
-
-The restart arm is now `restart_stalled=True` with a `SampleGlobalModel`: a
-stalled path is re-drawn to a fresh start from the domain — no EI, no kernel
-density estimate, no shared pool. The width and the restart are two
-single-attribute steps (`n_paths=1` → `n_paths=16` at restart off is
-parallelism; restart off → on at fixed width is the restart). Adam and L-BFGS-B
-come back bit-identical again, the single-path arm moves by at most 4.5% (on
-Ackley not at all), and the restart arm moves the most. A reading of that
-restart arm on these figures is **not written here**: the EI-era diagnosis was
-deleted together with the rule, and a replacement must be re-derived from the
-regenerated plots, not asserted. The two readings below travel with the plots.
-
-### Ackley is a failure for every curve, not a loss for the preconditioner
-
-Ackley d=100 at 3000 batches: `n_paths=16` 19.47, Adam 19.57, `n_paths=1`
-19.78, against `f* = 0`. All three miss the funnel; 19.5-19.9 is what Ackley
-looks like outside it, and the 1% spread only says where each froze.
-`n_paths=1` is bit-flat from batch 781 on: the diagonal secant has nothing to
-act on where the gradient is a ~1e-8 radial term buried in cos-frequency noise.
-That run predates the removal of the warm-up guard - it froze because Armijo
-kept shrinking `alpha` to a no-op step, and the same dead signal without the
-guard commits steps that go nowhere; the freeze is not re-measured here. Either
-way it is the designed boundary of a first-order diagonal preconditioner, not a
-tuning failure — no saddle/vanishing-gradient handling is built in (a Zhang-Li power
-iteration triggered on a small gradient norm was considered and rejected:
-multi-path sampling plus restart already cover that regime, so the extra
-complexity would buy nothing). `n_paths=16`'s 0.1 edge over Adam is brute-force
-best-of-16 starts, which is why a working restart-and-sample story is expected
-to show up rather than suspicious.
-
-### The unit-rescaling residual was exactly the warm-up guard
-
-Diag quadratic d=100, `x' = 10x`, zero retune, measured while the warm-up still
-carried an Armijo backtrack: soar-lite lands at `3.3e-65` in 19 points (base)
-and `1.6e-65` in 12 (rescaled); Adam goes `2.0e-63` vs `7.2e-5`, 58 orders
-apart. The panel claims outcome-level overlap, and it holds — 2x in f at a floor
-of machine zero, against 58 orders for a single-lr method. The 1.6x in points was
-fully explained and not noise: the warm-up step is `alpha0 * (-g)`,
-unpreconditioned, so under `x' = s x` its physical length scales as `1/s^2`, and
-the base system needed `ceil(log2(s^2)) = 7` more Armijo halvings. Measured then:
-base was rejected 12 times, the rescaled system 5 — exactly 7 apart — and after
-the first acceptance both needed exactly 6 points to reach their floor. The
-visible horizontal shift was therefore a first-step artefact, not path-dependent
-optimization.
-
-That artefact is structural rather than tuned away, so it is gone by
-construction now that the warm-up is a single unruled step: there is nothing to
-halt, and both systems take exactly one first step. What remains — and is not
-addressed — is the same scale dependence in the warm-up *direction*: `-g` is a
-gradient-type quantity, so the first step's physical length still scales as
-`1/s^2`; it simply stops being measured against the objective. Removing that
-needs a scale-free warm-up, which the secant cannot provide before it has its
-first pair.
+Every measured number this design has produced — the current lineup's medians,
+the previous restart on/off lineup's Ackley and unit-rescaling readings, and the
+step-length sweeps whose code path no longer exists — lives in `RESULTS.md`,
+one entry per lineup, newest first. None of them are restated here, so none of
+them can age in place.

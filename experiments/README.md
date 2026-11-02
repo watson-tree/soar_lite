@@ -2,7 +2,7 @@
 
 The panels in `DESIGN.md` come from one canonical script,
 `experiments/compare_baselines.py` — no notebooks, no hidden code path. This
-file is the run-book.
+file is the run-book; `RESULTS.md` is the ledger of what past runs measured.
 
 ## Prerequisites
 
