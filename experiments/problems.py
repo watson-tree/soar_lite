@@ -253,12 +253,14 @@ def build(group: str) -> list[Problem]:
     """Return the problems of one design group.
 
     group: "smooth" (preconditioning), "multimodal" (escape), "headline"
-    (mixed units + non-convex response), or "all".
+    (mixed units + non-convex response), "blr" (restart model: rastrigin, the
+    one problem where a restart has a stage), or "all".
     """
     groups = {
         "headline": lambda: [oscillator_chain()],
         "smooth": lambda: [diag_quadratic(), rotated_quadratic()],
         "multimodal": lambda: [ackley(), rastrigin()],
+        "blr": lambda: [rastrigin()],
     }
     if group == "all":
         return [p for g in groups.values() for p in g()]

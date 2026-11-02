@@ -17,6 +17,7 @@ gets a start it did not pay for.
 """
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import jax
@@ -28,8 +29,10 @@ from scipy.optimize import minimize
 from experiments.problems import Problem
 from soar_lite import (
     AcquisitionFn,
+    Bounds,
     DiagonalPreconditioner,
     Domain,
+    GlobalModel,
     n_path_schedule,
 )
 
@@ -62,13 +65,15 @@ class Trace:
 # --- soar-lite: the n-path engine --------------------------------------------
 
 
-def run_soar_lite(
+def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
     problem: Problem,
     *,
     n_paths: int,
     max_steps: int,
     seed: int,
-    restart_stalled: bool = False,
+    restart_stalled: bool = True,
+    mu: float = 0.0,
+    model: Callable[[jnp.ndarray], GlobalModel] | None = None,
 ) -> Trace:
     """Drive the n-path engine, recording best-so-far after every batch.
 
@@ -79,10 +84,13 @@ def run_soar_lite(
     the run stops within one batch of it. ``max_iters`` is the horizon the
     engine requires - deliberately non-binding, so it never ends the run first.
 
-    ``restart_stalled`` is whether a path the engine marks stalled is re-drawn;
-    ``False`` keeps the flock frozen. The n_paths=1 arms leave it off so their
-    single chain is the pure serial descent, which is what the panels compare a
-    batched run against.
+    ``restart_stalled`` is whether a path the engine marks stalled is re-drawn.
+    Every arm leaves it at the engine default (on): the panels' steps are meant
+    to move one attribute each, and `False` would move the restart bit too.
+    ``mu`` is the direction-momentum coefficient handed to the built
+    preconditioner (0.9 in the momentum arm, the analogue of Adam's first
+    moment decay), and ``model`` builds the restart model from the run's key -
+    how a BLR arm swaps the uniform draw for a fitted posterior.
 
     The flock is drawn here, uniformly over the box, so the experiment's
     distribution is the caller's: the engine only ever places the points it is
@@ -123,8 +131,9 @@ def run_soar_lite(
         x0=x0,
         max_iters=max_steps,
         budget_check=lambda: n_batches < max_steps,
-        local_solver=DiagonalPreconditioner(),
+        local_solver=DiagonalPreconditioner(mu=mu),
         restart_stalled=restart_stalled,
+        global_model=None if model is None else model(key),
         key=key,
     )
     trace.fun = float(result.fun)
@@ -133,7 +142,7 @@ def run_soar_lite(
 
 def surrogate_minimize(
     objective: AcquisitionFn,
-    bounds: jnp.ndarray,
+    bounds: Bounds,
     key: jnp.ndarray,
     n_points: int,
 ) -> jnp.ndarray:
@@ -150,7 +159,8 @@ def surrogate_minimize(
         objective: the acquisition to descend, ``(m, d) -> ((m,), (m, d))``:
             values and their per-row gradients, the engine's `EvalFG` shape
             without the feasibility column.
-        bounds: the search box, a ``(d, 2)`` array.
+        bounds: the search box, the engine's `Bounds` (a ``(d, 2)`` array or
+            scipy-style pairs).
         key: the PRNG key the starts are split from.
         n_points: how many local minimizers to return, one per row.
 
@@ -158,9 +168,8 @@ def surrogate_minimize(
         A ``(n_points, d)`` array, one minimizer per row.
 
     """
-    d = bounds.shape[0]
-    lo, hi = bounds[:, 0], bounds[:, 1]
     domain = Domain(bounds)
+    d, lo, hi = domain.d, domain.lo, domain.hi
 
     def eval_g(x_batch: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         f, g = objective(x_batch)

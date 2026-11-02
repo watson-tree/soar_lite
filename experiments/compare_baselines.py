@@ -2,17 +2,25 @@
 
 Two panels per method family, following the design in `DESIGN.md`:
 
-* smooth + headline (preconditioning proposition): soar-lite n_paths=1
-  (restart off), n_paths=16 (restart off), n_paths=16 (restart on), Adam,
-  L-BFGS-B (ceiling reference);
-* multimodal (escape proposition): the same three soar-lite arms, Adam.
+* smooth + headline (preconditioning proposition): soar-lite n_paths=1,
+  n_paths=1 with direction momentum (mu=0.9), n_paths=16, Adam, L-BFGS-B
+  (ceiling reference);
+* multimodal (escape proposition): the same soar-lite arms, Adam;
+* blr (restart-model proposition): n_paths=16 whose starts come from the
+  uniform sample or from a BLR posterior under the identity /
+  inverse-stereographic projection.
 
-Both n_paths=16 arms are plotted because one curve would move width and rule
-at once: n_paths=1 -> n_paths=16 (both restart off) is the parallelism step,
-n_paths=16 restart off -> restart on the restart step. Colour encodes the
-restart bit (C0 off, C1 on),
-linestyle encodes width (solid one path, dashed sixteen), so each of the two
-steps is a single visual attribute.
+Every arm leaves `restart_stalled` at the engine default (on): a probe showed
+stalls fire only where the method converges into a basin (the diagonal
+quadratic, rastrigin), so the restart bit is not a step the panels take. The
+width step (n_paths 1 -> 16) and the momentum step (mu 0 -> 0.9) each move one
+attribute.
+
+The blr panel carries no external baseline on purpose: a BLR restart serves no
+objective points (its acquisition descent is not an oracle call), so on these
+axes it would look free. The panel reads the centre bias only - rastrigin is
+the one problem where chains stall before reaching the floor - and its three
+curves differ in nothing but where a restart lands.
 
 Every method gets the same number of **batches** (one batch = one eval of
 parallel points, ``--max-steps``) - the wall-clock axis of a batched
@@ -61,40 +69,52 @@ from experiments.methods import (
     run_adam,
     run_lbfgs,
     run_soar_lite,
+    surrogate_minimize,
 )
+from soar_lite import BLRGlobalModel, IdentityProjection, SphereProjection
 
 HERE = Path(__file__).parent
 Runner: TypeAlias = Callable[..., Trace]
 
 
-def _serial(prob: problems.Problem, **kw: int) -> Trace:
-    """soar-lite n_paths=1 with no restart: the pure serial descent arm.
+def _serial(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
+    """soar-lite n_paths=1: the serial descent the batched arms are compared to."""
+    return run_soar_lite(prob, n_paths=1, max_steps=max_steps, seed=seed)
 
-    The serial arm is pinned to `restart_stalled=False` instead of relying on a
-    one-sample pool never tying: a probe is a batched action, and this arm is
-    the one-batch-per-point reference the batched arms are compared against.
+
+def _parallel(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
+    """soar-lite n_paths=16: what width alone buys at the same horizon."""
+    return run_soar_lite(prob, n_paths=16, max_steps=max_steps, seed=seed)
+
+
+def _serial_momentum(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
+    """soar-lite n_paths=1 with direction momentum at mu=0.9 (Adam's beta_1)."""
+    return run_soar_lite(
+        prob, n_paths=1, mu=0.9, max_steps=max_steps, seed=seed,
+    )
+
+
+def _blr(projection: type) -> Runner:
+    """n_paths=16 whose restart points come from a BLR posterior.
+
+    `projection` is the `ProjectionFactory` (a `Domain`-taking constructor), so
+    the identity and inverse-stereographic arms differ in one constructor.
     """
-    return run_soar_lite(prob, n_paths=1, restart_stalled=False, **kw)
 
+    def run(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
+        return run_soar_lite(
+            prob,
+            n_paths=16,
+            max_steps=max_steps,
+            seed=seed,
+            model=lambda key: BLRGlobalModel(
+                projection_factory=projection,
+                minimize=surrogate_minimize,
+                key=key,
+            ),
+        )
 
-def _parallel_no_restart(prob: problems.Problem, **kw: int) -> Trace:
-    """soar-lite n_paths=16 with no restart: what width alone buys.
-
-    Pinned to `restart_stalled=False` so the step from `_serial` differs only in
-    n_paths. Without this arm the only n_paths=16 curve carried restart on, so
-    width and restart moved together.
-    """
-    return run_soar_lite(prob, n_paths=16, restart_stalled=False, **kw)
-
-
-def _parallel_restart(prob: problems.Problem, **kw: int) -> Trace:
-    """soar-lite n_paths=16 with restart on the first stall.
-
-    Passed explicitly rather than left to the engine default, so the panel
-    states whether it measured restart; paired with `_parallel_no_restart` it
-    isolates restart at fixed width.
-    """
-    return run_soar_lite(prob, n_paths=16, restart_stalled=True, **kw)
+    return run
 
 
 CurveEntry: TypeAlias = dict[str, list[float] | list[list[float | None]]]
@@ -123,11 +143,17 @@ def _adam_lr(prob: problems.Problem) -> float:
 
 INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
 
-# Curve labels name the rule: two arms share n_paths=16 and the step between
-# them is exactly the restart effect.
-LABEL_SERIAL = "soar-lite n_paths=1 (NoRestart)"
-LABEL_PARALLEL = "soar-lite n_paths=16 (NoRestart)"
-LABEL_PARALLEL_RESTART = "soar-lite n_paths=16 (StallRestart)"
+# Curve labels name the rule: the width step (n_paths 1 -> 16) and the momentum
+# step (mu 0 -> 0.9) each move one attribute, and restart is the engine default
+# in every arm.
+LABEL_SERIAL = "soar-lite n_paths=1"
+LABEL_PARALLEL = "soar-lite n_paths=16"
+LABEL_MOMENTUM = "soar-lite n_paths=1, mu=0.9"
+# The blr panel's arms: one method, three restart models, so nothing but where
+# a restart lands differs.
+LABEL_BLR_SAMPLE = "n_paths=16, Sample draws"
+LABEL_BLR_IDENTITY = "n_paths=16, BLR identity"
+LABEL_BLR_SPHERE = "n_paths=16, BLR sphere"
 
 # Method roster per problem family: (label, runner, style kwargs).
 SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
@@ -138,13 +164,13 @@ SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     ),
     (
         LABEL_PARALLEL,
-        _parallel_no_restart,
+        _parallel,
         {"color": "C0", "lw": 2.0, "ls": "--"},
     ),
     (
-        LABEL_PARALLEL_RESTART,
-        _parallel_restart,
-        {"color": "C1", "lw": 2.0, "ls": "--"},
+        LABEL_MOMENTUM,
+        _serial_momentum,
+        {"color": "C2", "lw": 2.0, "ls": "-"},
     ),
     (
         "Adam (grid lr)",
@@ -160,9 +186,9 @@ SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
 
 # NAAdam (Adam + sigma_t = sigma0/sqrt(t) noise) was measured and dropped: the
 # decaying noise never separates from plain Adam on ackley/rastrigin, so it is
-# a redundant curve. The honest escape panel is soar-lite n_paths=16 under
-# both rules vs n_paths=1 vs Adam, so the restart step sits beside the width
-# step instead of hiding inside it.
+# a redundant curve. The escape panel is soar-lite n_paths=16 vs n_paths=1 vs
+# Adam, with the momentum arm added to read whether the sideways push changes
+# where a stalled chain drifts (ackley never stalls, rastrigin does).
 MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (
         LABEL_SERIAL,
@@ -171,13 +197,13 @@ MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     ),
     (
         LABEL_PARALLEL,
-        _parallel_no_restart,
+        _parallel,
         {"color": "C0", "lw": 2.0, "ls": "--"},
     ),
     (
-        LABEL_PARALLEL_RESTART,
-        _parallel_restart,
-        {"color": "C1", "lw": 2.0, "ls": "--"},
+        LABEL_MOMENTUM,
+        _serial_momentum,
+        {"color": "C2", "lw": 2.0, "ls": "-"},
     ),
     (
         "Adam (grid lr)",
@@ -186,10 +212,34 @@ MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     ),
 ]
 
+# The centre-bias proposition, on the one problem where a restart has a stage:
+# rastrigin chains converge into local basins and stall, and Sample's draws
+# demonstrably never improve the best. No external baseline: a BLR restart
+# serves no objective points, so its cost is invisible on the panels' axes and
+# a shared plot would sell a free lunch.
+BLR_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
+    (
+        LABEL_BLR_SAMPLE,
+        _parallel,
+        {"color": "C0", "lw": 2.0},
+    ),
+    (
+        LABEL_BLR_IDENTITY,
+        _blr(IdentityProjection),
+        {"color": "C4", "lw": 2.0, "ls": "--"},
+    ),
+    (
+        LABEL_BLR_SPHERE,
+        _blr(SphereProjection),
+        {"color": "C5", "lw": 2.0, "ls": "-."},
+    ),
+]
+
 PANELS: dict[str, list[tuple[str, Runner, dict[str, object]]]] = {
     "headline": SMOOTH_METHODS,
     "smooth": SMOOTH_METHODS,
     "multimodal": MULTIMODAL_METHODS,
+    "blr": BLR_METHODS,
 }
 
 
