@@ -254,7 +254,8 @@ def build(group: str) -> list[Problem]:
 
     group: "smooth" (preconditioning), "multimodal" (momentum drift), "headline"
     (mixed units + non-convex response), "blr" (restart model: rastrigin, the
-    one problem where a restart has a stage), or "all".
+    one problem where a restart has a stage), or "all" (the union of the four,
+    one entry per problem even though the groups overlap).
     """
     groups = {
         "headline": lambda: [oscillator_chain()],
@@ -263,5 +264,12 @@ def build(group: str) -> list[Problem]:
         "blr": lambda: [rastrigin()],
     }
     if group == "all":
-        return [p for g in groups.values() for p in g()]
+        # The groups overlap on rastrigin (multimodal and blr both list it), so
+        # dedupe by name: a caller that draws one panel per entry would
+        # otherwise draw the same problem twice.
+        unique: dict[str, Problem] = {}
+        for g in groups.values():
+            for p in g():
+                unique.setdefault(p.name, p)
+        return list(unique.values())
     return groups[group]()
