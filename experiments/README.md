@@ -41,8 +41,7 @@ uv run --group exp python -m experiments.compare_baselines \
     --max-steps 3000
 ```
 
-CPU wall-clock ≈ 105 min (headline ≈ 27 min, smooth ≈ 38 min, multimodal ≈
-37 min, invariance ≈ 1.5 min; measured, CPU-only). `--max-steps` is **batches
+`--max-steps` is **batches
 per method**; the per-point chart re-reads the same runs on the "objective
 points served" axis, so both billing notions come from one execution.
 
