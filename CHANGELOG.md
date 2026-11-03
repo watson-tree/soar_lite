@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `experiments/DESIGN.md`: the restart-model panel now carries its external
+  evidence. Tripp and Fable (2026) run the same inverse-stereographic projection
+  against an unprojected linear head on rover (60D), lasso-DNA (180D) and SVM
+  (388D) at 3 seeds x 150 evaluations, all maximized, and the bent head wins all
+  three (-1.28/-1.35, -0.309/-0.333, -0.134/-0.233) - the direction this panel's
+  centre-bias reading predicts. Their bent RBF beats both, so the gain is the
+  geometry rather than the linear function class, and their optimum-to-corner
+  sweep inverts the ranking, so the projection is a prior that the optimum is
+  interior, not a free win. Those numbers are quoted, not measured here: the
+  three objectives are gradient-free black boxes (a spline path cost, an SVR
+  fit, a lasso path solve) and cannot ride this engine's `eval_f_g` seam.
 - `tests/test_nonfinite_matrix.py`: the non-finite event matrix as one table.
   `{finite, +inf, -inf, nan} × {feasible, infeasible, no mask}` becomes nine
   rows against `_Best`; `_argmin_finite` gets its own value combinations (a NaN

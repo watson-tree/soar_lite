@@ -150,6 +150,28 @@ act on, and the oscillator's non-convexity is resonance-type — not the funnel
 that stalls a chain. The BLR proposition lives on rastrigin, where Sample's
 re-draws provably never improve the best and a fitted restart is the question.
 
+**External evidence: the bent projection on real problems.** The restart-model
+question is not only ours. Tripp and Fable, "Why Does Spherical-Linear Bayesian
+Optimization Work?" (2026), an analysis of Doumont, Fan et al., "We Still Don't
+Understand High-Dimensional Bayesian Optimization" (2025), run the same
+projection against an unprojected linear head on three real zero-order problems
+at 3 seeds x 150 evaluations each, all maximized: rover (60D) spherical-linear
+-1.28 against standard-linear -1.35, lasso-DNA (180D) -0.309 against -0.333, SVM
+(388D) -0.134 against -0.233. The bent head wins all three, which is the
+direction this panel's centre-bias reading predicts. The bent *RBF* on the same
+pipeline beats both on all three, so the gain is the geometry and not the linear
+function class; and the same study slides the optimum to a box corner and the
+ranking inverts, so the projection is a prior that the optimum is interior, not
+a free win.
+
+Two limits keep that evidence external rather than a panel of ours. The three
+objectives are black boxes with no gradient — a `scipy` spline path cost over
+obstacles, a per-point `sklearn` SVR fit, a per-point `LassoBench` path solve —
+so they cannot ride this engine's `eval_f_g` seam, and re-measuring them here
+would mean a finite-difference gradient at 60-388 evaluations per step. And 150
+evaluations is a zero-order BO count, not this harness's batch axis. The numbers
+above are therefore quoted, not measured here.
+
 L-BFGS-B appears only on the P② panels. Its role there is the *ceiling
 reference* — how close soar-lite's diagonal secant gets to a full-memory
 second-order method on smooth, convex landscape. That role does not exist on
