@@ -1,10 +1,28 @@
-"""Run the soar-lite / baseline comparison and emit figures plus results.json.
+r"""Run the soar-lite / baseline comparison and write per-arm traces plus figures.
+
+Storage is one file per (problem, arm): ``experiments/results/<problem>/
+<arm-key>.json`` holds that arm's raw per-seed trace, not a resampled grid -
+the grid is a plotting decision that depends on which other arms are present.
+A panel is then a *roster over those files*, so re-measuring one arm rewrites
+exactly one file and every panel listing that arm picks the new numbers up.
+Two panels can share an arm without storing it twice: rastrigin's
+``n_paths=16`` arm is one file that both the multimodal and the blr panel
+draw, which is why their Sample medians agree to the last digit rather than to
+whichever copy ran last.
+
+The arm key spells out the arm's whole configuration
+(``soar-sample-np1-mu0.63-restart-on``), never a path through a default it
+could have inherited. So an engine default moving changes the key and
+therefore the file path: the old trace stays as a record of the old
+configuration, and no rerun can quietly overwrite a measurement that no longer
+describes what the code does. The arms that take no knobs read the
+preconditioner's defaults from the class for the same reason.
 
 The panels, following the design in `DESIGN.md`:
 
-* smooth + headline (preconditioning proposition): soar-lite n_paths=1,
-  n_paths=1 with direction momentum (mu=0.9), n_paths=16, Adam, L-BFGS-B
-  (ceiling reference);
+* smooth + headline (preconditioning proposition): soar-lite n_paths=1 (the
+  default momentum), n_paths=16, n_paths=1 with momentum off (mu=0), Adam,
+  L-BFGS-B (ceiling reference);
 * multimodal (momentum-drift proposition): the same soar-lite arms, Adam;
 * blr (restart-model proposition): n_paths=16 whose starts come from the
   uniform sample or from a BLR posterior under the identity /
@@ -13,8 +31,8 @@ The panels, following the design in `DESIGN.md`:
 Every arm leaves `restart_stalled` at the engine default (on): a probe showed
 stalls fire only where the method converges into a basin (the diagonal
 quadratic, rastrigin), so the restart bit is not a step the panels take. The
-width step (n_paths 1 -> 16) and the momentum step (mu 0 -> 0.9) each move one
-attribute.
+width step (n_paths 1 -> 16) and the momentum step (mu 0 -> default) each move
+one attribute.
 
 The blr panel carries no external baseline on purpose: a BLR restart serves no
 objective points (its acquisition descent is not an oracle call), so on these
@@ -46,24 +64,27 @@ Usage:
     python -m experiments.compare_baselines --quick     # 2-seed smoke check
     python -m experiments.compare_baselines             # the full run
     python -m experiments.compare_baselines --lr-sweep  # Adam lr sensitivity panel
+    python -m experiments.compare_baselines --groups smooth \\
+        --problems diag_quad_d100_cond10000 \\
+        --arms soar-sample-np1-mu0-restart-on           # re-measure one arm
 """
 
 import argparse
 import json
-import math
 import warnings
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, TypeAlias
 
 import jax.numpy as jnp
 import matplotlib as mpl
 
 mpl.use("Agg")
 
-from typing import TypeAlias
-
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 
 from experiments import problems
 from experiments.methods import (
@@ -73,57 +94,108 @@ from experiments.methods import (
     run_soar_lite,
     surrogate_minimize,
 )
-from soar_lite import BLRGlobalModel, IdentityProjection, SphereProjection
+from soar_lite import (
+    BLRGlobalModel,
+    DiagonalPreconditioner,
+    GlobalModel,
+    IdentityProjection,
+    SphereProjection,
+)
 
 HERE = Path(__file__).parent
+RESULTS = HERE / "results"
 Runner: TypeAlias = Callable[..., Trace]
 
 
-def _serial(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
-    """soar-lite n_paths=1: the serial descent the batched arms are compared to."""
-    return run_soar_lite(prob, n_paths=1, max_steps=max_steps, seed=seed)
+# --- arms: (identity, runner, presentation) ----------------------------------
 
 
-def _parallel(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
-    """soar-lite n_paths=16: what width alone buys at the same horizon."""
-    return run_soar_lite(prob, n_paths=16, max_steps=max_steps, seed=seed)
+@dataclass(frozen=True)
+class Arm:
+    """One curve: what to run, and how to draw it.
+
+    ``key`` is the arm's identity on disk, so it names every attribute the
+    runner pins - including the ones the runner could have left to a default.
+    ``label`` and ``style`` are presentation only: two panels may draw the same
+    key under different labels, and do.
+    """
+
+    key: str
+    label: str
+    runner: Runner
+    style: dict[str, Any]
 
 
-def _serial_momentum(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
-    """soar-lite n_paths=1 with direction momentum at mu=0.9 (Adam's beta_1)."""
-    return run_soar_lite(
-        prob,
-        n_paths=1,
-        mu=0.9,
-        max_steps=max_steps,
-        seed=seed,
+# The preconditioner's own momentum default. Arms that take no knobs read it
+# from the class instead of restating it, so a default move re-keys them (a new
+# file) rather than silently changing what an existing file means.
+DEFAULT_MU = DiagonalPreconditioner().mu
+
+LABEL_SERIAL = f"soar-lite n_paths=1, mu={DEFAULT_MU:g} (default)"
+LABEL_PARALLEL = f"soar-lite n_paths=16, mu={DEFAULT_MU:g}"
+LABEL_NO_MOMENTUM = "soar-lite n_paths=1, mu=0 (momentum off)"
+# The blr panel's arms: one method, three restart models, so nothing but where
+# a restart lands differs.
+LABEL_BLR_SAMPLE = "n_paths=16, Sample draws"
+LABEL_BLR_IDENTITY = "n_paths=16, BLR identity"
+LABEL_BLR_SPHERE = "n_paths=16, BLR sphere"
+
+STYLE_SERIAL: dict[str, Any] = {"color": "C0", "lw": 2.0}
+STYLE_PARALLEL: dict[str, Any] = {"color": "C0", "lw": 2.0, "ls": "--"}
+STYLE_NO_MOMENTUM: dict[str, Any] = {"color": "C6", "lw": 1.5, "ls": "-."}
+
+
+def _model_for(model: str) -> Callable[[jnp.ndarray], GlobalModel] | None:
+    """Return the restart-model factory a key's model part names.
+
+    ``sample`` is the engine's own uniform draw, so it answers None.
+    """
+    if model == "sample":
+        return None
+    projections = {
+        "blr-identity": IdentityProjection,
+        "blr-sphere": SphereProjection,
+    }
+    try:
+        projection = projections[model]
+    except KeyError:
+        msg = f"unknown restart model {model!r}"
+        raise SystemExit(msg) from None
+    return lambda key: BLRGlobalModel(
+        projection_factory=projection,
+        minimize=surrogate_minimize,
+        key=key,
     )
 
 
-def _blr(projection: type) -> Runner:
-    """n_paths=16 whose restart points come from a BLR posterior.
+def soar_arm(  # noqa: PLR0913 - one keyword per attribute the key must name
+    *,
+    n_paths: int,
+    mu: float,
+    label: str,
+    style: dict[str, Any],
+    model: str = "sample",
+    restart_stalled: bool = True,
+) -> Arm:
+    """Build one soar-lite arm, its key derived from exactly these attributes."""
+    key = (
+        f"soar-{model}-np{n_paths}-mu{mu:g}"
+        f"-restart-{'on' if restart_stalled else 'off'}"
+    )
 
-    `projection` is the `ProjectionFactory` (a `Domain`-taking constructor), so
-    the identity and inverse-stereographic arms differ in one constructor.
-    """
-
-    def run(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
+    def runner(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
         return run_soar_lite(
             prob,
-            n_paths=16,
+            n_paths=n_paths,
             max_steps=max_steps,
             seed=seed,
-            model=lambda key: BLRGlobalModel(
-                projection_factory=projection,
-                minimize=surrogate_minimize,
-                key=key,
-            ),
+            restart_stalled=restart_stalled,
+            mu=mu,
+            model=_model_for(model),
         )
 
-    return run
+    return Arm(key=key, label=label, runner=runner, style=style)
 
-
-CurveEntry: TypeAlias = dict[str, list[float] | list[list[float | None]]]
 
 # Per-problem Adam learning rate, the pick the panels use (see --lr-sweep).
 # The picks span over two orders of magnitude across the panels, and lr=1e-4
@@ -149,109 +221,346 @@ def _adam_lr(prob: problems.Problem) -> float:
     return ADAM_LR.get(prob.name, 1e-2)
 
 
-INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
+def adam_arm(prob: problems.Problem) -> Arm:
+    """Adam at this problem's grid-tuned lr; the lr is part of the identity."""
+    lr = _adam_lr(prob)
+    key = f"adam-lr{lr:g}"
 
-# Curve labels name the rule: the width step (n_paths 1 -> 16) and the momentum
-# step (mu 0 -> 0.9) each move one attribute, and restart is the engine default
-# in every arm.
-LABEL_SERIAL = "soar-lite n_paths=1"
-LABEL_PARALLEL = "soar-lite n_paths=16"
-LABEL_MOMENTUM = "soar-lite n_paths=1, mu=0.9"
-# The blr panel's arms: one method, three restart models, so nothing but where
-# a restart lands differs.
-LABEL_BLR_SAMPLE = "n_paths=16, Sample draws"
-LABEL_BLR_IDENTITY = "n_paths=16, BLR identity"
-LABEL_BLR_SPHERE = "n_paths=16, BLR sphere"
+    def runner(p: problems.Problem, *, max_steps: int, seed: int) -> Trace:
+        return run_adam(p, lr=lr, max_steps=max_steps, seed=seed)
 
-# Method roster per problem family: (label, runner, style kwargs).
-SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
-    (
-        LABEL_SERIAL,
-        _serial,
-        {"color": "C0", "lw": 2.0},
-    ),
-    (
-        LABEL_PARALLEL,
-        _parallel,
-        {"color": "C0", "lw": 2.0, "ls": "--"},
-    ),
-    (
-        LABEL_MOMENTUM,
-        _serial_momentum,
-        {"color": "C2", "lw": 2.0, "ls": "-"},
-    ),
-    (
-        "Adam (grid lr)",
-        lambda prob, **kw: run_adam(prob, lr=_adam_lr(prob), **kw),
-        {"color": "C3", "lw": 1.5},
-    ),
-    (
-        "L-BFGS-B",
-        run_lbfgs,
-        {"color": "C7", "lw": 1.2, "ls": ":"},
-    ),
-]
+    return Arm(
+        key=key,
+        label="Adam (grid lr)",
+        runner=runner,
+        style={"color": "C3", "lw": 1.5},
+    )
 
-# NAAdam (Adam + sigma_t = sigma0/sqrt(t) noise) was measured and dropped: the
-# decaying noise never separates from plain Adam on ackley/rastrigin, so it is
-# a redundant curve. The multimodal panel is soar-lite n_paths=16 vs n_paths=1
-# vs Adam, with the momentum arm added to read whether the momentum push changes
-# where a stalled chain drifts (ackley never stalls, rastrigin does).
-MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
-    (
-        LABEL_SERIAL,
-        _serial,
-        {"color": "C0", "lw": 2.0},
-    ),
-    (
-        LABEL_PARALLEL,
-        _parallel,
-        {"color": "C0", "lw": 2.0, "ls": "--"},
-    ),
-    (
-        LABEL_MOMENTUM,
-        _serial_momentum,
-        {"color": "C2", "lw": 2.0, "ls": "-"},
-    ),
-    (
-        "Adam (grid lr)",
-        lambda prob, **kw: run_adam(prob, lr=_adam_lr(prob), **kw),
-        {"color": "C3", "lw": 1.5},
-    ),
-]
 
-# The centre-bias proposition, on the one problem where a restart has a stage:
-# rastrigin chains converge into local basins and stall, and Sample's draws
-# demonstrably never improve the best. No external baseline: a BLR restart
-# serves no objective points, so its cost is invisible on the panels' axes and
-# a shared plot would sell a free lunch.
-BLR_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
-    (
-        LABEL_BLR_SAMPLE,
-        _parallel,
-        {"color": "C0", "lw": 2.0},
-    ),
-    (
-        LABEL_BLR_IDENTITY,
-        _blr(IdentityProjection),
-        {"color": "C4", "lw": 2.0, "ls": "--"},
-    ),
-    (
-        LABEL_BLR_SPHERE,
-        _blr(SphereProjection),
-        {"color": "C5", "lw": 2.0, "ls": "-."},
-    ),
-]
+LBFGS_ARM = Arm(
+    key="lbfgs",
+    label="L-BFGS-B",
+    runner=run_lbfgs,
+    style={"color": "C7", "lw": 1.2, "ls": ":"},
+)
 
-PANELS: dict[str, list[tuple[str, Runner, dict[str, object]]]] = {
-    "headline": SMOOTH_METHODS,
-    "smooth": SMOOTH_METHODS,
-    "multimodal": MULTIMODAL_METHODS,
-    "blr": BLR_METHODS,
+
+# --- panels: rosters over arms ----------------------------------------------
+
+
+def _soar_ladder() -> list[Arm]:
+    """Build the soar-lite ladder both proposition panels read: width, momentum.
+
+    Three arms, each one attribute from its neighbour: `n_paths` 1 -> 16 at the
+    default `mu`, then `mu` default -> 0 at `n_paths=1`. The momentum-off arm is
+    what shows the diagonal sweet spot landing in a single step, which the
+    default's `mu` gives up near a minimiser - a cost the panel should show, not
+    state.
+    """
+    return [
+        soar_arm(n_paths=1, mu=DEFAULT_MU, label=LABEL_SERIAL, style=STYLE_SERIAL),
+        soar_arm(
+            n_paths=16,
+            mu=DEFAULT_MU,
+            label=LABEL_PARALLEL,
+            style=STYLE_PARALLEL,
+        ),
+        soar_arm(
+            n_paths=1,
+            mu=0.0,
+            label=LABEL_NO_MOMENTUM,
+            style=STYLE_NO_MOMENTUM,
+        ),
+    ]
+
+
+def _preconditioning_arms(prob: problems.Problem) -> list[Arm]:
+    """Build the P② roster: the soar-lite ladder, Adam, the L-BFGS-B ceiling."""
+    return [*_soar_ladder(), adam_arm(prob), LBFGS_ARM]
+
+
+def _drift_arms(prob: problems.Problem) -> list[Arm]:
+    """Build the P① roster: the same ladder, to read where a stalled chain rests."""
+    return [*_soar_ladder(), adam_arm(prob)]
+
+
+def _blr_arms(prob: problems.Problem) -> list[Arm]:
+    """Build the restart-model roster: every arm n_paths=16, only the model differs.
+
+    The Sample arm is the same key as the parallel arm, so the two panels share
+    one trace file - the consistency check is structural, not a coincidence.
+    """
+    del prob  # same roster on every problem; only rastrigin lists the panel
+    return [
+        soar_arm(
+            n_paths=16,
+            mu=DEFAULT_MU,
+            label=LABEL_BLR_SAMPLE,
+            style=STYLE_PARALLEL,
+        ),
+        soar_arm(
+            model="blr-identity",
+            n_paths=16,
+            mu=DEFAULT_MU,
+            label=LABEL_BLR_IDENTITY,
+            style={"color": "C4", "lw": 2.0, "ls": "--"},
+        ),
+        soar_arm(
+            model="blr-sphere",
+            n_paths=16,
+            mu=DEFAULT_MU,
+            label=LABEL_BLR_SPHERE,
+            style={"color": "C5", "lw": 2.0, "ls": "-."},
+        ),
+    ]
+
+
+PANELS: dict[str, Callable[[problems.Problem], list[Arm]]] = {
+    "headline": _preconditioning_arms,
+    "smooth": _preconditioning_arms,
+    "multimodal": _drift_arms,
+    "blr": _blr_arms,
 }
 
+INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
 
-def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
+
+# --- storage: one file per (problem, arm) -----------------------------------
+
+
+@dataclass(frozen=True)
+class Loaded:
+    """One arm's traces as read back from disk, with the budget they ran at."""
+
+    traces: list[Trace]
+    seeds: int
+    max_steps: int
+
+
+def trace_path(problem_name: str, arm_key: str) -> Path:
+    """Where one arm's trace lives: per problem, one file per arm."""
+    return RESULTS / problem_name / f"{arm_key}.json"
+
+
+def save_arm(
+    prob: problems.Problem,
+    arm: Arm,
+    traces: list[Trace],
+    *,
+    n_seeds: int,
+    max_steps: int,
+) -> Path:
+    """Write one arm's raw per-seed traces (no resampling: that is plotting's)."""
+    path = trace_path(prob.name, arm.key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "meta": {
+            "problem": prob.name,
+            "arm": arm.key,
+            "label": arm.label,
+            "description": prob.description,
+            "d": prob.d,
+            "f_star": prob.f_star,
+            "seeds": n_seeds,
+            "max_steps": max_steps,
+        },
+        "seeds": [
+            {
+                "points": t.points,
+                "batches": t.batches,
+                "best": t.best,
+                "fun": t.fun,
+            }
+            for t in traces
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=1))
+    return path
+
+
+def load_arm(problem_name: str, arm_key: str) -> Loaded | None:
+    """Read an arm's traces, or None when nothing has measured it at this key."""
+    try:
+        payload = json.loads(trace_path(problem_name, arm_key).read_text())
+    except (OSError, ValueError):
+        return None
+    meta = payload["meta"]
+    return Loaded(
+        traces=[
+            Trace(
+                points=s["points"],
+                batches=s["batches"],
+                best=s["best"],
+                fun=s["fun"],
+            )
+            for s in payload["seeds"]
+        ],
+        seeds=int(meta["seeds"]),
+        max_steps=int(meta["max_steps"]),
+    )
+
+
+def run_panel(
+    panel: str,
+    n_seeds: int,
+    max_steps: int,
+    *,
+    problems_filter: frozenset[str] | None = None,
+    arms_filter: frozenset[str] | None = None,
+) -> None:
+    """Run the selected arms of ``panel``, one trace file each.
+
+    The filters are how one arm is re-measured without its panel: they select
+    on the arm key (and on the problem), so the run touches only the files it
+    names and every other trace stays as it was.
+    """
+    for prob in problems.build(panel):
+        if problems_filter and prob.name not in problems_filter:
+            continue
+        for arm in PANELS[panel](prob):
+            if arms_filter and arm.key not in arms_filter:
+                continue
+            traces = [
+                arm.runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)
+            ]
+            path = save_arm(prob, arm, traces, n_seeds=n_seeds, max_steps=max_steps)
+            fins = [t.fun for t in traces]
+            print(
+                f"  {prob.name:26s} {arm.key:44s} "
+                f"final mean best = {np.mean(fins):.4e}  -> {path.relative_to(HERE)}",
+            )
+
+
+# --- plotting ---------------------------------------------------------------
+
+
+def plot_panel(panel: str, out_dir: Path) -> None:
+    """Draw a panel from whatever arm files exist; a missing arm is skipped."""
+    probs = problems.build(panel)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for axis in ("points", "batches"):
+        fig, axes = plt.subplots(
+            1,
+            len(probs),
+            figsize=(6.4 * len(probs), 4.6),
+            squeeze=False,
+        )
+        for ax, prob in zip(axes[0], probs, strict=True):
+            drawn = _draw_problem(ax, panel, prob, axis)
+            title = prob.description if drawn else "no trace files yet"
+            ax.set_title(f"{prob.name}\n{title}", fontsize=9)
+        fig.suptitle(
+            f"soar-lite vs first-order baselines - {panel} panel ({axis} axis)",
+        )
+        fig.tight_layout()
+        out = out_dir / f"{axis}.png"
+        fig.savefig(out, dpi=150)
+        plt.close(fig)
+        print(f"wrote {out.relative_to(HERE)}")
+
+
+def _draw_problem(
+    ax: Axes,
+    panel: str,
+    prob: problems.Problem,
+    axis: str,
+) -> bool:
+    """Draw one subplot; False when the arm files it needs are all absent."""
+    entries = [(arm, load_arm(prob.name, arm.key)) for arm in PANELS[panel](prob)]
+    present = [(arm, loaded) for arm, loaded in entries if loaded is not None]
+    missing = [arm.key for arm, loaded in entries if loaded is None]
+    if missing:
+        print(f"  no trace: {prob.name}: {', '.join(missing)}")
+    if not present:
+        return False
+    # One budget for the point-axis truncation: the largest any present arm ran
+    # at, so an arm measured at a smaller budget is simply shown to its own end.
+    budget = max(loaded.max_steps for _, loaded in present)
+    shown = {
+        arm.key: [_up_to(t, budget) if axis == "points" else t for t in loaded.traces]
+        for arm, loaded in present
+    }
+    col = 0 if axis == "points" else 1
+    xmax = max(
+        float(t.as_arrays()[col].max())
+        for traces in shown.values()
+        for t in traces
+        if len(t.points) > 0
+    )
+    # Log-spaced: an n-path run finishes its batches far earlier than a single
+    # chain finishes its points, and a linear grid would squash the batched
+    # curve into the left edge of the axis.
+    grid = np.logspace(0.0, np.log10(xmax), 120)
+    grid[-1] = xmax  # logspace rounds the last sample past its own end
+    for arm, _ in present:
+        med, q1, q3 = _summary(_resample(shown[arm.key], grid, axis))
+        ax.plot(grid, np.maximum(med, 1e-16), label=arm.label, **arm.style)
+        ax.fill_between(
+            grid,
+            np.maximum(q1, 1e-16),
+            np.maximum(q3, 1e-16),
+            color=arm.style["color"],
+            alpha=0.15,
+            lw=0,
+        )
+    ax.set_yscale("log")
+    ax.set_xscale("log")
+    ax.set_xlabel("objective points served" if axis == "points" else "batches served")
+    ax.set_ylabel("best-so-far (median [Q1, Q3] over seeds)")
+    ax.legend(fontsize=7)
+    ax.grid(alpha=0.25)
+    return True
+
+
+def _resample(traces: list[Trace], grid: np.ndarray, axis: str) -> np.ndarray:
+    """Resample every seed's best-so-far onto ``grid``.
+
+    Returns a ``(n_seeds, len(grid))`` array with NaN where a seed has no data
+    (before its first batch and after it stops). Callers aggregate over the
+    seed axis so each aggregation (median, quartiles) lives in one place.
+
+    ``grid`` is the shared x-point set: each seed's step curve lives on its own
+    x coordinates (different stop points, and n_paths shifts the batch axis), so
+    aligning them onto one grid is what makes a per-column aggregate over seeds
+    possible. ``ax.set_xscale("log")`` only changes how ticks are drawn — it
+    cannot align ragged per-seed x coordinates.
+    """
+    stacked = []
+    for trace in traces:
+        points, batches, best = trace.as_arrays()
+        x = points if axis == "points" else batches
+        idx = np.clip(np.searchsorted(x, grid, side="right") - 1, 0, len(best) - 1)
+        # The step curve exists only between a run's first and last cost unit.
+        curve = np.where((grid < x[0]) | (grid > x[-1]), np.nan, best[idx])
+        stacked.append(curve)
+    return np.vstack(stacked)
+
+
+def _summary(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Median and [Q1, Q3] over seeds, NaN-ignoring. Skew-safe on a log axis."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        med = np.nanmedian(arr, axis=0)
+        q1 = np.nanpercentile(arr, 25, axis=0)
+        q3 = np.nanpercentile(arr, 75, axis=0)
+    return med, q1, q3
+
+
+def _up_to(trace: Trace, max_points: int) -> Trace:
+    """Return the first ``max_points`` objective points of a run, nothing else."""
+    stop = sum(1 for p in trace.points if p <= max_points)
+    return Trace(
+        points=trace.points[:stop],
+        batches=trace.batches[:stop],
+        best=trace.best[:stop],
+        fun=trace.fun,
+    )
+
+
+# --- appendix panels --------------------------------------------------------
+
+
+def run_lr_sweep(n_seeds: int, max_steps: int) -> None:
     """Plot best-so-far vs Adam lr, one curve per problem (appendix panel).
 
     Shows the optimal lr drifting across problems and a wrong lr costing many
@@ -311,31 +620,14 @@ def run_lr_sweep(out: Path, n_seeds: int, max_steps: int) -> None:
         "rot & oscillator still falling at lr=2.0 (edge); rastrigin flat < 2e-1",
     )
     fig.tight_layout()
+    out = RESULTS / "lr_sweep" / "lr_sweep.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150)
     plt.close(fig)
-    print(f"wrote {out}")
+    print(f"wrote {out.relative_to(HERE)}")
 
 
-def plot_group_from_json(group: str, out_dir: Path) -> None:
-    """Redraw one group's figures straight from its results JSON (no re-run)."""
-    path = out_dir / f"results_{group}.json"
-    try:
-        payload = json.loads(path.read_text())
-    except (OSError, ValueError) as e:
-        msg = f"cannot read {path}: {e}"
-        raise SystemExit(msg) from e
-    labels = payload["meta"].get("labels", {})
-    for axis in ("points", "batches"):
-        plot(
-            payload["curves"],
-            labels,
-            group,
-            axis,
-            out_dir / f"results_{group}_{axis}.png",
-        )
-
-
-def run_invariance(out_dir: Path, n_seeds: int, max_steps: int) -> None:
+def run_invariance(n_seeds: int, max_steps: int) -> None:
     """Draw panel 5: one physics in two unit systems, zero retune.
 
     soar-lite's per-coordinate secant should overlap (outcome-level), Adam's
@@ -344,13 +636,19 @@ def run_invariance(out_dir: Path, n_seeds: int, max_steps: int) -> None:
     base = problems.diag_quadratic()
     scaled = _rescale(base, INVARIANCE_SCALE)
     lr = _adam_lr(base)
+    serial = soar_arm(
+        n_paths=1,
+        mu=DEFAULT_MU,
+        label=LABEL_SERIAL,
+        style=STYLE_SERIAL,
+    )
     methods = [
+        (serial.label, "C0", serial.runner),
         (
-            LABEL_SERIAL,
-            "C0",
-            _serial,
+            "Adam (same lr)",
+            "C3",
+            lambda p, **kw: run_adam(p, lr=lr, **kw),
         ),
-        ("Adam (same lr)", "C3", lambda p, **kw: run_adam(p, lr=lr, **kw)),
     ]
     fig, ax = plt.subplots(figsize=(6.4, 4.6))
     for label, color, runner in methods:
@@ -392,158 +690,11 @@ def run_invariance(out_dir: Path, n_seeds: int, max_steps: int) -> None:
     ax.grid(alpha=0.25, which="both")
     fig.suptitle("panel 5 - unit-rescaling consistency")
     fig.tight_layout()
-    fig.savefig(out_dir / "results_invariance.png", dpi=150)
-    plt.close(fig)
-    print(f"wrote {out_dir / 'results_invariance.png'}")
-
-
-def run_panel(
-    group: str,
-    n_seeds: int,
-    max_steps: int,
-) -> tuple[dict[str, dict[str, CurveEntry]], dict[str, str]]:
-    """Run every problem in ``group`` across every method and seed."""
-    methods = PANELS[group]
-    curves: dict[str, dict[str, CurveEntry]] = {}
-    labels: dict[str, str] = {}
-    for prob in problems.build(group):
-        labels[prob.name] = prob.description
-        curves[prob.name] = {}
-        traces = {
-            label: [runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)]
-            for label, runner, _ in methods
-        }
-        for label, _, _ in methods:
-            fins = [t.fun for t in traces[label]]
-            tail = f"final mean best = {np.mean(fins):.4e}"
-            print(f"  {prob.name:26s} {label:32s} {tail}")
-        for axis in ("points", "batches"):
-            col = 0 if axis == "points" else 1
-            # Equal batches is the batched budget, equal points the serial one,
-            # and they are the same runs seen twice. Truncating the point axis
-            # at max_steps is what a chain's own run costs, so an n-path run
-            # shows exactly the batches it could afford there.
-            shown = {
-                label: [
-                    _up_to(t, max_steps) if axis == "points" else t
-                    for t in traces[label]
-                ]
-                for label, _, _ in methods
-            }
-            xmax = max(
-                float(t.as_arrays()[col].max())
-                for ts in shown.values()
-                for t in ts
-                if len(t.points) > 0
-            )
-            # Log-spaced: an n-path run finishes its batches far earlier
-            # than a single chain finishes its points, and a linear grid
-            # would squash the batched curve into the left edge of the axis.
-            grid = np.logspace(0.0, np.log10(xmax), 120)
-            grid[-1] = xmax  # logspace rounds the last sample past its own end
-            for label, _, _ in methods:
-                arr = _resample(shown[label], grid, axis)
-                entry = curves[prob.name].setdefault(label, {})
-                entry[f"{axis}_grid"] = grid.tolist()
-                entry[f"{axis}_curves"] = _json_curves(arr)
-    return curves, labels
-
-
-def plot(
-    curves: dict[str, dict[str, CurveEntry]],
-    labels: dict[str, str],
-    group: str,
-    axis: str,
-    out: Path,
-) -> None:
-    """Draw one figure: a subplot per problem, best-so-far vs the chosen axis."""
-    methods = PANELS[group]
-    names = list(curves)
-    fig, axes = plt.subplots(
-        1,
-        len(names),
-        figsize=(6.4 * len(names), 4.6),
-        squeeze=False,
-    )
-    for ax, name in zip(axes[0], names, strict=True):
-        for label, _, style in methods:
-            data = curves[name][label]
-            grid = np.asarray(data[f"{axis}_grid"], dtype=float)
-            arr = np.asarray(data[f"{axis}_curves"], dtype=float)  # None -> NaN
-            med, q1, q3 = _summary(arr)
-            ax.plot(grid, np.maximum(med, 1e-16), label=label, **style)
-            ax.fill_between(
-                grid,
-                np.maximum(q1, 1e-16),
-                np.maximum(q3, 1e-16),
-                color=style["color"],
-                alpha=0.15,
-                lw=0,
-            )
-        ax.set_yscale("log")
-        ax.set_xscale("log")
-        ax.set_xlabel(
-            "objective points served" if axis == "points" else "batches served",
-        )
-        ax.set_ylabel("best-so-far (median [Q1, Q3] over seeds)")
-        ax.set_title(f"{name}\n{labels[name]}", fontsize=9)
-        ax.legend(fontsize=7)
-        ax.grid(alpha=0.25)
-    fig.suptitle(f"soar-lite vs first-order baselines - {group} panel ({axis} axis)")
-    fig.tight_layout()
+    out = RESULTS / "invariance" / "invariance.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150)
     plt.close(fig)
-    print(f"wrote {out}")
-
-
-def _resample(traces: list[Trace], grid: np.ndarray, axis: str) -> np.ndarray:
-    """Resample every seed's best-so-far onto ``grid``.
-
-    Returns a ``(n_seeds, len(grid))`` array with NaN where a seed has no data
-    (before its first batch and after it stops). Callers aggregate over the
-    seed axis so each aggregation (median, quartiles) lives in one place.
-
-    ``grid`` is the shared x-point set: each seed's step curve lives on its own
-    x coordinates (different stop points, and n_paths shifts the batch axis), so
-    aligning them onto one grid is what makes a per-column aggregate over seeds
-    possible. ``ax.set_xscale("log")`` only changes how ticks are drawn — it
-    cannot align ragged per-seed x coordinates.
-    """
-    stacked = []
-    for trace in traces:
-        points, batches, best = trace.as_arrays()
-        x = points if axis == "points" else batches
-        idx = np.clip(np.searchsorted(x, grid, side="right") - 1, 0, len(best) - 1)
-        # The step curve exists only between a run's first and last cost unit.
-        curve = np.where((grid < x[0]) | (grid > x[-1]), np.nan, best[idx])
-        stacked.append(curve)
-    return np.vstack(stacked)
-
-
-def _summary(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Median and [Q1, Q3] over seeds, NaN-ignoring. Skew-safe on a log axis."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        med = np.nanmedian(arr, axis=0)
-        q1 = np.nanpercentile(arr, 25, axis=0)
-        q3 = np.nanpercentile(arr, 75, axis=0)
-    return med, q1, q3
-
-
-def _json_curves(arr: np.ndarray) -> list[list[float | None]]:
-    """NaN -> None for a JSON-safe per-seed matrix (None reloads as NaN)."""
-    return [[None if math.isnan(v) else float(v) for v in row] for row in arr.tolist()]
-
-
-def _up_to(trace: Trace, max_points: int) -> Trace:
-    """Return the first ``max_points`` objective points of a run, nothing else."""
-    stop = sum(1 for p in trace.points if p <= max_points)
-    return Trace(
-        points=trace.points[:stop],
-        batches=trace.batches[:stop],
-        best=trace.best[:stop],
-        fun=trace.fun,
-    )
+    print(f"wrote {out.relative_to(HERE)}")
 
 
 def _rescale(prob: problems.Problem, scale: float) -> problems.Problem:
@@ -571,8 +722,14 @@ def _rescale(prob: problems.Problem, scale: float) -> problems.Problem:
     )
 
 
+def _comma_set(text: str) -> frozenset[str] | None:
+    """Parse a comma list into a filter set, or None when it selects everything."""
+    items = frozenset(item.strip() for item in text.split(",") if item.strip())
+    return items or None
+
+
 def main() -> None:
-    """Parse args, run the panels, write figures and the JSON dump."""
+    """Parse args, run the selected arms, write a trace file each, then draw."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--quick", action="store_true", help="2-seed smoke check")
     parser.add_argument("--seeds", type=int, default=20)
@@ -584,6 +741,16 @@ def main() -> None:
     )
     parser.add_argument("--groups", default="headline,smooth,multimodal,invariance")
     parser.add_argument(
+        "--problems",
+        default="",
+        help="comma list of problem names: re-measure only these",
+    )
+    parser.add_argument(
+        "--arms",
+        default="",
+        help="comma list of arm keys: re-measure only these",
+    )
+    parser.add_argument(
         "--lr-sweep",
         action="store_true",
         help="emit the Adam lr sensitivity figure",
@@ -591,59 +758,41 @@ def main() -> None:
     parser.add_argument(
         "--plot-only",
         action="store_true",
-        help="rebuild figures from results_*.json (no re-run)",
+        help="rebuild figures from the trace files (no re-run)",
     )
     args = parser.parse_args()
 
     if args.lr_sweep:
-        run_lr_sweep(HERE / "results_lr_sweep.png", n_seeds=2, max_steps=args.max_steps)
+        run_lr_sweep(n_seeds=2, max_steps=args.max_steps)
         return
 
     if args.plot_only:
         for group in args.groups.split(","):
-            if group == "invariance":
-                print(
-                    "invariance panel writes no JSON; rerun --groups invariance (fast)",
-                )
+            if group in {"invariance", "lr_sweep"}:
+                print(f"{group} writes no trace files; rerun --groups {group} (fast)")
                 continue
-            plot_group_from_json(group, HERE)
+            plot_panel(group, RESULTS / group)
         return
 
     groups = ["smooth"] if args.quick else args.groups.split(",")
     n_seeds = 2 if args.quick else args.seeds
     max_steps = 300 if args.quick else args.max_steps
+    problems_filter = _comma_set(args.problems)
+    arms_filter = _comma_set(args.arms)
 
     for group in groups:
         if group == "invariance":
-            run_invariance(HERE, n_seeds, max_steps)
+            run_invariance(n_seeds, max_steps)
             continue
         print(f"[{group}] seeds={n_seeds} max_steps={max_steps}")
-        curves, labels = run_panel(group, n_seeds, max_steps)
-        star = {p.name: p.f_star for p in problems.build(group)}
-        for axis in ("points", "batches"):
-            plot(
-                curves,
-                labels,
-                group,
-                axis,
-                out=HERE / f"results_{group}_{axis}.png",
-            )
-        with (HERE / f"results_{group}.json").open("w") as fh:
-            json.dump(
-                {
-                    "meta": {
-                        "group": group,
-                        "seeds": n_seeds,
-                        "max_steps": max_steps,
-                        "f_star": star,
-                        "labels": labels,
-                    },
-                    "curves": curves,
-                },
-                fh,
-                indent=1,
-            )
-        print(f"wrote {HERE / f'results_{group}.json'}")
+        run_panel(
+            group,
+            n_seeds,
+            max_steps,
+            problems_filter=problems_filter,
+            arms_filter=arms_filter,
+        )
+        plot_panel(group, RESULTS / group)
 
 
 if __name__ == "__main__":

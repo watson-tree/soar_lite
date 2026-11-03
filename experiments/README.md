@@ -76,19 +76,42 @@ flat over `1e-3..2e-1` and the pick sits ~5% below it.
 
 ## Outputs
 
-All in `experiments/` (gitignored — regenerated, not source):
+All in `experiments/results/` (gitignored — regenerated, not source). The unit
+is one **(problem, arm)** pair, so a rerun touches one file:
 
-- `results_{group}_batches.png` — budget axis: batches served.
-- `results_{group}_points.png` — budget axis: objective points served (the
+- `results/<problem>/<arm-key>.json` — that arm's raw per-seed trace on that
+  problem: points, batches, best-so-far per step, final value, and a `meta`
+  block naming the problem, the arm key, the seed count and the budget. Raw, not
+  resampled: the grid is a plotting decision that depends on which other arms
+  are present.
+- `results/<group>/batches.png` — budget axis: batches served.
+- `results/<group>/points.png` — budget axis: objective points served (the
   serial contest, pinned in ADR-0004).
-- `results_invariance.png` — panel 5, one physics in two unit systems, zero re-tune.
-- `results_lr_sweep.png` — the Adam grid sweep.
-- `results_{group}.json` — the per-seed best-so-far curves (one grid plus one
-  curve per seed) behind each figure; redraw any figure from it with
-  `--plot-only`, no re-run.
+- `results/invariance/invariance.png` — panel 5, one physics in two unit systems,
+  zero re-tune.
+- `results/lr_sweep/lr_sweep.png` — the Adam grid sweep.
 - Every curve plots the **median** best-so-far with the **[Q1, Q3] interquartile
   band** (not mean ± std — a skewed spread would read as symmetric and dip
   below the log axis).
+
+The arm key is the file name and spells out the arm's whole configuration
+(`soar-sample-np1-mu0.63-restart-on`, `adam-lr0.01`, `lbfgs`), so a changed
+default or a changed lr is a new key and a new file: the old trace stays as a
+record of the old configuration instead of being silently overwritten.
+Re-measuring one arm is a filter on that same identity:
+
+```bash
+# rewrite exactly one file, leave the rest of the panel alone
+uv run --group exp python -m experiments.compare_baselines \
+    --groups smooth --problems diag_quad_d100_cond10000 \
+    --arms soar-sample-np1-mu0-restart-on --seeds 20 --max-steps 3000
+
+# rebuild every figure from the files, no re-run
+uv run --group exp python -m experiments.compare_baselines --plot-only
+```
+
+`--plot-only` names any arm that has no trace file instead of drawing a gap, so
+a half-filled panel is visible rather than plausible.
 
 ## Reproducibility contract
 
@@ -101,12 +124,12 @@ All in `experiments/` (gitignored — regenerated, not source):
 - **No seam on soar-lite either**: the comparison runs the factory
   `value_and_grad` path — no `eval_f` (value-only) seam — so every batch the
   axis counts is a full value+gradient batch. The only attributes stepped are
-  `n_paths` (1 → 16) and `mu` (0 → 0.9); `restart_stalled` stays at its engine
-  default (on) in every arm, and the blr panel injects its restart model
-  through the public `model=` factory (`BLRGlobalModel`; the other arms use the
-  default `SampleGlobalModel`).
+  `n_paths` (1 → 16) and `mu` (0 → the class default); `restart_stalled` stays
+  at its engine default (on) in every arm, and the blr panel injects its restart
+  model through the public `model=` factory (`BLRGlobalModel`; the other arms
+  use the default `SampleGlobalModel`).
 - **Canvas only in-repo**: `experiments/DESIGN.md` is the design and the
-  story; figures are drawn from the JSON, never hand-tuned.
+  story; figures are drawn from the trace files, never hand-tuned.
 
 ## Open-source-time follow-ups (blocked on a public repo URL)
 

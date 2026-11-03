@@ -88,9 +88,10 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
     Every arm leaves it at the engine default (on): the panels' steps are meant
     to move one attribute each, and `False` would move the restart bit too.
     ``mu`` is the direction-momentum coefficient handed to the built
-    preconditioner (0.9 in the momentum arm, the analogue of Adam's first
-    moment decay), and ``model`` builds the restart model from the run's key -
-    how a BLR arm swaps the uniform draw for a fitted posterior.
+    preconditioner (the analogue of Adam's first moment decay: the panels run it
+    at the class default and at 0, never at a third hand-set strength), and
+    ``model`` builds the restart model from the run's key - how a BLR arm swaps
+    the uniform draw for a fitted posterior.
 
     The flock is drawn here, uniformly over the box, so the experiment's
     distribution is the caller's: the engine only ever places the points it is

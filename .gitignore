@@ -28,5 +28,7 @@ venv/
 *.so
 
 # Experiment run artifacts (regenerated, not source)
+experiments/results/
+# legacy flat artifacts, superseded by experiments/results/
 experiments/results_*.png
 experiments/results_*.json

@@ -70,6 +70,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `experiments/` stores one file per (problem, arm) instead of one file per
+  panel: `results/<problem>/<arm-key>.json` holds that arm's raw per-seed trace,
+  and a panel is a roster over those files drawn on demand. Re-measuring one arm
+  used to mean re-running its whole panel, because the panel owned the data and
+  wrote one dump covering every arm in it. The arm key spells out the arm's whole
+  configuration (`soar-sample-np1-mu0.63-restart-on`, `adam-lr0.01`, `lbfgs`),
+  so `--problems`/`--arms` filter on the same identity the path uses, and an
+  engine default moving re-keys the arms that inherit it: the old trace survives
+  as a record of the old configuration instead of being overwritten by a run
+  whose meaning has changed. Two panels can list the same arm without storing it
+  twice - rastrigin's `n_paths=16` arm is one file that both the multimodal and
+  the blr panel draw, so their agreement is structural rather than a
+  coincidence. `--plot-only` reads the files and names any arm with no trace
+  instead of drawing a gap. Old flat `results_*.json` / `results_*.png`
+  artifacts are not read by the new path.
+- The panels drop the `mu=0.9` arm and read the `mu=0` arm against the default
+  instead: with `0.63` as the shipped default, the momentum question is
+  on-versus-off, and a third hand-set strength only spent a curve. The two
+  proposition panels now share one soar-lite ladder (`n_paths` 1 / 16, then
+  `mu` default / 0), so a single roster edit moves both. Nothing re-measured:
+  the `mu=0.9` column in `experiments/RESULTS.md` stays as the record of what
+  that arm did, annotated with the rule it ran under.
+- The local solver's two smooths default to one window: `beta = 0.63`,
+  `mu = 0.63` (`≈ 1/(1-β) = e` steps), instead of `beta = 0.95` / `mu = 0`.
+  The secant-magnitude smooth and the direction's gradient smooth are two
+  controls on one operator, and their defaults were two different windows - a
+  20-step view of the curvature ratio under a bare gradient. They stay separate
+  knobs: `mu = 0` is still the off switch and `beta = 0.95` still reachable. A
+  caller that passed neither now runs with momentum it did not ask for, so this
+  is a behaviour change, not a default tidy-up; the measurements in
+  `experiments/RESULTS.md` were taken under the old defaults. Near a minimiser
+  the momentum carries a stale gradient into the step, which on a quadratic - a
+  problem the diagonal step otherwise lands in one shot - degrades 50-step error
+  from ≤ `1e-9` to ~ `3e-6`; `beta = 0.63, mu = 0` holds `1e-9`.
 - The run's starting flock is the entry's argument: `n_path_schedule(..., x0=...)`
   places it as handed, and `None` leaves the draw to the global model as before.
   `SampleGlobalModel` is now a pure draw - its `x0` is gone. The flock is where a
