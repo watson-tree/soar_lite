@@ -354,8 +354,8 @@ def _solver_with_secant(
     The step start's gradient is ``g - y``, so the committed point's gradient is
     exactly ``g``: the same secant the engine would have folded after a step of
     ``s``. That first fold also seeds the momentum EMA with the step start's
-    gradient, so ``propose`` here sees ``m = g - y`` - history only, never the
-    ``g`` it is about to precondition.
+    gradient, so ``m_prev = g - y`` here - history only; the ``g`` the next
+    ``propose`` mixes in at weight ``1 - mu`` is the live one.
     """
     solver = DiagonalPreconditioner(mu=mu, theta=0.0, n_alpha=n_alpha)
     start = PathPoint(x=jnp.zeros_like(g), f=1.0, g=g - y)
@@ -366,28 +366,30 @@ def _solver_with_secant(
 
 
 def _direction(solver: DiagonalPreconditioner, p: PathPoint) -> jnp.ndarray:
-    """Return the proposed direction d⊙w, with the alpha multiplier divided out."""
+    """Return the proposed direction d⊙m, with the alpha multiplier divided out."""
     return (p.x - solver.propose(0, p)) / solver.alpha[0]
 
 
-def test_diag_momentum_keeps_the_plain_step_descent_gain() -> None:
-    """The blend only rotates: <d⊙w, g> is exactly the plain step's <d⊙g, g>.
+def test_diag_momentum_is_the_current_gradient_blend() -> None:
+    """The direction is -d⊙m with m = (1-mu)·g + mu·m_prev, unprojected.
 
-    This is what the d-weighted projection buys. The momentum does change the
-    direction (it must, or nothing was blended), yet the direction's descent
-    gain on g - the quantity the no-acceptance-test claim rests on - is
-    untouched, so the step stays a descent direction by construction.
+    No projection means the descent gain on g is *not* pinned to the plain
+    step's: the blend adds ``mu·m_prev`` wherever the history helps or opposes
+    g. What the step must reproduce exactly is the weighted average of the live
+    gradient and the seeded history, through the same d.
     """
     g = jnp.array([0.5, -1.5])
+    mu = 0.5
     plain, at_plain = _solver_with_secant(0.0, g)
-    mom, at_mom = _solver_with_secant(0.5, g)
-    d_plain = _direction(plain, at_plain)
+    mom, at_mom = _solver_with_secant(mu, g)
+    d_plain = _direction(plain, at_plain)  # d⊙g, alpha divided out
     d_mom = _direction(mom, at_mom)
-    gain_plain = float(jnp.vdot(d_plain, g))
-    gain_mom = float(jnp.vdot(d_mom, g))
-    assert gain_plain > 0.0  # d ≥ 0 ⇒ the plain step always descends
-    assert close(gain_mom, gain_plain, 1e-9)  # exact in the d-metric
+    d = d_plain / g  # per-coordinate d; both solvers fold the same secant
+    m_prev = g - Y_MOM  # the fold seeded m with the step start's gradient
+    assert close(d_mom, d * ((1.0 - mu) * g + mu * m_prev), 1e-12)
     assert not close(d_mom, d_plain, 1e-9)  # the momentum really was blended in
+    # Unprojected: the gain is free to move off the plain step's value.
+    assert not close(float(jnp.vdot(d_mom, g)), float(jnp.vdot(d_plain, g)), 1e-9)
 
 
 def test_diag_momentum_folds_only_at_the_commit_not_in_propose() -> None:
@@ -434,13 +436,14 @@ def test_diag_mu_zero_keeps_no_momentum_state() -> None:
     assert solver.m == {}
 
 
-def test_diag_momentum_is_skipped_when_g_has_no_d_support() -> None:
-    """<g,g>_d == 0 means nothing to precondition: a zero step, not a push on m.
+def test_diag_momentum_moves_only_where_d_has_support() -> None:
+    """The step is zero where d = 0, however much history that coordinate holds.
 
-    d is nonzero only where the secant has curvature and g is nonzero only
-    where the coordinate is flat (d = 0), so every ``d_i·g_i²`` is 0 and the
-    projection's denominator vanishes. The step must collapse to the plain one
-    (zero there), not turn into d⊙m - the history has a live coordinate 0 here.
+    There is no projection and no ``<g,g>_d == 0`` special case under the
+    current-momentum blend: the step is ``-alpha·d⊙m``, so a coordinate with
+    d = 0 contributes nothing even when the history is live there. The history
+    does reach a coordinate with d > 0 but g = 0 - heavy-ball's flat-direction
+    build-up - which is why the blend is not a pure rotation of the plain step.
     """
     start = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 0.5]))
     solver = DiagonalPreconditioner(mu=0.5, theta=0.0)
@@ -449,7 +452,9 @@ def test_diag_momentum_is_skipped_when_g_has_no_d_support() -> None:
     at = PathPoint(x=start.x + jnp.array([1.0, 0.0]), f=0.5, g=jnp.array([0.0, 0.5]))
     solver.fold(0, start, at)  # seeds m = start.g, nonzero on coordinate 0
     assert close(solver.m[0], start.g, 1e-12)
-    assert close(solver.propose(0, at), at.x, 1e-12)
+    step = at.x - solver.propose(0, at)
+    assert close(step[1], 0.0, 1e-12)  # d = 0 there: no step, history or not
+    assert not close(step[0], 0.0, 1e-12)  # d > 0 and history live: it moves
 
 
 def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:

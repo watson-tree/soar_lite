@@ -195,7 +195,7 @@ SMOOTH_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
 # NAAdam (Adam + sigma_t = sigma0/sqrt(t) noise) was measured and dropped: the
 # decaying noise never separates from plain Adam on ackley/rastrigin, so it is
 # a redundant curve. The multimodal panel is soar-lite n_paths=16 vs n_paths=1
-# vs Adam, with the momentum arm added to read whether the sideways push changes
+# vs Adam, with the momentum arm added to read whether the momentum push changes
 # where a stalled chain drifts (ackley never stalls, rastrigin does).
 MULTIMODAL_METHODS: list[tuple[str, Runner, dict[str, object]]] = [
     (

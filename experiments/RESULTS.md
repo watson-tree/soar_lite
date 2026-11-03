@@ -40,6 +40,16 @@ budget — do not quote it as an expectation.
 | ackley_d100 | 19.78 | 19.59 | 19.82 | 19.57 | — |
 | rastrigin_d100 | 444.0 | 376.2 | 1437 | 807.9 | — |
 
+**Annotation, 2026-11-03 — the `mu=0.9` column belongs to a retired rule.** It
+was measured with the projected momentum direction (`w = g + m⊥`, which kept
+the step a descent direction). That rule was dropped: the direction is now the
+unprojected current momentum `m = (1-mu)·g + mu·m_prev`. Re-measured on the
+diagonal quadratic alone, 2 seeds x 3000 batches, `n_paths=1`: `mu=0` 1.3e-60,
+`mu=0.9` 6.6e-9 - the accuracy cost survives the rule change. The other
+`mu=0.9` cells (rotated quadratic 44.1, oscillator 4.7e-6, ackley 19.82,
+rastrigin 1437) have not been re-measured; read them as directional, not as the
+current arm's numbers.
+
 The points axis is not a second opinion on this table: a chain spends exactly
 one point per batch, so `n_paths=16` covers only its first ~187 batches there
 and its medians are truncation artefacts (rotated quadratic 1100 on points

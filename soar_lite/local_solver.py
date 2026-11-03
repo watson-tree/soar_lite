@@ -1,12 +1,12 @@
 """The default local solver: diagonal secant preconditioning (first order).
 
-`DiagonalPreconditioner` descends along ``-d ⊙ g``, where the per-coordinate
+`DiagonalPreconditioner` descends along ``-d ⊙ m``, where the per-coordinate
 scale ``d`` is the magnitude ratio of one secant pair (|Δx|/|Δy| in ``abs``
 mode, √(Δx²/Δy²) in ``rms`` mode), smoothed over the path's history. With
-``mu > 0`` the direction is smoothed over the path's gradient history as well,
-projected so the step stays a descent direction. It implements the engine's
-`LocalSolver` contract and owns only direction, step size and acceptance - no
-curvature model, no Hessian.
+``mu > 0`` the direction ``m`` is the current momentum, an unprojected blend of
+the gradient and its own history; at ``mu = 0`` it is the bare gradient ``g``.
+It implements the engine's `LocalSolver` contract and owns only direction, step
+size and acceptance - no curvature model, no Hessian.
 """
 
 import math
@@ -37,28 +37,41 @@ class DiagonalPreconditioner(LocalSolver):
     λ is a pure guard on Y → 0, never a deflation of a curvature-dominated
     coordinate (the additive spelling shrinks every d by √(Y/(Y+λ)), so `max`
     is the arm that leaves a curvature-dominated coordinate undeformed).
-    d ≥ 0 by construction, so -d⊙g is always a
-    descent direction and needs no acceptance test. Named "diagonal
+    d ≥ 0 by construction, so at ``mu = 0`` -d⊙g is a descent direction and the
+    plain step needs no acceptance test; with ``mu > 0`` the step follows the
+    momentum and that guarantee is withdrawn (see below). Named "diagonal
     preconditioner", not "diagonal Newton": coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside
     |y_i| and makes d a biased estimator of 1/Hᵢᵢ.
 
-    With ``mu > 0`` the direction is also smoothed over the path's gradient
-    history: an EMA ``m`` of the past steps' start gradients - the current step's
-    own gradient is folded in only once that step has committed - is blended in
-    as ``g + m⊥``, where ``m⊥ = m - (<m,g>_d/<g,g>_d)·g`` projects m onto g's
-    orthogonal complement under the **d-weighted** inner product
-    ``<a,b>_d = Σ d_i a_i b_i``. The weighting is load-bearing: Euclidean
-    orthogonalisation makes ``<m⊥,g> = 0``, but the step's descent is
-    ``<d⊙(g+m⊥), g>``, and that is not the same inner product - the step would
-    silently stop descending. As written, ``<d⊙(g+m⊥), g> = <g,g>_d > 0``
-    exactly, so the no-acceptance-test claim above holds with momentum on. The
-    knob is opt-in (``mu = 0`` is off, bit for bit the plain direction) because
-    momentum costs accuracy where the diagonal estimate is already right: near
-    a minimiser ``g → 0`` but ``m`` does not, so the direction stops vanishing
-    and the gradient-norm stopping test loses its anchor. It buys progress only
-    where ``d`` is structurally wrong (a rotated Hessian, which no
-    per-coordinate ratio can represent) and there only patchily - a mitigation,
-    not a fix.
+    With ``mu > 0`` the direction is the *current* momentum, not the bare
+    gradient: ``m = (1 - mu)·g + mu·m_prev``, where ``m_prev`` is an EMA of the
+    past steps' start gradients (window ≈ ``1/(1-mu)``; the current step's own
+    gradient enters only when that step has committed, folded by ``fold``). At
+    ``mu = 0`` it degenerates to ``g`` exactly. This is the unprojected
+    heavy-ball direction, and also Adam's first moment before its second-moment
+    division.
+
+    There is no projection onto the orthogonal complement of ``g``, so with
+    ``mu > 0`` there is no descent-direction invariant. Projecting would keep
+    only the part of the momentum transverse to ``g``, and the along-``g`` part
+    is exactly heavy-ball's value - the zigzag damping on an ill-conditioned
+    quadratic, the build-up across a flat direction - while the transverse part
+    it kept only turns the direction. And the invariant never cashed out: it
+    promises that a small enough step would descend, and this method takes one
+    unruled full step (or an alpha-grid argmin that does not compare against the
+    step's start), so per-step descent was never actually enforced. Convergence
+    rests on the engine's best-so-far bookkeeping and restart. A caller that
+    wants the invariant can shrink ``alpha`` or run a line search outside the
+    seam.
+
+    The knob is opt-in (``mu = 0`` is off, bit for bit the plain direction)
+    because momentum costs accuracy where the diagonal estimate is already
+    right: near a minimiser ``g → 0`` but ``m_prev`` does not vanish at the same
+    rate, the stale term ``mu·m_prev`` can outweigh ``g``, and the exact
+    one-shot step is scraped into a detour - and the gradient-norm stopping test
+    loses its anchor. It buys progress only where ``d`` is structurally wrong (a
+    rotated Hessian, which no per-coordinate ratio can represent) and there only
+    patchily - a mitigation, not a fix.
 
     Two phases per path, one step mechanic. Every step samples the alpha grid
     {alpha0, alpha0·backtrack, alpha0·backtrack², …} along its own direction and
@@ -117,7 +130,7 @@ class DiagonalPreconditioner(LocalSolver):
         moment: Literal["abs", "rms"] = "rms",  # mean ratio / mean-square ratio
         beta: float = 0.95,  # EMA decay; the window is ≈ 1/(1-β) steps
         theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
-        mu: float = 0.0,  # history-EMA decay for the momentum blend; 0 = off
+        mu: float = 0.0,  # gradient-EMA decay for the direction; 0 = bare g
         alpha0: float = 1.0,  # the full step's length, in units of the natural step
         n_alpha: int = 1,  # alpha samples per step; 1 = no line search
         backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
@@ -140,9 +153,10 @@ class DiagonalPreconditioner(LocalSolver):
                 steps), in (0, 1).
             theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
                 ``θ·g_i²`` for "rms"), >= 0.
-            mu: EMA decay for the gradient history that feeds the momentum
-                blend - it sets how far back the history reaches and nothing
-                else; 0 disables it (the default), in [0, 1).
+            mu: EMA decay of the gradient history blended into the direction,
+                ``(1 - mu)·g + mu·m_prev`` - it sets how far back the history
+                reaches and nothing else; 0 leaves the bare gradient (the
+                default), in [0, 1).
             alpha0: step length every path is armed at; the full step's
                 length, > 0.
             n_alpha: alpha samples per step along the step's direction; 1 means
@@ -223,15 +237,16 @@ class DiagonalPreconditioner(LocalSolver):
         return self.n_alpha > 1 or self._stationary(i, p)
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
-        """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - alpha·d⊙w.
+        """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - alpha·d⊙m.
 
-        w is g, or g + m⊥ when mu > 0 (see `_blend_momentum`).
+        m is g, or the current-momentum blend when mu > 0 (see
+        `_blend_momentum`).
         """
         if not self.has_secant[i]:
             return p.x + self.alpha[i] * (-p.g)
         d = self._diag(i, p.g)
-        w = p.g if self.mu == 0.0 else self._blend_momentum(i, p.g, d)
-        return p.x - self.alpha[i] * (d * w)
+        m = p.g if self.mu == 0.0 else self._blend_momentum(i, p.g)
+        return p.x - self.alpha[i] * (d * m)
 
     def verdict(
         self,
@@ -311,31 +326,21 @@ class DiagonalPreconditioner(LocalSolver):
         d = jnp.where(den > 0.0, self.s_ema[i] / den, 0.0)
         return jnp.sqrt(d) if self.moment == "rms" else d
 
-    def _blend_momentum(self, i: int, g: jnp.ndarray, d: jnp.ndarray) -> jnp.ndarray:
-        """Blend path i's momentum history into g, keeping g·step a descent gain.
+    def _blend_momentum(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
+        """Return path i's current momentum: (1 - mu)·g + mu·m_prev.
 
-        m is projected onto g's orthogonal complement under the d-weighted inner
-        product, so the step ``-alpha·d⊙(g + m⊥)`` has ``<d⊙(g+m⊥), g> =
-        <g,g>_d > 0`` exactly - the along-g part of the momentum cancels, and
-        what is added is orthogonal to g *in the metric the step is measured
-        in*. Projecting in the Euclidean metric instead leaves that gain free to
-        go negative.
+        ``m_prev`` (``self.m[i]``) is history only - the past step-start
+        gradients, folded by `fold` once each step has committed - so this
+        step's own gradient enters fresh, at weight ``1 - mu``. With ``mu = 0``
+        this is ``g`` exactly, which is why `propose` skips the call then.
 
-        m is history only - the past step-start gradients, folded by ``fold``
-        once each step has committed - so this step's own g enters exactly once,
-        as g. Folding g into m before projecting would put it in the projected
-        quantity too, where it is along g and so contributes nothing but a
-        factor mu on the part that was wanted: the blend would quietly run at
-        mu·m instead of m.
-
-        ``<g,g>_d == 0`` means g has no support where d > 0: there is nothing to
-        precondition, so no momentum is mixed in and the step is zero rather
-        than a push along m.
+        No projection: the along-g part of the history is kept. Its whole point
+        is that part - the zigzag damping and the flat-direction build-up - so
+        the direction is free to stop descending on g, and nothing here pins a
+        descent gain. See the class docstring for why that invariant was
+        withdrawn.
         """
-        gg = float(jnp.sum(d * g * g))
-        if gg <= 0.0:
-            return g
-        return g + (self.m[i] - (jnp.sum(d * self.m[i] * g) / gg) * g)
+        return (1.0 - self.mu) * g + self.mu * self.m[i]
 
     def _stationary(self, i: int, p: PathPoint) -> bool:
         """Return whether path i's gradient has hit its floor: ‖g‖ ≤ τ_rel·‖g_0‖.

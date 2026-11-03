@@ -30,7 +30,7 @@ reporting wins — R5):
   `mu=0.9` escapes a saddle — that needs a landscape whose discriminator is
   saddle-vs-minimum, and escaping is just what momentum terms are usually
   hoped to buy in deep-network optimizers. What the panels do test is whether
-  the sideways push changes *where a stalled chain ends up*. Rastrigin chains
+  the momentum push changes *where a stalled chain ends up*. Rastrigin chains
   converge into a lattice basin and stall; Ackley chains freeze outside the
   funnel. The momentum arm reads whether `mu=0.9` moves either stall, against
   serial, parallel and Adam.
