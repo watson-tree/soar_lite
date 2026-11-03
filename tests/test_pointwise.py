@@ -8,7 +8,7 @@ replaces, and check the pair actually drives the engine.
 import jax
 import jax.numpy as jnp
 
-from soar_lite import Domain, n_path_schedule, pointwise
+from soar_lite import DiagonalPreconditioner, Domain, n_path_schedule, pointwise
 
 
 def _objective(row: jnp.ndarray) -> jnp.ndarray:
@@ -94,6 +94,11 @@ def test_the_pair_drives_a_run() -> None:
         domain=domain,
         eval_f=eval_f,
         max_iters=5,
+        # n_alpha >= 2 puts every path in the judged lane, so the f-only seam is
+        # exercised from the first iteration instead of whenever a gradient floor
+        # happens to be hit - with the default n_alpha=1 it took a lucky path, and
+        # a different direction rule moved it out of reach.
+        local_solver=DiagonalPreconditioner(n_alpha=2),
     )
 
     assert result.status == "max_iters", result.status

@@ -64,14 +64,21 @@ class DiagonalPreconditioner(LocalSolver):
     wants the invariant can shrink ``alpha`` or run a line search outside the
     seam.
 
-    The knob is opt-in (``mu = 0`` is off, bit for bit the plain direction)
-    because momentum costs accuracy where the diagonal estimate is already
-    right: near a minimiser ``g → 0`` but ``m_prev`` does not vanish at the same
-    rate, the stale term ``mu·m_prev`` can outweigh ``g``, and the exact
-    one-shot step is scraped into a detour - and the gradient-norm stopping test
-    loses its anchor. It buys progress only where ``d`` is structurally wrong (a
-    rotated Hessian, which no per-coordinate ratio can represent) and there only
-    patchily - a mitigation, not a fix.
+    Both smooths default to a window of about ``e`` steps, ``beta = mu = 0.63``.
+    They stay two knobs - ``beta`` smooths the ratio that sets the step's scale,
+    ``mu`` smooths the direction, and the two histories are different quantities
+    - but one window is a better-motivated common default than two independently
+    guessed ones, and momentum then shares the diagonal's bandwidth instead of
+    running an order of magnitude longer.
+
+    Momentum is off at ``mu = 0`` (bit for bit the plain direction), and it costs
+    accuracy where the diagonal estimate is already right: near a minimiser
+    ``g → 0`` but ``m_prev`` does not vanish at the same rate, so the stale term
+    ``mu·m_prev`` can outweigh ``g``, the exact one-shot step is scraped into a
+    detour, and the gradient-norm stopping test loses its anchor. It buys
+    progress only where ``d`` is structurally wrong (a rotated Hessian, which no
+    per-coordinate ratio can represent) and there only patchily - a mitigation,
+    not a fix.
 
     Two phases per path, one step mechanic. Every step samples the alpha grid
     {alpha0, alpha0·backtrack, alpha0·backtrack², …} along its own direction and
@@ -128,9 +135,9 @@ class DiagonalPreconditioner(LocalSolver):
         self,
         *,
         moment: Literal["abs", "rms"] = "rms",  # mean ratio / mean-square ratio
-        beta: float = 0.95,  # EMA decay; the window is ≈ 1/(1-β) steps
+        beta: float = 0.63,  # EMA decay; the window is ≈ 1/(1-β) ≈ e steps
         theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
-        mu: float = 0.0,  # gradient-EMA decay for the direction; 0 = bare g
+        mu: float = 0.63,  # gradient-EMA decay for the direction; 0 = bare g
         alpha0: float = 1.0,  # the full step's length, in units of the natural step
         n_alpha: int = 1,  # alpha samples per step; 1 = no line search
         backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
@@ -155,8 +162,8 @@ class DiagonalPreconditioner(LocalSolver):
                 ``θ·g_i²`` for "rms"), >= 0.
             mu: EMA decay of the gradient history blended into the direction,
                 ``(1 - mu)·g + mu·m_prev`` - it sets how far back the history
-                reaches and nothing else; 0 leaves the bare gradient (the
-                default), in [0, 1).
+                reaches and nothing else; 0 leaves the bare gradient, in [0, 1).
+                Its default pairs with ``beta``: both windows are ≈ ``e`` steps.
             alpha0: step length every path is armed at; the full step's
                 length, > 0.
             n_alpha: alpha samples per step along the step's direction; 1 means

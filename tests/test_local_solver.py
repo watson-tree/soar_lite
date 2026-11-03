@@ -147,7 +147,7 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
 
     f0, g0 = quad(x0)
     p = PathPoint(x=x0, f=f0, g=g0)
-    solver = DiagonalPreconditioner(theta=0.0)
+    solver = DiagonalPreconditioner(theta=0.0, mu=0.0)
     solver.restart(0, p)
     # alpha = 1 overshoots by a factor 25 (f = 215) and is committed anyway:
     # the secant is exact at any length on a quadratic, so the overshoot costs
@@ -172,7 +172,7 @@ def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
 
     f0, g0 = quad(x0)
     p = PathPoint(x=x0, f=f0, g=g0)
-    solver = DiagonalPreconditioner(theta=0.0, moment="abs")
+    solver = DiagonalPreconditioner(theta=0.0, moment="abs", mu=0.0)
     solver.restart(0, p)
     trial = _warm_up(solver, p, quad)
     assert close(solver.propose(0, trial), jnp.zeros(3), 1e-12)
@@ -229,7 +229,7 @@ def test_diag_floor_is_a_floor_not_an_addend() -> None:
     unambiguously (the additive form would propose √2 shorter per coordinate).
     """
     theta = 1e-4
-    solver = DiagonalPreconditioner(theta=theta)
+    solver = DiagonalPreconditioner(theta=theta, mu=0.0)
     g0 = jnp.array([1.0, 0.5])
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=g0)
     solver.restart(0, p)
@@ -474,8 +474,11 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
             key=jax.random.PRNGKey(0),
         ),
         max_iters=50,
-        local_solver=DiagonalPreconditioner(theta=0.0),
+        local_solver=DiagonalPreconditioner(theta=0.0, mu=0.0),
     )
+    # mu = 0 pins the diagonal mechanics: with the momentum default on, the tail
+    # is a detour rather than the exact Newton step, and the 1e-9 bound below
+    # would be measuring the momentum instead.
     # θ = 0 makes the post-warm-up step exactly Newton, so g = 0 after it and
     # the next verdict gives up (the stopping test); the point is still the
     # best, which is what `fun`/`x` report.
@@ -487,7 +490,8 @@ def test_diag_momentum_runs_through_the_engine() -> None:
     """Engine round-trip with momentum on: it runs, descends, stays finite.
 
     Not a convergence claim - near the argmin g → 0 while m does not, so the
-    gradient-norm stopping test loses its anchor (that is why mu is opt-in).
+    gradient-norm stopping test loses its anchor. That is the cost the default
+    ``mu`` pays, and the reason the exactness tests above pin ``mu = 0``.
     What this pins is the engine's own restart→propose→fold gluing: ``restart``
     must have seeded the path's momentum, or the steady propose raises.
     """
@@ -590,7 +594,7 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
             key=jax.random.PRNGKey(0),
         ),
         max_iters=50,
-        local_solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
+        local_solver=DiagonalPreconditioner(theta=0.0, n_alpha=3, mu=0.0),
     )
     assert close(result.x, center, 1e-9)
     assert result.fun < 1e-12
