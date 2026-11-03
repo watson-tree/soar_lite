@@ -134,8 +134,8 @@ _Avoid_: value oracle, cheap evaluator
 The optional per-point boolean saying which served points may count toward the
 reported best (`fun`/`x`). It is
 read as 0/1 and nothing else: only `0` (or `False`) marks a point infeasible, so
-a mask holding anything else - a signed constraint margin, whose violated points
-are all negative, or a `nan` - is refused with a `ValueError` instead of being
+a mask holding anything else — a signed constraint margin, whose violated points
+are all negative, or a `nan` — is refused with a `ValueError` instead of being
 read as truthiness, where every one of those flags would have counted as
 feasible and quietly promoted a point into the answer.
 _Avoid_: validity mask
@@ -221,8 +221,10 @@ proxy — one iteration serves the redraw starts plus however many trials the
 method's own search serves, while a flock with nothing left to do stops the run
 (`all_stalled`) instead of billing a batchless iteration — so the four counters
 report what a run actually billed. At least one of `max_iters`/`time_limit` must
-be given: a `budget_check` alone stops nothing, because a gate consulted only
-before a batch is never consulted on a run that serves none.
+be given, validated once at entry: `stop` asks the caller's gate like the other
+two, but a gate is the caller's own predicate and the engine cannot see it
+advance, so it cannot tell a gate that will close from one that never does — a
+run may not rest on that alone.
 _Avoid_: eval budget, cost estimate, time limit
 
 **deadline (`time_limit`)**:
@@ -233,18 +235,19 @@ call in flight.
 _Avoid_: budget, timeout (that is a per-call concern)
 
 **budget gate** (`budget_check`):
-The batch-level predicate consulted once per batch — serve the whole batch or
-nothing, never a partial prefix. It exists for a budget the engine cannot see
-(points, wall-clock, dollars). Such an external gate can over-run by less than
-one batch. It is an extra gate, never a horizon.
+The caller's predicate, asked as one of the run's three stops at every loop head
+and again before each batch — serve the whole batch or nothing, never a partial
+prefix. It exists for a budget the engine cannot see (points, wall-clock,
+dollars). Such an external gate can over-run by less than one batch. It is an
+extra gate, never a horizon.
 _Avoid_: stopping budget
 
 **domain** (type `Domain`):
 The object that carries everything the engine knows about the search space: the
 per-dimension `(lb, ub)` sides (either may be unbounded), the per-dimension
 `scale` the draws use, and the injected per-dimension samplers. It is the sole
-authority on `d`; the engine clips every proposal into it. Bounds are data,
-never a unit-cube assumption.
+authority on the dimension `d`; the engine clips every proposal into it. Bounds
+are data, never a unit-cube assumption.
 _Avoid_: box (the box is only the bounded-sides part of the domain)
 
 **sampler**:

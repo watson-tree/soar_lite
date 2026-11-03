@@ -431,9 +431,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # budget the engine cannot see (points, dollars, an external clock). It is
     # one of `_Budget.stop`'s three inputs, asked at the loop head every
     # iteration and again before each served batch, fused or value-only.
-    # None means "no extra gate". It is additional, never a horizon: the engine
-    # asks it only before a batch, so it cannot tell a gate that closes on its
-    # own from one that never does, and a horizon is required.
+    # None means "no extra gate". It is additional, never a horizon: a gate is
+    # the caller's own predicate and the engine cannot see it advance, so it
+    # cannot tell one that closes from one that never does, and a horizon is
+    # required.
     budget_check: Callable[[], bool] | None = None,
     # Whether a stalled path is re-drawn. The stall itself is the engine's own
     # bit (`_Paths.stalled`), set when a path's method gives up or its point is
@@ -861,10 +862,10 @@ class _Budget:
     (`max_iters`), the wall-clock deadline (`time_limit`), and the caller's
     extra gate (`budget_check`). `stop` asks all three as one query - at the
     loop head every iteration, and again before each served batch - and names the
-    reason it refuses. At least one of the first two is required at entry,
-    because they are the only stops the engine can see advance on its own: it
-    asks a `budget_check` only before a batch, so it cannot tell a gate that
-    closes on its own from one that never does.
+    reason it refuses. At least one of the first two is required at entry: they
+    advance on their own and the engine can see them do it, while a
+    `budget_check` is the caller's predicate, so the engine cannot tell a gate
+    that closes from one that never does.
 
     The four counters are pure reports, not caps, and not one of them gates: the
     fused pass counts on its pair (`n_f_g_points` / `n_f_g_batches`, one batch per
@@ -1502,9 +1503,8 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
     if max_iters is None and time_limit is None:
         msg = (
             "a run needs a horizon: pass max_iters (iterations) or "
-            "time_limit (seconds); budget_check is asked at the loop head and "
-            "before each batch, so a gate that closes on its own cannot be "
-            "distinguished from one that never does"
+            "time_limit (seconds); budget_check is the caller's gate, and the "
+            "engine cannot tell one that closes from one that never does"
         )
         raise ValueError(msg)
 
