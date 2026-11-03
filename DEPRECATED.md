@@ -1,10 +1,22 @@
 # Deprecated directions
 
-Archived design directions that were explored and then abandoned. Each entry
-records what was tried, why it failed, and the evidence, so a future reader
-does not re-run the same line. Nothing in this file is shipped: probe scripts
-cited here live in `.scratch/` and are not committed, every number that matters
-is reproduced inline.
+Archived design directions that were explored and then abandoned or
+superseded. Each entry records what was tried, why it failed, and the
+evidence, so a future reader does not re-run the same line. Nothing in this
+file is shipped: probe scripts cited here live in `.scratch/` and are not
+committed, every number that matters is reproduced inline.
+
+Three rules, the same discipline as `experiments/RESULTS.md`:
+
+- **Entries are records: never re-edit them.** A `Status` line states the
+  delivered code at the time of writing; when the code later changes, that
+  historical claim stays exactly as written and a new entry is appended below.
+  Rewriting an old `Status` erases the before/after the file exists to preserve.
+- **Only abandoned or superseded directions belong here.** The direction that
+  remains in the code stays in `ALGORITHM.md` / `DESIGN.md`; this file archives
+  what was dropped and what replaced it, not the code's current shape.
+- **Numbers are never re-edited.** A measured value stays as measured; a new
+  measurement is a new entry, and the old numbers rest.
 
 ## Adaptive momentum window (residual-triggered `β`)
 
@@ -108,3 +120,26 @@ anything over `μ` and usually subtracts. The only data-supported conclusion is
 that the two benchmark terrains want **opposite constant windows** (rotated
 quadratic `β ≈ 0.95`, Rastrigin `μ = 0`), which is exactly what the existing
 constant `β` / `μ` knobs already provide.
+
+## Default windows `β = 0.95` / `μ = 0` (superseded by one ≈e-step window)
+
+**Status: superseded — the resting point moved, the two knobs remain.** The
+delivered defaults once read `beta=0.95` (secant-magnitude EMA, window ≈ 20
+steps) and `mu=0.0` (momentum off, opt-in). They now both read `0.63`
+(window ≈ `e` steps ≈ 2.7), so the diagonal's bandwidth and the momentum's are
+the same length.
+
+### What it was
+
+`β` smoothed the secant magnitude over ≈ 20 steps; `μ` was opt-in, and only the
+momentum arm (`mu=0.9`) turned it on.
+
+### Why it changed
+
+The two EMAs are the same operator (`new = ρ·old + (1−ρ)·x`) applied to the
+ratio and to the direction, so the real knob is one window `W`, with
+`β = μ = 1 − 1/W`. Asking how many steps a piece of geometry stays credible
+gives one physical scale, `W ≈ e`, not 20 for one EMA and 0 for the other. The
+default unifies on that scale; `β` and `μ` stay two independent controls
+(`μ = 0` is still the off switch, `β = 0.95` is still reachable on its own) —
+what changed is only where they rest, not how many of them there are.
