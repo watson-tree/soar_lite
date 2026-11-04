@@ -213,9 +213,13 @@ def soar_arm(  # noqa: PLR0913 - one keyword per attribute the key must name
 # rotated quadratic and the oscillator keep improving to lr=2.0). On the
 # diagonal quadratic and Ackley every grid point from 1e-2 up is a floor or a
 # plateau, so those two picks are one point of a tie, not a strict argmin; on
-# rastrigin the floor is flat over 1e-3..2e-1 and 0.5 sits ~5% below it.
+# rastrigin the floor is flat over 1e-3..2e-1 and 0.5 sits ~5% below it. The
+# compartment chain is the one strict interior argmin: its curve falls from
+# 5.0 at lr=1e-2 to 1.1e-3 at 1e-1 and back up to 2.8e-2 at 2e-1, so there the
+# pick is a real optimum rather than an edge or a tie.
 ADAM_LR: dict[str, float] = {
     "oscillator_n20_F20": 2.0,
+    "pk_chain_n21_d61": 1e-1,
     "diag_quad_d100_cond10000": 1e-2,
     "rot_quad_d100_cond1e+06": 2.0,
     "ackley_d100": 1e-2,
@@ -595,12 +599,14 @@ def run_lr_sweep(n_seeds: int, max_steps: int) -> None:
     Shows the optimal lr drifting across problems and a wrong lr costing many
     orders of magnitude. The C0 diamond marks the lr actually used in the
     panels (``ADAM_LR``). It agrees with the sweep's argmin on the rotated
-    quadratic, the oscillator and rastrigin; on the diagonal quadratic and
-    Ackley every grid point sits at the same floor or plateau, so the pick is
-    one point of that tie rather than a strict argmin. On the rotated
-    quadratic and the oscillator the curve is still falling at the grid edge
-    (lr=2.0 is the best *sampled* point, not an interior minimum); on rastrigin
-    the floor is flat over 1e-4..2e-1, so its argmin is a noise-level nudge.
+    quadratic, the oscillator, the compartment chain and rastrigin; on the
+    diagonal quadratic and Ackley every grid point sits at the same floor or
+    plateau, so the pick is one point of that tie rather than a strict argmin.
+    On the rotated quadratic and the oscillator the curve is still falling at
+    the grid edge (lr=2.0 is the best *sampled* point, not an interior
+    minimum); the compartment chain is the mirror case, an interior optimum
+    that is sharp on both sides; on rastrigin the floor is flat over
+    1e-4..2e-1, so its argmin is a noise-level nudge.
     """
     lr_grid = [1e-4, 1e-3, 1e-2, 1e-1, 2e-1, 5e-1, 1.0, 2.0]
     probs = problems.build("all")
@@ -646,7 +652,8 @@ def run_lr_sweep(n_seeds: int, max_steps: int) -> None:
     fig.suptitle(
         "Adam lr sensitivity - C0 diamond = the lr the panels use; on diag and "
         "Ackley it is one point of a floor/plateau tie, not a strict argmin; "
-        "rot & oscillator still falling at lr=2.0 (edge); rastrigin flat < 2e-1",
+        "rot & oscillator still falling at lr=2.0 (edge); pk_chain is a sharp "
+        "interior optimum; rastrigin flat < 2e-1",
     )
     fig.tight_layout()
     out = FIGURES / "lr_sweep" / "lr_sweep.png"

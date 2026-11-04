@@ -72,7 +72,10 @@ so the pick is one point of that tie (`lr=1e-4` costs 52 orders of magnitude on
 the diagonal quadratic against it). On the rotated quadratic and the oscillator
 the curve is still falling at the right edge — `lr=2.0` — so there the diamond
 is the best *sampled* point, not an interior minimum; on rastrigin the floor is
-flat over `1e-3..2e-1` and the pick sits ~5% below it.
+flat over `1e-3..2e-1` and the pick sits ~5% below it. The compartment chain
+(`pk_chain_n21_d61`) is the one problem that goes the other way: its curve rises
+steeply on both sides of the diamond, so there the pick is a strict interior
+optimum rather than an edge or a tie.
 
 ## Outputs
 

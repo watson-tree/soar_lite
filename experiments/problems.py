@@ -9,9 +9,11 @@ clips into it, so every served point counts toward the best. Each problem
 is one batched JAX pass, differentiable, and has a known global value
 ``f_star``.
 
-The headline problem carries both properties the comparison is about: mixed
-physical units (kg, N/m, N*s/m) and a non-convex response landscape. The
-remaining problems isolate one property each.
+The headline problems carry both properties the comparison is about: mixed
+physical units and a non-convex response landscape. They are the two real
+inverse problems - a frequency-domain one (vibration isolation) and a
+time-domain one (compartment kinetics). The remaining problems isolate one
+property each.
 
 Import sets ``jax_enable_x64``: the oscillator chain solves a complex linear
 system and the ill-conditioned quadratics have condition numbers up to 1e6,
@@ -25,10 +27,17 @@ from typing import TypeAlias
 
 import jax
 import jax.numpy as jnp
+import jax.scipy
 
 jax.config.update("jax_enable_x64", val=True)
 
 EvalFG: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray, None]"]
+
+# Assay detection limit of the compartment problem, relative to the bolus dose:
+# a sample below it is not a measurement and does not enter the loss. Double
+# precision reaches ~1e-300, so this is never active as a numerical floor.
+PK_DETECT = 1e-8
+PK_FLOOR = 1e-30
 
 
 @dataclass(frozen=True)
@@ -249,16 +258,145 @@ def oscillator_chain(
     )
 
 
+def pk_chain(
+    n_comp: int = 21,
+    seed: int = 0,
+    n_times: int = 20,
+) -> Problem:
+    """Recover a compartment model's micro rate constants from concentrations.
+
+    The textbook pharmacokinetic inverse problem. ``n_comp`` compartments form a
+    bidirectional chain, exchanging first-order transfer rates ``f_i`` (i ->
+    i+1), ``b_i`` (i+1 -> i) and eliminating at ``gamma_i`` from every one of
+    them, so the unknowns are ``3n - 2`` rates in their own unit (1/h) spanning
+    four decades. A bolus sits in each end at ``t = 0`` and the first three
+    compartments are measured; the loss is the log-scale mismatch against the
+    hidden true design, so ``f* = 0`` sits exactly on it.
+
+    This is the time-domain counterpart of the oscillator and the second real
+    problem in the panel. Its coupling is local in a compartment graph, not a
+    dense rotation, which is the structure the diagonal approximation reads as
+    "approximately right": the system matrix is a compartmental one, every row
+    summing to minus its elimination rate.
+
+    Two details are load-bearing, and both were measured rather than assumed.
+    A bolus in one end only leaves most of the rates invisible - the far
+    compartments never carry mass, so the loss can fall to ~1e-7 while most of
+    the 61 rates stay wherever they started, a flat subspace a benchmark should
+    not hide. The sampling times are a dyadic geometric grid,
+    ``t_j = first_t * 2**j``, because that is the natural grid for a spectrum
+    spanning decades and because
+    ``expm(A t_j) = expm(A first_t)**(2**j)`` then costs one matrix exponential
+    plus repeated squaring instead of one exponential per sample - which is
+    what makes a 20-seed, 3000-batch run of this problem affordable.
+
+    The window runs long enough that its tail falls under ``PK_DETECT``, and
+    those samples are dropped rather than scored: a concentration ten orders of
+    magnitude below the peak is what a real assay cannot see, and scoring it
+    would put a numerical floor where a measurement should be.
+
+    The loss is non-convex in the box, and not only mildly. Coupling makes the
+    flat directions *joint*: each coordinate on its own moves the loss (moving
+    one to a box edge is visible for 17/20 transfer and 19/20 backward rates,
+    median change ~0.3), yet several can move together and stay at a low loss.
+    Measured: L-BFGS-B started exactly at the truth stops after one evaluation
+    at ``f = 7e-33``, but started at ``truth * 1.05`` it walks to a box edge
+    and rests at ``7.6e-4`` with coordinates up to 3x off, and random starts
+    end anywhere from ``1e-3`` to ``3``. That is the real difficulty of
+    compartment fitting - the observed curve does not pin every rate - and it
+    is why this problem sits in the non-convex headline group rather than
+    among the quadratics.
+
+    ``first_t`` is fixed from the true design's fastest mode, so no
+    eigendecomposition enters the differentiated path.
+    """
+    key_f, key_b, key_g = jax.random.split(jax.random.PRNGKey(seed), 3)
+
+    def log_uniform(
+        key: jnp.ndarray,
+        lo: float,
+        hi: float,
+        shape: tuple[int, ...],
+    ) -> jnp.ndarray:
+        """Draw rates spanning decades: what makes the per-coordinate scale matter."""
+        return jnp.exp(
+            jax.random.uniform(
+                key,
+                shape,
+                minval=math.log(lo),
+                maxval=math.log(hi),
+            ),
+        )
+
+    theta_star = jnp.concatenate(
+        [
+            log_uniform(key_f, 1e-2, 1e2, (n_comp - 1,)),
+            log_uniform(key_b, 1e-2, 1e2, (n_comp - 1,)),
+            log_uniform(key_g, 1e-3, 1.0, (n_comp,)),
+        ],
+    )
+
+    def system_matrix(theta: jnp.ndarray) -> jnp.ndarray:
+        """Return the compartmental matrix ``A`` with ``dC/dt = A C``."""
+        n = n_comp
+        trans_f = theta[: n - 1]
+        trans_b = theta[n - 1 : 2 * (n - 1)]
+        elim = theta[2 * (n - 1) :]
+        idx = jnp.arange(n)
+        out_f = jnp.concatenate([trans_f, jnp.zeros(1)])
+        out_b = jnp.concatenate([jnp.zeros(1), trans_b])
+        mat = jnp.zeros((n, n))
+        mat = mat.at[idx, idx].set(-(out_f + out_b + elim))
+        mat = mat.at[idx[:-1] + 1, idx[:-1]].set(trans_f)
+        return mat.at[idx[:-1], idx[:-1] + 1].set(trans_b)
+
+    def trajectory(theta: jnp.ndarray, first_t: jnp.ndarray) -> jnp.ndarray:
+        """Concentrations at ``first_t * 2**j`` for ``j < n_times``, shape (T, n)."""
+        load = jnp.zeros((n_comp,)).at[0].set(1.0).at[n_comp - 1].set(1.0)
+
+        def square(carry: jnp.ndarray, _: None) -> tuple[jnp.ndarray, jnp.ndarray]:
+            return carry @ carry, carry @ load
+
+        start = jax.scipy.linalg.expm(system_matrix(theta) * first_t)
+        _, conc = jax.lax.scan(square, start, None, length=n_times)
+        return conc
+
+    speeds = jnp.abs(jnp.linalg.eigvals(system_matrix(theta_star)))
+    first_t = 0.1 / jnp.max(speeds[speeds > 1e-9])
+    observed = jnp.arange(3)
+    target = trajectory(theta_star, first_t)[:, observed]
+    measured = target > PK_DETECT
+
+    def fn(theta: jnp.ndarray) -> jnp.ndarray:
+        conc = trajectory(theta, first_t)[:, observed]
+        ratio = jnp.log10((conc + PK_FLOOR) / (target + PK_FLOOR)) ** 2
+        return jnp.sum(jnp.where(measured, ratio, 0.0))
+
+    d = 3 * n_comp - 2
+    return Problem(
+        name=f"pk_chain_n{n_comp}_d{d}",
+        d=d,
+        bounds=jnp.stack([theta_star / 4.0, theta_star * 4.0], axis=1),
+        eval_f_g=_jit_pointwise(fn),
+        f_star=0.0,
+        description=(
+            f"compartment kinetics, {n_comp} compartments, d={d}, rates over 4 decades"
+        ),
+        x_star=theta_star,
+    )
+
+
 def build(group: str) -> list[Problem]:
     """Return the problems of one design group.
 
     group: "smooth" (preconditioning), "multimodal" (momentum drift), "headline"
-    (mixed units + non-convex response), "blr" (restart model: rastrigin, the
-    one problem where a restart has a stage), or "all" (the union of the four,
-    one entry per problem even though the groups overlap).
+    (the two real inverse problems: mixed units and a non-convex response),
+    "blr" (restart model: rastrigin, the one problem where a restart has a
+    stage), or "all" (the union of the four, one entry per problem even though
+    the groups overlap).
     """
     groups = {
-        "headline": lambda: [oscillator_chain()],
+        "headline": lambda: [oscillator_chain(), pk_chain()],
         "smooth": lambda: [diag_quadratic(), rotated_quadratic()],
         "multimodal": lambda: [ackley(), rastrigin()],
         "blr": lambda: [rastrigin()],

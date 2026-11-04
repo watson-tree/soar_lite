@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A sixth problem, `pk_chain_n21_d61`: a compartment-kinetics inverse problem
+  read in the time domain. A bidirectional chain of 21 compartments exchanges
+  first-order transfer rates `f_i` / `b_i` and eliminates at `gamma_i`, each in
+  its own unit and spanning four decades, for d = 3n-2 = 61 unknowns; a bolus
+  in each end at `t = 0` drives `dC/dt = A(k) C`, and the loss is a
+  log-squared discrepancy against a hidden design's concentrations on three
+  observed compartments over a dyadic geometric time grid. Its coupling is
+  nearest-neighbour in a compartment graph - the structure the diagonal
+  approximation is built for - so it is the second real inverse problem on
+  soar-lite's side of the panel's dividing line, without repeating the
+  oscillator's physics. Two design features are measured rather than assumed
+  and are argued in the docstring: a single bolus leaves most of the rates
+  unconstrained, and the window's tail falls below the assay limit, so those
+  samples are dropped instead of scored against a numerical floor. The
+  repeated-squaring form of the dyadic grid (`expm(A t_j) = expm(A t_0)**(2**j)`)
+  is what makes a 20-seed x 3000-batch run affordable at all - the direct form
+  cost ~150 ms per batch instead of ~4 ms. `ADAM_LR` gains the one entry in the
+  whole table that is a strict interior optimum of the sweep (`lr=1e-1`).
+- The compartment problem's 20-seed x 3000-batch measurement, in `RESULTS.md`
+  as a supplement to the v3 entry: a sixth problem is a row added to the
+  lineup, so nothing was re-measured and nothing is superseded.
+- `experiments/DESIGN.md`: a "What the problem set can support" section. The
+  panels are a **matchup table, not a verdict** - two real problems is a sample
+  of two, both on the same side of the property that decides the outcome - and
+  the dividing line is stated as *structure* (banded, diagonal-trustworthy
+  coupling vs dense rotation, with gradient-free multimodal relief belonging to
+  neither) rather than "scientific vs toy". It also records that L-BFGS-B is
+  not a ceiling on the compartment problem, so the smooth panel's reading does
+  not transfer to it.
 - A `soar-lite n_paths=1, mu=0.9` arm on the P① and P② panels. Its window is
   ~1/(1-0.9) = 10 steps, the same window Adam's first moment runs at `b1=0.9`,
   so the panels can ask whether the secant beats Adam's RMS at Adam's momentum

@@ -21,6 +21,91 @@ Unless a table says otherwise it holds **medians**, the statistic the figures
 plot. The harness's stdout line is `final mean best` — mean, not median, and
 not comparable with the tables below.
 
+## 2026-11-04 — lineup v4 supplement: the compartment-kinetics problem
+
+Budget 20 seeds x 3000 batches, `headline` panel, at the code of this commit.
+This is a **row added to the lineup**, not a new lineup: `pk_chain_n21_d61` is a
+sixth problem, so it has no previous measurement to supersede and no other
+panel was re-measured for it. Every trace file listed below is new.
+
+Why a sixth problem: the panel had one real inverse problem (the oscillator, a
+frequency-domain one) and a synthetic stand-in for dense rotational coupling.
+The compartment chain is a real *time-domain* one, and it sits on exactly the
+structure the diagonal approximation is built for — nearest-neighbour coupling
+in a compartment graph, rates spanning four decades — without repeating the
+oscillator's physics. It is the second real problem and the first one whose
+loss has coupled near-flat directions rather than resonance non-convexity.
+
+| arm | median | Q1 | Q3 | worst seed | seeds above 1e-2 |
+| --- | --- | --- | --- | --- | --- |
+| soar `n_paths=16`, mu=0.63 | 4.51e-7 | 2.93e-7 | 7.52e-7 | 1.54e-6 | 0/20 |
+| soar `n_paths=1`, mu=0.63 | 3.66e-5 | 6.11e-6 | 5.70e-5 | 1.69e-4 | 0/20 |
+| soar `n_paths=1`, mu=0 | 2.06e-5 | 2.21e-6 | 6.52e-5 | 1.30e-3 | 0/20 |
+| soar `n_paths=1`, mu=0.9 | 3.14e-4 | 3.99e-5 | 3.47e-4 | 2.13 | 1/20 |
+| Adam `lr=1e-1` | 2.51e-4 | 1.11e-4 | 7.15e-4 | 2.28e-3 | 0/20 |
+| L-BFGS-B | 5.06e-3 | 3.68e-5 | 4.40e-1 | 6.17 | 9/20 |
+
+Median best-so-far along the budget (batches 100 / 300 / 1000 / 3000):
+
+| arm | 100 | 300 | 1000 | 3000 |
+| --- | --- | --- | --- | --- |
+| soar `n_paths=16` | 2.55e-5 | 6.22e-7 | 4.51e-7 | 4.51e-7 |
+| soar `n_paths=1`, mu=0.63 | 3.12e-4 | 7.69e-5 | 5.63e-5 | 3.66e-5 |
+| soar `n_paths=1`, mu=0 | 5.30e-3 | 2.18e-5 | 2.08e-5 | 2.06e-5 |
+| soar `n_paths=1`, mu=0.9 | 2.74e-1 | 9.14e-4 | 5.42e-4 | 3.14e-4 |
+| Adam `lr=1e-1` | 2.47 | 9.00e-1 | 2.30e-2 | 2.51e-4 |
+
+### Annotations
+
+**The win is real and it is a rate gap, not a ceiling.** At equal budget the
+serial arm ends ~7x under Adam and the wide arm ~560x under it. But Adam's row
+is still falling steeply when the budget runs out (2.30e-2 at 1000 batches to
+2.51e-4 at 3000), so unlike the rotated quadratic this is *not* a problem where
+the first-order method cannot reach the serial arm's accuracy — it is one where
+it is far slower and the budget here is what stops it. Saying "Adam cannot"
+would be a claim about a run that was never continued.
+
+**The wide arm carries most of the margin, and it stops early.** `n_paths=16`
+reaches its final median by batch 300 and is flat afterwards — 187 batches is
+all the batches figure shows it, so on that axis it is nearly a horizontal line
+from the start. The points figure is where its cost is paid.
+
+**`mu=0.9` hurts here, and one seed in twenty diverges.** Median 3.14e-4 sits
+above Adam's 2.51e-4, and one seed ends at 2.13 — a factor ~10 above the problem's
+starting loss. This is the mirror image of the oscillator, where the same arm is
+the best serial column: a 10-step momentum window is a trade, and four decades
+of rate spread is the regime that punishes it, because averaging gradients over
+a window mixes coordinates whose scales differ by 1e4.
+
+**L-BFGS-B is the least reliable arm here, not the ceiling.** Its Q1 (3.68e-5)
+is better than Adam's median, its median (5.06e-3) is worse than Adam's, and 9
+of 20 seeds end above 1e-2. The distribution is bimodal, not noisy. A
+throwaway probe against `problems.pk_chain()` (not part of the lineup) shows
+why: started exactly at the truth it stops after one evaluation at `f = 7e-33`,
+but started at `truth * 1.05` it walks to a box edge and rests at `7.6e-4` with
+coordinates up to 3x off. The loss is non-convex in the *coupled* sense —
+individual coordinates are visible (moving one to a box edge changes the loss
+by a median ~0.3) but several can move together and stay near the floor — so a
+full-memory serial line search with no per-coordinate scaling lands in a bad
+basin about half the time. The smooth panel's "exact curvature is the ceiling"
+reading does not transfer to this problem.
+
+**Adam's lr is the sweep's only strict interior optimum.** The grid gives 5.03
+at `1e-2`, 1.10e-3 at `1e-1`, 2.75e-2 at `2e-1` (2 seeds, 3000 batches, the
+`--lr-sweep` run that produced the appendix figure): both neighbours are far
+worse, so this pick is a real optimum rather than an edge point or one of a tie.
+It is also the only problem in the table where that is true.
+
+**Identifiability, measured on the shipped problem** (construction check, not a
+lineup measurement): moving one coordinate at a time from the truth to a box
+edge makes the loss visible (>1e-6) for 17/20 transfer, 19/20 backward and
+20/21 elimination rates in the ×4 direction, and 17/20, 19/20, 15/21 in the ×¼
+direction. The weak block is elimination: a far compartment's clearance rate is
+weakly constrained, which is the real ill-conditioning of compartment fitting
+rather than a defect. The design that makes the transfer and backward rates
+visible at all is the second bolus — with one end dosed the far rates barely
+move the loss, which is why the problem doses both ends.
+
 ## 2026-11-04 — figure rule: each axis truncates at its own shortest extent
 
 No trace was re-measured; every number in this file stands. What changed is where

@@ -59,14 +59,34 @@ and the momentum (`mu` 0 → the default); each curve moves exactly one.
 
 Four run groups plus two appendix panels, one role each:
 
-1. **Headline — broadband device design (borrowed recipe).** A N-stage
-   coupled-oscillator / vibration-isolation network. Per-stage parameters carry
-   heterogeneous physical units: mass `m_k` [kg], stiffness `k_k` [N/m],
-   damping `c_k` [N·s/m]. N=20 → d≈60.
-   Loss = `Σ_j log₁₀(|H(ω_j)| / |H_target(ω_j)|)²` over a log-spaced grid, with
-   `H` the (banded, linear) frequency response. Synthetic target design → known
-   `f* = 0`; boxes are physical ranges. Serves **P② + unit-invariance**.
-   Landscape: non-convex via resonance/interference — *not* a funnel (see Risk).
+1. **Headline — the two real inverse problems.** Both mix physical units and
+   both have a non-convex response; one is read in the frequency domain, the
+   other in time. Keeping two of them is what stops the headline from resting
+   on one recipe, and they sit on the *same* side of the property that decides
+   the outcome (see "What the problem set can support" below) — which is the
+   honest limit of a sample of two.
+   - **Vibration isolation** (borrowed recipe). A N-stage
+     coupled-oscillator / vibration-isolation network. Per-stage parameters carry
+     heterogeneous physical units: mass `m_k` [kg], stiffness `k_k` [N/m],
+     damping `c_k` [N·s/m]. N=20 → d≈60.
+     Loss = `Σ_j log₁₀(|H(ω_j)| / |H_target(ω_j)|)²` over a log-spaced grid, with
+     `H` the (banded, linear) frequency response. Synthetic target design → known
+     `f* = 0`; boxes are physical ranges. Serves **P② + unit-invariance**.
+     Landscape: non-convex via resonance/interference — *not* a funnel (see Risk).
+   - **Compartment kinetics** (time domain). A bidirectional chain of `n`
+     compartments exchanging first-order transfer rates `f_i` / `b_i` and
+     eliminating at `gamma_i`, each in its own unit (1/h) and spanning four
+     decades; n=21 → d=61. Loss =
+     `Σ_{j,i} log₁₀(C_i(t_j) / C*_i(t_j))²` over a dyadic geometric time grid,
+     on three observed compartments, with a bolus in each end at `t = 0`.
+     Synthetic truth design → known `f* = 0`; boxes are truth × [¼, 4]. Serves
+     **P②** on exactly the coupling shape the diagonal approximation is built
+     for — nearest-neighbour in a compartment graph — without repeating the
+     oscillator's physics. Two of its features were forced by measurement, not
+     chosen: a single bolus leaves most of the rates unconstrained, and the
+     window's tail falls below the assay limit, so those samples are dropped
+     rather than scored. Both are argued and counted in `problems.pk_chain`
+     and `RESULTS.md`.
 2. **Smooth — the preconditioner's home and its boundary.**
    - **Diagonal control**: axis-aligned ill-conditioned quadratic `diag(10^i)`,
      d=100. Diagonal `H`, so soar-lite is Newton-exact in ~1 step (existing
@@ -104,6 +124,32 @@ Two appendix panels, property demos rather than races:
 6. **Adam lr sweep.** Log-scan of `lr` per problem, marking the panel pick
    (`ADAM_LR`) — the evidence that soar-lite has no learning rate where Adam
    pays a grid. Emitted by `--lr-sweep`.
+
+## What the problem set can support
+
+A panel is a **matchup table, not a verdict.** Two real problems is a sample of
+two, both on the same side of the one property that decides the outcome, so the
+set can say *where* each method wins. It cannot say one wins in general, and no
+figure here should be read as if it did.
+
+The dividing line is **structure, not "scientific vs toy"**:
+
+- **soar-lite's side** — smooth, near-separable, diagonal-trustworthy coupling
+  (banded or sparse), with heterogeneous per-coordinate scale. This is the
+  regime the per-coordinate secant reads as "approximately right, not exact".
+- **Adam's side** — strongly ill-conditioned *and* densely rotated, where the
+  off-diagonal terms dominate the Hessian and a diagonal reading of it is not
+  approximately right at all. That gap is structural, not a missing knob: the
+  quantity soar's preconditioner normalises is a secant ratio, which rotation
+  biases, while Adam's normalises a squared gradient, which it does not.
+- **neither** — gradient-free multimodal relief (Ackley), where the gradient
+  says nothing about where to move next.
+
+The `mu=0.9` column opens a second axis in the same panels, and its verdict is
+not uniform: a longer momentum window is a trade, and on the two real problems
+it lands on opposite sides of even. Neither real problem is on the rotated side
+of that dividing line, so the panel does not measure it — that gap is recorded
+in `RESULTS.md`, not papered over.
 
 ## dfbench (Learn2Design-2026) relationship
 
@@ -398,12 +444,19 @@ window is a knob with a measurable effect.
 
 ## Risk to remember
 
-The headline problem's "multimodality" is resonance/interference-type
-non-convexity, **not** the funnel type that Ackley/Rastrigin provide. The two
-complement each other; the headline must not be counted as covering the funnel
-slot. Watch whether the diagonal approximation's "approximately right, not
-exact" banded coupling actually lands the discriminator on soar-lite's side — a
-two-curve self-check decides before the full run.
+The headline problems' "multimodality" is resonance/interference-type
+non-convexity plus, in the compartment case, coupled near-flat directions where
+several rates move together; **not** the funnel type that Ackley/Rastrigin
+provide. The two complement each other; the headline must not be counted as
+covering the funnel slot. The banded-coupling question — whether the diagonal
+approximation's "approximately right, not exact" band lands the discriminator
+on soar-lite's side — is now measured on both headline problems, and the answer
+is yes at equal budget; `RESULTS.md` holds the numbers and the caveats,
+including that Adam was still descending when the budget ran out. Note also
+that L-BFGS-B is *not* a ceiling on the compartment problem: its median loses to
+the serial arm and it fails outright on a good fraction of seeds, because a
+full-memory serial line search with no per-coordinate scaling walks into a bad
+basin. Expecting the smooth panel's ceiling to transfer here would be wrong.
 
 The funnel slot has a known blind spot, and it is deliberate: no
 saddle/vanishing-gradient handling is built in. A Zhang-Li power iteration
