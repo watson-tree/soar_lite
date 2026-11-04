@@ -21,7 +21,142 @@ Unless a table says otherwise it holds **medians**, the statistic the figures
 plot. The harness's stdout line is `final mean best` — mean, not median, and
 not comparable with the tables below.
 
-## 2026-11-02 — lineup v2 (momentum arm, BLR restart panel) — CURRENT
+## 2026-11-04 — figure rule: each axis truncates at its own shortest extent
+
+No trace was re-measured; every number in this file stands. What changed is where
+the curves stop.
+
+**The points axis used to cut in batches.** That fixed an earlier unit error (the
+cut value was `max_steps`, a batch count, applied as a point count) but left the
+symptom it was meant to fix: an `n_paths=16` arm serves 16 points per batch, so
+on the points axis it ran to 48000 while every single chain ended at 3000, and
+its curve trailed alone past the last x where any other arm had data. Each axis
+now cuts at the shortest extent present **on that axis**: 3000 points on the
+points figure, 3000 batches on the batches figure. All curves end together.
+
+The wide arm therefore shows only its first ~187 of 3000 batches on that
+figure. That is the axis doing its job - equal objective points served - and the
+batches figure still shows the run whole. The `blr` panel is unaffected: all of
+its arms are `n_paths=16`, so it is never truncated on points (14368 against
+1000 batches, the identity arm having stopped at batch 898 on every seed).
+
+**Arm styles now encode one attribute each**: linestyle is `n_paths` (solid 1,
+dashed 16) and colour is the momentum level. `mu=0` was drawn dash-dot on the
+strength of being a special arm, but it is also `n_paths=1`, and only one of
+those two facts should decide a linestyle.
+
+## 2026-11-04 — lineup v3 supplement: the `mu=0.9` momentum arm
+
+Budget and code unchanged from the entry below (20 seeds x 3000 batches, the
+`headline` / `smooth` / `multimodal` panels at `878fda9`). This arm was measured
+after that entry as a **column added to it**, not a new lineup: nothing it
+measures is superseded.
+
+Why this arm exists: its window is about 10 steps, the same window Adam's first
+moment runs at `b1=0.9`, so the panels can ask the momentum question at Adam's
+reach as well as at soar's own. Adam was not moved to meet it - a baseline whose
+knobs mirror the method under test stops being one.
+
+| problem | mu=0.9 | mu=0.63 (default) | mu=0 | n_paths=16 | Adam |
+| --- | --- | --- | --- | --- | --- |
+| diag_quad_d100_cond10000 | 7.2e-9 | 1.9e-9 | 6.2e-61 | 1.5e-9 | 2.0e-63 |
+| rot_quad_d100_cond1e+06 | 25.1 | 42.0 | 90.2 | 24.7 | 0.499 |
+| oscillator_n20_F20 | 1.6e-5 | 9.2e-6 | 3.1e-5 | 4.5e-8 | 7.5e-5 |
+| ackley_d100 | 19.8 | 19.71 | 19.71 | 19.55 | 19.57 |
+| rastrigin_d100 | 1700 | 1615 | 722 | 1520 | 807.9 |
+
+Every column but `mu=0.9` restates the entry below; those numbers are that
+measurement, not a second one. L-BFGS-B is left out: it takes no `mu`, so the
+column would be the same numbers again.
+
+### Annotations
+
+**The arm answers a gap the v2 entry had to leave open.** That entry carries a
+`mu=0.9` column measured under the then-current *projected* momentum rule
+(rotated quadratic 44.1, oscillator 4.7e-6, rastrigin 1437) and says those cells
+"have not been re-measured" under the unprojected rule. They are measured now:
+25.1, 1.6e-5, 1700. The rotated case improved by ~40% when the projection was
+dropped, but this is **not** the controlled comparison it looks like - the
+engine changed in several other ways between the two lineups (the restart
+default, the fold refactor, the momentum read), so the change is not attributable
+to the projection alone.
+
+**Momentum's effect on rastrigin does not scale with the window.** Default to
+0.9 costs 5% (1615 -> 1700), while off to default costs 124% (722 -> 1615):
+the damage is done by having momentum history at all on that landscape, not by
+how far back it reaches. On rastrigin no momentum level recovers the `mu=0`
+floor.
+
+**The rotated quadratic is the one landscape that pays**, and it pays a lot:
+90.2 (`mu=0`) -> 42.0 (default) -> 25.1 (`mu=0.9`), all but reaching what the
+16-wide arm gets (24.7). Read that as confirming where momentum helps rather
+than as a reason to raise the default - the same `mu=0.9` costs 3.8x on the
+diagonal quadratic, where `mu=0` is exact, and the oscillator is non-monotone in
+`mu` (1.6e-5 at 0.9 against 9.2e-6 at the default).
+
+## 2026-11-04 — lineup v3 (`mu=0.63` default, BLR panel at its own budget) — CURRENT
+
+Budget: 20 seeds x 3000 batches for `headline`, `smooth`, `multimodal` and
+`invariance`; **20 seeds x 1000 batches for `blr`**, which has its own budget
+(see `DESIGN.md`). The traces were measured at `878fda9`; the figures were
+redrawn after the truncation fix noted below.
+
+Wall clock, as a record rather than an expectation: 4h38m for `blr` and 1h38m
+for the other four groups. The `blr` panel did **not** scale down with its
+budget — its cost is the restart proposal's acquisition descent, not the batch
+count, and the `blr-sphere` arm alone took about three hours.
+
+### P② and P① medians, batches axis
+
+The `n_paths=1` column is the arm that takes the engine default, so in this
+entry it carries `mu=0.63`; the momentum-off arm is spelled out beside it.
+
+| problem | n_paths=1 (mu=0.63) | n_paths=16 | n_paths=1, mu=0 | Adam | L-BFGS-B |
+| --- | --- | --- | --- | --- | --- |
+| diag_quad_d100_cond10000 | 1.9e-9 | 1.5e-9 | 6.2e-61 | 2.0e-63 | 9.4e-8 |
+| rot_quad_d100_cond1e+06 | 42.0 | 24.7 | 90.2 | 0.499 | 1.4e-4 |
+| oscillator_n20_F20 | 9.2e-6 | 4.5e-8 | 3.1e-5 | 7.5e-5 | 7.3e-3 |
+| ackley_d100 | 19.71 | 19.55 | 19.71 | 19.57 | — |
+| rastrigin_d100 | 1615 | 1520 | 722 | 807.9 | — |
+
+### BLR panel medians, 1000 batches (rastrigin, all arms `n_paths=16`)
+
+| arm | median best |
+| --- | --- |
+| Sample draws | 1551 |
+| BLR identity | 275.5 |
+| BLR sphere | 738.5 |
+
+### Annotations
+
+**The `Sample draws` row is read off a shared arm file, and nothing was lost.**
+The multimodal panel re-measured that same arm at 3000 batches in the same
+session, so the file holds the longer trace. The run is prefix-deterministic —
+same seeds, same steps — so the first 1000 batches of that trace *are* the
+1000-batch run: its median at batch 1000 (1551) and its mean (1.5489e+03) both
+reproduce the `blr` phase's own log line. The `blr` figure truncates the arm at
+the panel's budget instead of re-measuring it.
+
+**v3 is not a re-measurement of v2, and the two cannot be subtracted.** Between
+the lineups `DiagonalPreconditioner`'s default `mu` moved from 0 to 0.63 (one
+window, two knobs: `beta=mu=0.63`), and the `mu=0.9` arm was retired with the
+projected momentum direction. Every arm above therefore ran at a setting no v2
+arm had. v3 carries its own momentum contrast (`n_paths=1, mu=0`); cross-entry
+differences would confound the default change with the measurement.
+
+**The points axis now truncates in batches, at the shortest budget present.**
+It used to cut every arm at `max_steps` *points* — a unit error that stopped an
+`n_paths=16` arm after ~187 batches and flattened all three `blr` arms onto
+their initial value, so the figure showed one line inside a narrow y band. The
+cut is now at the panel's own budget in batches, and a panel whose arms
+disagree prints which budget it used. This is a figure change only: no trace
+was re-measured, and the same-budget panels are unaffected.
+
+**Traces and figures now live in separate trees.** `experiments/results/` holds
+only per-(problem, arm) JSON; the panels were moved verbatim to
+`experiments/figures/<panel>/`.
+
+## 2026-11-02 — lineup v2 (momentum arm, BLR restart panel) — SUPERSEDED by the v3 entry
 
 Budget: 20 seeds x 3000 batches, all five groups (`headline`, `smooth`,
 `multimodal`, `invariance`, `blr`). Code: `experiments/` at `18c146b`.

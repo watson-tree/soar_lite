@@ -76,20 +76,25 @@ flat over `1e-3..2e-1` and the pick sits ~5% below it.
 
 ## Outputs
 
-All in `experiments/results/` (gitignored — regenerated, not source). The unit
-is one **(problem, arm)** pair, so a rerun touches one file:
+Two trees, both gitignored — regenerated, not source. `experiments/results/`
+holds traces, `experiments/figures/` holds what was drawn from them, so a
+figure is always re-derivable and a trace never is. The unit is one
+**(problem, arm)** pair, so a rerun touches one file:
 
 - `results/<problem>/<arm-key>.json` — that arm's raw per-seed trace on that
   problem: points, batches, best-so-far per step, final value, and a `meta`
   block naming the problem, the arm key, the seed count and the budget. Raw, not
   resampled: the grid is a plotting decision that depends on which other arms
   are present.
-- `results/<group>/batches.png` — budget axis: batches served.
-- `results/<group>/points.png` — budget axis: objective points served (the
-  serial contest, pinned in ADR-0004).
-- `results/invariance/invariance.png` — panel 5, one physics in two unit systems,
+- `figures/<group>/batches.png` — budget axis: batches served.
+- `figures/<group>/points.png` — budget axis: objective points served (the
+  serial contest, pinned in ADR-0004). Every arm is cut at the shortest extent
+  present **on that axis**, so all curves end together: an `n_paths=16` arm
+  serves 16 points per batch, so here it shows only the first ~187 of its 3000
+  batches. That is what the axis is for, not a clipped result.
+- `figures/invariance/invariance.png` — panel 5, one physics in two unit systems,
   zero re-tune.
-- `results/lr_sweep/lr_sweep.png` — the Adam grid sweep.
+- `figures/lr_sweep/lr_sweep.png` — the Adam grid sweep.
 - Every curve plots the **median** best-so-far with the **[Q1, Q3] interquartile
   band** (not mean ± std — a skewed spread would read as symmetric and dip
   below the log axis).
@@ -118,16 +123,21 @@ a half-filled panel is visible rather than plausible.
 - **Fixed seeds**: `range(n_seeds)` from 0; every runner takes the seed, and JAX
   uses it for the start point and every stochastic step. Same lock + same seed
   ⇒ same number.
-- **Zero knobs on soar-lite**: its two start lengths / grid sizes ship inert
-  (`n_alpha=1`, `alpha0=1`); the formal runs use factory defaults end to end.
-  Adam pays the per-problem lr grid each time — that asymmetry is the point.
+- **No *tuned* knobs on soar-lite** — which is not the same as no knobs.
+  `DiagonalPreconditioner` exposes eight (`moment`, `beta`, `theta`, `mu`,
+  `alpha0`, `n_alpha`, `backtrack`, `tau_rel`), and two of them are live
+  smoothing windows: `beta` sets the preconditioner's memory and `mu` the
+  direction's, so neither is inert. What the formal runs do is take them at
+  their factory defaults end to end, so soar-lite pays no per-problem search;
+  Adam pays the per-problem lr grid each time. That asymmetry is about
+  *tuning*, not about having parameters, and it is the point.
 - **No seam on soar-lite either**: the comparison runs the factory
   `value_and_grad` path — no `eval_f` (value-only) seam — so every batch the
   axis counts is a full value+gradient batch. The only attributes stepped are
-  `n_paths` (1 → 16) and `mu` (0 → the class default); `restart_stalled` stays
-  at its engine default (on) in every arm, and the blr panel injects its restart
-  model through the public `model=` factory (`BLRGlobalModel`; the other arms
-  use the default `SampleGlobalModel`).
+  `n_paths` (1 → 16) and `mu` (0 → 0.9 → the class default); `restart_stalled`
+  stays at its engine default (on) in every arm, and the blr panel injects its
+  restart model through the public `model=` factory (`BLRGlobalModel`; the other
+  arms use the default `SampleGlobalModel`).
 - **Canvas only in-repo**: `experiments/DESIGN.md` is the design and the
   story; figures are drawn from the trace files, never hand-tuned.
 

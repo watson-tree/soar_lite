@@ -103,7 +103,8 @@ from soar_lite import (
 )
 
 HERE = Path(__file__).parent
-RESULTS = HERE / "results"
+RESULTS = HERE / "results"  # traces only: one file per (problem, arm)
+FIGURES = HERE / "figures"  # one directory per panel
 Runner: TypeAlias = Callable[..., Trace]
 
 
@@ -134,15 +135,21 @@ DEFAULT_MU = DiagonalPreconditioner().mu
 LABEL_SERIAL = f"soar-lite n_paths=1, mu={DEFAULT_MU:g} (default)"
 LABEL_PARALLEL = f"soar-lite n_paths=16, mu={DEFAULT_MU:g}"
 LABEL_NO_MOMENTUM = "soar-lite n_paths=1, mu=0 (momentum off)"
+LABEL_MOMENTUM_09 = "soar-lite n_paths=1, mu=0.9 (Adam's window)"
 # The blr panel's arms: one method, three restart models, so nothing but where
 # a restart lands differs.
 LABEL_BLR_SAMPLE = "n_paths=16, Sample draws"
 LABEL_BLR_IDENTITY = "n_paths=16, BLR identity"
 LABEL_BLR_SPHERE = "n_paths=16, BLR sphere"
 
+# Style grammar: linestyle encodes `n_paths` (one solid line per width: 1 ->
+# solid, 16 -> dashed) and colour encodes the momentum level. Without a rule
+# like this two single-path arms read as different kinds of object because one
+# of them happens to switch momentum off.
 STYLE_SERIAL: dict[str, Any] = {"color": "C0", "lw": 2.0}
 STYLE_PARALLEL: dict[str, Any] = {"color": "C0", "lw": 2.0, "ls": "--"}
-STYLE_NO_MOMENTUM: dict[str, Any] = {"color": "C6", "lw": 1.5, "ls": "-."}
+STYLE_NO_MOMENTUM: dict[str, Any] = {"color": "C6", "lw": 1.5}
+STYLE_MOMENTUM_09: dict[str, Any] = {"color": "C1", "lw": 1.5}
 
 
 def _model_for(model: str) -> Callable[[jnp.ndarray], GlobalModel] | None:
@@ -249,16 +256,31 @@ LBFGS_ARM = Arm(
 
 
 def _soar_ladder() -> list[Arm]:
-    """Build the soar-lite ladder both proposition panels read: width, momentum.
+    """Build the soar-lite roster both proposition panels read: one knob at a time.
 
-    Three arms, each one attribute from its neighbour: `n_paths` 1 -> 16 at the
-    default `mu`, then `mu` default -> 0 at `n_paths=1`. The momentum-off arm is
-    what shows the diagonal sweet spot landing in a single step, which the
-    default's `mu` gives up near a minimiser - a cost the panel should show, not
-    state.
+    A partial grid, not a chain: the momentum axis runs at `n_paths=1` (`mu`
+    0.63 / 0.9 / 0) and one width step (`n_paths` 1 -> 16) sits at the default
+    `mu`. The momentum-off arm is what shows the diagonal sweet spot landing in
+    a single step, which the default's `mu` gives up near a minimiser - a cost
+    the panel should show, not state.
+
+    The `mu=0.9` arm reads the momentum *horizon*, and it is a comparison arm,
+    not a tuned one: its window is ~1/(1-0.9) = 10 steps, the same window Adam's
+    first moment runs at `b1=0.9`, so the panel can ask whether the secant beats
+    Adam's RMS at Adam's momentum reach as well as at ours. Adam itself stays at
+    its own defaults - a baseline whose knobs are moved to mirror the method
+    under test stops being the baseline. This arm is the current, unprojected
+    momentum; the `mu=0.9` column retired from the v2 tables was the *projected*
+    direction, a different rule whose numbers are not these.
     """
     return [
         soar_arm(n_paths=1, mu=DEFAULT_MU, label=LABEL_SERIAL, style=STYLE_SERIAL),
+        soar_arm(
+            n_paths=1,
+            mu=0.9,
+            label=LABEL_MOMENTUM_09,
+            style=STYLE_MOMENTUM_09,
+        ),
         soar_arm(
             n_paths=16,
             mu=DEFAULT_MU,
@@ -473,23 +495,29 @@ def _draw_problem(
         print(f"  no trace: {prob.name}: {', '.join(missing)}")
     if not present:
         return False
-    # One budget for the point-axis truncation: the largest any present arm ran
-    # at, so an arm measured at a smaller budget is simply shown to its own end.
-    budget = max(loaded.max_steps for _, loaded in present)
+    # Cut every arm at the shortest extent **of the axis being drawn**: one arm
+    # can be shared with a panel that runs longer, and a curve that outlives the
+    # others on x reads as a comparison it is not. The unit is the axis's own -
+    # batches are level across arms, points are not, since a point count is
+    # exactly what n_paths inflates and an n_paths=16 arm would otherwise trail
+    # 16x past every single chain. A panel whose arms are all one width is
+    # untouched by this, so this cannot starve a wide arm of its own run.
+    xcol = 0 if axis == "points" else 1
+    xmax = min(
+        max(
+            float(t.as_arrays()[xcol].max()) for t in loaded.traces if len(t.points) > 0
+        )
+        for _, loaded in present
+    )
+    if len({loaded.max_steps for _, loaded in present}) > 1:
+        print(f"  mixed budgets: {prob.name}: cutting all arms at {xmax:g} {axis}")
     shown = {
-        arm.key: [_up_to(t, budget) if axis == "points" else t for t in loaded.traces]
+        arm.key: [_up_to(t, axis, xmax) for t in loaded.traces]
         for arm, loaded in present
     }
-    col = 0 if axis == "points" else 1
-    xmax = max(
-        float(t.as_arrays()[col].max())
-        for traces in shown.values()
-        for t in traces
-        if len(t.points) > 0
-    )
-    # Log-spaced: an n-path run finishes its batches far earlier than a single
-    # chain finishes its points, and a linear grid would squash the batched
-    # curve into the left edge of the axis.
+    # Log-spaced: the descent these panels are about happens in the first
+    # decade of served cost, and a linear grid would compress it into the left
+    # edge of the axis.
     grid = np.logspace(0.0, np.log10(xmax), 120)
     grid[-1] = xmax  # logspace rounds the last sample past its own end
     for arm, _ in present:
@@ -546,9 +574,10 @@ def _summary(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return med, q1, q3
 
 
-def _up_to(trace: Trace, max_points: int) -> Trace:
-    """Return the first ``max_points`` objective points of a run, nothing else."""
-    stop = sum(1 for p in trace.points if p <= max_points)
+def _up_to(trace: Trace, axis: str, max_x: float) -> Trace:
+    """Return the part of a run that served at most ``max_x`` units of ``axis``."""
+    x = trace.points if axis == "points" else trace.batches
+    stop = sum(1 for v in x if v <= max_x)
     return Trace(
         points=trace.points[:stop],
         batches=trace.batches[:stop],
@@ -620,7 +649,7 @@ def run_lr_sweep(n_seeds: int, max_steps: int) -> None:
         "rot & oscillator still falling at lr=2.0 (edge); rastrigin flat < 2e-1",
     )
     fig.tight_layout()
-    out = RESULTS / "lr_sweep" / "lr_sweep.png"
+    out = FIGURES / "lr_sweep" / "lr_sweep.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150)
     plt.close(fig)
@@ -690,7 +719,7 @@ def run_invariance(n_seeds: int, max_steps: int) -> None:
     ax.grid(alpha=0.25, which="both")
     fig.suptitle("panel 5 - unit-rescaling consistency")
     fig.tight_layout()
-    out = RESULTS / "invariance" / "invariance.png"
+    out = FIGURES / "invariance" / "invariance.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150)
     plt.close(fig)
@@ -771,7 +800,7 @@ def main() -> None:
             if group in {"invariance", "lr_sweep"}:
                 print(f"{group} writes no trace files; rerun --groups {group} (fast)")
                 continue
-            plot_panel(group, RESULTS / group)
+            plot_panel(group, FIGURES / group)
         return
 
     groups = ["smooth"] if args.quick else args.groups.split(",")
@@ -792,7 +821,7 @@ def main() -> None:
             problems_filter=problems_filter,
             arms_filter=arms_filter,
         )
-        plot_panel(group, RESULTS / group)
+        plot_panel(group, FIGURES / group)
 
 
 if __name__ == "__main__":

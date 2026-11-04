@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A `soar-lite n_paths=1, mu=0.9` arm on the P① and P② panels. Its window is
+  ~1/(1-0.9) = 10 steps, the same window Adam's first moment runs at `b1=0.9`,
+  so the panels can ask whether the secant beats Adam's RMS at Adam's momentum
+  reach as well as at soar's own. Adam is left at its defaults: a baseline whose
+  knobs are moved to mirror the method under test stops being a baseline, and
+  `b1=b2=0.63` is not a sensible Adam either - its second moment would get a
+  ~2.7-step memory for a quantity that wants a long one. The arm is the current,
+  unprojected momentum, not the *projected* `mu=0.9` column retired from the v2
+  tables.
+- The `mu=0.9` arm's 20-seed x 3000-batch measurement, in `RESULTS.md` as a
+  supplement to the v3 entry (5 problems, one new column, three annotations).
+  It ran through `--arms`, and that is the demonstration the storage refactor
+  was for: the run wrote five trace files and left the other twenty-five
+  byte-identical, so re-measuring one arm no longer re-runs the panel that holds
+  it. The figures were redrawn by the same run and pick the new arm up beside
+  the existing ones.
 - `experiments/DESIGN.md`: the restart-model panel now carries its external
   evidence. Tripp and Fable (2026) run the same inverse-stereographic projection
   against an unprojected linear head on rover (60D), lasso-DNA (180D) and SVM
@@ -80,6 +96,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mu = 0` stores no history at all.
 
 ### Changed
+
+- Each figure axis now truncates at the shortest extent present **on that axis**
+  (3000 points / 3000 batches), instead of cutting both axes in batches. The
+  points axis is not level across arms - a point count is what `n_paths`
+  inflates - so an `n_paths=16` curve used to trail 16x past every single chain
+  on its own, to 48000 against 3000. Every curve now ends at the same x. No
+  trace was re-measured. The `blr` panel, whose arms are all one width, is not
+  truncated on points, so the earlier "wide arm cut to ~187 batches" bug does
+  not come back.
+- Arm styles encode one attribute each: linestyle is `n_paths` (solid 1, dashed
+  16), colour is the momentum level. `mu=0` is `n_paths=1` and now draws solid,
+  like the other single-path arms; it had been dash-dot for being an exception,
+  which made one width look like two kinds of object.
+
+- The experiments docs no longer claim soar-lite has "zero knobs". It exposes
+  eight (`moment`, `beta`, `theta`, `mu`, `alpha0`, `n_alpha`, `backtrack`,
+  `tau_rel`), and `beta` and `mu` are live smoothing windows that the panels step
+  rather than inert placeholders. What is true is narrower and is what the docs
+  now say: the formal runs take them at their factory defaults end to end, so
+  soar-lite pays no *per-problem* search while Adam pays an lr grid each time.
+  The claim was about tuning and was written as if it were about parameters.
+
+- `experiments/` keeps traces and figures in two trees: `results/` holds only
+  the per-(problem, arm) JSON, and the panels moved verbatim to
+  `figures/<group>/`. They were sharing one directory per panel, so "where is
+  the data" and "where is the picture" had the same answer.
+- The points-axis truncation cut every arm at `max_steps` *points*, a unit
+  error: `max_steps` is a batch count, so an `n_paths=16` arm was stopped after
+  ~187 batches and the three `blr` arms - none of which restarts that early -
+  collapsed onto one line at their initial value inside a narrow y band. Every
+  arm is now cut in batches at the **shortest** budget present, which is what
+  makes arms that ran at different budgets comparable at all, and a panel whose
+  arms disagree prints the budget it used. No trace was re-measured; the
+  same-budget panels are unaffected.
+- `experiments/DESIGN.md` records that the `blr` panel has its own budget (1000
+  batches, not 3000) with its two consequences, and states the panel's standing
+  asymmetry: a fitted restart descends the acquisition over its surrogate, and
+  those reads are not charged against the batch budget, so the comparison is a
+  surrogate against no surrogate rather than a cost-matched one.
+- `experiments/DESIGN.md` adds two reading rules for the `mu=0.63` default:
+  momentum is a trade rather than a uniform win, and where every method
+  converges the number to read is the rate, not the floor - a floor at machine
+  precision is a statement about each method's stopping rule.
 
 - `experiments/` stores one file per (problem, arm) instead of one file per
   panel: `results/<problem>/<arm-key>.json` holds that arm's raw per-seed trace,

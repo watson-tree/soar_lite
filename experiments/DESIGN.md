@@ -126,21 +126,44 @@ step moves exactly one knob (`n_paths` or `mu`); restart stays at the engine
 default (on) in every arm:
 
 - **Smooth + headline** (**P②**): `soar-lite n_paths=1` (default `mu`),
-  `soar-lite n_paths=16`, `soar-lite n_paths=1, mu=0` (momentum off), `Adam`
-  (grid lr), `L-BFGS-B` (ceiling *reference*, not a head-to-head baseline —
-  full-memory + serial line search vs our per-coordinate + batched n_paths).
-- **Multimodal** (**P①**): the same three soar-lite arms, `Adam` (grid lr).
-  The momentum-off arm is the P① contrast: with `mu=0.63` as the default, the
-  ladder is off / on rather than a third hand-set strength.
+  `soar-lite n_paths=1, mu=0.9`, `soar-lite n_paths=16`,
+  `soar-lite n_paths=1, mu=0` (momentum off), `Adam` (grid lr), `L-BFGS-B`
+  (ceiling *reference*, not a head-to-head baseline — full-memory + serial line
+  search vs our per-coordinate + batched n_paths).
+- **Multimodal** (**P①**): the same four soar-lite arms, `Adam` (grid lr).
+  The momentum axis runs at `n_paths=1` — 0.9, the default, 0 — so the curve
+  family differs from its neighbours by one knob, and the `mu=0.9` arm asks the
+  momentum question at **Adam's own horizon** instead of ours: 0.9 is a 10-step
+  window (~1/(1-0.9)), the same window Adam's first moment runs at `b1=0.9`.
+  Adam keeps its defaults rather than being refitted to mirror soar — a baseline
+  whose knobs are moved to match the method under test stops being a baseline,
+  and `b1=b2=0.63` would not even be a sensible Adam (its second moment would
+  get a ~2.7-step memory for a quantity that wants a long one). The arm also
+  tests the *default* rather than the direction: if the momentum trade described
+  below were an artefact of a short window, a ten-step window would remove the
+  cost. It does not - the cost stays and only the landscape moves the sign - so
+  the trade belongs to the mechanism, not to the horizon. `RESULTS.md` holds the
+  numbers.
 - **BLR** (**restart model**, rastrigin alone, its own figure, all
   `n_paths=16`): `Sample draws`, `BLR identity`, `BLR sphere` — one method,
   three restart models, so nothing but where a restart lands differs.
+
+  This panel measures **a surrogate against no surrogate**, and only that. A
+  fitted restart's proposal is found by descending the acquisition over the
+  surrogate, and those evaluations are not charged: the batch budget counts the
+  `eval_f_g` calls the engine serves, and a model read is not one of them.
+  `Sample draws` spends its whole budget on the function; the two fitted arms
+  spend the same function budget **plus** an unbilled search over their own
+  model. So the comparison is about which landing place is better, not about
+  what it costs - a cost-matched fitted arm would have to pay for its
+  acquisition descent out of the same budget, and that variant is not measured.
+  Read every `blr` gap with that asymmetry in hand.
 - **Invariance**: `soar-lite` (n_paths=1) vs `Adam`, two unit systems, overlaid
   after the coordinate transform.
 
-The width step (`n_paths` 1 → 16) and the momentum step (`mu` 0 → default) are
-the two single-attribute knobs; a single `n_paths=16` curve that also flipped
-restart would charge the whole gap to "parallelism". Restart is not a step the
+The width step (`n_paths` 1 → 16) and the momentum steps (`mu` default → 0.9 and
+default → 0) are the single-attribute moves; a single `n_paths=16` curve that
+also flipped restart would charge the whole gap to "parallelism". Restart is not a step the
 panels take: a probe showed stalls fire only where a method has already settled
 into a basin (the diagonal quadratic, rastrigin), never on the rotated
 quadratic, Ackley or the oscillator.
@@ -188,9 +211,17 @@ NAAdam (Adam + `σ_t = σ0/√t` decaying Gaussian noise) was measured and
 **dropped**: on ackley/rastrigin at d=100 the noise never separates from plain
 Adam — larger `σ0` is flat (rastrigin) to worse (ackley) — so it would only be
 a redundant, exactly-overlapping curve. The multimodal panel is therefore
-`soar-lite` n_paths=1 (default `mu`) / 16 / (1, `mu=0`) vs `Adam`, which is the
+`soar-lite` n_paths=1 (default `mu`, `mu=0.9`, `mu=0`) / 16 vs `Adam`, which is the
 honest contrast: momentum is read as a *drift* on these landscapes, not
 asserted to be an escape mechanism in general.
+
+Two rules keep the `mu=0.63` default from being over-read. Momentum is a
+**trade, not a uniform win**: it costs where the choice of basin dominates and
+pays where off-diagonal coupling does, and the lattice landscape that pays the
+cost is not the headline. And on a landscape where every method converges, the
+number to read is the **rate**, not the floor reached — each method stops on its
+own criterion, so a floor at machine precision is a statement about the stopping
+rule rather than about the algorithm.
 
 Adam learning rate is **per-problem grid-tuned**: the picks span over two
 orders of magnitude (diag and Ackley 1e-2 → rotated quadratic and oscillator
@@ -259,9 +290,12 @@ is **unmeasured**, and deliberately left open: `alpha0` names the one
 hard-coded `=1` in `_reset_step`, `n_alpha` stays as `1`-inert, both exposed so
 the relief is available if a harder landscape ever shows the symptom. The
 defaults are not a claim that the knobs are useless elsewhere — they are a
-contract on the *benchmark*: the formal runs contribute zero knobs (Adam pays a
-per-problem lr grid each time), so "no tuning" is a fact about the benchmark,
-not a universal theorem about the method.
+contract on the *benchmark*: the formal runs contribute no **tuned** knobs (Adam
+pays a per-problem lr grid each time), so "no tuning" is a fact about the
+benchmark, not a universal theorem about the method. "No tuning" is also not
+"no parameters": the class exposes eight, and `beta` and `mu` are live windows,
+not inert placeholders — the `mu=0.9` arm exists precisely because the momentum
+window is a knob with a measurable effect.
 
 ## Budget, statistics, outputs
 
@@ -278,17 +312,27 @@ not a universal theorem about the method.
   - **batches** figure — every method 3000 batches. This is the wall-clock axis
     of a batched setting, and the only axis where `n_paths=16` and a single chain
     compare at equal cost per step; it is the main chart.
-  - **points** figure — each run truncated at 3000 objective points, the fair
-    information unit of a serial setting. A chain spends exactly one point per
-    batch, so `n_paths=16` shows only its first ~187 batches there.
+  - **points** figure — the same runs on the information unit of a serial
+    setting. Unlike the batch axis, a point axis is *not* level across arms: a
+    point count is what `n_paths` inflates, so an `n_paths=16` arm serves 16
+    points per batch and would trail 16x past every single chain - 48000 against
+    3000 on these runs. Every arm is therefore cut at the shortest extent present
+    **on the points axis**, so all curves end together and the wide arm shows the
+    first ~187 of its 3000 batches. That truncation is the reading, not a loss:
+    the axis asks what each method bought from the same number of objective
+    points served, and the batches figure is where the wide arm is shown whole.
+    The rule is per-axis, so a panel whose arms share one width (the `blr` panel,
+    all `n_paths=16`) is not truncated at all.
 - Seeds `N=20`; report **median, shaded [Q1, Q3]** (interquartile band), log-y,
   log x — mean ± std would model a skewed best-so-far spread as symmetric and
   dip below the log axis.
-- Outputs live under `experiments/results/`, one file per **(problem, arm)**:
-  `results/<problem>/<arm-key>.json` holds that arm's raw per-seed trace (points,
-  batches, best-so-far, final value), plus `results/<group>/{batches,points}.png`
-  assembled from it, `results/invariance/invariance.png` and
-  `results/lr_sweep/lr_sweep.png`. A panel is a roster over arm files, not a
+- Outputs are split by kind. `experiments/results/` holds traces only, one file
+  per **(problem, arm)**: `results/<problem>/<arm-key>.json` with that arm's raw
+  per-seed trace (points, batches, best-so-far, final value).
+  `experiments/figures/<panel>/` holds what was drawn from them —
+  `{batches,points}.png`, plus `figures/invariance/invariance.png` and
+  `figures/lr_sweep/lr_sweep.png` — so a figure is always re-derivable from the
+  traces and a trace never from a figure. A panel is a roster over arm files, not a
   container that owns them, so re-measuring one arm rewrites one file and every
   panel listing it picks the new numbers up — rastrigin's `n_paths=16` arm is a
   single file that both the multimodal and the blr panel draw. The default run is
@@ -297,6 +341,17 @@ not a universal theorem about the method.
   arm files with no re-run, naming any arm that has no trace instead of drawing a
   gap. The invariance panel writes no trace — it is re-run (fast) rather than
   re-plotted.
+- The `blr` panel runs at **its own budget**, 1000 batches rather than 3000.
+  A restart model acts only once a chain stalls, rastrigin stalls it around
+  batch 700, and the remaining 2000 batches buy that panel nothing. Two
+  consequences are load-bearing. The cross-panel consistency check - the
+  `Sample` arm's median matching the multimodal panel's `n_paths=16` median -
+  holds only because both panels share a budget, so with different budgets the
+  `blr` panel is read against its own arms alone and never subtracted from a
+  3000-batch panel. And the shared rastrigin `n_paths=16` arm is one file that
+  both panels write: because a run is prefix-deterministic, the 3000-batch
+  trace's first 1000 batches *are* a 1000-batch run, so the `blr` figure
+  truncates that arm to the panel's budget instead of re-measuring it.
 - The arm key spells out the arm's whole configuration
   (`soar-sample-np1-mu0.63-restart-on`, `adam-lr0.01`, `lbfgs`) instead of
   leaning on a default. An engine default moving therefore changes the key and
