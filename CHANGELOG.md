@@ -483,6 +483,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A trace file can no longer be replaced by a run at a different budget. Its
+  name is `(problem, arm)` and the budget it was measured at lives inside it, so
+  `--seeds` / `--max-steps` were the one unguarded way to overwrite a record:
+  `--quick` (2 seeds x 300 batches) wrote into the same roots as the canonical
+  run and, since the arm key does not encode the budget, replaced forty 20-seed
+  records with two-seed ones that no later reader could tell apart. `run_panel`
+  now compares the on-disk `meta` against the requested budget and exits before
+  the first batch, naming the path, both budgets and the two exits — pass the
+  same numbers, or delete the file and rerun. That incident is also why
+  `--quick` writes to `results/smoke/` and `figures/smoke/`: a smoke check
+  produces exactly the full run's file names, and the record is what it would
+  hit. A same-budget overwrite after a code change is still possible, the arm
+  key not fingerprinting the code; that is a separate mechanism and is not
+  claimed here. `tests/test_trace_budget_guard.py` holds the guard's three rows
+  (different budget refused and the file untouched, same budget allowed,
+  unreadable record allowed); it needs the `exp` group and skips without it.
 - A probe start is committed only when `f` **and** its gradient are finite. A
   finite `f` with a non-finite gradient was accepted as live and then proposed
   from (`-p.g`), so one NaN poisoned that coordinate's magnitude EMAs for the

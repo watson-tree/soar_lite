@@ -29,7 +29,10 @@ uv run --group exp python -m experiments.compare_baselines --quick
 
 The quick gate runs only the `smooth` panel — the diag control and the rotated
 quadratic — with 2 seeds and `--max-steps 300` per method, so it writes just
-that panel's figures (seconds, not minutes). Use it to confirm the environment
+that panel's figures (seconds, not minutes). It writes them under
+`results/smoke/` and `figures/smoke/`, not into the record: a smoke check
+produces exactly the file names a full run does, and those files are the
+measurement. Use it to confirm the environment
 before committing to the full schedule.
 
 ## Canonical run
@@ -98,6 +101,9 @@ figure is always re-derivable and a trace never is. The unit is one
 - `figures/invariance/invariance.png` — panel 5, one physics in two unit systems,
   zero re-tune.
 - `figures/lr_sweep/lr_sweep.png` — the Adam grid sweep.
+- `results/smoke/`, `figures/smoke/` — where `--quick` writes, one smoke run
+  per panel. Same names as the record on purpose (it exercises the same code)
+  in roots of its own, so checking the environment cannot overwrite it.
 - Every curve plots the **median** best-so-far with the **[Q1, Q3] interquartile
   band** (not mean ± std — a skewed spread would read as symmetric and dip
   below the log axis).
@@ -106,6 +112,32 @@ The arm key is the file name and spells out the arm's whole configuration
 (`soar-sample-np1-mu0.63-restart-on`, `adam-lr0.01`, `lbfgs`), so a changed
 default or a changed lr is a new key and a new file: the old trace stays as a
 record of the old configuration instead of being silently overwritten.
+
+Every knob is in the key, and the budget is not one: `--seeds` and
+`--max-steps` say how the arm was *measured*, not which arm it is. That left one
+way to replace a record, and it was the easiest to type by accident — so the
+harness refuses to write over a file whose `meta` names a different budget, and
+it refuses before the first batch. The message names the file, both budgets and
+the two legitimate exits:
+
+```bash
+# refused: holds 20 seeds x 3000 batches, this run asks for 2 x 300
+uv run --group exp python -m experiments.compare_baselines \
+    --groups smooth --seeds 2 --max-steps 300
+
+# same numbers as the record: this is the documented rerun
+uv run --group exp python -m experiments.compare_baselines \
+    --groups smooth --seeds 20 --max-steps 3000
+
+# changing the budget on purpose starts by deleting the file
+rm experiments/results/<problem>/<arm-key>.json
+```
+
+Deleting is the deliberate act; a flag to approve the overwrite would be a
+second way to say yes and would get typed without reading. `--quick` needs no
+exemption because it writes to its own roots: the smoke check cannot overwrite
+the record it is checking.
+
 Re-measuring one arm is a filter on that same identity:
 
 ```bash

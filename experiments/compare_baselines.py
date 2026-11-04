@@ -426,6 +426,51 @@ def load_arm(problem_name: str, arm_key: str) -> Loaded | None:
     )
 
 
+def refuse_budget_change(
+    problem_name: str,
+    arm_key: str,
+    *,
+    n_seeds: int,
+    max_steps: int,
+) -> None:
+    """Stop before the compute if this file already holds another budget.
+
+    A trace file is named ``(problem, arm)``, which says nothing about the
+    budget it was measured at, so a run at another ``--seeds`` /
+    ``--max-steps`` would replace a record with numbers that no longer belong
+    to the entry it came from. The file *is* the record, so replacing it has to
+    be a deliberate delete rather than a side effect of typing the wrong flag.
+
+    Args:
+        problem_name: The problem half of the file's identity.
+        arm_key: The arm half of the file's identity.
+        n_seeds: Seeds this run will measure.
+        max_steps: Batches this run will serve per method.
+
+    Raises:
+        SystemExit: the file on disk holds a different ``(seeds, max_steps)``.
+            Nothing has been computed when this fires.
+
+    """
+    path = trace_path(problem_name, arm_key)
+    try:
+        meta = json.loads(path.read_text())["meta"]
+        on_disk = (int(meta["seeds"]), int(meta["max_steps"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if on_disk == (n_seeds, max_steps):
+        return
+    shown = path.relative_to(HERE) if path.is_relative_to(HERE) else path
+    msg = (
+        f"budget conflict: {shown} holds "
+        f"{on_disk[0]} seeds x {on_disk[1]} batches, this run asks for "
+        f"{n_seeds} x {max_steps}. Nothing was written.\n"
+        f"  same budget: pass the same --seeds and --max-steps.\n"
+        f"  replacing the record on purpose: delete that file and rerun."
+    )
+    raise SystemExit(msg)
+
+
 def run_panel(
     panel: str,
     n_seeds: int,
@@ -446,6 +491,12 @@ def run_panel(
         for arm in PANELS[panel](prob):
             if arms_filter and arm.key not in arms_filter:
                 continue
+            refuse_budget_change(
+                prob.name,
+                arm.key,
+                n_seeds=n_seeds,
+                max_steps=max_steps,
+            )
             traces = [
                 arm.runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)
             ]
@@ -797,6 +848,15 @@ def main() -> None:
         help="rebuild figures from the trace files (no re-run)",
     )
     args = parser.parse_args()
+
+    if args.quick:
+        # A smoke check must not touch the record. Its 2-seed, 300-batch traces
+        # would carry exactly the file names a full run's do and would replace
+        # them, the arm key not encoding the budget. Separate roots are what
+        # make "just check the environment" safe to type.
+        global RESULTS, FIGURES  # noqa: PLW0603 - the output roots are script state
+        RESULTS = RESULTS / "smoke"  # pyright: ignore[reportConstantRedefinition]
+        FIGURES = FIGURES / "smoke"  # pyright: ignore[reportConstantRedefinition]
 
     if args.lr_sweep:
         run_lr_sweep(n_seeds=2, max_steps=args.max_steps)
