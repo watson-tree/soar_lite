@@ -191,19 +191,37 @@ def oscillator_chain(
     Loss is the log-scale mismatch of the payload transmissibility
     ``|H(omega)|`` against a synthetic target produced by a hidden physical
     design, ``sum_j (log10 |H_j| - log10 |H*_j|)^2``, so ``f* = 0`` sits
-    exactly on that design. The response is a batched complex solve of
+    exactly on that design. Both sides carry a ``1e-12`` floor, which is a
+    ``-inf`` guard for an exact null rather than a shaping term: responses
+    drawn from this box stay several orders of magnitude above it, so the
+    slope the optimiser sees is the log mismatch, not the floor. The response
+    is a batched complex solve of
 
         A(omega) X = (k_0 + i*omega*c_0) e_0,
         A = -omega^2 M + i*omega C + K,
 
-    which is cheap (one tridiagonal N x N solve per frequency) and differentiable.
-    The landscape is non-convex through resonance and anti-resonance, and the
-    off-diagonal coupling between parameters is what the diagonal approximation
-    drops - the intended "approximately right, not exact" middle ground.
+    and ``A`` is tridiagonal, but it is assembled and solved **densely**: one
+    ``(n, n)`` complex solve per frequency, O(n^3) rather than the O(n) a banded
+    solve would give. At ``n = 20`` that is the cheap side of this problem set -
+    XLA batches the solves and the reverse pass is an adjoint solve of the same
+    size - and a banded solve would only pay if ``n_masses`` grew substantially,
+    which nothing here asks for. The landscape is non-convex through resonance
+    and anti-resonance, and the off-diagonal coupling between parameters is what
+    the diagonal approximation drops - the intended "approximately right, not
+    exact" middle ground.
 
     The box is the hidden design scaled by ``[1/4, 4]`` per parameter: wide
     enough that the start is not already solved, narrow enough that the target
-    resonances stay inside the band. Boxes make positivity structural.
+    resonances stay inside the band. Boxes make positivity structural, and this
+    one is not merely a safeguard: ``m``, ``k`` and ``c`` enter ``A``
+    homogeneously, so scaling every parameter by a common factor leaves ``|H|``
+    unchanged - the response sees only ``omega_n = sqrt(k/m)`` and
+    ``zeta = c / (2 sqrt(k m))``. Every point of the ray ``lambda * theta_star``
+    inside the box is therefore an exact solution: ``f* = 0`` is a set rather
+    than a point, and what this problem identifies is the transmissibility, not
+    the design. ``x_star`` is one point on that set, the one the target was
+    drawn from. It is also why a benchmark here must score ``f`` and not the
+    distance to ``x_star``.
     """
     key_m, key_k, key_c = jax.random.split(jax.random.PRNGKey(seed), 3)
     n = n_masses
@@ -234,7 +252,7 @@ def oscillator_chain(
             mat = mat + jnp.diag(upper[:-1], 1) + jnp.diag(upper[:-1], -1)
             rhs = jnp.zeros(n, dtype=jnp.complex128).at[0].set(k[0] + 1j * w * c[0])
             sol = jnp.linalg.solve(mat, rhs)
-            return jnp.abs(sol[-1]) + 1e-12  # floor keeps log finite at nulls
+            return jnp.abs(sol[-1]) + 1e-12  # -inf guard at a null, not a shaper
 
         return jax.vmap(one_freq)(omega)
 

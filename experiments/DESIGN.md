@@ -70,8 +70,14 @@ Four run groups plus two appendix panels, one role each:
      heterogeneous physical units: mass `m_k` [kg], stiffness `k_k` [N/m],
      damping `c_k` [N·s/m]. N=20 → d≈60.
      Loss = `Σ_j log₁₀(|H(ω_j)| / |H_target(ω_j)|)²` over a log-spaced grid, with
-     `H` the (banded, linear) frequency response. Synthetic target design → known
+     `H` the frequency response of a tridiagonal (banded) system, solved
+     densely - one `n×n` complex solve per frequency, O(n³) rather than O(n),
+     which at N=20 is the cheap side of the set. Synthetic target design → known
      `f* = 0`; boxes are physical ranges. Serves **P② + unit-invariance**.
+     The response is scale-invariant (`m`, `k`, `c` scaled together leave
+     `|H|` unchanged), so `f* = 0` is a whole ray through the truth rather
+     than a point: what is identified is the transmissibility, not the design,
+     and the score is on `f`, never on the distance to the hidden `x*`.
      Landscape: non-convex via resonance/interference — *not* a funnel (see Risk).
    - **Compartment kinetics** (time domain). A bidirectional chain of `n`
      compartments exchanging first-order transfer rates `f_i` / `b_i` and
