@@ -219,9 +219,18 @@ def oscillator_chain(
     ``zeta = c / (2 sqrt(k m))``. Every point of the ray ``lambda * theta_star``
     inside the box is therefore an exact solution: ``f* = 0`` is a set rather
     than a point, and what this problem identifies is the transmissibility, not
-    the design. ``x_star`` is one point on that set, the one the target was
-    drawn from. It is also why a benchmark here must score ``f`` and not the
-    distance to ``x_star``.
+    the design. A dimension count says the same thing more bluntly: the loss
+    reads twenty real numbers, one ``|H|`` per frequency, against ``d = 3*n``
+    unknowns, so the response's Jacobian has at most twenty rows and cannot be
+    full rank for ``n > 6``; at the truth far fewer directions than that are
+    independent, because neighbouring frequencies of a smooth spectrum measure
+    much the same thing. Parameter recovery is not a question this problem can
+    answer, and that division of labour is deliberate: this is a **design**
+    problem - does an optimiser drive the response onto the target - while
+    ``pk_chain`` is the recovery problem, built so that its rates are
+    identifiable. ``x_star`` is one point on the solution set, the point the
+    target was drawn from; the benchmark scores ``f`` and never the distance to
+    it.
     """
     key_m, key_k, key_c = jax.random.split(jax.random.PRNGKey(seed), 3)
     n = n_masses

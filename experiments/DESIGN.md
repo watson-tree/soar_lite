@@ -77,7 +77,14 @@ Four run groups plus two appendix panels, one role each:
      The response is scale-invariant (`m`, `k`, `c` scaled together leave
      `|H|` unchanged), so `f* = 0` is a whole ray through the truth rather
      than a point: what is identified is the transmissibility, not the design,
-     and the score is on `f`, never on the distance to the hidden `x*`.
+     and the score is on `f`, never on the distance to the hidden `x*`. This
+     is a **design** problem, not a **recovery** one, and not by accident:
+     twenty response samples cannot fix sixty parameters (the Jacobian has at
+     most twenty rows, and neighbouring frequencies on a smooth spectrum are
+     far from independent), so the panel asks whether a method drives the
+     response onto the target, never whether it finds the design. `pk_chain`
+     is where recovery is the question, and it was built so that its rates are
+     identifiable.
      Landscape: non-convex via resonance/interference — *not* a funnel (see Risk).
    - **Compartment kinetics** (time domain). A bidirectional chain of `n`
      compartments exchanging first-order transfer rates `f_i` / `b_i` and
