@@ -10,11 +10,11 @@ deliberately **not** brought over.
 The trade-off: borrowing the name invites readers to expect a SOAR
 reimplementation, but a full adaptive-restart framework would re-introduce the
 expensive surrogate fitting this package exists to avoid (high-dimensional and
-budget-bound). The name plus an explicit "difference from SOAR" section
-(`ALGORITHM.md`, §8) is cheaper than renaming to an opaque novelty, and it pays
+budget-bound). The name plus an explicit "difference from SOAR" section on the
+`How it works` page is cheaper than renaming to an opaque novelty, and it pays
 the attribution honestly.
 
 Consequence: do not "finish" the SOAR port under this name, do not add a
 surrogate model and call it SOAR-compatible, and do not rename toward fuller
-compatibility. The relationship is attribution + distinction, and §8 of
-`ALGORITHM.md` is the canonical statement of it.
+compatibility. The relationship is attribution + distinction, and that page's
+SOAR section is the canonical statement of it.

@@ -108,11 +108,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mu = 0` keeps the bare gradient. There is no projection onto `g`'s orthogonal
   complement and so no per-step descent invariant - convergence rests on the
   engine's best-so-far accounting and restarts, not on forcing each step down.
-  `ALGORITHM.md` §1.6 records why the projected variant was dropped;
+  `ALGORITHM.md` §1.6 records why the projected variant was dropped (that
+  document is now deprecated);
   `RESULTS.md` holds the near-minimiser accuracy cost of the stale term.
 
 ### Changed
 
+- `ALGORITHM.md` is deprecated and no longer kept in sync: its explanation moved
+  to the [How it works](docs/explanation/how-it-works.md) page.
 - `NPathResult.fun` is `nan`, not `inf`, when no feasible point was ever
   served. `inf` is a value an objective may actually take, so it cannot also
   mean "no answer": `nan` in both `fun` and `x` is that state, and a feasible

@@ -13,8 +13,9 @@ Three rules, the same discipline as `experiments/RESULTS.md`:
   historical claim stays exactly as written and a new entry is appended below.
   Rewriting an old `Status` erases the before/after the file exists to preserve.
 - **Only abandoned or superseded directions belong here.** The direction that
-  remains in the code stays in `ALGORITHM.md` / `DESIGN.md`; this file archives
-  what was dropped and what replaced it, not the code's current shape.
+  remains in the code stays in the `How it works` page / `DESIGN.md`; this
+  file archives what was dropped and what replaced it, not the code's current
+  shape.
 - **Numbers are never re-edited.** A measured value stays as measured; a new
   measurement is a new entry, and the old numbers rest.
 

@@ -11,6 +11,7 @@ theme:
 nav:
   - Home: index.md
   - Tutorial: tutorial/getting-started.md
+  - How it works: explanation/how-it-works.md
   - API Reference: reference/api.md
 
 # Internal notes live beside the site sources and are not published.

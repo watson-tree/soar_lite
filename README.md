@@ -68,10 +68,9 @@ library:
   batch. Owns the domain, the shared horizon and the stall state machine.
   `n_paths = 1` is the single-path baseline.
 
-`ALGORITHM.md` is the derivation: what each piece does, why the floor is a floor
-and not an addend, the two cost axes, what may be redesigned freely, the
-seven invariants that must survive a redesign, and what this library does and does
-not take from SOAR.
+**[How it works](docs/explanation/how-it-works.md)** is the derivation: what each
+piece does, why the floor is a floor and not an addend, the two cost axes, and
+what this library does and does not take from SOAR.
 
 ## Install
 

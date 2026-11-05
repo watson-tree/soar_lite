@@ -280,6 +280,6 @@ is the contract to code against.
 
 ## 7. Next
 
-`ALGORITHM.md` in the repository is the derivation: why the floor is a floor and
-not an addend, the cost counters, what may be redesigned freely, and the
-invariants that must survive a redesign.
+[How it works](../explanation/how-it-works.md) is the derivation: why the floor
+is a floor and not an addend, the cost counters, and what this library does and
+does not take from SOAR.

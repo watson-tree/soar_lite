@@ -127,7 +127,7 @@ Two appendix panels, property demos rather than races:
    the secant-based steady state: the **warmup step is by design not
    coordinate-invariant** (a scalar `α` applied uniformly across mixed-unit
    coords), so the first secant pair — and anything seeded by it — is not the
-   transformed pair (`ALGORITHM.md` §1.4/§7). On the diagonal quadratic this
+   transformed pair. On the diagonal quadratic this
    self-corrects in one step (`d` reads `1/Hᵢ` exactly, independent of the seed
    pair's scale), so the diag control gives clean overlap; a general/multimodal
    problem would **not** guarantee same basin, so never use one for this panel.

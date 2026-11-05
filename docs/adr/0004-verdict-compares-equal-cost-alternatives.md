@@ -76,7 +76,8 @@ Implemented with this decision: the per-path horizon as the engine's `_Horizon`
 clock, per-batch billing as its `_Budget` meter, the scheduler and seam tests
 restated in batches, and three new invariants (samples produced per completed
 horizon, the budget never exceeded under restart storms, a stall inside a
-horizon poisons that sample). `ALGORITHM.md` carries the resulting wording.
+horizon poisons that sample). The `How it works` page carries the resulting
+wording.
 
 ## Amendment: the horizon clock is gone
 

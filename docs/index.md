@@ -96,6 +96,6 @@ print(result.x, result.fun)  # ≈[3. 3.] 3e-5
 - **[Tutorial](tutorial/getting-started.md)** — one run end to end: the
   objective contract, the knobs, and the two swap points.
 - **[API Reference](reference/api.md)** — generated from the docstrings.
-- `ALGORITHM.md` in the repository is the derivation: what each piece does, the
-  invariants that must survive a redesign, and what this library does and does
-  not take from SOAR.
+- **[How it works](explanation/how-it-works.md)** — the derivation: what each
+  piece does, the two cost axes, and what this library does and does not take
+  from SOAR.
