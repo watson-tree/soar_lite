@@ -131,14 +131,14 @@ a value, backtracks, or compares against its start. `needs_verdict` is therefore
 **independent of the phase**: it answers True when `n_alpha > 1` and False
 otherwise, because the commit is what was proposed.
 
-One exception to unit invariance: the warm-up step is **not** coordinate-
-invariant. `−g₀` is a gradient-like quantity (`x̃ = c·x` gives `g̃ = g/c`, so
-magnifying a coordinate shrinks its gradient), and multiplying it by a scalar `α`
-keeps the step scaling backwards with the coordinate scale; only the steady-state
-`−d⊙g` is displacement-like. The cost is close to zero in practice: the case that
-wants invariance is the smooth single basin, where `d` reads `1/H` on the first
-pair and erases the scale error warm-up introduced, and on multimodal problems
-invariance was never the point.
+One exception to unit invariance: the warm-up step is **not** unit-invariant.
+`−g₀` is a gradient-like quantity (`x̃ = c·x` gives `g̃ = g/c`, so magnifying a
+coordinate shrinks its gradient), and multiplying it by a scalar `α` keeps the
+step scaling backwards with the coordinate scale; only the steady-state `−d⊙g` is
+displacement-like. The cost is close to zero in practice: the case that wants
+invariance is the smooth single basin, where `d` reads `1/H` on the first pair and
+erases the scale error warm-up introduced, and on multimodal problems invariance
+was never the point.
 
 ### Stopping
 

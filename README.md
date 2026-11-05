@@ -35,7 +35,7 @@ is a per-coordinate secant preconditioner that is unit-invariant: scaling a
 coordinate `x` by `c` scales its step by `c`, and rescaling `f` leaves the
 step alone, so one set of unitless knobs serves mixed units (kg, N/m,
 N·s/m, …). Unit invariance is a property of the preconditioner itself, not of
-the warm-up step, which is by design not coordinate-invariant — so the
+the warm-up step, which is by design not unit-invariant — so the
 invariance experiment shows a small, self-correcting offset there, not a
 different descent rate (the contrast is Adam, whose single learning rate is
 per-unit-system).

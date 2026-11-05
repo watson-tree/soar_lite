@@ -125,7 +125,7 @@ Two appendix panels, property demos rather than races:
    systems, while Adam's separate (one system needs a different `α`). Exact
    per-step covariance (`x̃=c·x ⇒ d̃=c²d, Δx̃=c·Δx`) is real but holds only for
    the secant-based steady state: the **warmup step is by design not
-   coordinate-invariant** (a scalar `α` applied uniformly across mixed-unit
+   unit-invariant** (a scalar `α` applied uniformly across mixed-unit
    coords), so the first secant pair — and anything seeded by it — is not the
    transformed pair. On the diagonal quadratic this
    self-corrects in one step (`d` reads `1/Hᵢ` exactly, independent of the seed
