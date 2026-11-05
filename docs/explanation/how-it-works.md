@@ -386,18 +386,32 @@ halves**: if either `f` or `g` is non-finite, nothing is committed and the path 
 
 ### stalled is the only path state
 
-A path that neither gets redrawn nor commits a step in a round is `stalled`. It
-has only two writers: the method's own `give_up` (or "accepted but no finite
-sample"), and the commit gate refusing a non-finite start or winner. A refused
-start **does not** become `points[i]` — `points[i]` always means "where this path
-stands" — so an unusable start stays `stalled` and is redrawn next round instead
-of being clipped or forced into a degenerate point.
+`stalled` means the path took no step this round; redrawing a stalled path is
+`restart_stalled`'s separate decision, one layer up. The flag has two writers:
+the verdict channel, in either of its two exits — `give_up`, or `accept` with no
+finite sample ever served — and the commit gate refusing a non-finite start or
+winner. A refused start **does not** become `points[i]` — `points[i]` always
+means "where this path stands" — so an unusable start stays `stalled` and is
+redrawn next round instead of being clipped or forced into a degenerate point.
 
 `stalled` and "has no point" are two different things, and only the latter is
 outside `restart_stalled`'s control: the placeholder's empty `x` is the machine's
 initial state (iteration 0 uses it to make every path go through one redraw), so
 it is always redrawn; holding a point whose values are non-finite is a stall, and
 `restart_stalled` decides whether to redraw it.
+
+### All stalled: redraw, or end
+
+When every path is `stalled`, the round has neither steps nor owed starts, and
+only two outcomes remain, decided by one bit, `restart_stalled`:
+
+- **On (default)**: stalled paths enter the redraw set on the next round, so every
+  round has a batch to serve — the flock cycles between stalling and restarting,
+  with the interval set by how quickly the local method stops.
+- **Off**: stopped paths never revive themselves and the flock deadlocks; the
+  engine recognizes the deadlock and ends the run with `status = all_stalled`.
+  That round serves no batch, so — like a refused batch — it does not count in
+  `n_iters`.
 
 ### The stop gates
 
@@ -440,36 +454,8 @@ recognition:
 - `all_stalled`: with restarts off the flock deadlocks, with no path able to move
   and no path owing a start. It likewise does not count in `n_iters`.
 
-The counts report and do not budget: the engine cannot gate inside an indivisible
-batch. So an external budget such as `budget_check` can overshoot by up to one
-batch size — a deliberate cost, backstopped by the premise that `g` costs about
-2–5 times `f` and `f` is cheap; a caller whose `f` is itself expensive should not
-connect the f-only seam.
-
-### All stalled: redraw, or end
-
-When every path is `stalled`, the round has neither steps nor owed starts, and
-only two outcomes remain, decided by one bit, `restart_stalled`:
-
-- **On (default)**: stalled paths enter the redraw set on the next round, so every
-  round has a batch to serve — the flock cycles between stalling and restarting,
-  with the interval set by how quickly the local method stops, not by an engine
-  window.
-- **Off**: stopped paths never revive themselves and the flock deadlocks; the
-  engine recognises the deadlock and ends the run with `status = all_stalled`.
-  That round serves no batch, so — like a refused batch and `unbounded` — it does
-  not count in `n_iters`.
-
-The deadlock test is "the redraw set is empty and every path is `stalled`": an
-empty redraw set means every path holds a point and none wants redrawing, and
-`all(stalled)` means every path is stopped. With restarts on the first half can
-never hold (a stalled path is always in the redraw set), so `all_stalled` is
-reachable only with them off — and it is exactly what breaks the deadlock when
-they are.
-
-There is no other engine-side early exit: every stop condition other than
-`all_stalled` depends only on numbers the caller supplied, so no plugin can make
-the loop run forever.
+Those two are the whole of the engine's own initiative; every remaining stop is
+one of the caller's gates, so no plugin can make the loop run forever.
 
 ## Cost: two seams, two rulers
 
