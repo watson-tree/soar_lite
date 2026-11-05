@@ -11,19 +11,22 @@ The objective is called in batches: given a batch of points `x` of shape
 a feasibility mask. The goal is to minimise `f` over the feasible points.
 
 That is the whole entry contract. There is no Hessian and no curvature estimate:
-the only second-order information is the secant implied by the last pair of
-points. It is first-order in the sense that the caller supplies the value and
-the gradient together — a zero-order objective does not fit, because every point
-on a path must carry a finite gradient as well as a finite value.
+a full Hessian is quadratic in the dimension — far too expensive in the
+medium-to-high dimension this method targets, and `n_paths` paths would each
+want one — so the only second-order information is the secant implied by the
+last pair of points. It is first-order in the sense that the caller supplies the
+value and the gradient together — a zero-order objective does not fit, because
+every point on a path must carry a finite gradient as well as a finite value.
 
 Budget is counted in evaluations, and there are two ways to count them (see
 Cost).
 
-## The local step
+## The local step: a diagonal preconditioner
 
-Every path descends by the same rule: a coordinate-wise preconditioner estimated
-from secant pairs. The rule is one construction with a handful of choices around
-it.
+Every path descends by the same rule: a diagonal approximation of the inverse
+Hessian, one entry per coordinate, estimated from secant pairs and applied
+element-wise to the direction. The rule is one construction with a handful of
+choices around it.
 
 ### The secant ratio
 
@@ -52,9 +55,10 @@ On a single pair the two variants agree (`√(s²/y²) = |s/y|`); they differ on
 which moment is smoothed — `"abs"` averages the magnitude, `"rms"` averages its
 square (the RMS), so the former is smoother on small secants and the latter more
 sensitive to large ones. The EMA window is about `1/(1−β)` steps, and the default
-`β = 0.63` is about `e` steps (2.7). Magnitudes rather than the signed `sᵢyᵢ` are
-used to keep the estimate strictly positive: once the denominator can cross zero
-or turn negative, `d ≥ 0` is gone.
+`β = 0.63` is about `e` steps (2.7). Magnitudes rather than the signed `sᵢ` or
+`yᵢ` are used to keep the estimate strictly positive: a signed value drifts and
+can cross zero, which would flip the step's sign — and `d ≥ 0` is what keeps the
+step descending.
 
 The step then takes `Δx = −diag(B)⁻¹ g = −d ⊙ g`. What this does is change the
 direction from a **gradient-like quantity** into a **displacement-like
@@ -63,13 +67,17 @@ makes the scale run backwards with the coordinate scale, and multiplying by `d`
 supplies the missing `1/H`. It is one element-wise multiply-and-divide, with no
 matrix, no linear solve, and no scalar learning rate.
 
-Because `d ≥ 0` by construction (absolute value or square, then a positive
-floor), `(−d⊙g)·(−g) ≥ 0` holds coordinate-wise whenever the direction is `g`.
-A preconditioned gradient-like direction is still a descent direction, so with
-`μ = 0` the step needs no acceptance test and no line search to "verify the
-direction". With `μ > 0` the direction becomes the current momentum and this
-property no longer holds — see Momentum, where the loss is deliberate. The
-default is `μ = 0.63`, so the default does not hold it.
+Everything above steps along the bare gradient `g` — the quasi-Newton form just
+reconstructed. The step can also carry a momentum, the gradient EMA
+`m = (1−μ)·g + μ·m_{k−1}` with `μ ∈ [0,1)`; at `μ = 0` that is `m = g` and
+nothing above changes. Because `d ≥ 0` by construction (absolute value or
+square, then a positive floor), `(−d⊙g)·(−g) ≥ 0` holds coordinate-wise, so a
+preconditioned gradient-like direction is a descent direction, and at `μ = 0`
+the step needs no acceptance test and no line search to "verify the direction".
+With `μ > 0` the direction is the momentum and that guarantee is gone — see
+Momentum, where the loss is deliberate — but the closer `μ` is to zero, the more
+nearly the direction still descends. The default `μ = 0.63` therefore does not
+hold the guarantee.
 
 ### Unit invariance, and why there is no scalar learning rate
 
