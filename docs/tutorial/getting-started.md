@@ -6,8 +6,9 @@ result fields mean, and where the two swap points are.
 ## 1. Write the batched objective
 
 The engine sees the objective through exactly one function: a batch of points
-in, f values and gradients out together. One fused `jax.value_and_grad` pass gives
-you both.
+in, f values and gradients out together. You do not write that gradient by
+hand: write the objective once, per point, and let `pointwise` build the batch
+for you.
 
 | Position | Shape | Meaning |
 | --- | --- | --- |
@@ -22,20 +23,28 @@ Constraints reach the engine by two independent routes:
   *before* it is served, so the objective never sees a point outside it.
 - **The mask.** A point masked `False` is still served - its f value and gradient
   come back normally and are used - but it never becomes the best. So
-  `result.fun` is a minimum over feasible points only, and is `inf` if nothing
+  `result.fun` is a minimum over feasible points only, and is `nan` if nothing
   feasible was ever served. The mask is read as 0/1 and nothing else: only `0`
   marks a point infeasible, so a signed margin (negative where violated) or a
   `NaN` raises a `ValueError` instead of counting as feasible.
 
 ```python
 import jax.numpy as jnp
+from soar_lite import pointwise
 
 
-def eval_f_g(x):
-    f_vals = jnp.sum((x - 3.0) ** 2, axis=1)
-    grad = 2.0 * (x - 3.0)
-    return f_vals, grad, None
+def squares(x):  # one point (d,) in, one scalar out
+    return jnp.sum((x - 3.0) ** 2)
+
+
+eval_f_g, eval_f = pointwise(squares)
 ```
+
+`pointwise` `vmap`s `jax.value_and_grad` for the fused seam and the plain
+forward pass for the optional one, so the only function you write is the
+per-point scalar. Hand-writing `∂f/∂x` is fine for a sum of squares and is how a
+sign or a factor slips in anywhere else. The second return is the `eval_f` seam
+of §4: pass it as `eval_f=eval_f` to serve judged trials for their value alone.
 
 ## 2. Run it
 
@@ -55,13 +64,13 @@ result = n_path_schedule(
     max_iters=30,
 )
 print(result.x, result.fun, result.status)
-# [3. 3.] 0.0 max_iters
+# ≈[3. 3.] 3e-5 max_iters
 ```
 
 The status says only why the loop stopped, never that it converged: it is
 `max_iters` here because the run reached the horizon you gave it - and the
-horizon counts iterations, not work. The four paths reach the minimiser within
-the first few iterations, and every later stop is a fresh start: by default
+horizon counts iterations, not work. The four paths get close to the minimiser
+within a few iterations, and every later stop is a fresh start: by default
 (`restart_stalled=True`) a stalled path reloads a draw from the global model each
 time its own stopping test fires, so the flock keeps working until the horizon.
 Ask for the frozen version instead and the same run ends much sooner: with
@@ -79,7 +88,7 @@ correspond:
 | Field | Meaning |
 | --- | --- |
 | `x` | argmin, in the coordinates you handed the engine |
-| `fun` | its value: the best over feasible points, `inf` if none, `-inf` if the objective has no floor |
+| `fun` | its value: the best over feasible points, `nan` if none, `-inf` if the objective has no floor |
 | `n_f_g_points` | fused points billed - the serial-cost count |
 | `n_f_g_batches` | fused batches billed, one per `eval_f_g` call - the parallel-cost count |
 | `n_f_points` | value-only points billed (the `eval_f` seam) |

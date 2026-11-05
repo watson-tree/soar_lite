@@ -30,23 +30,25 @@ later; what this repository currently implements is aimed at scientific
 numerical optimisation. The default local solver, `DiagonalPreconditioner`,
 is a per-coordinate secant preconditioner that is unit-invariant: scaling a
 coordinate `x` by `c` scales its step by `c`, and rescaling `f` leaves the
-step alone, so one set of dimensionless knobs serves mixed units (kg, N/m,
+step alone, so one set of unitless knobs serves mixed units (kg, N/m,
 N·s/m, …). Unit invariance is a property of the preconditioner itself, not of
 the warm-up step, which is by design not coordinate-invariant — so the
 invariance experiment shows a small, self-correcting offset there, not a
 different descent rate (the contrast is Adam, whose single learning rate is
 per-unit-system).
 
-Three seams, no dependencies beyond JAX and the standard library:
+Two plugin seams under one engine, no dependencies beyond JAX and the standard
+library:
 
 - **`n_path_schedule`** — the engine: runs `n_paths` paths in lockstep, one
   batched evaluation per iteration, and owns the domain, the shared horizon and the
   stall state machine. A stalled path is re-drawn unless the run sets
   `restart_stalled=False`, the run's one restart knob.
 - **`DiagonalPreconditioner`** — the default local method: a per-coordinate
-  diagonal secant step `-d ⊙ g`, EMA-smoothed, with a gradient-norm floor and an
-  optional alpha grid (`n_alpha`) whose argmin the engine commits. No matrix, no
-  linear solve, no scalar learning rate.
+  diagonal secant step `-d ⊙ m`, where `m` is the momentum (the gradient-history
+  blend; the bare gradient `g` at `mu = 0`), EMA-smoothed, with a gradient-norm
+  floor and an optional alpha grid (`n_alpha`) whose argmin the engine commits.
+  No matrix, no linear solve, no scalar learning rate.
 - **`SampleGlobalModel`** / **`BLRGlobalModel`** — the restart-point source and the
   run's evidence sink: the engine asks it for one fresh point per restarting path.
   The default `SampleGlobalModel` draws whatever the `domain` admits; `BLRGlobalModel`
@@ -62,13 +64,14 @@ pip install soar-lite
 
 ```python
 import jax.numpy as jnp
-from soar_lite import Domain, n_path_schedule
+from soar_lite import Domain, n_path_schedule, pointwise
 
 
-def eval_f_g(x):
-    """(M, d) points in; (M,) f values, (M, d) gradients, (M,)|None mask out."""
-    return jnp.sum((x - 3.0) ** 2, axis=1), 2.0 * (x - 3.0), None
+def squares(x):  # one point (d,) in, one scalar out
+    return jnp.sum((x - 3.0) ** 2)
 
+
+eval_f_g, _ = pointwise(squares)
 
 result = n_path_schedule(
     eval_f_g,
@@ -76,7 +79,7 @@ result = n_path_schedule(
     n_paths=4,
     max_iters=30,
 )
-print(result.x, result.fun)  # [3. 3.] 0.0
+print(result.x, result.fun)  # ≈[3. 3.] 3e-5
 ```
 
 ## Where to go next

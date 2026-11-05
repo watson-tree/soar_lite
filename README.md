@@ -33,21 +33,24 @@ later; what this repository currently implements is aimed at scientific
 numerical optimisation. The default local solver, `DiagonalPreconditioner`,
 is a per-coordinate secant preconditioner that is unit-invariant: scaling a
 coordinate `x` by `c` scales its step by `c`, and rescaling `f` leaves the
-step alone, so one set of dimensionless knobs serves mixed units (kg, N/m,
+step alone, so one set of unitless knobs serves mixed units (kg, N/m,
 N·s/m, …). Unit invariance is a property of the preconditioner itself, not of
 the warm-up step, which is by design not coordinate-invariant — so the
 invariance experiment shows a small, self-correcting offset there, not a
 different descent rate (the contrast is Adam, whose single learning rate is
 per-unit-system).
 
-Three seams, a few modules (`soar_lite/engine.py`, `soar_lite/local_solver.py`,
-`soar_lite/domain.py`, `soar_lite/global_model/`), no dependencies beyond JAX
-and the standard library:
+Two plugin seams and the engine that joins them, a few modules
+(`soar_lite/engine.py`, `soar_lite/local_solver.py`, `soar_lite/domain.py`,
+`soar_lite/global_model/`), no dependencies beyond JAX and the standard
+library:
 
 - **`DiagonalPreconditioner`** — the local method. Reads the secant equation one
   coordinate at a time, `d_i = 1/B_ii = s_i/y_i`, smooths the secant pair with an
-  EMA, floors the denominator with a gradient-norm term, and steps `-d ⊙ g`. No
-  matrix, no linear solve, no scalar learning rate, unit-invariant.
+  EMA, floors the denominator with a gradient-norm term, and steps `-d ⊙ m`,
+  where `m` is the momentum (the gradient-history blend; the bare gradient `g`
+  at `mu = 0`). No matrix, no linear solve, no scalar learning rate,
+  unit-invariant.
 - **`SampleGlobalModel`** / **`BLRGlobalModel`** — the restart points. A model
   supplies **where** a restart lands and is the run's evidence sink; the engine
   asks it for one fresh point per restarting path and clips it into the domain. The

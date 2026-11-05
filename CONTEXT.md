@@ -69,9 +69,12 @@ _Avoid_: max rounds, is non verdict
 **best**:
 The run's running best, a single `fun`/`x`: the best *feasible* point — the
 run's reported answer, and what `NPathResult` calls `fun`/`x`. The engine is the
-sole owner. A *feasible* `-inf` is not weighed but taken: the objective has no
-floor there, so it becomes `fun`/`x` and ends the run with `status` `unbounded`;
-a `nan`, a `+inf` or an infeasible `-inf` changes nothing.
+sole owner. It starts at `nan` and stays there while no finite feasible value
+has arrived, so `nan` means "no answer" and `inf` is never a sentinel - it is
+left to mean a value an objective actually took. A *feasible* `-inf` is not
+weighed but taken: the objective has no floor there, so it becomes `fun`/`x` and
+ends the run with `status` `unbounded`; a `nan`, a `+inf` or an infeasible
+`-inf` changes nothing.
 _Avoid_: incumbent (retired), best-so-far, current optimum
 
 **stall / stalled**:
@@ -149,8 +152,9 @@ _Avoid_: gradient difference, step pair
 
 **diagonal preconditioner**:
 The local method itself: a per-coordinate step-size estimate read off the
-secant pair, applied as `-d ⊙ g`. No matrix, no linear solve, no scalar
-learning rate.
+secant pair, applied as `-d ⊙ m` where `m` is the momentum (a blend of the
+gradient and its history; the bare gradient `g` at `mu = 0`). No matrix, no
+linear solve, no scalar learning rate.
 _Avoid_: diagonal Newton (it is a biased `1/H` estimate, not Newton)
 
 **floor (λ)**:
