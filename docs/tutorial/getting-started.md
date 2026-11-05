@@ -1,9 +1,9 @@
 # Getting started
 
-This page walks one run end to end: the objective contract, the call, what the
-result fields mean, and where the two swap points are.
+This page walks one run end to end: the objective contract and its constraints,
+the call, what the result fields mean, and where the two swap points are.
 
-## 1. Write the batched objective
+## 1. Write the batched objective and constraints
 
 The engine sees the objective through exactly one function: a batch of points
 in, f values and gradients out together. You do not write that gradient by
@@ -17,34 +17,63 @@ for you.
 | output 2 | `(M, d)` | gradients `∂f/∂x` |
 | output 3 | `(M,)` or `None` | feasibility mask: 0/1 (or booleans); `None` means all feasible |
 
-Constraints reach the engine by two independent routes:
+Constraints ride two independent routes, split by kind rather than by taste:
 
-- **The domain.** `domain` declares the region every proposal is clipped into
-  *before* it is served, so the objective never sees a point outside it.
-- **The mask.** A point masked `False` is still served - its f value and gradient
-  come back normally and are used - but it never becomes the best. So
-  `result.fun` is a minimum over feasible points only, and is `nan` if nothing
-  feasible was ever served. The mask is read as 0/1 and nothing else: only `0`
-  marks a point infeasible, so a signed margin (negative where violated) or a
-  `NaN` raises a `ValueError` instead of counting as feasible.
+- **The boundary is the domain's job.** `domain` declares the region every
+  proposal is clipped into *before* it is served, so the objective never sees a
+  point outside it.
+- **Every other constraint is the mask's job.** Pass `feasible` to `pointwise`:
+  a per-point predicate that returns `True` where the point is allowed. A point
+  masked `False` is still served - its f value and gradient come back normally
+  and are used - but it never becomes the best. So `result.fun` is a minimum
+  over feasible points only, and is `nan` if nothing feasible was ever served.
+  The mask is read as 0/1 and nothing else: only `0` marks a point infeasible,
+  so a signed margin (negative where violated) or a `NaN` raises a `ValueError`
+  instead of counting as feasible.
 
 ```python
 import jax.numpy as jnp
-from soar_lite import pointwise
+from soar_lite import Domain, pointwise
 
 
 def squares(x):  # one point (d,) in, one scalar out
     return jnp.sum((x - 3.0) ** 2)
 
 
-eval_f_g, eval_f = pointwise(squares)
+def below_diagonal(x):  # one point (d,) in, one boolean out
+    return x[0] + x[1] <= 7.0
+
+
+domain = Domain([(-5.0, 5.0), (-5.0, 5.0)])
+eval_f_g, eval_f = pointwise(squares, feasible=below_diagonal)
 ```
 
 `pointwise` `vmap`s `jax.value_and_grad` for the fused seam and the plain
-forward pass for the optional one, so the only function you write is the
-per-point scalar. Hand-writing `∂f/∂x` is fine for a sum of squares and is how a
-sign or a factor slips in anywhere else. The second return is the `eval_f` seam
-of §4: pass it as `eval_f=eval_f` to serve judged trials for their value alone.
+forward pass for the optional one, so the only functions you write are the
+per-point scalar and the per-point predicate - hand-writing `∂f/∂x` is fine for a
+sum of squares and is how a sign or a factor slips in anywhere else. The second
+return is the `eval_f` seam of §4: pass it as `eval_f=eval_f` to serve judged
+trials for their value alone.
+
+`domain` carries only bounded sides here; the `Domain` of §4 adds a
+per-dimension `scale`, unbounded sides, and the sampler a restart draws from.
+`feasible` is how a constraint that is no side of the domain reaches the
+engine: `below_diagonal` is a diagonal half-space no `Domain` can state, and it
+leaves this run's answer alone because `(3, 3)` sits well inside it.
+
+Remember neither route steers: `domain` only clips each proposal into its
+sides, and the mask is a gate, not a guide - masked-out points are still served
+and still pull the paths, so it decides who may be `best` and does not sit a
+path on a boundary it violates. To make a constraint the domain cannot state
+actually pull the paths, fold it into the objective as a differentiable penalty
+and let the gradient guide:
+`f(x) + c · max(0, violation(x))²` - in JAX,
+`squares(x) + c * jnp.maximum(0.0, violation(x)) ** 2`. That buys guidance at
+the price of soft feasibility: a finite `c` gives an approximately feasible
+answer (too small and the paths still cross, too large and the objective
+distorts), so keep `feasible` as the hard gate on what may become `best`. The
+penalty schedule is your envelope, like any constraint transform; the engine
+only climbs the `f` you hand it.
 
 ## 2. Run it
 
@@ -55,11 +84,11 @@ Each missing required argument is refused by `ValueError` rather
 than guessed.
 
 ```python
-from soar_lite import Domain, n_path_schedule
+from soar_lite import n_path_schedule
 
 result = n_path_schedule(
     eval_f_g,
-    domain=Domain([(-5.0, 5.0), (-5.0, 5.0)]),
+    domain=domain,
     n_paths=4,
     max_iters=30,
 )
