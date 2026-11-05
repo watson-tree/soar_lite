@@ -38,8 +38,8 @@ from soar_lite import (
 
 Carry = tuple[jnp.ndarray, optax.OptState, jnp.ndarray]
 
-# Inner horizon of `surrogate_minimize`: one restart-free single-path descent,
-# long enough for the acquisition to reach its local minimum from a uniform
+# Inner horizon of `surrogate_minimize`: one restart-free descent per path, long
+# enough for a path to reach the acquisition's local minimum from a uniform
 # start, short of the outer run's own horizon.
 _INNER_ITERS = 40
 
@@ -144,17 +144,20 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
 def surrogate_minimize(
     objective: AcquisitionFn,
     bounds: Bounds,
-    key: jnp.ndarray,
     n_points: int,
+    key: jnp.ndarray,
 ) -> jnp.ndarray:
-    """Minimize a batched acquisition with `n_points` single-path engine runs.
+    """Minimize a batched acquisition with one restart-free n-path engine run.
 
     The injected inner minimizer `BLRGlobalModel.propose` asks for: the
     model hands out its own acquisition and this driver answers with the
-    library's own descent, one serial path per start - the same restart-free
+    library's own descent, one path per minimizer - the same restart-free
     recipe the n_paths=1 arms use, so the acquisition is optimized by the method
-    it will later drive. Starts are uniform over the box, matching the default
-    model's draw; each run stops at `_INNER_ITERS`.
+    it will later drive. Restarts are off because each path has one job: reach
+    the acquisition's local minimum from a uniform start. The starts come from
+    the default model's draw over the box, matching the outer run's own, and
+    each path stops at `_INNER_ITERS`; the whole cohort is served one batch per
+    iteration rather than by one run per start.
 
     Args:
         objective: the acquisition to descend, ``(m, d) -> ((m,), (m, d))``:
@@ -162,36 +165,29 @@ def surrogate_minimize(
             without the feasibility column.
         bounds: the search box, the engine's `Bounds` (a ``(d, 2)`` array or
             scipy-style pairs).
-        key: the PRNG key the starts are split from.
         n_points: how many local minimizers to return, one per row.
+        key: the PRNG key the starts are drawn from.
 
     Returns:
         A ``(n_points, d)`` array, one minimizer per row.
 
     """
     domain = Domain(bounds)
-    d, lo, hi = domain.d, domain.lo, domain.hi
 
     def eval_g(x_batch: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         f, g = objective(x_batch)
         return f, g, None
 
-    outs = []
-    for _ in range(n_points):
-        key, sub = jax.random.split(key)
-        x0 = jax.random.uniform(sub, (1, d), minval=lo, maxval=hi)
-        result = n_path_schedule(
-            eval_g,
-            n_paths=1,
-            domain=domain,
-            x0=x0,
-            max_iters=_INNER_ITERS,
-            local_solver=DiagonalPreconditioner(),
-            restart_stalled=False,
-            key=sub,
-        )
-        outs.append(result.x)
-    return jnp.stack(outs)
+    result = n_path_schedule(
+        eval_g,
+        n_paths=n_points,  # one path per minimizer: one batch, not n runs
+        domain=domain,
+        max_iters=_INNER_ITERS,
+        local_solver=DiagonalPreconditioner(),
+        restart_stalled=False,
+        key=key,
+    )
+    return result.flock_x
 
 
 # --- Adam: one compiled scan per run --------------------------------

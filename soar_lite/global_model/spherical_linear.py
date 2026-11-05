@@ -64,12 +64,14 @@ AcquisitionFn: TypeAlias = Callable[
 # The inner minimizer `propose` hands its own acquisition to, injected by the
 # composition root (the experiment driver) instead of imported, so this module
 # never reaches back into the engine's scheduler:
-# `minimize(acquisition, bounds, key, n_points)` returns up to `n_points` local
+# `minimize(acquisition, bounds, n_points, key)` returns up to `n_points` local
 # minimizers of `acquisition` over `bounds`, one per row, shape `(n_points, d)`.
-# The engine already owns the descent recipe; a second one here would be a
-# second answer to the same question.
+# The count comes before the seed, as at every entry here: what to ask for is
+# the caller's question, the key only supplies the randomness. The engine
+# already owns the descent recipe; a second one here would be a second answer
+# to the same question.
 MinimizeFn: TypeAlias = Callable[
-    [AcquisitionFn, Bounds, jnp.ndarray, int],
+    [AcquisitionFn, Bounds, int, jnp.ndarray],
     jnp.ndarray,
 ]
 
@@ -426,7 +428,7 @@ class BLRGlobalModel(GlobalModel):
             return self._acq_value_and_grad(projection, x, weights, cov, best)
 
         starts = jnp.asarray(
-            self._minimize(acquisition, domain.bounds, sub, n_points),
+            self._minimize(acquisition, domain.bounds, n_points, sub),
         )
         if starts.shape != (n_points, domain.d):
             msg = (

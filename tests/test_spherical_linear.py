@@ -32,8 +32,8 @@ from soar_lite.global_model.spherical_linear import _log_h
 def _grid_minimize(
     objective: AcquisitionFn,
     bounds: Bounds,
-    key: jnp.ndarray,
     n_points: int,
+    key: jnp.ndarray,
 ) -> jnp.ndarray:
     """Stand in for the driver's inner minimizer with the best of a grid."""
     box = jnp.asarray(bounds)
@@ -52,8 +52,8 @@ def _grid_minimize(
 def _short_minimize(
     objective: AcquisitionFn,
     bounds: Bounds,
-    key: jnp.ndarray,
     n_points: int,
+    key: jnp.ndarray,
 ) -> jnp.ndarray:
     """Return fewer rows than asked, so the shape check has something to reject."""
     del objective, key

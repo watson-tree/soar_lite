@@ -293,7 +293,7 @@ is the contract to code against.
 `BLRGlobalModel` fits its posterior and builds its own `-log EI` acquisition,
 but it never descends that acquisition: the descent recipe is the engine's, so
 the model takes it as the injected `minimize` - a `MinimizeFn`,
-`(acquisition, bounds, key, n_points) -> (n_points, d)`, where the acquisition
+`(acquisition, bounds, n_points, key) -> (n_points, d)`, where the acquisition
 is `(m, d) -> ((m,), (m, d))` (value and gradient, no feasibility column). The
 natural answer, and what the experiment drivers do, is to hand the engine back
 to itself: one restart-free run whose width is the number of minimisers you
@@ -312,7 +312,7 @@ from soar_lite import (
 INNER_ITERS = 40  # one restart-free descent, long enough to settle -log EI
 
 
-def surrogate_minimize(objective, bounds, key, n_points):
+def surrogate_minimize(objective, bounds, n_points, key):
     """Descend an acquisition with one restart-free n-path run."""
     domain = Domain(bounds)
 
