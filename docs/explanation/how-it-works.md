@@ -103,37 +103,26 @@ differs at exactly one point: its `m/√v` is unitless, so the whole step scale
 falls to the scalar learning rate `α`, which must therefore carry `[x]`, and with
 mixed units no single `α` can be right for all coordinates at once.
 
-### The floor is a guard, not an addend
+### The floor: a guard on the denominator
 
 `λ = θ·|gᵢ|` for `"abs"` (units `[f]/[x]`) or `λ = θ·gᵢ²` for `"rms"` (units
-`[f]²/[x]²`), with `θ` unitless. It is anchored to the **current gradient**
-rather than to `y₀` or `|f_k|`: the floor has to vanish with `g`, not with `y`. A
-flat but unconverged coordinate (`y → 0` while `g ≠ 0`) gets a finite step from
-it, and a genuinely converged coordinate (`g → 0`) is caught by the stopping test
-first, so the division never repeats at `g ≈ 0`.
+`[f]²/[x]²`), with `θ` unitless, and the denominator is `max(Y, λ)`. It is
+anchored to the **current gradient** rather than to `y₀` or `|f_k|`: the floor
+has to vanish with `g`, not with `y`. A flat but unconverged coordinate
+(`y → 0` while `g ≠ 0`) still gets a finite step, and a genuinely converged
+coordinate (`g → 0`) is caught by the stopping test before the division ever
+repeats at `g ≈ 0`.
 
-The floor uses `max`, not `+`:
-
-```text
-den = max(Y, λ)        ← what this implementation does
-den = Y + λ            ← the additive spelling that was rejected
-```
-
-The two differ everywhere except at the two limits `Y → 0` and `Y → ∞`.
-Globally the relation is `d_add = d_max·√(max(Y,λ)/(Y+λ))` (`"rms"`; no square
-root for `"abs"`): the additive spelling always gives a smaller `d` than the
-`max` spelling, so **λ lowers the step at every `Y`, not only when `Y` bottoms
-out**. The ratio `d_max/d_add = √((Y+λ)/max(Y,λ))` peaks at `√2` at `Y = λ` (with
-`"abs"` unsquared the peak is `2`) and tends to 1 at both ends. In other words an
-additive floor folds `λ` into the job of tuning the step size, and then `Y` no
-longer tells you whether the coordinate is curvature-dominated.
-
-`max` keeps the jobs apart: **λ only guards `Y → 0`**, and once `Y` is above `λ`,
-`d` is faithfully `S/Y`. How aggressive the step should be is carried by separate
-knobs (`alpha0` for whole-step damping, `backtrack` for the grid's spacing,
-`n_alpha` for how many samples the grid has), not stuffed into the floor. That is
-not a tuning win but a decoupling: it restores the estimator from "a ratio
-polluted by λ" to "the ratio itself".
+Anchoring to `g` is safe because the step then multiplies `d` and `g`
+element-wise. When `Y` bottoms out, `d` is `1/|g|` up to constants — `S₁/(θ·|g|)`
+in `"abs"`, `√(S₂/(θ·gᵢ²))` in `"rms"` — and the full step `−d ⊙ g` reduces to
+`−(S₁/θ)·sign(g)` or `−(√S₂/√θ)·sign(g)`: a finite `[x]`-valued move in the
+direction of `−sign(g)`. The `g` inside the floor cancels the `g` it is
+multiplied by, which is why anchoring to `g` cannot make the step explode as
+`g → 0`. The floor is a **guard**: it only touches `d` where `Y < λ`; everywhere
+else `d = S/Y` stands, and how aggressive the step should be stays with the
+separate knobs `alpha0` (whole-step damping), `backtrack` (grid spacing) and
+`n_alpha` (grid size).
 
 ### The warm-up step
 

@@ -69,7 +69,7 @@ library:
   `n_paths = 1` is the single-path baseline.
 
 **[How it works](docs/explanation/how-it-works.md)** is the derivation: what each
-piece does, why the floor is a floor and not an addend, the two cost axes, and
+piece does, why the floor is anchored to the gradient, the two cost axes, and
 what this library does and does not take from SOAR.
 
 ## Install

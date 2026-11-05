@@ -281,5 +281,5 @@ is the contract to code against.
 ## 7. Next
 
 [How it works](../explanation/how-it-works.md) is the derivation: why the floor
-is a floor and not an addend, the cost counters, and what this library does and
+is anchored to the gradient, the cost counters, and what this library does and
 does not take from SOAR.

@@ -144,3 +144,43 @@ gives one physical scale, `W ≈ e`, not 20 for one EMA and 0 for the other. The
 default unifies on that scale; `β` and `μ` stay two independent controls
 (`μ = 0` is still the off switch, `β = 0.95` is still reachable on its own) —
 what changed is only where they rest, not how many of them there are.
+
+## Additive denominator floor (`+` instead of `max`)
+
+**Status: rejected at the design level — `soar_lite/local_solver.py` reads
+`den = max(Y, λ)`, and the additive spelling was never shipped.**
+
+### What it was
+
+A spelling of the gradient-anchored floor that adds instead of capping:
+
+    den = Y + λ
+
+instead of `den = max(Y, λ)`, with `λ = θ·|g_i|` (`"abs"`) or `θ·g_i²`
+(`"rms"`).
+
+### Why it was plausible
+
+`Y + λ` is smooth at `Y = λ` and, read charitably, rolls the guard and a
+shrinkage into one term.
+
+### Why it fails
+
+The two spellings agree only at the limits `Y → 0` and `Y → ∞`; in between, the
+additive spelling always gives a **smaller** `d`:
+
+    d_add = d_max · √(max(Y, λ) / (Y + λ))      ("rms"; the "abs" ratio is unsquared)
+
+so λ deflates the step at *every* `Y`, not only where `Y` bottoms out. The
+deflation peaks at `Y = λ`: `d_max/d_add = √((Y + λ)/max(Y, λ)) = √2`, or `2` for
+the unsquared `"abs"` ratio, and tends to 1 at both ends. In effect an additive
+floor folds λ into the job of tuning the step size, so `Y` stops answering
+"is this coordinate curvature-dominated?".
+
+### Verdict
+
+Rejected analytically. The floor's only job is to keep `d` finite at `Y → 0`;
+`max` keeps that job apart from step-size tuning — λ caps `d` below and,
+everywhere `Y ≥ λ`, the estimate stays the faithful `S/Y`. Step aggressiveness
+belongs to the separate knobs `alpha0`, `backtrack`, `n_alpha`, not to the
+floor.
