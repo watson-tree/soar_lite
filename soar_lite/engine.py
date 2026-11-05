@@ -611,7 +611,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
         - ``x``: the argmin in the caller's coordinates
         - ``fun``: the best value (min feasible eval; ``inf`` if none, ``-inf``
-          when the objective has no floor, which also ends the run)
+            when the objective has no floor, which also ends the run)
         - ``n_f_points``: value-only points served (the f seam)
         - ``n_f_batches``: value-only batches served (the f seam)
         - ``n_f_g_points``: fused points served (the serial-cost count)
