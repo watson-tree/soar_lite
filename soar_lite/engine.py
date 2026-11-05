@@ -382,10 +382,22 @@ class NPathResult:
     it is `nan` when nothing feasible was ever served and `-inf` when a feasible
     point priced the objective at `-inf` (the trajectory still moves on the
     penalized objective, but `f⋆` does not). scipy's `fun` has no such filter.
+
+    Two more fields report the flock itself rather than its single best point.
+    `flock_x` is each path's held coordinates as the run ended, one row per
+    path, and `flock_fun` its held value - already served, not re-evaluated, so
+    a path frozen by `restart_stalled=False` reports the value it stalled with.
+    Neither is filtered by feasibility nor sorted: this is where the paths
+    stopped, not a ranking. A path that never held a usable point (the run
+    ended before one arrived) is `nan` on both halves. That also means `x`/`fun`
+    need not be a row of the flock: the best point may come from a path that
+    was restarted afterwards.
     """
 
     x: jnp.ndarray  # (d,) coords of the best point found
     fun: float  # min over feasible recorded evals; nan if none, -inf if unbounded
+    flock_x: jnp.ndarray  # (n_paths, d) each path's held coords as it ended
+    flock_fun: jnp.ndarray  # (n_paths,) each path's held value; nan if it held none
     n_f_points: int  # value-only points served (the f seam)
     n_f_batches: int  # value-only batches served (the f seam)
     n_f_g_points: int  # fused points served (the serial-cost count)
@@ -728,9 +740,19 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             break
         budget.tick()  # counted after the body: only finished iterations
 
+    # Each path's point as the run ended, and its value. A path that never held
+    # a usable point reports `nan` on both halves: nothing was served for it, so
+    # there is neither a coordinate nor a value to carry out.
+    flock_x = jnp.stack(
+        [p.x if p.x.size else jnp.full(domain.d, jnp.nan) for p in paths.points],
+    )
+    flock_fun = jnp.asarray([p.f for p in paths.points])
+
     return NPathResult(
         x=best.x,
         fun=best.fun,
+        flock_x=flock_x,
+        flock_fun=flock_fun,
         n_f_points=budget.n_f_points,
         n_f_batches=budget.n_f_batches,
         n_f_g_points=budget.n_f_g_points,

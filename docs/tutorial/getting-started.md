@@ -161,6 +161,8 @@ correspond:
 | --- | --- |
 | `x` | argmin, in the coordinates you handed the engine |
 | `fun` | its value: the best over feasible points, `nan` if none, `-inf` if the objective has no floor |
+| `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where it held no point |
+| `flock_fun` | each path's held value, `(n_paths,)`; `nan` where it held no point |
 | `n_f_g_points` | fused points billed - the serial-cost count |
 | `n_f_g_batches` | fused batches billed, one per `eval_f_g` call - the parallel-cost count |
 | `n_f_points` | value-only points billed (the `eval_f` seam) |
@@ -174,6 +176,14 @@ its own. It stops on a gate - the horizon (`max_iters`), the deadline
 hand: `all_stalled` (the whole flock stalled with restarts off) and `unbounded`
 (a feasible point priced the objective at `-inf`). Neither is a criterion the
 search met.
+
+The flock pair is not a ranking: `flock_x` and `flock_fun` are each path's
+held point as the run ended, one row per path, unsorted and unfiltered by
+feasibility - the value is the one that path stopped on, not a fresh
+evaluation, so a path frozen by `restart_stalled=False` reports the value it
+stalled with. Nothing gets you the flock of an earlier iteration, and `x`/`fun`
+need not be a row of this one: the best point may come from a path that was
+restarted afterwards.
 
 ## 4. Turn the knobs you actually need
 
@@ -277,6 +287,87 @@ To replace one outright, implement its protocol and pass the instance:
 
 Both protocols are documented in the [API Reference](../reference/api.md), which
 is the contract to code against.
+
+### The engine as its own minimizer
+
+`BLRGlobalModel` fits its posterior and builds its own `-log EI` acquisition,
+but it never descends that acquisition: the descent recipe is the engine's, so
+the model takes it as the injected `minimize` - a `MinimizeFn`,
+`(acquisition, bounds, key, n_points) -> (n_points, d)`, where the acquisition
+is `(m, d) -> ((m,), (m, d))` (value and gradient, no feasibility column). The
+natural answer, and what the experiment drivers do, is to hand the engine back
+to itself: one restart-free run whose width is the number of minimisers you
+want, read off `flock_x`.
+
+```python
+import jax
+from soar_lite import (
+    BLRGlobalModel,
+    DiagonalPreconditioner,
+    Domain,
+    SphereProjection,
+    n_path_schedule,
+)
+
+INNER_ITERS = 40  # one restart-free descent, long enough to settle -log EI
+
+
+def surrogate_minimize(objective, bounds, key, n_points):
+    """Descend an acquisition with one restart-free n-path run."""
+    domain = Domain(bounds)
+
+    def eval_g(x_batch):      # an acquisition: (m, d) -> ((m,), (m, d))
+        f, g = objective(x_batch)
+        return f, g, None     # finite everywhere: no feasibility to mask
+
+    result = n_path_schedule(
+        eval_g,
+        domain=domain,
+        n_paths=n_points,     # one path per minimiser: one batch, not n runs
+        max_iters=INNER_ITERS,
+        local_solver=DiagonalPreconditioner(),
+        restart_stalled=False,  # a pure descent, no restarting inside it
+        key=key,
+    )
+    return result.flock_x    # one row per path: n_points local minimisers
+
+
+global_model = BLRGlobalModel(
+    projection_factory=SphereProjection,  # IdentityProjection is the other prior
+    minimize=surrogate_minimize,
+    key=jax.random.PRNGKey(0),
+)
+
+result = n_path_schedule(
+    eval_f_g,
+    domain=domain,
+    n_paths=8,
+    max_iters=200,
+    global_model=global_model,
+)
+```
+
+It is the engine inside the engine: the outer run asks the model for a restart
+when a path stalls, the model asks `surrogate_minimize` to descend its
+acquisition, and `surrogate_minimize` runs the engine again - flat and
+restart-free this time. Four things keep it honest:
+
+- **`restart_stalled=False` inside.** The inner run has one job: reach the
+  acquisition's local minimum from each start. Restarts would replace that with
+  random wandering, so they are off, and the run ends on `all_stalled` or the
+  horizon with every path parked where it settled.
+- **`n_paths = n_points`, not a loop.** The acquisition is batched, so one run
+  of width `n_points` serves the whole cohort one row per path. Looping
+  `n_paths=1` runs would buy the same points with `n_points` times the batches -
+  the serial shape of a job the GPU wants wide.
+- **A fit comes before the inner run.** Until `observe` has given the posterior
+  a spread to standardize by, `propose` answers with the domain's own draw and
+  never calls `minimize`, so the deepest layer is not entered on the first
+  restarts. If the inner horizon is short enough to end before a path is
+  placed, that row of `flock_x` is `nan`, and the outer run serves it as an
+  unusable start and stalls that path.
+- **`feas=None`.** An acquisition is finite everywhere, so the fused seam's
+  third slot is `None` - there is nothing to mask out.
 
 ## 7. Next
 

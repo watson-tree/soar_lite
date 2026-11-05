@@ -1292,6 +1292,42 @@ def test_a_malformed_flock_is_refused_at_the_entry() -> None:
     )
 
 
+def test_flock_reports_where_each_path_stopped() -> None:
+    """`flock_x`/`flock_fun` are each path's held point, nan where none arrived."""
+
+    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return jnp.sum((theta - 0.5) ** 2), 2.0 * (theta - 0.5)
+
+    starts = flock(3, d=2)
+    res = n_path_schedule(
+        Recorder(quad),
+        **flock_kwargs(starts, unit_domain(2)),
+        max_iters=1,  # one iteration: the flock is placed, then the horizon
+        restart_stalled=False,
+    )
+    # Iteration 0 places the caller's flock and nothing has stepped yet, so the
+    # reported flock is exactly the starts - one row per path, in path order -
+    # and its values are those starts' values, not the best over feasible ones.
+    assert res.flock_x.shape == (3, 2), res.flock_x.shape
+    assert jnp.array_equal(res.flock_x, starts), res.flock_x
+    assert res.flock_fun.shape == (3,), res.flock_fun.shape
+    assert jnp.allclose(res.flock_fun, jnp.sum((starts - 0.5) ** 2, axis=1))
+
+    # A run whose gate is closed before the first batch has served no point for
+    # any path: both halves are nan, not an empty or zero-filled row.
+    empty = n_path_schedule(
+        Recorder(quad),
+        **flock_kwargs(starts, unit_domain(2)),
+        max_iters=1,
+        budget_check=lambda: False,
+        restart_stalled=False,
+    )
+    assert empty.status == "budget_exhausted", empty.status
+    assert empty.flock_x.shape == (3, 2), empty.flock_x.shape
+    assert bool(jnp.all(jnp.isnan(empty.flock_x))), empty.flock_x
+    assert bool(jnp.all(jnp.isnan(empty.flock_fun))), empty.flock_fun
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
