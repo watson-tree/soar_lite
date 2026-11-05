@@ -437,4 +437,10 @@ def build(group: str) -> list[Problem]:
             for p in g():
                 unique.setdefault(p.name, p)
         return list(unique.values())
+    if group not in groups:
+        # The name arrives from `--groups`, which is argv and therefore a plain
+        # string: a typo has to be named here rather than surface as a KeyError.
+        choices = ", ".join(["all", *groups])
+        msg = f"unknown problem group {group!r}; pick one of {choices}"
+        raise SystemExit(msg)
     return groups[group]()

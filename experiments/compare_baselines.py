@@ -75,7 +75,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import jax.numpy as jnp
 import matplotlib as mpl
@@ -510,6 +510,13 @@ def run_panel(
 
 # --- plotting ---------------------------------------------------------------
 
+Axis: TypeAlias = Literal["points", "batches"]
+"""The two cost units a panel can be drawn against.
+
+Named as a type so a caller inside the repo gets the pair from the checker; the
+comparisons below still read it at run time, since `--groups` never reaches here.
+"""
+
 
 def plot_panel(panel: str, out_dir: Path) -> None:
     """Draw a panel from whatever arm files exist; a missing arm is skipped."""
@@ -540,7 +547,7 @@ def _draw_problem(
     ax: Axes,
     panel: str,
     prob: problems.Problem,
-    axis: str,
+    axis: Axis,
 ) -> bool:
     """Draw one subplot; False when the arm files it needs are all absent."""
     entries = [(arm, load_arm(prob.name, arm.key)) for arm in PANELS[panel](prob)]
@@ -595,7 +602,7 @@ def _draw_problem(
     return True
 
 
-def _resample(traces: list[Trace], grid: np.ndarray, axis: str) -> np.ndarray:
+def _resample(traces: list[Trace], grid: np.ndarray, axis: Axis) -> np.ndarray:
     """Resample every seed's best-so-far onto ``grid``.
 
     Returns a ``(n_seeds, len(grid))`` array with NaN where a seed has no data
@@ -629,7 +636,7 @@ def _summary(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return med, q1, q3
 
 
-def _up_to(trace: Trace, axis: str, max_x: float) -> Trace:
+def _up_to(trace: Trace, axis: Axis, max_x: float) -> Trace:
     """Return the part of a run that served at most ``max_x`` units of ``axis``."""
     x = trace.points if axis == "points" else trace.batches
     stop = sum(1 for v in x if v <= max_x)
