@@ -114,19 +114,19 @@ and must never share a chart, and the `f` pair must never be read as the `f_g`
 pair. They replace scipy's single `nfev`.
 _Avoid_: nfev (retired)
 
-**objective** (目标 f):
+**objective**:
 The scalar function being minimized; its per-point values are the f values the
 engine records. Distinct from the *cost model* (the four counters), which
 counts work.
 _Avoid_: loss, cost, fitness
 
-**eval_f_g** (批量求值函数):
+**eval_f_g**:
 The caller's per-batch callable (type `EvalFG`): points in,
 `(f, gradient, feas?)` out. The seam to the objective's values and
 gradients; the engine is blind to it otherwise.
 _Avoid_: oracle, evaluator, black box
 
-**eval_f** (可选的值求值器, type `EvalF`):
+**eval_f** (type `EvalF`):
 The optional value-only sibling: points in, `(f, feas?)` out, no gradient.
 It exists so a judged step's trials and the redraw starts can be read by value
 first and their winners' gradients bought once at *settle*, instead of once per

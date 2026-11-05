@@ -118,8 +118,10 @@ either matters, write the gradient by hand and hand the engine a fused
 ## 2. Run it
 
 `eval_f_g` is the only positional argument; everything else is keyword-only.
-`domain` and `n_paths` are required, and a run needs a horizon - at least one
-of `max_iters` or `time_limit`. `eval_f` is optional (the value-only seam).
+`domain` and `n_paths` are required, and a run needs a stop - at least one of
+the horizon `max_iters` or the deadline `time_limit`. `eval_f` is optional
+(the value-only seam), handed in here for the budget it saves when the method
+enumerates trials; the default single-sample step leaves it unbilled this run.
 Each missing required argument is refused by `ValueError` rather
 than guessed.
 
@@ -131,6 +133,7 @@ result = n_path_schedule(
     domain=domain,
     n_paths=4,
     max_iters=30,
+    eval_f=eval_f,
 )
 print(result.x, result.fun, result.status)
 # ≈[3. 3.] 3e-5 max_iters
@@ -163,26 +166,29 @@ correspond:
 | `n_f_points` | value-only points billed (the `eval_f` seam) |
 | `n_f_batches` | value-only batches billed (the `eval_f` seam) |
 | `n_iters` | engine iterations completed (iteration 0 places the flock); one iteration may serve several batches |
-| `status` | `max_iters`, `time_limit`, `budget_exhausted` or `unbounded` |
+| `status` | `max_iters`, `time_limit`, `budget_exhausted`, `unbounded` or `all_stalled` |
 
 There is no `success` or `message`: the engine has no convergence criterion of
-its own. It stops on a horizon, on an extra gate - or on `unbounded`, when a
-feasible point prices the objective at `-inf`, which is an answer in hand rather
-than a criterion the search converged to.
+its own. It stops on a gate - the horizon (`max_iters`), the deadline
+(`time_limit`), the extra budget gate - or before the horizon on an answer in
+hand: `all_stalled` (the whole flock stalled with restarts off) and `unbounded`
+(a feasible point priced the objective at `-inf`). Neither is a criterion the
+search met.
 
 ## 4. Turn the knobs you actually need
 
 | Knob | What it buys |
 | --- | --- |
-| `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
 | `n_paths` | engine width: paths advanced in lockstep each iteration |
+| `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
+| `x0` | the flock's start, one point per path `(n_paths, d)`: placed by iteration 0 exactly where you ask; `None` lets the global model draw it - hand it in for the starts a run is measured on |
+| `eval_f` | the optional value-only seam: points in, f values out, no gradient - pass it to save budget, omit it in a fused-only comparison |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
-| `time_limit` | a wall-clock horizon in seconds, for when an iteration's cost is too uneven to budget in iterations |
-| `eval_f` | the optional value-only seam: points in, f values out, no gradient |
-| `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
-| `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
-| `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` freezes the flock, and the run ends on `all_stalled` once every path parks |
+| `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
+| `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` freezes the flock, and the run ends on `all_stalled` once every path parks |
+| `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
+| `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |
 
 Three gotchas worth knowing up front:
@@ -206,7 +212,7 @@ Three gotchas worth knowing up front:
   run (`all_stalled`) instead of entering a batchless iteration. So `max_iters`
   is a deterministic stop, not
   a cost estimate - read the four counters for what the run actually
-  did, and pass `time_limit` if wall-clock is what you care about. `budget_check`
+  did, and pass the deadline (`time_limit`) if wall-clock is what you care about. `budget_check`
   is an extra gate consulted at the loop head each iteration and again before
   every billed batch (value-only included), so an external budget derived from
   batches or points can over-run by less than one batch, never more.
