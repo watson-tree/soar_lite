@@ -101,28 +101,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what makes the engine's cheap-trial path reachable for free. It is not the
   seam for a value-only objective: a function JAX cannot differentiate cannot be
   `objective` at all.
-- `DiagonalPreconditioner(mu=...)`: an opt-in momentum blend. With `mu > 0` the
-  direction smooths a second history - an EMA `m` of the **past** steps' start
-  gradients, the current step's joining it only once that step has committed -
-  and blends it in as `g + m_perp`, where `m_perp = m - (<m,g>_d / <g,g>_d)*g`
-  projects onto g's orthogonal complement in the **d-weighted** inner product
-  `<a,b>_d = sum d_i a_i b_i`. The weighting is what keeps the invariant:
-  `<d*(g+m_perp), g> = <g,g>_d > 0`, so the step still descends by construction
-  and still needs no acceptance test - Euclidean orthogonality (`<m_perp,g> = 0`)
-  is the wrong inner product and would void that silently while looking like a
-  proof. History only is the other half of it: the projection is linear, so
-  folding this step's `g` into `m` before projecting it would leave `mu*m_perp`,
-  the along-`g` part being annihilated - `mu` would then scale the window and the
-  transverse term at once. Default 0 (off) is not caution: near a minimiser
-  `g -> 0` while `m` lags a whole window behind, so the direction stops vanishing
-  and the `||g|| <= tau_rel*||g_0||` stopping test never fires. `mu` is
-  independent of `beta` - that one smooths the secant pair, i.e. curvature, and
-  `s`/`y` keep sharing it - and the secant pair keeps reading raw `g`
-  differences, so the two knobs never entangle. The fold has one site, `fold`
-  (the step's commit), so `propose` only ever reads `m` and an alpha-grid retry
-  cannot fold the same gradient twice; `restart` disarms the secant and the next
-  fold re-seeds `m` exactly as it re-seeds `s`/`y`, so no history crosses one;
-  `mu = 0` stores no history at all.
+- `DiagonalPreconditioner(mu=...)`: a momentum knob on the direction, default
+  0.63 (the same ≈ e-step window as `beta`). With `mu > 0` the direction is the
+  unprojected heavy-ball momentum `m = (1 - mu)·g + mu·m_prev`, where `m_prev` is
+  the EMA of past steps' start gradients, written only at each step's commit;
+  `mu = 0` keeps the bare gradient. There is no projection onto `g`'s orthogonal
+  complement and so no per-step descent invariant - convergence rests on the
+  engine's best-so-far accounting and restarts, not on forcing each step down.
+  `ALGORITHM.md` §1.6 records why the projected variant was dropped;
+  `RESULTS.md` holds the near-minimiser accuracy cost of the stale term.
 
 ### Changed
 
