@@ -229,9 +229,16 @@ on whether your objective is really parallel:
   with `eval_f`, buying trial values by cheap value-only passes) shrinks the
   spread of the best and buys a larger improvement for the same number of
   batches.
-- **On a CPU.** Batches run mostly serially, so the sampling work per point is
-  what costs, and the point count is the honest number: raising `n_paths`
-  improves the best per point far less than it improves it per batch.
+- **On a CPU.** Batches run mostly serially, so the point count is the honest
+  cost axis, and there width thins every path instead of speeding anything up.
+  The flock advances in lockstep — every path takes one step an iteration — so
+  at a fixed point budget each path gets about `1/n_paths` of the steps a
+  single path would. Best-of-n only shrinks the spread across the starts; it
+  cannot put the missing steps back. So whenever the budget runs out before a
+  path converges — the regime this library is for — that lost depth dominates,
+  and a single path ends better per point than a wide one. Width on a CPU buys
+  variance reduction, not a speedup; it pays only where the paths are nearly
+  free, which is the GPU's line, not the CPU's.
 
 One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
 **point** is one row of data (serial cost, CPU) - and a batch is a
