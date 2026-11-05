@@ -1,7 +1,7 @@
 [project]
 name = "soar-lite"
 version = "0.1.0"
-description = "First-order diagonal-preconditioned K-path descent with sample-based (expected-improvement) restarts"
+description = "First-order n-path descent with stalled-path restarts and a unit-invariant diagonal preconditioner default"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

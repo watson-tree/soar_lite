@@ -1,6 +1,6 @@
 site_name: soar-lite
 site_url: https://watson-tree.github.io/soar_lite/
-site_description: First-order diagonal-preconditioned n-path descent with sample-based restarts
+site_description: First-order n-path descent with stalled-path restarts and a unit-invariant diagonal preconditioner default
 repo_url: https://github.com/watson-tree/soar_lite
 repo_name: watson-tree/soar_lite
 docs_dir: docs

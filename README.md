@@ -3,12 +3,42 @@
 [![CI](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml/badge.svg)](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/watson-tree/soar_lite/blob/main/notebooks/quickstart.ipynb)
 
-First-order diagonal-preconditioned n-path descent with stalled-path restarts
-drawn from a `GlobalModel`, for minimizing objectives that are expensive
-enough to make the evaluation budget the binding constraint. Value and gradient
-come back together from the caller; no Hessian and no curvature model — the
-default restarts are sampled from the domain, and a surrogate is opt-in
-(`BLRGlobalModel`).
+First-order n-path descent with stalled-path restarts, for objectives
+expensive enough that the evaluation budget is the binding constraint. The
+caller returns value and gradient together: the library fits no Hessian and
+does not solve second-order information directly (the diagonal preconditioner
+is a biased `1/H` estimate, not Newton), and a zero-order objective — value
+only, no gradient — is not its seam. It is another realisation of the SOAR
+framework (Mathesen et al., 2021): the core is the same idea (a global
+restart-point model and a local method each own their half, joined by one
+mechanism), while the details are this library's own — not a port of the
+reference implementation, not interface-compatible, and no claim to reproduce
+its results.
+
+It is built for moderate- to high-dimensional search spaces and is
+deliberately not tuned for low dimension: with few coordinates several
+restarts collapse into the same basin, and the default sampler draws
+independent uniform/normal points rather than a low-discrepancy sequence
+because the mid-to-high regime is the target. The `n_paths` paths advance in
+lockstep, one fused batch per iteration — a GPU pattern: a batch's wall-clock
+barely grows as it widens. On a CPU the same run works, but it only trades
+evaluations for a best-of-n reduction in variance, not a wall-clock speedup.
+
+`-lite` is the same decision stated as scope: the shipped pieces are a
+lightweight set of defaults, chosen by judgment rather than fitted for
+generality — not a general-purpose toolkit. The local method and the
+restart-point model are both plugin points — write a `LocalSolver` or a
+`GlobalModel` and pass it in — so a more general implementation can drop in
+later; what this repository currently implements is aimed at scientific
+numerical optimisation. The default local solver, `DiagonalPreconditioner`,
+is a per-coordinate secant preconditioner that is unit-invariant: scaling a
+coordinate `x` by `c` scales its step by `c`, and rescaling `f` leaves the
+step alone, so one set of dimensionless knobs serves mixed units (kg, N/m,
+N·s/m, …). Unit invariance is a property of the preconditioner itself, not of
+the warm-up step, which is by design not coordinate-invariant — so the
+invariance experiment shows a small, self-correcting offset there, not a
+different descent rate (the contrast is Adam, whose single learning rate is
+per-unit-system).
 
 Three seams, a few modules (`soar_lite/engine.py`, `soar_lite/local_solver.py`,
 `soar_lite/domain.py`, `soar_lite/global_model/`), no dependencies beyond JAX
