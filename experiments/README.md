@@ -21,6 +21,14 @@ pip install 'jax==0.10.2' 'optax==0.2.8' 'matplotlib==3.11.2' 'scipy==1.17.1'
 pip install -e .
 ```
 
+The default sync pins the CPU JAX build. The canonical runs are GPU-shaped, so on
+a GPU box install the CUDA build matching your driver line alongside it —
+`uv pip install 'jax[cuda12]'` (or `'jax[cuda13]'`) — and note that a later
+`uv sync` restores the CPU wheel from the lock. JAX picks its backend from what is
+installed: to pin one inside the process, call
+`jax.config.update("jax_platform_name", "cpu")` — or `"cuda"` — before any JAX
+work.
+
 ## Smoke check
 
 ```bash

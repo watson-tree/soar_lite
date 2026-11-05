@@ -57,8 +57,17 @@ library:
 ## Install
 
 ```bash
-pip install soar-lite
+pip install soar-lite                 # CPU JAX: works anywhere
+pip install soar-lite 'jax[cuda12]'   # GPU: CUDA 12 driver
+pip install soar-lite 'jax[cuda13]'   # GPU: CUDA 13 driver
 ```
+
+`soar-lite` declares plain `jax` (the CPU build) so an install never needs a GPU,
+and holds no GPU-specific code — only the JAX backend differs. The CUDA build is a
+JAX extra, so which one you get stays yours to name rather than a version this
+package picks. JAX picks its backend from what is installed; to pin one inside a
+process, call `jax.config.update("jax_platform_name", "cpu")` — or `"cuda"` —
+before any JAX work.
 
 ## Minimal run
 
