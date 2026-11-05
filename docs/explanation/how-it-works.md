@@ -482,15 +482,15 @@ The counts report and do not budget: `stop` never reads them.
 
 **How many batches a round spends is decided by the seam**:
 
-- **With `eval_f` connected**: trials and redraw starts serve `f` only, and the
-  owed gradients are merged into **one** fused batch at the end of the round, so
-  a round is one fused batch plus whatever f-only batches the method's verdicts
-  need.
-- **Without `eval_f`**: the fused batch is the only way to get a value, so **each
-  trial is itself a fused batch** — the preconditioner method `retry`/`accept`s
-  candidate by candidate, so `n_alpha` candidates spend `n_alpha` fused batches on
-  that step, the redraw starts' batch included. Measured on one path with
-  `n_alpha = 5` over two iterations: 6 fused batches without the seam, 2 with it.
+- **With `eval_f` connected**: each trial serves `f` only, and the round's one
+  fused batch (`settle`) buys everything still owed — the accepted trial's
+  gradient and every redraw start's value and gradient, since a start defers
+  both halves. So an `n_alpha`-candidate step spends `n_alpha` f-only batches
+  plus one fused batch.
+- **Without `eval_f`**: the fused batch is the only way to read a value, so
+  **each trial is itself a fused batch** and the winner needs no `settle` pass.
+  An `n_alpha`-candidate step spends `n_alpha` fused batches, one per candidate
+  as the method `retry`/`accept`s them in turn.
 
 Both rulers must be reported: on the serial axis a flock of `n_paths` paths has
 its gain divided by `n_paths`, so multi-path's book ceiling is lower; on the
@@ -508,10 +508,11 @@ numbers.
 
 ## When this fits
 
-- This is a **local** method plus sampling restarts, not a global searcher: it
-  buys globality through the diversity of `n_paths` paths and the restart rate,
-  with convergence guarantees on a par with Adam/RMSProp and no pursuit of
-  Newton/quasi-Newton.
+- This is a **global** search assembled from one local method and one restart
+  model: the local method descends on a par with Adam/RMSProp and pursues no
+  Newton/quasi-Newton, and globality comes from the diversity of `n_paths` paths
+  plus `restart_stalled` re-drawing fresh starts — from the domain, or from a
+  fitted surrogate where one is wired in.
 - The per-coordinate estimate ignores the coupling term `Σ_{j≠i} Hᵢⱼ sⱼ`, which
   lands inside `|yᵢ|` and makes `d` a biased estimate of `1/Hᵢᵢ` (the stronger the
   coupling, the bigger the bias, tending to systematic under-stepping: more
@@ -524,22 +525,34 @@ numbers.
 
 The "soar" in the name is a nod to the **adaptive restart** framework of Mathesen
 et al. 2021: it argues that the global side (which kind of start is worth buying)
-and the local method each have their own stretch, and that the restart between
-them is decided by a third mechanism rather than leaving global diversity to the
-local search alone. `-lite` means this package implements only the minimal
-version of that skeleton: restart starts come from a `GlobalModel`, and the
-default arm fits no model at all, drawing from the `Domain` directly. The rest is
-a different story:
+and the local method each have their own stretch, joined by one connecting
+mechanism rather than leaving global diversity to the local search alone. `-lite`
+means this package implements only the minimal version of that skeleton: restart
+starts come from a `GlobalModel`. The rest is a different story:
 
-- SOAR is a **global–local collaborative optimisation framework** (the literature
-  includes surrogate/ensemble models and statistical acceptance tests); this
-  package by default fits no model of `f`, has no multi-fidelity, and has one
-  local method plus one start-model seam.
-- SOAR's third mechanism decides "continue or restart" and accumulates its own
-  evidence; this package splits it into one bit, `restart_stalled` (whether), and
-  `GlobalModel.propose` (where), leaving the stopping judgement to the local
-  method's own stopping test. The surrogate arm's `−log EI` is an acquisition
-  function serving "where is still worth trying", not a restart verdict.
+- **Three parts become two.** SOAR strings a surrogate model, an acquisition
+  rule (which start is worth buying next), and a local method into one framework.
+  This package folds the surrogate and the acquisition into the one `GlobalModel`
+  contract (`observe` plus `propose`), so the acquisition is half of a seam, not
+  a third part on its own — "where is still worth trying", never a restart
+  verdict — and two seams remain: the global model and the local solver. The
+  fold is what permits the default arm: once surrogate and acquisition share one
+  contract, an arm that fits nothing and simply draws satisfies it too, with no
+  acquisition to speak of. The two seams that survive the fold are the next two
+  bullets, each chosen for the medium-to-high dimension this library targets.
+- The **global model** ships two arms aimed at that regime: the default
+  `SampleGlobalModel` — the model-free arm above — fits nothing and draws from
+  the `Domain` with a plain per-dimension sampler, uniform on a bounded side and
+  `N(0, scale²)` on a free one, independent points rather than a low-discrepancy
+  sequence because the mid-to-high regime is the target; and the surrogate arm
+  `BLRGlobalModel` fits a Bayesian linear posterior on inverse-stereographically
+  projected coordinates (a fixed-hyperparameter port of Doumont et al. 2026),
+  which cures the corner-seeking pathology a Euclidean RBF Gaussian-process
+  posterior falls into in high dimension, and proposes the local minimum of
+  `−log EI`. EI carries no acquisition hyperparameters of its own and is strong
+  in practice, but choosing it as the default acquisition is a personal prior,
+  not something the skeleton requires. SOAR's own default surrogate is that
+  Gaussian process, the half of SOAR least at home in medium-to-high dimension.
 - The default local method is the coordinate-wise secant-ratio preconditioner,
   first-order: the caller supplies the value and the gradient together, with no
   Hessian, no curvature model, and no direct solve of second-order information. A
@@ -562,6 +575,12 @@ results. The citation is for attribution and to locate the difference.
   optimization with adaptive restart: a framework for integrated local and global
   learning. *Journal of Global Optimization*, 79, 87–110. (SOAR-style sample
   restarts.)
+- Doumont, C., Fan, D., Maus, N., Gardner, J. R., Moss, H., & Pleiss, G. (2026).
+  *We Still Don't Understand High-Dimensional Bayesian Optimization*.
+  Proceedings of the Twenty-Eighth International Conference on Artificial
+  Intelligence and Statistics (AISTATS), PMLR 300.
+  <github.com/colmont/linear-bo> — the inverse-stereographic projection the
+  surrogate arm ports.
 - Jones, D. R., Schonlau, M., & Welch, W. J. (1998). Efficient global optimization
   of expensive black-box functions. *Journal of Global Optimization*, 13,
   455–492. (The closed-form EI.)
