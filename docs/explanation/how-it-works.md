@@ -144,10 +144,7 @@ One exception to unit invariance: the warm-up step is **not** unit-invariant.
 `−g₀` is a gradient-like quantity (`x̃ = c·x` gives `g̃ = g/c`, so magnifying a
 coordinate shrinks its gradient), and multiplying it by a scalar `α` keeps the
 step scaling backwards with the coordinate scale; only the steady-state `−d⊙g` is
-displacement-like. The cost is close to zero in practice: the case that wants
-invariance is the smooth single basin, where `d` reads `1/H` on the first pair and
-erases the scale error warm-up introduced, and on multimodal problems invariance
-was never the point.
+displacement-like.
 
 ### Stopping
 
@@ -205,13 +202,14 @@ version projected `m` onto the `d`-metric orthogonal complement of `g` (directio
 **"Acceleration" does not bring in Nesterov.** Nesterov's `O(1/k²)` (a convex
 smooth bound; Newton in one step on a quadratic) comes from treating the gradient
 difference `y = g_k − g_{k−1}` as second-order information. This method's
-`d = S/Y` is already that same second-order use, and it **closes the
-dimensions** — dividing `y` by the co-directional displacement `s` is what
-produces a displacement-like estimate of `H⁻¹`. Nesterov consumes `y` alone,
-without dividing by `s`, hiding the second-order units inside its step length
+`d = S/Y` is already that same second-order use: dividing `y` by the
+co-directional displacement `s` produces a displacement-like estimate of `H⁻¹`.
+Nesterov consumes `y` alone, without dividing by `s`, hiding the second-order
+units inside its step length
 `1/L` (`L` is curvature, in the `[f]/[x]` system); it also has to evaluate `g` at
-a look-ahead point, which does not fit the propose-then-evaluate seam. So it is not
-introduced, and `μ` does one job only: smoothing the direction's noise.
+a look-ahead point, which does not fit the propose-then-evaluate seam. So it is
+not introduced, and `μ`'s one job is not second-order: it reuses the old
+direction once more, a mitigation rather than a repair (below).
 
 **The default `μ = 0.63` shares the window with `β`, about `e` steps.** The cost
 of momentum is real: near an optimum `g → 0` while `m` decays on the `1/(1−μ)`
@@ -230,7 +228,8 @@ gradient.
 
 **`μ` and `β` are two independent knobs that happen to share a default window.**
 `β` smooths the **curvature** estimate (`s`/`y`), answering "how often does `d`
-re-learn the geometry"; `μ` smooths the **direction**'s noise. Both take "the
+re-learn the geometry"; `μ` averages the past **gradients** into the step's
+direction. Both take "the
 geometry or the direction changes within a few steps" as the same physical scale,
 hence the same default `W ≈ e`; but they remain two knobs, and moving one does
 not move the other. `s` and `y` still share one `β`: they are the two ends of the
@@ -239,13 +238,7 @@ the two ends would bias the ratio itself when things change (which is also why
 `s` and `y` do not each get a `β`). The only coupling point: `m` feeds the
 direction alone, and the secant pair still reads the **raw** gradient difference
 (`y = g_k − g_{k−1}`, not routed through `m`); otherwise the two knobs would
-become entangled. The fold point is unique: `fold` writes `m` when a step commits
-and `propose` only reads, so an `n_alpha > 1` grid that re-samples the same step
-many times reads the same history each time, and no repeated folding shortens the
-window that `μ` buys. A restart does not touch `m`; it only puts `has_secant`
-back to False, and the next `fold` (the warm-up one) reseeds from the new start's
-gradient — the same path by which `s`/`y` reseed, so history does not cross a
-restart.
+become entangled.
 
 ## Restart
 
