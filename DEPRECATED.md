@@ -184,3 +184,44 @@ Rejected analytically. The floor's only job is to keep `d` finite at `Y → 0`;
 everywhere `Y ≥ λ`, the estimate stays the faithful `S/Y`. Step aggressiveness
 belongs to the separate knobs `alpha0`, `backtrack`, `n_alpha`, not to the
 floor.
+
+## EI continue-or-restart verdict
+
+**Status: deprecated — removed from the code.** The single restart decision
+once read `EI_restart >= EI_continue`; the shipped engine now splits it into
+the local method's own stopping test (*when*), the `restart_stalled` boolean
+(*whether*) and `GlobalModel.propose` (*where*). Expected improvement survives
+only as `BLRGlobalModel`'s acquisition function, answering *where to draw*,
+never *whether to stop*.
+
+### What it was
+
+One verdict owned the whole restart decision: at each stage it fitted a model
+to each side's evidence — the path's own progress stream on the *continue*
+side, a pool of group-min draws on the *restart* side — priced both sides as
+expected improvement, and redrew the path when `EI_restart >= EI_continue`. A
+stage clock and a window gated when the two EIs were compared.
+
+### Why it was plausible
+
+Expected improvement already sits on the surrogate arm, so "does this path
+still beat a fresh draw?" looked like one natural acquisition question, and
+folding *when*, *whether* and *where* into it meant one knob instead of three.
+
+### Why it fails
+
+The two sides have no common model that reads them symmetrically. Continuing
+is priced from a path's own autocorrelated progress; restarting is priced from
+a mixture pooled across every path's starts. Neither is the same quantity, so
+no single expected-improvement scale compares them without smuggling in a
+bias — toward *restart*, because a fresh draw always looks like it might
+improve — and the run redraws instead of descending, starving the exploitation
+its local steps already paid for.
+
+### Verdict
+
+Removed. The decision that was one statistical verdict is now the method's own
+stopping test for *when*, a boolean for *whether*, and `GlobalModel.propose`
+for *where*; a stopped path either stays put or gets a new point, with nothing
+in between to compare. Expected improvement stays where it still has a
+subject: the surrogate arm's acquisition function.

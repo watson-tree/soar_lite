@@ -242,6 +242,11 @@ become entangled.
 
 ## Restart
 
+**For pure multi-start descent that never restarts, turn `restart_stalled` off
+explicitly**: stopped paths stay where they are, spend no more budget, and
+nothing wakes them; when the whole flock has stopped, the run ends with
+`all_stalled` rather than idling to the horizon.
+
 ### The default is no surrogate
 
 A restart has one job: give a stopped path a new start. That start is either
@@ -269,12 +274,9 @@ keeps them in three different places, none answering for another:
 
 The split is deliberate: *when* is already stated by the method's stopping test,
 *whether* is a policy bit, and only *where* needs a real implementation, so only
-*where* becomes a seam. The previous version merged all three into one "restart
-rule" (comparing the expected improvement of continuing against restarting, then
-redrawing on the verdict), and the price was a third mechanism that had to
-accumulate its own evidence and derive its own pace. That layer has no reason to
-exist: a stopped path either stays put or gets a new point, and there is nothing
-in between to compare.
+*where* becomes a seam. A stopped path either stays put or gets a new point;
+there is nothing in between to compare, and no third mechanism needs to weigh
+the two alternatives.
 
 ### Two arms
 
@@ -290,27 +292,22 @@ is one point, one evaluation, independent of the dimension.
 samples already served (features given by an injected `Projection`), and
 `propose` returns the local minimum of `−log EI` found inside the domain by
 `MinimizeFn`. **EI's role here is an acquisition function** (Jones et al. 1998),
-answering "where does the surrogate think is still worth trying", not "continue
-or restart" — it hands back a start and makes no comparison. The descent on
-`−log EI` uses the caller's injected `MinimizeFn` (usually this package's own
-n-path engine), so this arm trades one inner search for a smarter start, at the
-cost of that inner round's evaluations.
+answering "where does the surrogate think is still worth trying" — it hands
+back a start and makes no comparison. The descent on `−log EI` uses the
+caller's injected `MinimizeFn` (usually this package's own n-path engine), so
+this arm trades one inner search for a smarter start, at the cost of that inner
+round's evaluations.
 
 ### A restart costs no extra gradient batch
 
-`propose`'s answer is clipped into the domain, wrapped as a point that owes both
-halves, and handed to `settle` together with the round's step winners, so a
-restart start never buys a gradient batch of its own. With the f-only seam
-connected the merge is even tighter: the restart start's value also waits and is
-bought once in the same fused batch. An unusable start (`f` or `g` not finite)
-does not land, and the path stays `stalled` to be redrawn next round — it never
-becomes `points[i]`, so "where this path stands" cannot be polluted by a
-degenerate point.
-
-**For pure multi-start descent that never restarts, turn `restart_stalled` off
-explicitly**: stopped paths stay where they are, spend no more budget, and
-nothing wakes them; when the whole flock has stopped, the run ends with
-`all_stalled` rather than idling to the horizon.
+`propose`'s answer is clipped into the domain, wrapped as a point that still
+owes its `f` and `g`, and handed to `settle` together with the round's step
+winners, so a restart start never buys a gradient batch of its own. With the
+f-only seam connected the merge is even tighter: the restart start's value also
+waits and is bought once in the same fused batch. An unusable start (`f` or `g`
+not finite) does not land, and the path stays `stalled` to be redrawn next round
+— it never becomes `points[i]`, so "where this path stands" cannot be polluted
+by a degenerate point.
 
 ## The engine
 
