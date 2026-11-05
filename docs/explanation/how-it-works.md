@@ -81,15 +81,27 @@ hold the guarantee.
 
 ### Unit invariance, and why there is no scalar learning rate
 
-Rescaling a coordinate, `x̃ = c·x`, gives `d̃ = c²·d` and `Δx̃ = c·Δx`; rescaling
-the value, `f̃ = c_f·f`, gives `d → d/c_f` with `Δx` unchanged. That is exactly
-the scaling a step carrying physical units should have, and it is what lets one
-set of unitless knobs serve ℃, m and Pa at once.
+Rescaling a coordinate, `x̃ = c·x`, rescales the secant to `s̃ = c·s` and the
+gradient to `g̃ = g/c` (hence `ỹ = y/c`), so `d̃ = s̃/ỹ = (c·s)/(y/c) = c²·d`,
+and the step follows it:
 
-Every knob is unitless, and no free coefficient carries the units of `[x]`. This
-is the key difference from Adam: Adam's `m/√v` is unitless, so the whole scale of
-the step is pushed into the scalar `α`, and on a problem with mixed units no
-single `α` can be right for all coordinates at once.
+```text
+Δx̃ = −d̃ ⊙ g̃ = −(c²·d) ⊙ (g/c) = −c·d ⊙ g = c·Δx
+```
+
+Rescaling the value, `f̃ = c_f·f`, leaves `s` alone and scales `g̃ = c_f·g`, so
+`d̃ = s/ỹ = s/(c_f·y) = d/c_f`, and the step is unchanged:
+
+```text
+Δx̃ = −(d/c_f) ⊙ (c_f·g) = −d ⊙ g = Δx
+```
+
+That is exactly the scaling a step carrying physical units should have, and it
+is what lets one set of unitless knobs serve ℃, m and Pa at once: every knob is
+a free coefficient with no units attached, and none of them carries `[x]`. Adam
+differs at exactly one point: its `m/√v` is unitless, so the whole step scale
+falls to the scalar learning rate `α`, which must therefore carry `[x]`, and with
+mixed units no single `α` can be right for all coordinates at once.
 
 ### The floor is a guard, not an addend
 
