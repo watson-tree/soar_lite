@@ -473,9 +473,7 @@ f 的成本整个抹掉。计数只报不预算：`stop` 从不读它们（3.5�
   `test_propose_descends_the_acquisition_into_the_box`、`test_posterior_variance_stays_under_the_prior_far_from_data`、
   `test_log_h_matches_its_definition_where_it_can_be_written_down`、`test_the_model_carries_no_box_of_its_own`。
 - 入口校验：`test_out_of_range_knobs_are_rejected_at_the_entry`、`test_a_nonpositive_width_is_refused_at_the_entry`、
-  `test_a_flock_of_the_wrong_shape_is_refused_at_the_entry`、`test_a_malformed_flock_is_refused_at_the_entry`、
-  `test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry`、
-  `test_a_seam_object_without_its_methods_is_a_type_error`。
+  `test_a_flock_of_the_wrong_shape_is_refused_at_the_entry`、`test_a_malformed_flock_is_refused_at_the_entry`。
 
 #### 本仓边界（不带走）
 

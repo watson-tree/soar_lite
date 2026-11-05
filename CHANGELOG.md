@@ -263,11 +263,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mean 0), so nothing about the draw comes from a box width. An unbounded run
   spells its unbounded sides in the `Domain`; there is no `domain=None` left to
   refuse.
-- The seams are checked for being callable, not only the two Protocol objects.
-  `eval_f_g`, `eval_f`, `sample` and `budget_check` are refused with a
-  `TypeError` naming the argument before any batch is served; before this a
-  mistyped dial reached the first batch and failed there as `'int' object is
-  not callable`, a symptom one frame away from the argument that caused it.
 - A feasibility mask is validated instead of being read as truthiness. Only `0`
   (or `False`) marks a point infeasible, so a batch whose mask holds anything
   else - a signed constraint margin, whose violated points are all negative, or
@@ -474,6 +469,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the only reason one phase needed a mechanism the other did not. Passing
   `armijo_c=` to `DiagonalPreconditioner` is now a `TypeError`; `n_alpha >= 2` is
   the one way to localize a first step.
+- The entry's runtime check that the seams are callable and that the two plugin
+  objects carry their Protocol's methods, with the `@runtime_checkable` on
+  `GlobalModel` and `LocalSolver` that only that check used. `eval_f_g`,
+  `eval_f`, `budget_check`, `global_model` and `local_solver` are annotated with
+  the types the check re-asserted, so it added a branch and no discriminating
+  power: a wrong object now fails where the type checker refuses the call, or at
+  the first use of the missing member. The entry checks that the annotations
+  cannot state are unchanged - the horizon, the knob ranges, `n_paths`, and
+  `x0`'s shape / finiteness / box.
 
 ### Fixed
 

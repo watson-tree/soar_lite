@@ -37,7 +37,7 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, Protocol, TypeAlias, runtime_checkable
+from typing import Literal, Protocol, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -105,7 +105,6 @@ class _Pending:
         return PathPoint(self.x, self.f, self.g)
 
 
-@runtime_checkable
 class GlobalModel(Protocol):
     """The engine's restart-point source (its second plugin point).
 
@@ -129,8 +128,8 @@ class GlobalModel(Protocol):
     model accumulates lives inside it; the engine never reads
     it. The methods are called by the engine on its own schedule - `observe`
     once per served batch, `propose` once per cohort of restarting paths - so
-    they trust their arguments: `n_path_schedule` validates the object once at
-    the entry (that it carries this contract), and nothing here re-checks.
+    they trust their arguments: this Protocol is the whole contract, and
+    neither the entry nor a method re-checks it at run time.
 
     The flock is not this contract's: a caller that hands in its own starts
     gives them to `n_path_schedule` as `x0`, and the engine places them without
@@ -183,7 +182,6 @@ class GlobalModel(Protocol):
         ...
 
 
-@runtime_checkable
 class LocalSolver(Protocol):
     """The search method the n-path engine drives (the engine's plugin point).
 
@@ -228,8 +226,8 @@ class LocalSolver(Protocol):
     mutates the model, so a method folds exactly once per committed step.
 
     These methods are called by the engine, once per path per iteration, so
-    they trust their arguments: `n_path_schedule` validates the object once
-    (that it carries this contract) at the entry, and nothing here re-checks.
+    they trust their arguments: this Protocol is the whole contract, and
+    neither the entry nor a method re-checks it at run time.
     """
 
     def restart(self, i: int, p: PathPoint) -> None:
@@ -653,21 +651,14 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         n_paths=n_paths,
         max_iters=max_iters,
         time_limit=time_limit,
-        eval_f_g=eval_f_g,
-        eval_f=eval_f,
-        budget_check=budget_check,
     )
-    # The seams: presence, not signatures, and the defaults, bound lazily -
-    # the local solver imports the engine's types, so importing it at module
-    # scope would form a cycle. Kept with the knob checks above and apart from
-    # the build below.
-    _check_seam(global_model, GlobalModel, "global_model")
-    _check_seam(local_solver, LocalSolver, "local_solver")
-    # The caller's flock, checked in the same block and before anything is
-    # built: the entry is the only place a human hands it over.
+    # The caller's flock, checked before anything is built: the entry is the
+    # only place a human hands it over.
     if x0 is not None:
         x0 = _check_x0(x0, n_paths, domain)
 
+    # The defaults, bound lazily: the local solver imports the engine's types,
+    # so importing it at module scope would form a cycle.
     if global_model is None:
         from soar_lite.global_model import SampleGlobalModel  # noqa: PLC0415
 
@@ -1469,33 +1460,21 @@ class _Paths:
             self.local_solver.fold(i, point, best)
 
 
-def _check_seam(obj: object | None, proto: type, what: str) -> None:
-    """Reject a seam object that does not carry the Protocol's methods.
-
-    Presence only, never signatures - a wrong-signature method still fails at
-    its own call site. Static typing already knows the type, so this is the
-    runtime catch for a caller who hands in anything at all; `None` passes, as
-    `n_path_schedule` defaults it right after the check. Deliberately in its own
-    function: the isinstance is redundant to a type checker and needs saying once.
-    """
-    if obj is not None and not isinstance(obj, proto):
-        msg = f"{what} does not implement {proto.__name__} (a member is missing)"
-        raise TypeError(msg)
-
-
-def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
+def _validate_run(
     *,
     n_paths: int,
     max_iters: int | None,
     time_limit: float | None,
-    eval_f_g: EvalFG,
-    eval_f: EvalF | None,
-    budget_check: Callable[[], bool] | None,
 ) -> None:
-    """Reject a run the engine cannot finish, cannot price, or cannot call.
+    """Reject a run the engine cannot finish or cannot price.
 
     The caller's own inputs are checked here, once per run - the only place a
     human hands this engine something. Nothing below re-checks them.
+
+    Only what the annotations cannot state is tested here: a horizon, two
+    ranges, a count. A seam's type is the annotations' job - a check for
+    "callable" or "carries the Protocol" re-asserts what the type checker
+    already refuses, so there is none.
     """
     if max_iters is not None and max_iters < 0:
         msg = f"max_iters must be >= 0, got {max_iters}"
@@ -1512,17 +1491,6 @@ def _validate_run(  # noqa: PLR0913 - the entry's own knobs, named once
         raise ValueError(msg)
 
     _check_positive_int(n_paths, "n_paths")
-
-    # Presence of the callables, not their signatures. Without this a mistyped
-    # seam reaches the first batch and fails there as `'int' object is not
-    # callable`, a symptom a frame away from the argument that caused it.
-    if not callable(eval_f_g):
-        msg = f"eval_f_g must be callable, got {type(eval_f_g).__name__}"
-        raise TypeError(msg)
-    for what, fn in (("eval_f", eval_f), ("budget_check", budget_check)):
-        if fn is not None and not callable(fn):
-            msg = f"{what} must be callable or None, got {type(fn).__name__}"
-            raise TypeError(msg)
 
 
 def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:

@@ -1292,64 +1292,6 @@ def test_a_malformed_flock_is_refused_at_the_entry() -> None:
     )
 
 
-def test_a_seam_dial_that_is_not_callable_is_refused_at_the_entry() -> None:
-    """A mistyped seam fails where it is passed, naming that argument.
-
-    Same gate as the two Protocol objects, at the other end: without it a wrong
-    callable reaches the first batch and fails there as `'int' object is not
-    callable`, a symptom a frame away from the argument that caused it.
-    """
-
-    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        return jnp.sum(theta**2, axis=1), 2.0 * theta, None
-
-    def rejects(first: object, **knobs: object) -> str:
-        try:
-            # the dial under test is deliberately out of contract
-            n_path_schedule(
-                first,  # pyright: ignore[reportArgumentType]
-                **flock_kwargs(flock(1), Domain([(0.0, 1.0)])),  # pyright: ignore[reportArgumentType]
-                max_iters=1,
-                **knobs,  # pyright: ignore[reportArgumentType]
-            )
-        except TypeError as e:
-            return str(e)
-        msg = f"accepted: {first!r} {knobs}"
-        raise AssertionError(msg)
-
-    assert "eval_f_g must be callable" in rejects(42)
-    assert "eval_f must be callable" in rejects(eval_f_g, eval_f=7)
-    assert "budget_check must be callable" in rejects(eval_f_g, budget_check=0)
-
-
-def test_a_seam_object_without_its_methods_is_a_type_error() -> None:
-    """The two seams are checked for presence once, before any point is served.
-
-    Static typing already refuses these; the runtime check catches the caller
-    who reaches the engine from untyped code, and it names which seam objected.
-    """
-
-    def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-        return jnp.sum(theta**2), 2.0 * theta
-
-    def rejects(**knobs: object) -> str:
-        try:
-            # the knob under test is deliberately out of contract
-            n_path_schedule(
-                Recorder(quad),
-                **flock_kwargs(flock(1), Domain([(0.0, 1.0)])),  # pyright: ignore[reportArgumentType]
-                max_iters=1,
-                **knobs,  # pyright: ignore[reportArgumentType]
-            )
-        except TypeError as e:
-            return str(e)
-        msg = f"accepted: {knobs}"
-        raise AssertionError(msg)
-
-    assert "local_solver" in rejects(local_solver=object())
-    assert "global_model" in rejects(global_model=object())
-
-
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
