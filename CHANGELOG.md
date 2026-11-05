@@ -126,6 +126,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `NPathResult.fun` is `nan`, not `inf`, when no feasible point was ever
+  served. `inf` is a value an objective may actually take, so it cannot also
+  mean "no answer": `nan` in both `fun` and `x` is that state, and a feasible
+  `-inf` still reports as `-inf`. Code that tested `result.fun == math.inf` for
+  "nothing feasible" must test `math.isnan(result.fun)`; `_Best` now starts at
+  `nan`, and its comparison lands the first finite feasible value
+  unconditionally.
 - Each figure axis now truncates at the shortest extent present **on that axis**
   (3000 points / 3000 batches), instead of cutting both axes in batches. The
   points axis is not level across arms - a point count is what `n_paths`

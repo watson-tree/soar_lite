@@ -13,6 +13,9 @@ question. What they must agree on is the table, and the table is short:
     -inf        yes           -inf            yes
     -inf        no            no              no
 
+"No answer" is `nan` in both fields: `fun` starts there and `x` is all-nan.
+`inf` is left to mean a value an objective actually took, never a sentinel.
+
 A seventh dimension is not in that table because it is not a value: with the
 value finite, either half of the pair can still be broken. A gradient that is
 not all finite is "half dead" - the value is real and reports, the point cannot
@@ -84,14 +87,14 @@ def flock_kwargs(
     [
         (1.0, True, 1.0, False),  # a plain answer
         (1.0, None, 1.0, False),  # no mask: every point counts as feasible
-        (1.0, False, math.inf, False),  # usable evidence, not an answer
-        (math.inf, True, math.inf, False),  # a dead start
-        (math.nan, True, math.inf, False),
-        (math.nan, False, math.inf, False),
-        (math.nan, None, math.inf, False),
+        (1.0, False, math.nan, False),  # usable evidence, not an answer
+        (math.inf, True, math.nan, False),  # a dead start
+        (math.nan, True, math.nan, False),
+        (math.nan, False, math.nan, False),
+        (math.nan, None, math.nan, False),
         # Below every finite value but unreachable: no answer to report, and the
         # run goes on (the point was served, the caller just cannot use it).
-        (-math.inf, False, math.inf, False),
+        (-math.inf, False, math.nan, False),
         # A feasible floor is the answer itself: it ends the run on the spot.
         (-math.inf, True, -math.inf, True),
     ],
@@ -114,9 +117,12 @@ def test_best_counts_a_value_only_when_it_is_feasible_and_finite(
     else:
         best.observe(x_batch, [f], feas)
 
-    assert best.fun == fun
+    if math.isnan(fun):
+        assert math.isnan(best.fun)
+    else:
+        assert best.fun == fun
     assert best.unbounded is ends_run
-    if best.fun == math.inf:
+    if math.isnan(best.fun):
         assert bool(jnp.all(jnp.isnan(best.x)))  # no answer, no x to point at
 
 
@@ -136,7 +142,7 @@ def test_a_mask_flag_that_is_not_zero_or_one_is_refused(flag: float) -> None:
     best = _Best(1)
     with pytest.raises(ValueError, match="feas mask"):
         best.observe(jnp.array([[0.25]]), [1.0], jnp.array([flag]))
-    assert best.fun == math.inf  # the batch was refused before any fold
+    assert math.isnan(best.fun)  # the batch was refused before any fold
 
 
 @pytest.mark.parametrize(

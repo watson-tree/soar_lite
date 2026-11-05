@@ -381,13 +381,13 @@ class NPathResult:
     (`status="unbounded"`) or for a flock every path of which has stalled with
     restarts off (`status="all_stalled"`) - and `fun` is the
     best over *feasible* points only, so
-    it is `inf` when nothing feasible was ever served and `-inf` when a feasible
+    it is `nan` when nothing feasible was ever served and `-inf` when a feasible
     point priced the objective at `-inf` (the trajectory still moves on the
     penalized objective, but `f⋆` does not). scipy's `fun` has no such filter.
     """
 
     x: jnp.ndarray  # (d,) coords of the best point found
-    fun: float  # min over feasible recorded evals; inf if none, -inf if unbounded
+    fun: float  # min over feasible recorded evals; nan if none, -inf if unbounded
     n_f_points: int  # value-only points served (the f seam)
     n_f_batches: int  # value-only batches served (the f seam)
     n_f_g_points: int  # fused points served (the serial-cost count)
@@ -947,15 +947,16 @@ class _Best:
     improvement to weigh but the answer itself - the objective has no floor
     there, so no later trial can beat it and no step can improve on it, which
     is why it ends the run (`unbounded`) instead of entering a comparison. It
-    starts at inf: until something feasible arrives there is no answer to
-    report.
+    starts at `nan` and stays there until a finite feasible value arrives:
+    `nan` is the "no answer" state, which leaves `inf` free to mean a value an
+    objective actually took rather than a sentinel.
     """
 
     def __init__(self, d: int) -> None:
         # d is the flock's business (it is `x0`'s second axis), so the
         # placeholder is already the right shape.
         self.x = jnp.full(d, math.nan)
-        self.fun = math.inf
+        self.fun = math.nan  # "no answer yet", not `inf`: a value may take it
         # Set when a feasible point priced the objective at -inf: the run has an
         # answer that no later trial can beat, so it stops on it.
         self.unbounded = False
@@ -991,7 +992,9 @@ class _Best:
         if pos is None:  # nothing feasible served, or all of it non-finite
             return
         j = candidates[pos]
-        if f_vals[j] < self.fun:
+        # nan means no answer yet, so the first finite feasible value lands
+        # unconditionally; after that one must beat the running best.
+        if math.isnan(self.fun) or f_vals[j] < self.fun:
             self.fun = f_vals[j]
             self.x = x_batch[j]
 
