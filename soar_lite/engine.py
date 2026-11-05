@@ -741,11 +741,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         budget.tick()  # counted after the body: only finished iterations
 
     # Each path's point as the run ended, and its value. A path that never held
-    # a usable point reports `nan` on both halves: nothing was served for it, so
-    # there is neither a coordinate nor a value to carry out.
-    flock_x = jnp.stack(
-        [p.x if p.x.size else jnp.full(domain.d, jnp.nan) for p in paths.points],
-    )
+    # a usable point still carries an all-nan `x` - that is what the placeholder
+    # is - so it reports `nan` on both halves with no branch here.
+    flock_x = jnp.stack([p.x for p in paths.points])
     flock_fun = jnp.asarray([p.f for p in paths.points])
 
     return NPathResult(
@@ -1182,12 +1180,13 @@ class _Paths:
       advances.
     - A start or a winner is committed only when it is `usable` - finite in
       both halves - one gate defined once on the point type.
-    - A path holds a point or it does not. "No point" (an empty `x`, which only
-      the placeholder has) is the machine's own state, not a stall: such a path
-      restarts without consulting `restart_stalled`, which is how iteration 0
-      places the flock and how a refused start is eventually re-drawn instead of
-      idling forever. A held point with a non-finite value is the other case -
-      a stall, so `restart_stalled` decides whether it is re-drawn.
+    - A path holds a point or it does not. "No point" (an all-nan `x`, which
+      only the placeholder has) is the machine's own state, not a stall: such a
+      path restarts without consulting `restart_stalled`, which is how iteration
+      0 places the flock and how a refused start is eventually re-drawn instead
+      of idling forever. A refused point is the other case: the path keeps the
+      point it holds and is marked stalled, so `restart_stalled` decides whether
+      it is re-drawn.
     """
 
     def __init__(  # noqa: PLR0913 - the run's collaborators, built once
@@ -1224,11 +1223,18 @@ class _Paths:
         # A path's point is one object, not three parallel lists: it is what
         # every seam call takes, and a step commits one path at a time (so a
         # list, whose item assignment is the commit, beats a stacked array). The
-        # placeholder says "no point has arrived" and is the only empty `x` in
-        # the run: a usable restart start replaces it, an unusable one never
-        # becomes a point, and a stalled path never serves or compares it.
+        # placeholder says "no point has arrived" with an all-nan `x`: an `x` is
+        # always `domain.d` wide, so "has no point" is a value on that shape, not
+        # a second shape - the same placeholder `_Best` uses for "no answer". A
+        # usable restart start replaces it, an unusable one never becomes a
+        # point, and a stalled path never serves or compares it.
         self.points = [
-            PathPoint(jnp.zeros(0), math.nan, jnp.zeros(0)) for _ in range(self.n_paths)
+            PathPoint(
+                jnp.full(self.domain.d, jnp.nan),
+                math.nan,
+                jnp.full(self.domain.d, jnp.nan),
+            )
+            for _ in range(self.n_paths)
         ]
         # Nothing has arrived yet, and a path that has not arrived is not
         # stalled: iteration 0 restarts it rather than reading it as a stall.
@@ -1266,16 +1272,18 @@ class _Paths:
         path restarts and every path is stalled, `_AllStalled` is raised before
         any batch is asked for.
         """
-        # "No point" is the machine's own state, never a stall to weigh, so it
-        # is read off the point's shape and not off its value: only the
-        # placeholder has an empty `x`, and only a path that holds a point can
-        # be read as stalled. A value test would conflate the two - a held point
-        # whose f is not finite is a stall (`_place`/`_advance` refuse it and set
-        # `stalled`), which `restart_stalled` owns, not an owed start.
+        # "No point" is the machine's own state, never a stall to weigh, and it
+        # is marked by an all-nan `x` rather than by a shape: `x` is always
+        # `domain.d` wide, so the placeholder is a value on that shape (the same
+        # one `_Best` uses for "no answer"). Only the placeholder has it, and
+        # only a path that holds a point can be read as stalled: a held point is
+        # committed through `usable`, so its `x` is clipped into the box and its
+        # f is finite.
         restarted = [
             i
             for i in range(self.n_paths)
-            if self.points[i].x.size == 0 or (self.restart_stalled and self.stalled[i])
+            if bool(jnp.all(jnp.isnan(self.points[i].x)))
+            or (self.restart_stalled and self.stalled[i])
         ]
         # Nothing is going to move again: no path restarts, and every path is
         # stalled. `_place` is the only writer that clears a stall bit and it

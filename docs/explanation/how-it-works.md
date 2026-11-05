@@ -395,10 +395,10 @@ means "where this path stands" — so an unusable start stays `stalled` and is
 redrawn next round instead of being clipped or forced into a degenerate point.
 
 `stalled` and "has no point" are two different things, and only the latter is
-outside `restart_stalled`'s control: the placeholder's empty `x` is the machine's
-initial state (iteration 0 uses it to make every path go through one redraw), so
-it is always redrawn; holding a point whose values are non-finite is a stall, and
-`restart_stalled` decides whether to redraw it.
+outside `restart_stalled`'s control: the placeholder's all-nan `x` is the
+machine's initial state (iteration 0 uses it to make every path go through one
+redraw), so it is always redrawn; a refused point is a stall, and
+`restart_stalled` decides whether that path is redrawn.
 
 ### All stalled: redraw, or end
 
