@@ -17,6 +17,29 @@ for you.
 | output 2 | `(M, d)` | gradients `∂f/∂x` |
 | output 3 | `(M,)` or `None` | feasibility mask: 0/1 (or booleans); `None` means all feasible |
 
+### 1.1 The objective
+
+```python
+import jax.numpy as jnp
+from soar_lite import pointwise
+
+
+def squares(x):  # one point (d,) in, one scalar out
+    return jnp.sum((x - 3.0) ** 2)
+
+
+eval_f_g, eval_f = pointwise(squares)
+```
+
+`pointwise` `vmap`s `jax.value_and_grad` for the fused seam and the plain
+forward pass for the optional one, so the only function you write is the
+per-point scalar - hand-writing `∂f/∂x` is fine for a sum of squares and is how
+a sign or a factor slips in anywhere else. The second return is the `eval_f`
+seam of §4: pass it as `eval_f=eval_f` to serve judged trials for their value
+alone.
+
+### 1.2 Constraints
+
 Constraints ride two independent routes, split by kind rather than by taste:
 
 - **The boundary is the domain's job.** `domain` declares the region every
@@ -32,12 +55,7 @@ Constraints ride two independent routes, split by kind rather than by taste:
   instead of counting as feasible.
 
 ```python
-import jax.numpy as jnp
-from soar_lite import Domain, pointwise
-
-
-def squares(x):  # one point (d,) in, one scalar out
-    return jnp.sum((x - 3.0) ** 2)
+from soar_lite import Domain
 
 
 def below_diagonal(x):  # one point (d,) in, one boolean out
@@ -47,13 +65,6 @@ def below_diagonal(x):  # one point (d,) in, one boolean out
 domain = Domain([(-5.0, 5.0), (-5.0, 5.0)])
 eval_f_g, eval_f = pointwise(squares, feasible=below_diagonal)
 ```
-
-`pointwise` `vmap`s `jax.value_and_grad` for the fused seam and the plain
-forward pass for the optional one, so the only functions you write are the
-per-point scalar and the per-point predicate - hand-writing `∂f/∂x` is fine for a
-sum of squares and is how a sign or a factor slips in anywhere else. The second
-return is the `eval_f` seam of §4: pass it as `eval_f=eval_f` to serve judged
-trials for their value alone.
 
 `domain` carries only bounded sides here; the `Domain` of §4 adds a
 per-dimension `scale`, unbounded sides, and the sampler a restart draws from.
@@ -74,6 +85,35 @@ answer (too small and the paths still cross, too large and the objective
 distorts), so keep `feasible` as the hard gate on what may become `best`. The
 penalty schedule is your envelope, like any constraint transform; the engine
 only climbs the `f` you hand it.
+
+### 1.3 An objective that misbehaves: non-finite values and gradients
+
+The engine never refuses a hard objective, it just stops trusting a point - and
+two places trust differently. `best` is the looser read: it keeps the minimum
+over *finite* `f` values among feasible points and never looks at `g`. So a
+`nan` or `+inf` value never becomes `best`, but a finite value whose gradient
+has a `nan` somewhere still can: the run reports that point even though no path
+ever stands on it. A path commits more strictly - a point is `usable` only when
+its value *and* every gradient component are finite, because the next step is
+proposed from `-g` and folded on gradient differences. A point that is not
+`usable` stalls its path in place: re-drawn by default, parked under
+`restart_stalled=False` (see §2). The run carries on.
+
+`-inf` is the one case to decide yourself. A *feasible* point priced at `-inf`
+is not a value to compare but the answer, so the run stops at once with
+`status == "unbounded"` (§3 gives the result semantics). If that `-inf` is not
+the answer you want but a sign the objective was handed a point outside its real
+domain, mark those points infeasible - a `domain` side or the `feasible`
+predicate - and the short-circuit never fires: an infeasible `-inf` is skipped
+like any other non-finite value.
+
+`pointwise` differentiates with `jax.value_and_grad`, and that is where an
+objective's seams show. A function that cannot be traced (a Python `if` on a
+value, indexing by a traced integer) raises there; a function that is not
+differentiable at a point yields whatever subgradient JAX picks, or a `nan` -
+the `nan` stalls the path, a finite-but-wrong one steers it silently. When
+either matters, write the gradient by hand and hand the engine a fused
+`(f, g, feas)` seam instead of `pointwise` - the batch shape in the table above.
 
 ## 2. Run it
 
