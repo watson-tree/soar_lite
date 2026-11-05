@@ -151,7 +151,9 @@ class DiagonalPreconditioner(LocalSolver):
         back on its own: the alpha grid only samples down from it.
         ``backtrack`` is that grid's spacing (``n_alpha >= 2``), one constant
         for both phases. A knob outside its own range raises ValueError here,
-        once per object; nothing downstream re-checks it.
+        once per object; nothing downstream re-checks it. ``moment`` is the one
+        knob whose whole range is already its annotation's (a ``Literal``), so
+        it is not re-tested here.
 
         Args:
             moment: which magnitude ratio to smooth, ``"abs"`` (mean of |s|,
@@ -174,7 +176,6 @@ class DiagonalPreconditioner(LocalSolver):
 
         """
         for name, value, ok, want in (
-            ("moment", moment, moment in ("abs", "rms"), '"abs" or "rms"'),
             ("beta", beta, 0.0 < beta < 1.0, "in (0, 1)"),
             ("theta", theta, theta >= 0.0, ">= 0"),
             ("mu", mu, 0.0 <= mu < 1.0, "in [0, 1)"),

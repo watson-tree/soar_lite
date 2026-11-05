@@ -478,8 +478,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first use of the missing member. The entry checks that the annotations
   cannot state are unchanged - the horizon, the knob ranges, `n_paths`, and
   `x0`'s shape / finiteness / box.
+- Two remaining runtime checks that only re-asserted an annotation. `moment in
+  ("abs", "rms")` in `DiagonalPreconditioner`: the knob is a `Literal`, so its
+  whole range is the annotation. And the `isinstance(value, int)` half of
+  `_check_positive_int`, whose only caller passes `n_paths: int`. The range
+  tests beside them stay - `beta`, `theta`, `mu`, `alpha0`, `n_alpha`,
+  `backtrack`, `tau_rel`, and `n_paths < 1` are values no annotation can state.
+  `_check_positive_int` keeps its `isinstance(value, bool)` test, which is not
+  the same kind: `bool` subclasses `int`, so a type checker accepts `True` where
+  a count is asked for, and only the runtime refuses it.
+- `_check_bounds`'s `float(low)` / `float(high)` casts, which accepted the wrong
+  type instead of refusing it: `bounds=[("3.0", "5.0")]` passed the box check
+  and failed later inside `jnp.asarray`. Raw comparison serves every legal
+  input.
 
 ### Fixed
+
+- Two docstrings that named validation the engine no longer does.
+  `n_path_schedule` still promised a `TypeError` for a seam missing its methods
+  and a `ValueError` for a model whose `d` disagreed with `domain`; the first
+  went with the seam check, the second with the run owning the box. And
+  `global_model`'s Args entry still described a model carrying the run's box.
+  The entry now says what it does, and that a plugin object is taken on its
+  type.
 
 - A trace file can no longer be replaced by a run at a different budget. Its
   name is `(problem, arm)` and the budget it was measured at lives inside it, so

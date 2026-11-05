@@ -539,11 +539,12 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     feas mask is True update it. The trajectory itself still moves on the
     penalized objective.
 
-    The caller's inputs are validated here, once per run: knob ranges and a
-    model whose `d` disagrees with the run's `domain` raise ValueError, and a
-    seam object that does not carry its contract's methods raises TypeError.
-    The domain itself refused a malformed box when it was built, so no spelling
-    of the box reaches the loop unchecked. The seam methods themselves trust the
+    The caller's inputs are validated here, once per run: the horizon, the two
+    knob ranges, `n_paths`, and `x0`'s shape, finiteness and box raise
+    ValueError. The domain itself refused a malformed box when it was built, so
+    no spelling of the box reaches the loop unchecked. The two plugin objects
+    are taken on their types - a type checker refuses a wrong one, and nothing
+    here re-checks it at run time. The seam methods themselves trust the
     engine - they run per path per iteration, and the engine is their only
     caller.
 
@@ -588,13 +589,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             a horizon (``None`` means none).
         global_model: the restart-point source and the run's evidence sink: a
             `GlobalModel` that is fed every served batch and asked for points
-            only when a restart fires. It also carries the run's box
-            (``GlobalModel.domain``), which is why ``domain`` is optional beside
-            it and cannot be a different one. ``None`` builds a
+            only when a restart fires. It carries no box of its own - the engine
+            hands it the run's ``domain`` at every ask. ``None`` builds a
             `SampleGlobalModel` over ``domain`` - bounded, free or half-bounded,
             wherever the domain's own draw reaches - which fits nothing.
-            A model's ``d`` and its ``domain.d`` are the run's dimension, and the
-            two are checked against each other.
         local_solver: the local method (``None`` binds ``DiagonalPreconditioner``).
         restart_stalled: whether a path the engine marks stalled (its method gave
             up, or its point was not usable) is re-drawn from the global model.
@@ -1591,13 +1589,14 @@ def _feas_flags(feas: jnp.ndarray) -> list[bool]:
     return [bool(v) for v in feas.tolist()]
 
 
-def _check_positive_int(value: object, name: str) -> int:
+def _check_positive_int(value: int, name: str) -> int:
     """Return `value` if it is a positive int, refusing bools and the rest.
 
-    Takes `object` on purpose: the two callers hand in what an injected object
-    carries, so the check is the only thing that knows the answer.
+    The bool test is not redundant with the annotation: `bool` subclasses
+    `int`, so a type checker accepts `True` where an `int` is asked for, and a
+    flag is not a count.
     """
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+    if isinstance(value, bool) or value < 1:
         msg = f"{name} must be a positive int, got {value!r}"
         raise ValueError(msg)
     return value

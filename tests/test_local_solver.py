@@ -622,7 +622,6 @@ def test_diag_knobs_out_of_range_are_rejected() -> None:
         {"beta": 1.0},
         {"theta": -1.0},
         {"tau_rel": 0.0},
-        {"moment": "l2"},
         {"n_alpha": 0},
         {"alpha0": 0.0},
         {"backtrack": 1.0},

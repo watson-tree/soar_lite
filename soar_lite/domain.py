@@ -245,8 +245,8 @@ def _check_bounds(bounds: Bounds | None) -> None:
                 raise ValueError(msg)
             pairs.append((pair[0], pair[1]))
     for j, (low, high) in enumerate(pairs):
-        lo_f = -math.inf if low is None else float(low)
-        hi_f = math.inf if high is None else float(high)
+        lo_f = -math.inf if low is None else low
+        hi_f = math.inf if high is None else high
         if math.isnan(lo_f) or math.isnan(hi_f):
             msg = f"bounds[{j}] has a NaN side: ({low!r}, {high!r})"
             raise ValueError(msg)
