@@ -74,12 +74,9 @@ class DiagonalPreconditioner(LocalSolver):
     keeps one flat coordinate from pinning a path alive (or one huge-start
     coordinate from declaring it dead), and keeps τ_rel dimensionless.
 
-    Derivation: the secant equation ``B·s = y`` read one coordinate at a time
-    (couplings dropped) gives ``d_i = 1/B_ii = s_i/y_i``, and the step is
-    ``dx = -diag(B)^{-1}·g = -d⊙g`` - multiplying by ``d`` is what turns a
-    gradient-like direction into a displacement-like one. Nothing is a matrix
-    method here: no B is stored, and the smoothing acts on the secant pair, not
-    on the ratio.
+    The derivation behind both spellings - the secant equation read one
+    coordinate at a time, and why no matrix is stored - is the explanation
+    page's local-step section ([how it works](../explanation/how-it-works.md)).
     """
 
     def __init__(  # noqa: PLR0913 - each knob is a distinct, independently-swept facet

@@ -148,11 +148,12 @@ class SphereProjection(Projection):
 
     Every projected row has norm one, so a linear head read on these features has
     a constant self inner product: its posterior variance stays bounded far from
-    data instead of climbing back to the prior, which is the corner-seeking
-    pathology the projection exists to cure. And the last coordinate,
-    ``(|z|^2 - 1)/(|z|^2 + 1)``, is a radially symmetric, saturating feature of
-    the input - the one extra degree of freedom a linear head gets, an isotropic
-    bowl whose center the weights place.
+    data instead of climbing back to the prior. That climb is the corner-seeking
+    pathology the projection exists to cure - variance growing with distance
+    reads as unexplored room, and an acquisition spends its asks on the box
+    corners. The last coordinate, ``(|z|^2 - 1)/(|z|^2 + 1)``, is then a
+    radially symmetric, saturating feature of the input - the one extra degree of
+    freedom a linear head gets, an isotropic bowl whose center the weights place.
 
     `mask` keeps that bowl off dimensions whose natural prior is uniform - an
     angle, say, wants no attraction to the center. A left-out dimension keeps its

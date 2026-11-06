@@ -242,18 +242,23 @@ class LocalSolver(Protocol):
         ...
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
-        """Return path i's raw next candidate from its current point p."""
+        """Return path i's raw next candidate, shape ``(d,)``, from its point p.
+
+        Raw: the engine composes and clips it into `domain` before serving, so a
+        method needs no box of its own and never reconciles two of them.
+        """
         ...
 
     def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
         """Rule the step's enumeration from the served trial's coords and value.
 
-        `x` is the served (clipped) point and `f` its value; the trial's own
-        gradient is deliberately absent, because the engine may have served the
-        value alone and left the gradient to be bought for the winner. `p` is
-        the step's start, whose gradient a path always has. Only asked for a
-        path that answered True to ``needs_verdict``, so a step that commits its
-        one proposal unjudged never reaches here.
+        `x` is the served (clipped) point and `f` its value - a Python float,
+        not a JAX scalar, because every served batch is pulled to the host once.
+        The trial's own gradient is deliberately absent, because the engine may
+        have served the value alone and left the gradient to be bought for the
+        winner. `p` is the step's start, whose gradient a path always has. Only
+        asked for a path that answered True to ``needs_verdict``, so a step that
+        commits its one proposal unjudged never reaches here.
 
         The return is an enumeration decision, not a verdict on the trial's
         quality: "retry" asks for another candidate (the method typically
@@ -339,11 +344,12 @@ class NPathResult:
     restart's starts plus the method's trials), so an iteration is not a batch.
 
     Work is reported as four counts instead of scipy's single ``nfev``, on two
-    axes that never mix. The seam that served the work decides the pair -
-    ``n_f_*`` is the value-only seam, ``n_f_g_*`` the fused value+gradient one -
-    and points versus batches are the serial cost and the parallel wall-clock
-    cost. Which axis a comparison reads is the caller's business; a run handed no
-    ``eval_f`` seam simply reports zero on the f pair.
+    axes that never mix. Which seam served the work decides the pair:
+    ``n_f_points`` and ``n_f_batches`` for the value-only seam, ``n_f_g_points``
+    and ``n_f_g_batches`` for the fused one. Points are the serial cost and
+    batches the parallel wall-clock cost. Which axis a comparison reads is the
+    caller's business; a run handed no ``eval_f`` seam reports zero on both f
+    counts.
 
     Two deliberate differences from `OptimizeResult`: ``success``/``message`` are
     absent, because the engine has no convergence criterion of its own - a run
@@ -486,7 +492,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     here re-checks it at run time.
 
     Args:
-        eval_f_g: the objective as one batched pass. Takes rows ``x`` of shape
+        eval_f_g: the objective as one batched pass; `pointwise` builds one
+            from a per-point scalar. Takes rows ``x`` of shape
             ``(M, d)`` and returns ``(f: (M,), g: (M, d), feas: (M,) | None)`` -
             value, gradient and optional feasibility mask. A mask holds 0/1 (or
             booleans) and nothing else: only 0 marks a point infeasible, so any
@@ -677,10 +684,10 @@ def pointwise(
     function returning ``(f, feas)`` would be differentiated as a pair. Keeping
     `feasible` a separate point predicate leaves both halves scalar.
 
-    The pair comes back fused-first, matching `n_path_schedule`'s argument
-    order, and both halves are lazy closures: building them runs nothing, so a
-    caller who wants only the fused seam discards the other with
-    ``eval_f_g, _ = pointwise(objective)``.
+    The pair comes back fused-first, matching `n_path_schedule`'s two seam
+    arguments: ``eval_f_g=`` takes the first, ``eval_f=`` the second. Both are
+    lazy closures, so building them runs nothing, and a caller who wants only
+    the fused seam discards the other with ``eval_f_g, _ = pointwise(objective)``.
 
     The f-only half is the fused objective's own forward pass,
     ``vmap(objective)`` - literally the same function, so returning it costs

@@ -66,6 +66,21 @@ class Domain:
 
     `draw` is the one contract: ``(key, n) -> (n, d)`` starts drawn one dimension
     at a time.
+
+    Example:
+        Sample starts with no engine and no surrogate, the case a domain alone
+        covers:
+
+            >>> import jax
+            >>> from soar_lite import Domain
+
+            >>> domain = Domain([(0.0, 1.0), (None, None)], scale=[1.0, 2.0])
+            >>> domain.draw(jax.random.PRNGKey(0), 3).shape
+            (3, 2)
+
+        The first column is uniform inside its bounded side, the second draws
+        ``N(0, 2^2)`` because nothing there is declared.
+
     """
 
     def __init__(
