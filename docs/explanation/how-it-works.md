@@ -7,26 +7,28 @@ that way, and which trade-offs it accepts.
 ## The contract: one objective, value and gradient
 
 The objective is called in batches: given a batch of points `x` of shape
-`(n, d)` it returns `f` of shape `(n,)`, `∇f` of shape `(n, d)`, and optionally
-a feasibility mask. The goal is to minimize `f` over the feasible points.
+`(M, d)` it returns `f` of shape `(M,)`, `∇f` of shape `(M, d)`, and optionally
+a feasibility mask of shape `(M,)`. The goal is to minimize `f` over the
+feasible points. Infeasible points are still served, and their gradients still
+drive the paths: the mask decides only what may become the final answer.
 
-That is the whole entry contract. There is no Hessian and no curvature estimate:
-a full Hessian is quadratic in the dimension, and with `n_paths` paths you would
-need one per path — far too expensive in the medium-to-high dimension this method
-targets — so the only second-order information is the secant implied by the last
-pair of points. It is first-order in the sense that the caller supplies the
-value and the gradient together — a zero-order objective does not fit, because
-every point on a path must carry a finite gradient as well as a finite value.
+That is the whole entry contract. There is no full Hessian and no curvature
+model. A full Hessian is quadratic in the dimension, and with `n_paths` paths
+you would need one per path — far too expensive in the medium-to-high dimension
+this method targets. So the only second-order information is the coordinate-wise
+secant ratio estimated from the last pair of points. It is first-order: the
+caller supplies the value and the gradient together, so a zero-order objective
+does not fit — every point on a path must carry a finite gradient as well as a
+finite value.
 
-Budget is counted in evaluations, and there are two ways to count them (see
-Cost).
+Work is reported in two currencies, served points and batches, because one
+evaluation serves a whole batch (see Cost).
 
 ## The local step: a diagonal preconditioner
 
 Every path descends by the same rule: a diagonal approximation of the inverse
 Hessian, one entry per coordinate, estimated from secant pairs and applied
-element-wise to the direction. The rule is one construction with a handful of
-choices around it.
+element-wise to the direction.
 
 ### The secant ratio
 
@@ -39,25 +41,30 @@ Bᵢᵢ = yᵢ / sᵢ        ⇒        dᵢ := 1/Bᵢᵢ ≈ sᵢ / yᵢ
 ```
 
 `dᵢ` is the observed displacement over the observed change in gradient on that
-coordinate, with units `[x]²/[f]`, independent per coordinate. (The same object
-falls out of the diagonal degeneration of the SR1 update; the secant equation is
-simply the shorter road — it needs no full update formula and never stores `B`.)
+coordinate, with units `[x]²/[f]`, independent per coordinate. The ratio as
+written can come out negative when `sᵢ` and `yᵢ` disagree in sign, which is why
+the sign is discarded first: the magnitudes `|s|` and `|y|` are what get smoothed
+below, never `|s/y|`. (The
+same quantity follows from the diagonal degeneration of the symmetric rank-one
+(SR1) update; the secant equation is simply the shorter road — it needs no full
+update formula and never stores `B`.)
 
-A single pair `(s, y)` is noisy, so the path smooths it with an EMA — **the
-smoothing acts on the magnitudes of the secant pair, not on the ratio itself**:
+A single pair `(s, y)` is noisy, so the path smooths it with an EMA (an
+exponential moving average) — **the smoothing acts on the magnitudes of the
+secant pair, not on the ratio itself**:
+
+| Variant | Numerator | Denominator | Inverse curvature | Step |
+| --- | --- | --- | --- | --- |
+| `"abs"` (mean magnitude) | `S₁ = EMA(|s|)` | `Y₁ = EMA(|y|)` | `d = S₁ / max(Y₁, λ)` | `Δx = −d ⊙ g` |
+| `"rms"` (root mean square, default) | `S₂ = EMA(s²)` | `Y₂ = EMA(y²)` | `d = √(S₂ / max(Y₂, λ))` | `Δx = −d ⊙ g` |
 
 `λ` in both denominators is the per-coordinate floor, defined in *The floor*
 below.
 
-| Variant | Numerator | Denominator | Inverse curvature | Step |
-| --- | --- | --- | --- | --- |
-| `"abs"` (mean magnitude) | `S₁ = EMA(√(s²))` | `Y₁ = EMA(√(y²))` | `d = S₁ / max(Y₁, λ)` | `Δx = −d ⊙ g` |
-| `"rms"` (root mean square, default) | `S₂ = EMA(s²)` | `Y₂ = EMA(y²)` | `d = √(S₂ / max(Y₂, λ))` | `Δx = −d ⊙ g` |
-
-On a single pair the two variants agree (`√(s²/y²) = |s/y|`); they differ only in
-which moment is smoothed — `"abs"` averages the magnitude, `"rms"` averages its
-square (the RMS), so the former is smoother on small secants and the latter more
-sensitive to large ones. The EMA window is about `1/(1−β)` steps, and the default
+On a single pair the two variants agree (`|s|/|y| = |s/y|`); they differ only in
+which moment is smoothed — `"abs"` averages the magnitude, so every pair counts in
+proportion to its size, while `"rms"` averages the square, so large pairs
+dominate. The EMA window is about `1/(1−β)` steps, and the default
 `β = 0.63` is about `e` steps (2.7). Magnitudes rather than the signed `sᵢ` or
 `yᵢ` are used to keep the estimate strictly positive: a signed value drifts and
 can cross zero, which would flip the step's sign — and `d ≥ 0` is what keeps the
@@ -65,7 +72,7 @@ step descending.
 
 The step then takes `Δx = −diag(B)⁻¹ g = −d ⊙ g`. What this does is change the
 direction from a **gradient-like quantity** into a **displacement-like
-quantity**: `−g` has units `[f]/[x]`, so using it directly as a displacement
+quantity**. `−g` has units `[f]/[x]`, so using it directly as a displacement
 makes the scale run backwards with the coordinate scale, and multiplying by `d`
 supplies the missing `1/H`. It is one element-wise multiply-and-divide, with no
 matrix, no linear solve, and no scalar learning rate.
@@ -89,7 +96,7 @@ gradient to `g̃ = g/c` (hence `ỹ = y/c`), so `d̃ = s̃/ỹ = (c·s)/(y/c) = 
 and the step follows it:
 
 ```text
-Δx̃ = −d̃ ⊙ g̃ = −(c²·d) ⊙ (g/c) = −c·d ⊙ g = c·Δx
+Δx̃ = −d̃ ⊙ g̃ = −(c²·d) ⊙ (g/c) = −c·(d ⊙ g) = c·Δx
 ```
 
 Rescaling the value, `f̃ = c_f·f`, leaves `s` alone and scales `g̃ = c_f·g`, so
@@ -100,8 +107,9 @@ Rescaling the value, `f̃ = c_f·f`, leaves `s` alone and scales `g̃ = c_f·g`,
 ```
 
 That is exactly the scaling a step carrying physical units should have, and it
-is what lets one set of unitless knobs serve ℃, m and Pa at once: every knob is
-a free coefficient with no units attached, and none of them carries `[x]`. Adam
+is what lets one set of unitless knobs serve °C, m and Pa — three different units
+of `x` — at once: every knob is a free coefficient with no units attached, and
+none of them carries `[x]`. Adam
 differs at exactly one point: its `m/√v` is unitless, so the whole step scale
 falls to the scalar learning rate `α`, which must therefore carry `[x]`, and with
 mixed units no single `α` can be right for all coordinates at once.
@@ -110,11 +118,11 @@ mixed units no single `α` can be right for all coordinates at once.
 
 `λ = θ·|gᵢ|` for `"abs"` (units `[f]/[x]`) or `λ = θ·gᵢ²` for `"rms"` (units
 `[f]²/[x]²`), with `θ` unitless, and the denominator is `max(Y, λ)`. It is
-anchored to the **current gradient** rather than to `y₀` or `|f_k|`: the floor
-has to vanish with `g`, not with `y`. A flat but unconverged coordinate
-(`y → 0` while `g ≠ 0`) still gets a finite step, and a genuinely converged
-coordinate (`g → 0`) is caught by the stopping test before the division ever
-repeats at `g ≈ 0`.
+anchored to the **current gradient** rather than to the first secant `y₀` or the
+current value `|f_k|`: the floor has to vanish with `g`, not with `y`. A flat but
+unconverged coordinate (`y → 0` while `g ≠ 0`) still gets a finite step, and a
+genuinely converged coordinate (`g → 0`) is caught by the stopping test before
+the division ever repeats at `g ≈ 0`.
 
 Anchoring to `g` is safe because the step then multiplies `d` and `g`
 element-wise. When `Y` bottoms out, `d` is `1/|g|` up to constants — `S₁/(θ·|g|)`
@@ -124,24 +132,24 @@ direction of `−sign(g)`. The `g` inside the floor cancels the `g` it is
 multiplied by, which is why anchoring to `g` cannot make the step explode as
 `g → 0`. The floor is a **guard**: it only touches `d` where `Y < λ`; everywhere
 else `d = S/Y` stands, and how aggressive the step should be stays with the
-separate knobs `alpha0` (whole-step damping), `backtrack` (grid spacing) and
-`n_alpha` (grid size) — see *The warm-up step* below.
+separate knobs `alpha0` (whole-step damping), `backtrack` (grid spacing, used
+when `n_alpha > 1`) and `n_alpha` (grid size) — see *The warm-up step* below.
 
 ### The warm-up step
 
 Warm-up and steady state share the **same step mechanism**: sample the `alpha`
 grid `{alpha0, alpha0·backtrack, alpha0·backtrack², …}` along the current
 direction, let the engine's step-wise argmin pick the winner, and let `fold`
-record it. The two phases differ only in the **direction**: the first step has no
-secant pair, so `d` cannot be estimated and the direction is `−g₀`; once the
-first `(s, y)` exists it becomes `−d⊙g`. Everything except the direction
+record it. The two phases differ only in the **direction**: warm-up has no secant
+pair yet, so `d` cannot be estimated and the direction is `−g₀`; once the first
+`(s, y)` exists it becomes `−d⊙g`. Everything except the direction
 (`alpha0`, `backtrack`, `n_alpha`) is shared between them.
 
 With the default `n_alpha = 1`, both phases take **one unguarded whole step**:
 warm-up commits `x − α0·g₀` and steady state commits `x − α0·d⊙g`. Neither reads
-a value, backtracks, or compares against its start. `needs_verdict` is therefore
-**independent of the phase**: it answers True when `n_alpha > 1` and False
-otherwise, because the commit is what was proposed.
+a value, runs a line search, or compares against its start. `needs_verdict` is
+therefore **independent of the phase**: it answers True when `n_alpha > 1` and
+False otherwise, because the engine commits exactly what the method proposed.
 
 One exception to unit invariance: the warm-up step is **not** unit-invariant.
 `alpha0` is unitless in both phases; what changes is the direction it scales. In
@@ -155,17 +163,17 @@ and only the direction's units differ.
 
 ### Stopping
 
-A path stops when `‖g‖ ≤ τ_rel·‖g₀‖` (`τ_rel` unitless, about `1e-6`). It then
-gives up, stops spending evaluations, and leaves the decision "start again or
-not?" to the restart rule.
+A path stops when `‖g‖ ≤ τ_rel·‖g₀‖`, where `τ_rel` is unitless and about `1e-6`
+and `g₀` is the gradient the path started from. It then gives up, stops spending
+evaluations, and leaves the decision "start again or not?" to the restart rule.
 
-The norm is used rather than a per-coordinate `|gᵢ| ≤ τ_rel·|g₀,ᵢ|`: the
-per-coordinate all-quantifier either never fires for a path whose coordinate
-happens to start at zero (a phantom survivor), or fires early for a path whose
-coordinate starts large. The norm reads only the aggregated gradient scale
-relative to its start, so no single coordinate can hold the whole path alive or
-sink it. This is also where a negative-curvature or saddle escape would attach;
-this implementation does not connect one.
+The norm is used rather than a per-coordinate `|gᵢ| ≤ τ_rel·|g₀,ᵢ|`: that test
+asks every coordinate to clear its own threshold, so it either never fires for a
+path whose coordinate happens to start at zero (a phantom survivor), or fires
+early for a path whose coordinate starts large. The norm reads only the
+aggregated gradient scale relative to its start, so no single coordinate can hold
+the whole path alive or sink it. This is also where a negative-curvature or
+saddle escape would attach; this implementation does not connect one.
 
 ### Momentum
 
@@ -200,8 +208,8 @@ The invariant also buys nothing where no line search runs: a descent direction
 only promises that a small enough step decreases `f`, while this method takes one
 unguarded whole step, read by no value and compared against no start. Convergence
 rests on best-so-far accounting plus restarts and stalls, not on every step
-descending; a caller who wants the guarantee can shrink `α` or run a line search
-outside the engine.
+descending; a caller who wants the guarantee can shrink `alpha0` or run a line
+search outside the engine.
 
 **The cost is real.** Near an optimum `g → 0` while `m` decays on the `1/(1−μ)`
 window, so `μ·m_{k−1}` can outweigh `g_k` and the direction is carried off by old
@@ -219,16 +227,16 @@ explicitly**: stopped paths stay where they are, spend no more budget, and
 nothing wakes them; when the whole flock has stopped, the run ends with
 `all_stalled` rather than idling to the horizon.
 
-### The default is no surrogate
+### The default is sampling, not a surrogate
 
 A restart has one job: give a stopped path a new start. That start is either
 drawn straight from the `Domain` (`SampleGlobalModel`, the default) or pointed at
 by a surrogate fitted on the samples already served (`BLRGlobalModel`). The
-default is the former: drawing a point costs one evaluation and fits nothing, so
-its cost is independent of the dimension. The sweet spot of a local method is the
-landscape where `d` is right, and restarts there should be rare anyway; keeping a
-surrogate ready for it trades global-side cost for a crutch most runs never lean
-on.
+default is the former: drawing a point costs one row in the next batch and fits
+nothing, so its cost is independent of the dimension. The sweet spot
+of a local method is the landscape where `d` is right, and restarts there
+should be rare anyway; keeping a surrogate ready for it trades global-side
+cost for a crutch most runs never lean on.
 
 ### Three questions kept apart
 
@@ -256,9 +264,11 @@ the two alternatives.
 no-op, and `propose` hands back the point `Domain.draw` asked for — uniform on a
 bounded side, `N(0, scale²)` on a free side, truncated normal on a half-bounded
 side, and the caller's injected per-dimension sampler when one was supplied. It
-does not own the flock: the first round's starts come from the entry's `x0`, and
-it is asked only when a path actually restarts. So the marginal cost of a restart
-is one point, one evaluation, independent of the dimension.
+does not own the flock: iteration 0's starts are the caller's `x0` when one was
+handed in — placed as handed, since the entry validates and refuses an out-of-box
+`x0` rather than clipping it — and otherwise the model draws them. Every later
+restart asks the model. So the marginal cost of a restart is one point, one row
+in the next batch, independent of the dimension.
 
 **The surrogate arm.** `BLRGlobalModel` fits a Bayesian linear posterior on the
 samples already served (features given by an injected `Projection`), and
@@ -285,9 +295,9 @@ by a degenerate point.
 
 Two vocabularies meet here. `propose` and `observe` from `GlobalModel`, and
 `needs_verdict`, `verdict` and `fold` from `LocalSolver`, are the protocols a
-caller implements; `settle`, `_place` and `_advance` are the engine's own
-internals, named here because the order they run in is the subject and nothing
-outside can call them.
+caller implements. The engine's own internals are `settle`, `_place` and
+`_advance`; they are named here because the order they run in is the subject,
+and nothing outside can call them.
 
 ### One iteration
 
@@ -297,7 +307,7 @@ A round first sorts the paths, then buys one batch:
    `stalled` with `restart_stalled` on.
 2. **Queue**: the remaining paths. A path that is `stalled` and not being
    redrawn stays here — it proposes nothing this round and yields no winner, but
-   its point is still readable (`f⋆` can be read from it).
+   its point is still readable (the best so far can still be read from it).
 3. **Starts**: the redraw set asks `global_model.propose(len(restarted), domain)`
    for a batch of starts. The engine checks the shape and clips into the domain;
    a wrong shape is a `ValueError` at once — the width belongs to the engine, and
@@ -305,7 +315,7 @@ A round first sorts the paths, then buys one batch:
    deep inside a broadcast.
 4. **Steps**: each path in the queue takes one step down one of two channels by
    `needs_verdict`, producing the winner of that step.
-5. **One batch settled**: redraw starts first, then the step winners in path
+5. **One `settle` batch**: redraw starts first, then the step winners in path
    order; the **same** batch goes to `settle` to buy the gradients still owed.
 6. **Landing**: a start goes through `_place` (unusable leaves it `stalled`,
    redrawn next round) and a winner through `_advance` (unusable is `stalled`, no
@@ -317,18 +327,19 @@ together" and "decide one at a time, then buy" are the same schedule.
 ### Verdict and no-verdict channels
 
 `needs_verdict(i, p)` asks "does this path need per-candidate verdicts for its
-next step?". With the default `n_alpha = 1` the whole step answers False: the
-method commits as proposed, the engine takes its single proposal as the winner of
-this step **without reading a value first**, and the value and gradient are
-bought once in `settle`'s fused batch. An `n_alpha > 1` step grid answers True:
-the method proposes candidate by candidate, the engine clips and serves each, and
-the method's `verdict` reads `retry`/`accept`/`give_up`.
+next step?". With the default `n_alpha = 1` it answers False for the whole step:
+the method commits as proposed, the engine takes its single proposal as the
+winner of this step **without reading a value first**, and the value and
+gradient are bought once in `settle`'s fused batch. An `n_alpha > 1` step grid
+answers True: the method proposes candidate by candidate, the engine clips and
+serves each, and the method's `verdict` returns `retry`/`accept`/`give_up`.
 
 A failure in the verdict channel has only two exits, both named by the method:
-`give_up` (its convergence test fired) sets `stalled`, and `accept` with no finite
-sample ever served also sets `stalled`. The engine sets no trial limit — how long
-the enumeration runs is the method's business, and adding a limit would give an
-already-decided judgment a second, invisible stopping rule; the price is one
+`give_up` (its convergence test fired) sets `stalled`, and so does `accept`
+returned although every trial it was shown had a non-finite value. The engine
+sets no trial limit: how long the enumeration runs is the method's business,
+and a limit would give an already-decided judgment a second, invisible
+stopping rule. The price is one
 contract: `verdict` must eventually return `accept` or `give_up`, so an
 enumeration that never terminates hangs rather than runs slowly.
 
@@ -338,10 +349,11 @@ only (the verdict listens to values only) and the winner's gradient waits for
 candidates multiply directly into the fused batch count (see Cost).
 
 For a start to be usable in the optimization, **both halves must be finite**: a
-start with finite `f` but a non-finite gradient would be read by `propose` and
-enter `fold`, and one NaN is enough to poison that coordinate's magnitude EMA
-permanently. Such a start is treated as a dead start, is `stalled` on arrival, and
-`restart_stalled` decides whether to redraw it.
+start with finite `f` but a non-finite gradient would look usable on the value
+alone, yet the gradient is what the next secant reads — one NaN is enough to
+poison that coordinate's magnitude EMA permanently. Such a start is treated as
+a dead start, is `stalled` on arrival, and `restart_stalled` decides whether to
+redraw it.
 
 ### One argmin owner and one commit point
 
@@ -373,10 +385,10 @@ means "where this path stands" — so an unusable start stays `stalled` and is
 redrawn next round instead of being clipped or forced into a degenerate point.
 
 `stalled` and "has no point" are two different things, and only the latter is
-outside `restart_stalled`'s control: the placeholder's all-nan `x` is the
-machine's initial state (iteration 0 uses it to make every path go through one
-redraw), so it is always redrawn; a refused point is a stall, and
-`restart_stalled` decides whether that path is redrawn.
+outside `restart_stalled`'s control. The placeholder's all-nan `x` is the engine's
+starting state (iteration 0 uses it to make every path go through one redraw), so
+it is always redrawn. A refused point is a stall, and `restart_stalled` decides
+whether that path is redrawn.
 
 ### All stalled: redraw, or end
 
@@ -414,7 +426,7 @@ drift from its own evidence.
 The same `stop` is also the loop head's condition: a completed iteration may have
 just reached the horizon, so it is asked once before a new round opens. A
 mid-iteration refusal raises at the point of the request and ends the run, with
-that round not counted in `n_iters` — so the middle layer never checks a return
+that round not counted in `n_iters` — so the engine's loop never checks a return
 value and never passes a flag up or down. **The gate is asked before every batch,
 fused or value-only**: a verdict channel's `while` can spin many turns without
 returning to the loop head, and without that question a step crossing the deadline
@@ -434,7 +446,9 @@ recognition:
   and no path owing a start. It likewise does not count in `n_iters`.
 
 Those two are the whole of the engine's own initiative; every remaining stop is
-one of the caller's gates, so no plugin can make the loop run forever.
+one of the caller's gates. No plugin can bypass those gates and the schedule
+itself is bounded — but a plugin method that never returns (a `verdict`
+enumeration that hangs, say) still hangs the process.
 
 ## Cost: two evaluation seams, two rulers
 
@@ -466,22 +480,22 @@ connected. The counts report and do not budget: `stop` never reads them.
 - **With `eval_f` connected**: each trial serves `f` only, and the round's one
   fused batch (`settle`) buys everything still owed — the accepted trial's
   gradient and every redraw start's value and gradient, since a start defers
-  both halves. So an `n_alpha`-candidate step spends `n_alpha` value-only batches
-  plus one fused batch.
+  both halves. So an `n_alpha`-candidate step spends at most `n_alpha` value-only
+  batches plus one fused batch — fewer if `verdict` accepts early.
 - **Without `eval_f`**: the fused batch is the only way to read a value, so
   **each trial is itself a fused batch** and the winner needs no `settle` pass.
-  An `n_alpha`-candidate step spends `n_alpha` fused batches, one per candidate
-  as the method `retry`/`accept`s them in turn.
+  An `n_alpha`-candidate step spends at most `n_alpha` fused batches, one per
+  candidate, until the method `accept`s.
 
 Both rulers must be reported: on the serial axis a flock of `n_paths` paths has
-its gain divided by `n_paths`, so multi-path's book ceiling is lower; on the
+its gain divided by `n_paths`, so that ruler shows multi-path as worse; on the
 parallel axis one evaluation is one parallel call's cost, and only then does
 "many samples plus restart" show honestly. Neither equals wall clock — a faster
 language removes fixed overhead but cannot change the structural "how many points
 one evaluation must serve".
 
 Stopping is recorded in iterations, and the four fields report rather than
-budget: `batches` is a different axis from `max_iters`, so "how many batches a
+budget: `batches` is a different quantity from `max_iters`, so "how many batches a
 full horizon spent" must be read from `n_*_batches`, never by using `max_iters` as
 a cost number. **Never mix them**: one table or one plot uses one axis and must
 say which, and fused-axis numbers must not be compared against value-only
@@ -490,8 +504,9 @@ ones.
 ## When this fits
 
 - This is a **global** search assembled from one local method and one restart
-  model: the local method descends on a par with Adam/RMSProp and pursues no
-  Newton/quasi-Newton, and globality comes from the diversity of `n_paths` paths
+  model: the local method is designed to be competitive with Adam/RMSProp and
+  builds no full Newton/quasi-Newton model, and globality comes from the
+  diversity of `n_paths` paths
   plus `restart_stalled` re-drawing fresh starts — from the domain, or from a
   fitted surrogate where one is wired in.
 - The per-coordinate estimate ignores the coupling term `Σ_{j≠i} Hᵢⱼ sⱼ` — the
@@ -513,7 +528,7 @@ ones.
 
 The "soar" in the name is a nod to the **adaptive restart** framework of Mathesen
 et al. 2021: it argues that the global side and the local method each have their
-own stretch, joined by an **adaptive restart process** that decides where the next
+own job, joined by an **adaptive restart process** that decides where the next
 start comes from — mainly by selecting a *sampling criterion*, an improvement
 function such as expected improvement (EI) or probability of improvement (PI)
 scored against
@@ -537,7 +552,7 @@ starts come from a `GlobalModel`. The rest is a different story:
   `SampleGlobalModel` — the model-free arm above — fits nothing and draws from
   the `Domain` with a plain per-dimension sampler, uniform on a bounded side and
   `N(0, scale²)` on a free one, independent points rather than a low-discrepancy
-  sequence because the mid-to-high regime is the target; and the surrogate arm
+  sequence because the mid-to-high regime is the target. The surrogate arm
   `BLRGlobalModel` fits a Bayesian linear posterior on inverse-stereographically
   projected coordinates (a fixed-hyperparameter port of Doumont et al. 2026),
   which cures the corner-seeking pathology a Euclidean RBF Gaussian-process
@@ -545,15 +560,17 @@ starts come from a `GlobalModel`. The rest is a different story:
   `−log EI`. EI carries no acquisition hyperparameters of its own and is strong
   in practice, but choosing it as the default acquisition is a personal prior,
   not something the skeleton requires. SOAR's own default surrogate is that
-  Gaussian process, the half of SOAR least at home in medium-to-high dimension.
+  Gaussian process, the part of its design least at home in medium-to-high
+  dimension.
 - The default local method is the coordinate-wise secant-ratio preconditioner,
   first-order: the caller supplies the value and the gradient together, with no
-  Hessian, no curvature model, and no direct solve of second-order information. A
+  full Hessian, no curvature model, and no direct solve of second-order
+  information. A
   zero-order objective does not fit either — every point on a path must carry a
   finite gradient, and value-plus-gradient is the entry contract.
 
 This package's **core agrees** with SOAR — the global side and the local method
-each have their own stretch, joined by the adaptive restart process — while the
+each have their own job, joined by the adaptive restart process — while the
 **details differ**: `-lite` is the minimal implementation of that skeleton,
 not an implementation lifted from the SOAR literature. So it is **not** a pure
 port of SOAR, and it implies no interface compatibility and no reproducible
