@@ -34,8 +34,8 @@ eval_f_g, eval_f = pointwise(squares)
 `pointwise` `vmap`s `jax.value_and_grad` for the fused seam and the plain
 forward pass for the optional one, so the only function you write is the
 per-point scalar. Hand-writing `∂f/∂x` is safe for a sum of squares and is how a
-sign or a factor slips in anywhere else. The second return is the optional
-value-only seam §4 uses: pass it as `eval_f=eval_f` to serve judged trials for
+sign or a factor slips in anywhere else. The second return is the optional f-only
+seam §4 uses: pass it as `eval_f=eval_f` to serve judged trials for
 their value alone.
 
 ### 1.2 Constraints
@@ -108,13 +108,14 @@ domain, mark those points infeasible — a `domain` side or the `feasible`
 predicate — and the short-circuit never fires: an infeasible `-inf` is skipped
 like any other non-finite value.
 
-`pointwise` differentiates with `jax.value_and_grad`, and that is where an
-objective's seams show. A function that cannot be traced (a Python `if` on a
+`pointwise` differentiates with `jax.value_and_grad`, and that is where the
+entry contract shows through. A function that cannot be traced (a Python `if` on a
 value, indexing by a traced integer) raises there; a function that is not
 differentiable at a point yields whatever subgradient JAX picks, or a `nan` —
 the `nan` stalls the path, a finite-but-wrong one steers it silently. When
-either matters, write the gradient by hand and hand the engine a fused
-`(f, g, feas)` seam instead of `pointwise`, with the shapes of the table above:
+either matters, write the gradient by hand and hand the engine the fused
+`(f, g, feas)` evaluation seam instead of `pointwise`, with the shapes of the
+table above:
 
 ```python
 import jax
@@ -213,7 +214,7 @@ restarted afterwards.
 | `n_paths` | engine width: paths advanced in lockstep each iteration |
 | `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
 | `x0` | the flock's start, one point per path `(n_paths, d)`: placed by iteration 0 exactly where you ask; `None` lets the global model draw it — hand it in for the starts a run is measured on |
-| `eval_f` | the optional value-only seam: points in, f values out, no gradient — pass it to save budget, omit it in a fused-only comparison |
+| `eval_f` | the optional f-only seam: points in, f values out, no gradient — pass it to save budget, omit it in a fused-only comparison |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |

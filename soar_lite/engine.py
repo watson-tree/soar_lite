@@ -21,7 +21,7 @@ coordinate-free, and owns the flock, the domain and its clip, the shared horizon
 and the restart cadence; the local solver owns direction, step size and
 acceptance, and the global model only where a restart lands.
 
-Restarting is two seams and one flag, not a third plugin: `_Paths` marks a path
+Restarting is two plugin seams and one flag, not a third plugin: `_Paths` marks a path
 stalled when its method gave up or its point was not usable, `restart_stalled`
 says whether such a path is re-drawn, and `GlobalModel.propose` says where.
 """
@@ -164,7 +164,7 @@ class GlobalModel(Protocol):
         every path when the caller handed no `x0` - and `domain` is the box the
         answer must land in and the one statement of the dimension. The answer
         is in the coordinates the objective takes. The engine still clips it into
-        that box, as the defensive seam for a model that oversteps, not as a way
+        that box, as a defensive clip for a model that oversteps, not as a way
         of reconciling two boxes.
 
         The model owns its randomness (an instance holds its key), which is what
@@ -346,8 +346,8 @@ class NPathResult:
     restart's starts plus the method's trials), so an iteration is not a batch.
 
     Work is reported as four counts instead of scipy's single ``nfev``, on two
-    axes that never mix. Which seam served the work decides the pair:
-    ``n_f_points`` and ``n_f_batches`` for the value-only seam, ``n_f_g_points``
+    axes that never mix. Which evaluation seam served the work decides the pair:
+    ``n_f_points`` and ``n_f_batches`` for the f-only seam, ``n_f_g_points``
     and ``n_f_g_batches`` for the fused one. Points are the serial cost and
     batches the parallel wall-clock cost. Which axis a comparison reads is the
     caller's business; a run handed no ``eval_f`` seam reports zero on both f
@@ -406,7 +406,7 @@ class NPathResult:
 
 
 def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
-    # after the one positional seam: one name per dial beats a config object here)
+    # after the one positional argument: one name per dial beats a config object here)
     eval_f_g: EvalFG,
     *,
     # The run's width: how many paths the engine drives.
@@ -481,8 +481,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     writes.
 
     `fun` is the true minimum over every feasible eval with a finite value -
-    every served point when the seam reports no mask, only the points its mask
-    passes otherwise - while the trajectory itself moves on the penalized
+    every served point when the objective reports no mask, only the points its
+    mask passes otherwise - while the trajectory itself moves on the penalized
     objective. Work is reported, never budgeted: four counts on two axes that
     do not mix - points against batches, and f against f+g - and none of them
     stops the run (see `NPathResult`).
@@ -690,17 +690,17 @@ def pointwise(
     function returning ``(f, feas)`` would be differentiated as a pair. Keeping
     `feasible` a separate point predicate leaves both halves scalar.
 
-    The pair comes back fused-first, matching `n_path_schedule`'s two seam
-    arguments: ``eval_f_g=`` takes the first, ``eval_f=`` the second. Both are
+    The pair comes back fused-first, matching `n_path_schedule`'s two evaluation
+    seams: ``eval_f_g=`` takes the first, ``eval_f=`` the second. Both are
     lazy closures, so building them runs nothing, and a caller who wants only
     the fused seam discards the other with ``eval_f_g, _ = pointwise(objective)``.
 
     The f-only half is the fused objective's own forward pass,
     ``vmap(objective)`` - literally the same function, so returning it costs
-    nothing and buys the engine's cheap-trial path. That does not make this the seam for
-    a *value-only* objective: a function JAX cannot differentiate cannot be
-    `objective` here at all, so a caller holding values and no gradient needs an
-    f-only adapter of its own.
+    nothing and buys the engine's cheap-trial path. That does not make this the
+    evaluation seam for a *value-only* objective: a function JAX cannot
+    differentiate cannot be `objective` here at all, so a caller holding values
+    and no gradient needs an f-only adapter of its own.
 
     Args:
         objective: the per-point objective, ``(d,) -> ()``; a function
@@ -708,10 +708,10 @@ def pointwise(
             fused half exist.
         feasible: the per-point feasibility predicate, ``(d,) -> ()`` of a
             boolean; None (the default) marks every point viable, the same
-            `None` both seams accept.
+            `None` both evaluation seams accept.
 
     Returns:
-        The two seam shapes `n_path_schedule` takes, as a pair.
+        The two evaluation seam shapes `n_path_schedule` takes, as a pair.
             ``eval_f_g`` a fused ``(f, g, feas)`` batch, ``eval_f`` its
             value-only ``(f, feas)`` sibling.
 
@@ -751,7 +751,7 @@ class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
 class _OptimumReached(Exception):  # noqa: N818 - a signal, not an error
     """A served *feasible* point priced the objective at `-inf`.
 
-    Raised inside `_Best.observe`, the single funnel both seams pass through,
+    Raised inside `_Best.observe`, the single funnel both evaluation seams pass through,
     and caught by the loop. Unlike `_BudgetExhausted` it arrives after a batch
     was served and charged, and it leaves an answer behind instead of naming a
     gate: the run stops on that point, so `fun` is `-inf` and `status` is
@@ -958,7 +958,7 @@ class _Evaluator:
 
         A trial's gradient is only wanted for the step's winner, so with the
         f-only seam each trial is served for its value alone and the winners are
-        graded once, together (`settle`). Without the seam a fused pass is the
+        graded once, together (`settle`). Without it a fused pass is the
         only way to a value, so every trial carries its gradient whether or not
         the step's argmin keeps it; `settle` then buys nothing.
         """
@@ -1380,8 +1380,8 @@ def _validate_run(
     The caller's own inputs are checked here, once per run - the only place a
     human hands this engine something - and nothing below re-checks them. Only
     what the annotations cannot state is tested: a horizon, two ranges, a count.
-    A seam's type is the annotations' job: a check for "callable" or "carries
-    the Protocol" re-asserts what the type checker already refuses.
+    An injected callable's type is the annotations' job: a check for "callable"
+    or "carries the Protocol" re-asserts what the type checker already refuses.
     """
     if max_iters is not None and max_iters < 0:
         msg = f"max_iters must be >= 0, got {max_iters}"
@@ -1412,7 +1412,7 @@ def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:
     out-of-box start is the caller saying "search this box" and "begin there" at
     once; clipping it would slide the start onto a wall and hide the
     contradiction. The clip keeps its own job: proposals the model *generates*
-    may overstep, and clamping those is the defensive seam.
+    may overstep, and clamping those is the defensive clip.
 
     The box test carries a machine-precision tolerance: a start computed at a
     boundary rounds by a few representable steps, so a coordinate within

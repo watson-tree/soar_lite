@@ -183,7 +183,7 @@ costs nothing in units. It is the unprojected heavy-ball direction
 (`m_k = g_k + μ(m_{k−1} − g_k)`), and it is not Nesterov's method: Nesterov
 consumes the gradient difference `y` on its own, hiding the second-order units
 inside a step length, and evaluates `g` at a look-ahead point, which the
-propose-then-evaluate seam cannot do.
+propose-then-evaluate protocol cannot do.
 
 **The default `μ = 0.63` shares its window with `β`.** Both answer the same
 physical question — how fast does the geometry, or the direction, change — so
@@ -201,7 +201,7 @@ only promises that a small enough step decreases `f`, while this method takes on
 unguarded whole step, read by no value and compared against no start. Convergence
 rests on best-so-far accounting plus restarts and stalls, not on every step
 descending; a caller who wants the guarantee can shrink `α` or run a line search
-outside the seam.
+outside the engine.
 
 **The cost is real.** Near an optimum `g → 0` while `m` decays on the `1/(1−μ)`
 window, so `μ·m_{k−1}` can outweigh `g_k` and the direction is carried off by old
@@ -246,7 +246,7 @@ keeps them in three different places, none answering for another:
 
 The split is deliberate: *when* is already stated by the method's stopping test,
 *whether* is a policy bit, and only *where* needs a real implementation, so only
-*where* becomes a seam. A stopped path either stays put or gets a new point;
+*where* becomes a plugin seam. A stopped path either stays put or gets a new point;
 there is nothing in between to compare, and no third mechanism needs to weigh
 the two alternatives.
 
@@ -334,7 +334,7 @@ enumeration that never terminates hangs rather than runs slowly.
 
 With the f-only seam connected, each trial in the verdict channel serves `f` only
 (the verdict listens to values only) and the winner's gradient waits for
-`settle`; without the seam, each trial is itself a fused batch, so `n_alpha`
+`settle`; without it, each trial is itself a fused batch, so `n_alpha`
 candidates multiply directly into the fused batch count (see Cost).
 
 For a start to be usable in the optimization, **both halves must be finite**: a
@@ -395,10 +395,11 @@ only two outcomes remain, decided by one bit, `restart_stalled`:
 
 `max_iters` is the engine's own horizon, counted in **iterations** (iteration 0 is
 the round that places the flock). It is a deterministic stop, not a cost proxy:
-how many batches a round serves is decided by the method and the seam, from the
-batch that redraws starts to the method's trial batches. `time_limit` is the
-wall-clock version of the same thing, for callers who cannot say how expensive a
-round is. At least one of them must be given, or the entry raises `ValueError`.
+how many batches a round serves is decided by the method and the evaluation
+seam, from the batch that redraws starts to the method's trial batches.
+`time_limit` is the wall-clock version of the same thing, for callers who cannot
+say how expensive a round is. At least one of them must be given, or the entry
+raises `ValueError`.
 `budget_check` is the extra gate for budgets the engine cannot see (points, wall
 clock, money, an external early stop).
 
@@ -435,7 +436,7 @@ recognition:
 Those two are the whole of the engine's own initiative; every remaining stop is
 one of the caller's gates, so no plugin can make the loop run forever.
 
-## Cost: two seams, two rulers
+## Cost: two evaluation seams, two rulers
 
 One evaluation serves a batch of `(M, d)` points, so the same run has two rulers,
 answering different questions. They agree only while every batch carries exactly
@@ -457,10 +458,10 @@ only), each with a pair of counts, so a result carries four fields:
 
 **Both pairs are recorded** — "billed" means "actually served": a caller may
 bring a value-only `eval_f`, and that half's work is reported honestly, or the
-serial ruler would erase `f`'s cost entirely in a run with the seam connected.
-The counts report and do not budget: `stop` never reads them.
+serial ruler would erase `f`'s cost entirely in a run with the f-only seam
+connected. The counts report and do not budget: `stop` never reads them.
 
-**How many batches a round spends is decided by the seam**:
+**How many batches a round spends is decided by the evaluation seam**:
 
 - **With `eval_f` connected**: each trial serves `f` only, and the round's one
   fused batch (`settle`) buys everything still owed — the accepted trial's
@@ -514,7 +515,8 @@ The "soar" in the name is a nod to the **adaptive restart** framework of Mathese
 et al. 2021: it argues that the global side and the local method each have their
 own stretch, joined by an **adaptive restart process** that decides where the next
 start comes from — mainly by selecting a *sampling criterion*, an improvement
-function such as expected improvement or probabilistic improvement scored against
+function such as expected improvement (EI) or probability of improvement (PI)
+scored against
 a global model fitted on what has been evaluated — rather than leaving global
 diversity to the local search alone. `-lite`
 means this package implements only the minimal version of that skeleton: restart
@@ -523,13 +525,14 @@ starts come from a `GlobalModel`. The rest is a different story:
 - **Three parts become two.** SOAR strings a surrogate model, an acquisition
   rule (which start is worth buying next), and a local method into one framework.
   This package folds the surrogate and the acquisition into the one `GlobalModel`
-  contract (`observe` plus `propose`), so the acquisition is half of a seam, not
-  a third part on its own — "where is still worth trying", never a restart
-  verdict — and two seams remain: the global model and the local solver. The
-  fold is what permits the default arm: once surrogate and acquisition share one
-  contract, an arm that fits nothing and simply draws satisfies it too, with no
-  acquisition to speak of. The two seams that survive the fold are the next two
-  bullets, each chosen for the medium-to-high dimension this library targets.
+  contract (`observe` plus `propose`), so the acquisition is half of a plugin
+  seam, not a third part on its own — "where is still worth trying", never a
+  restart verdict — and two plugin seams remain: the global model and the local
+  solver. The fold is what permits the default arm: once surrogate and
+  acquisition share one contract, an arm that fits nothing and simply draws
+  satisfies it too, with no acquisition to speak of. The two plugin seams that
+  survive the fold are the next two bullets, each chosen for the medium-to-high
+  dimension this library targets.
 - The **global model** ships two arms aimed at that regime: the default
   `SampleGlobalModel` — the model-free arm above — fits nothing and draws from
   the `Domain` with a plain per-dimension sampler, uniform on a bounded side and

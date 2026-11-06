@@ -2,14 +2,15 @@
 
 One of the engine's two plugin concretes, beside `local_solver.py`
 (`DiagonalPreconditioner`): it implements the engine's `GlobalModel` contract,
-which stays in `engine.py` because the engine owns its seams. It carries no box
-of its own: the run's one `Domain` is handed to `propose` at every ask, so this
-class holds nothing but the key. A restart with no model to ask is a restart the
-engine has nowhere to take; the run's flock is not this class's business - a
-caller that chooses its starts hands them to `n_path_schedule` as `x0`, and the
-engine places them without asking any model. Import direction is one-way - this
-module reads the engine's types and the `Domain` it samples, and the engine
-binds this class lazily inside `n_path_schedule` - so neither import is circular.
+which stays in `engine.py` because the engine owns its evaluation seams. It
+carries no box of its own: the run's one `Domain` is handed to `propose` at
+every ask, so this class holds nothing but the key. A restart with no model to
+ask is a restart the engine has nowhere to take; the run's flock is not this
+class's business - a caller that chooses its starts hands them to
+`n_path_schedule` as `x0`, and the engine places them without asking any model.
+Import direction is one-way - this module reads the engine's types and the
+`Domain` it samples, and the engine binds this class lazily inside
+`n_path_schedule` - so neither import is circular.
 """
 
 import jax

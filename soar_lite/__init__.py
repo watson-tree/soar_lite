@@ -10,7 +10,7 @@ against them; the concrete implementations (`DiagonalPreconditioner`,
 Whether a stalled path is re-drawn is the `restart_stalled` knob on
 `n_path_schedule`, not a plugin: *when* a path has stopped is the local solver's
 own stopping test, and *where* it restarts is the global model's, so the engine
-needs no third seam to join them.
+needs no third plugin seam to join them.
 
 Internal helpers (the box/argmin utilities, the run's private state holders) are
 not re-exported here on purpose; they are `_`-private in their own modules. A

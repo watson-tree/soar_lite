@@ -10,13 +10,14 @@ works](../explanation/how-it-works.md) gives the reasoning behind it.
 
 A few names carry fixed meanings across the page. A **path** is one chain of
 points; the **flock** is all `n_paths` of them. A **seam** is a function the
-engine calls through - an injected objective (`EvalFG`, `EvalF`) or one of the
-two plugins. A **fused pass** is one call that returns value and gradient
-together. A **judged step** has the engine serve each candidate for its value
-alone and lets `LocalSolver.verdict` rule it, buying gradients only for the
-winner; an **unjudged** one serves its single proposal fused with its gradient
-and commits it after the engine's finite check alone. An **arm** is one variant
-of a plugin, and an **ask** is one `propose` call.
+engine calls through, named by what it carries: the two **evaluation seams** are
+`eval_f_g` (the fused pass) and `eval_f` (value only), and the two **plugin
+seams** are `LocalSolver` and `GlobalModel`. A **fused pass** is one call that
+returns value and gradient together. A **judged step** has the engine serve each
+candidate for its value alone and lets `LocalSolver.verdict` rule it, buying
+gradients only for the winner; an **unjudged** one serves its single proposal
+fused with its gradient and commits it after the engine's finite check alone. An
+**arm** is one variant of a plugin, and an **ask** is one `propose` call.
 
 ## Entry point
 
@@ -52,8 +53,10 @@ The shapes a caller writes down when it plugs something in.
 
 ## Plugin contracts
 
-Code against these to replace a piece; the engine calls them, never the reverse.
-`Projection` comes with the factory alias a caller writes to build one.
+Code against these to replace a piece. The engine calls `LocalSolver` and
+`GlobalModel`, never the reverse; `Projection` is the model's own extension point,
+read by `BLRGlobalModel`, and comes with the factory alias a caller writes to
+build one.
 
 ::: soar_lite.LocalSolver
 ::: soar_lite.GlobalModel

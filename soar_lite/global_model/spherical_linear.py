@@ -109,9 +109,9 @@ class Projection(abc.ABC):
 
     `features` is the one contract: a pure query of the coordinates, the same
     ``(m, d)`` input mapping to the same ``(m, w)`` rows, with `w` stable across
-    calls for one projection. It is also the seam a surrogate of another family
-    reads - nothing in a projection is specific to `BLRGlobalModel`'s posterior,
-    since it carries geometry, not fit state.
+    calls for one projection. It is also the one method a surrogate of another
+    family reads - nothing in a projection is specific to `BLRGlobalModel`'s
+    posterior, since it carries geometry, not fit state.
     """
 
     def __init__(self, domain: Domain) -> None:
@@ -629,8 +629,8 @@ def _log_h(z: jnp.ndarray) -> jnp.ndarray:
     ``-10 < z < 0`` folds the difference with ``log1mexp``; below that the
     cancellation is wider than a float32 mantissa, so the leading Mills-ratio
     asymptotics ``log phi(z) - 2 log|z|`` take over - its ``1 - 3/z^2``
-    correction is under 3 percent at the seam, under 1 percent from ``z = -20``,
-    and the improvement is negligible there either way.
+    correction is under 3 percent where the segments meet, under 1 percent from
+    ``z = -20``, and the improvement is negligible there either way.
     """
     log_phi = -0.5 * z * z - _HALF_LOG_2PI
     log_z_phi = jnp.log(jnp.abs(z)) + log_ndtr(z)  # log|z * Phi(z)|
