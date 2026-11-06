@@ -133,7 +133,7 @@ def test_features_stay_d_plus_one_wide_whatever_the_mask_bends() -> None:
         assert projection.features(xs).shape == (6, 5)
 
 
-def test_dimensions_left_out_keep_their_centred_coordinate() -> None:
+def test_dimensions_left_out_keep_their_centered_coordinate() -> None:
     """Read unmasked dimensions as a plain trend in their own coordinate unit."""
     bounds = jnp.asarray([[-2.0, 2.0], [0.0, 10.0]])
     projection = SphereProjection(Domain(bounds), mask=[True, False])

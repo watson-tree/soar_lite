@@ -436,9 +436,9 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
         def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
             """Return n_points of the well this ask is assigned to."""
             del domain
-            centre = shallow if self.asked == 0 else deep
+            center = shallow if self.asked == 0 else deep
             self.asked += 1
-            return jnp.full((n_points, 1), centre)
+            return jnp.full((n_points, 1), center)
 
     def run(*, restart_stalled: bool) -> NPathResult:
         return n_path_schedule(
