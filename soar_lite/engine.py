@@ -700,7 +700,7 @@ def pointwise(
     nothing and buys the engine's cheap-trial path. That does not make this the
     evaluation seam for a *value-only* objective: a function JAX cannot
     differentiate cannot be `objective` here at all, so a caller holding values
-    and no gradient needs an value-only adapter of its own.
+    and no gradient needs a value-only adapter of its own.
 
     Args:
         objective: the per-point objective, ``(d,) -> ()``; a function

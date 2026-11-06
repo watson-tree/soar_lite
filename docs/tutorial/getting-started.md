@@ -1,7 +1,9 @@
 # Getting started
 
 This page walks one run end to end: the objective contract and its constraints,
-the call, what the result fields mean, and where the two swap points are.
+the call, what the result fields mean, and where the two swap points are. It
+assumes `soar-lite` and JAX are installed — see [Install](../index.md#install) on
+the home page.
 
 ## 1. Write the batched objective and constraints
 
@@ -41,11 +43,13 @@ value-only seam (the second return value), so the only function you write is the
 per-point scalar. Hand-writing `∂f/∂x` is safe for a sum of squares, but
 elsewhere it is an easy way to introduce a sign or a scale error. That second
 return is the seam §4 uses: pass it as `eval_f=eval_f` to serve judged trials for
-their value alone.
+their value alone. Without `feasible`, the third slot is still there, as `None`
+— the same `None` the hand-written seam in §1.3 returns.
 
 ### 1.2 Constraints
 
-Constraints ride two independent routes, split by kind rather than by taste:
+Constraints ride two independent routes, split by kind rather than by
+preference:
 
 - **The boundary is the domain's job.** `domain` declares the region; nothing
   you write has to re-check it.
@@ -148,8 +152,8 @@ argument is refused by `ValueError` rather than guessed.
 
 `eval_f` is optional: hand it in when the method enumerates trials for their
 values alone; §4 says when that saves budget. The default solver proposes one
-trial per step, so this run never calls it; it is passed here only to show where
-it goes.
+trial per step, so this run never calls it — nothing is read from it unless a
+step is judged. It is passed here only to show where it goes.
 
 ```python
 from soar_lite import n_path_schedule
@@ -236,9 +240,11 @@ Four gotchas worth knowing up front:
   take its own injected sampler. There is no uniform prior over an infinite
   side, so the engine never invents one — it falls back to those draws.
 - **`eval_f` serves a judged step's trials value-only and buys one fused pass
-  for the winner.** The method reads each trial's f cheaply, then buys the
-  single winner's gradient once. Without `eval_f` every trial is itself a
-  fused batch, so the count lands on the `f_g` pair instead of the `f` pair.
+  for the winner.** A step is judged when the solver asks for a verdict
+  phase rather than taking its first proposal (§6). The method reads each
+  trial's f cheaply, then buys the single winner's gradient once. Without
+  `eval_f` every trial is itself a fused batch, so the count lands on the `f_g`
+  pair instead of the `f` pair.
 - **`n_paths = 1` is the single-path baseline.** Same code, one path — and with
   one path the parallelism is gone while the default restart bit still fires:
   every stop becomes a random redraw, which on a unimodal problem is a restart
@@ -282,9 +288,9 @@ One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
 ## 6. Swap a piece
 
 The engine owns the schedule; the method and the restart-point source are
-plugins — the two plugin seams, objects you swap, where §1's seams were functions
-the engine calls. Either default can be replaced by passing an instance of your
-own class. Continuing §1's example:
+plugins — the two plugin seams, objects you swap, unlike §1's seams, which were
+functions you hand in. Either default can be replaced by passing an instance of
+your own class. Continuing §1's example:
 
 ```python
 from soar_lite import DiagonalPreconditioner, Domain, n_path_schedule
@@ -325,8 +331,8 @@ own acquisition — the engine inside the engine — is a separate job, and has
 
 ## 7. Next
 
-[How it works](../explanation/how-it-works.md) is the derivation: why the floor
-is anchored to the gradient, the cost counters, and what this library does and
-does not take from SOAR. [Surrogate restarts](../how-to/surrogate-restarts.md)
-is the one advanced page: fitting a model on the evidence, and descending the
-acquisition it proposes.
+[How it works](../explanation/how-it-works.md) is the derivation: why the
+denominator floor is anchored to the gradient, the cost counters, and what this
+library does and does not take from SOAR.
+[Surrogate restarts](../how-to/surrogate-restarts.md) is the one advanced page:
+fitting a model on the evidence, and descending the acquisition it proposes.
