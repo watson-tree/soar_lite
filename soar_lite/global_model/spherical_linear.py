@@ -310,8 +310,8 @@ class BLRGlobalModel(GlobalModel):
                 per `propose`, so the geometry is always the box that ask was
                 handed, and `Projection`'s own constructor validates the domain.
             minimize: the acquisition's inner optimizer, shape ``MinimizeFn``.
-                Owned by the caller: the descent recipe is the engine's, not
-                this model's.
+                Supplied by the caller: this model holds the recipe and calls
+                it, and never picks one itself.
             var_prior: weight-prior variance (the ridge scale opposite `noise`).
             noise: observation-noise variance added to the posterior mean's
                 self-covariance.

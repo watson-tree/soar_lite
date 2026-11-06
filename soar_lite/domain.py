@@ -31,9 +31,9 @@ from jax.scipy.special import ndtr, ndtri
 Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
 """The search box in scipy's spelling, which `Domain` normalizes.
 
-One ``(lb, ub)`` pair per dimension, a side of ``None`` or ``+-inf`` meaning
-unbounded there. A ``(d, 2)`` array is the same data row-wise, for callers that
-already hold one.
+One ``(lb, ub)`` pair per dimension, where either side of the pair - the lower
+or the upper bound - may be ``None`` or ``+-inf``, meaning unbounded there. A
+``(d, 2)`` array is the same data row-wise, for callers that already hold one.
 """
 
 DrawFn: TypeAlias = Callable[[jnp.ndarray, int], jnp.ndarray]
@@ -80,10 +80,9 @@ class Domain:
         Args:
             bounds: the box, scipy-style pairs or a ``(d, 2)`` array. A side may
                 be ``None`` or ``+-inf`` for an unbounded domain; a NaN side, or
-                a lower side above its upper, is refused. ``None`` as the whole
-                argument is refused too: the box declares the dimension and
-                which sides are unbounded, so a domain has nothing to read
-                without one.
+                a lower side above its upper, is refused. ``None`` is not a
+                box: the dimension and the unbounded sides are declared by the
+                box itself, so a domain cannot exist without one.
             scale: per-dimension prior width in coordinate units, a ``(d,)``
                 vector or ``None`` for every dimension at one. A projection that
                 normalizes compares the entries to each other, but the common
