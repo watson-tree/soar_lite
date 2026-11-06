@@ -145,7 +145,8 @@ every shape in that table.
 
 ## 2. Run it
 
-`eval_f_g` is the only positional argument; everything else is keyword-only.
+The fused seam — `eval_f_g` here, whatever you name it — is the only positional
+argument; everything else is keyword-only.
 `domain` and `n_paths` are required, and a run needs a stop — at least one of
 the horizon `max_iters` or the deadline `time_limit`. Each missing required
 argument is refused by `ValueError` rather than guessed.
@@ -227,7 +228,7 @@ restarted afterwards.
 | `eval_f` | the optional value-only seam: points in, f values out, no gradient — pass it to save budget, omit it in a fused-only comparison |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
-| `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
+| `budget_check` | an extra gate for a budget the engine cannot see, checked each iteration and before every billed batch |
 | `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` freezes the flock, and the run ends on `all_stalled` once every path parks |
 | `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
 | `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
@@ -256,10 +257,8 @@ Four gotchas worth knowing up front:
   run (`all_stalled`) instead of entering a batchless iteration. So `max_iters`
   is a deterministic stop, not a cost estimate: read the counters for what the
   run actually did, and pass the deadline (`time_limit`) if wall-clock is what
-  you care about. `budget_check` is an extra gate, consulted at the loop head
-  each iteration and again before every billed batch (value-only included), so
-  an external budget derived from batches or points can over-run by less than
-  one batch, never more.
+  you care about. An external budget derived from batches or points, checked
+  through `budget_check`, can over-run by less than one batch, never more.
 
 ## 5. What a batch and a point cost
 
