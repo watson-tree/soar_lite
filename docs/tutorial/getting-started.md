@@ -17,6 +17,9 @@ for you.
 | output 2 | `(M, d)` | gradients `∂f/∂x` |
 | output 3 | `(M,)` or `None` | feasibility mask: 0/1 (or booleans); `None` means all feasible |
 
+The engine clips every proposal into `domain` before calling your function, so
+every row of `x` is inside it already.
+
 ### 1.1 The objective
 
 ```python
@@ -31,28 +34,26 @@ def squares(x):  # one point (d,) in, one scalar out
 eval_f_g, eval_f = pointwise(squares)
 ```
 
-`pointwise` `vmap`s `jax.value_and_grad` for the fused seam and the plain
-forward pass for the optional one, so the only function you write is the
-per-point scalar. Hand-writing `∂f/∂x` is safe for a sum of squares and is how a
-sign or a factor slips in anywhere else. The second return is the optional f-only
-seam §4 uses: pass it as `eval_f=eval_f` to serve judged trials for
-their value alone.
+`pointwise` `vmap`s `jax.value_and_grad` for the fused seam and the plain forward
+pass for the optional f-only seam (the second return value), so the only function
+you write is the per-point scalar. Hand-writing `∂f/∂x` is safe for a sum of squares
+and is how a sign or a factor slips in anywhere else. That second return is the seam
+§4 uses: pass it as `eval_f=eval_f` to serve judged trials for their value alone.
 
 ### 1.2 Constraints
 
 Constraints ride two independent routes, split by kind rather than by taste:
 
-- **The boundary is the domain's job.** `domain` declares the region every
-  proposal is clipped into *before* it is served, so the objective never sees a
-  point outside it.
+- **The boundary is the domain's job.** `domain` declares the region; nothing
+  you write has to re-check it.
 - **Every other constraint is the mask's job.** Pass `feasible` to `pointwise`:
   a per-point predicate that returns `True` where the point is allowed. A point
   masked `False` is still served — its f value and gradient come back normally
   and are used — but it never becomes the best. So `result.fun` is a minimum
   over feasible points only, and is `nan` if nothing feasible was ever served.
-  The mask is read as 0/1, booleans included (`True == 1`): only `0` marks a
-  point infeasible, so a signed margin (negative where violated) or a `NaN`
-  raises a `ValueError` instead of counting as feasible.
+  The mask is read as 0/1, booleans included (`True == 1`): a `1` marks the
+  point feasible, a `0` infeasible, and any other value — a signed margin, a
+  `NaN` — raises a `ValueError` instead of being read.
 
 ```python
 from soar_lite import Domain
@@ -67,22 +68,23 @@ eval_f_g, eval_f = pointwise(squares, feasible=below_diagonal)
 ```
 
 `domain` carries only bounded sides here; §4 has the rest of what a `Domain`
-can hold. `feasible` is how a constraint that is no side of the domain reaches the
-engine: `below_diagonal` is a diagonal half-space no `Domain` can state, and it
-leaves this run's answer alone because `(3, 3)` sits well inside it.
+can hold. `feasible` is how a constraint the domain cannot state reaches the engine:
+`below_diagonal` is a diagonal half-space, not a box side, and it leaves this
+run's answer alone because `(3, 3)` sits well inside it.
 
 Remember neither route steers: `domain` only clips each proposal into its
 sides, and the mask is a gate, not a guide — masked-out points are still served
-and still pull the paths, so it decides who may be `best` and does not sit a
-path on a boundary it violates. To make a constraint the domain cannot state
+and still pull the paths, so it decides who may be `best` but does not steer a
+path away from infeasible regions. To make a constraint the domain cannot state
 actually pull the paths, fold it into the objective as a differentiable penalty
 and let the gradient guide:
-`f(x) + c · max(0, violation(x))²` — in JAX,
+`f(x) + c · max(0, violation(x))²`, where `violation(x)` is zero where the
+constraint holds and positive where it is violated — in JAX,
 `squares(x) + c * jnp.maximum(0.0, violation(x)) ** 2`. That buys guidance at
 the price of soft feasibility: a finite `c` gives an approximately feasible
 answer (too small and the paths still cross, too large and the objective
 distorts), so keep `feasible` as the hard gate on what may become `best`. The
-penalty schedule is your envelope, like any constraint transform; the engine
+penalty schedule is yours to choose, like any constraint transform; the engine
 only climbs the `f` you hand it.
 
 ### 1.3 An objective that misbehaves: non-finite values and gradients
@@ -92,20 +94,20 @@ places trust differently: `best` reads `f` alone, while a path needs a finite
 `g` as well.
 
 `best` is the looser read — the minimum over *finite* `f` values among feasible
-points — so a `nan` or `+inf` value never becomes `best`, but a finite value
-whose gradient has a `nan` somewhere still can: the run reports that point even
-though no path ever stands on it. A path commits more strictly: a point is
-`usable` only when its value *and* every gradient component are finite, because
-the next step is proposed from `-g` and folded on gradient differences. A point
-that is not `usable` stalls its path in place — re-drawn by default, parked
-under `restart_stalled=False` (see §2). The run carries on.
+points — so a `nan` or `+inf` value never becomes `best`, but a finite value whose
+gradient has a `nan` somewhere still can become `best`: the run reports that point
+even though no path ever stands on it. A path commits more strictly: a point is
+`usable` only when its value *and* every gradient component are finite, because the
+next step is proposed from `-g` and folded on gradient differences. A point that is
+not `usable` stalls its path in place — re-drawn by default, parked under
+`restart_stalled=False` (see §2). The run carries on.
 
 `-inf` is the one case to decide yourself. A *feasible* point priced at `-inf`
 is not a value to compare but the answer, so the run stops at once with
 `status == "unbounded"` (§3 gives the result semantics). If that `-inf` is not
 the answer you want but a sign the objective was handed a point outside its real
-domain, mark those points infeasible — a `domain` side or the `feasible`
-predicate — and the short-circuit never fires: an infeasible `-inf` is skipped
+domain, mark those points infeasible via a `domain` side or the `feasible`
+predicate, and the short-circuit never fires: an infeasible `-inf` is skipped
 like any other non-finite value.
 
 `pointwise` differentiates with `jax.value_and_grad`, and that is where the
@@ -143,8 +145,8 @@ argument is refused by `ValueError` rather than guessed.
 
 `eval_f` is optional: hand it in when the method enumerates trials for their
 values alone; §4 says when that saves budget. The default single-sample step
-does no enumeration, so this run never calls it — passing it here is just the
-interface.
+does no enumeration, so this run never calls it; it is passed here only to show
+where it goes.
 
 ```python
 from soar_lite import n_path_schedule
@@ -165,14 +167,14 @@ The status says only why the loop stopped, never that it converged: it is
 horizon counts iterations, not work. The four paths get close to the minimizer
 within a few iterations, and every later stop is a fresh start: by default
 (`restart_stalled=True`) a stalled path reloads a draw from the global model each
-time its own stopping test fires, so the flock — the points its paths hold — keeps
+time its own stopping test fires, so the flock — the points the paths hold — keeps
 working until the horizon.
 Ask for the frozen version instead and the same run ends much sooner: with
 `restart_stalled=False` a converged path is parked for good — it holds its point
 and still counts toward `best`, but never moves again — and once every path is
 parked the run has nothing left to do and stops with status `all_stalled`. The
-four counters of §3 report what either run actually served, which is why they,
-not `n_iters`, are the cost.
+four counters of §3 report what either run actually served, which is why the
+cost is read off them and not off `n_iters`.
 
 ## 3. Read the result
 
@@ -183,8 +185,8 @@ correspond:
 | --- | --- |
 | `x` | argmin, in the coordinates you handed the engine |
 | `fun` | its value: the best over feasible points, `nan` if none, `-inf` if the objective has no floor |
-| `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where it held no point |
-| `flock_fun` | each path's held value, `(n_paths,)`; `nan` where it held no point |
+| `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path holds no usable point (a refused start leaves the row empty) |
+| `flock_fun` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |
 | `n_f_g_points` | fused points billed — the serial-cost count |
 | `n_f_g_batches` | fused batches billed, one per `eval_f_g` call — the parallel-cost count |
 | `n_f_points` | value-only points billed (the `eval_f` seam) |
@@ -196,8 +198,8 @@ There is no `success` or `message`: the engine has no convergence criterion of
 its own. It stops on a gate — the horizon (`max_iters`), the deadline
 (`time_limit`), the extra budget gate — or before the horizon on an answer in
 hand: `all_stalled` (the whole flock stalled with restarts off) and `unbounded`
-(a feasible point priced the objective at `-inf`). Neither is a criterion the
-search met.
+(a feasible point priced the objective at `-inf`). Neither of those two is a
+criterion the search met.
 
 The flock pair is not a ranking: `flock_x` and `flock_fun` are each path's
 held point as the run ended, one row per path, unsorted and unfiltered by
@@ -213,7 +215,7 @@ restarted afterwards.
 | --- | --- |
 | `n_paths` | engine width: paths advanced in lockstep each iteration |
 | `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
-| `x0` | the flock's start, one point per path `(n_paths, d)`: placed by iteration 0 exactly where you ask; `None` lets the global model draw it — hand it in for the starts a run is measured on |
+| `x0` | the flock's start, one point per path `(n_paths, d)`: placed by iteration 0 exactly where you ask; `None` lets the global model draw it — hand it in when runs have to be compared on the same starts |
 | `eval_f` | the optional f-only seam: points in, f values out, no gradient — pass it to save budget, omit it in a fused-only comparison |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
@@ -229,9 +231,9 @@ Four gotchas worth knowing up front:
   `N(0, scale²)`, a half-side draws the same normal truncated, and any side can
   take its own injected sampler. There is no uniform prior over an infinite
   side, so the engine never invents one — it falls back to those draws.
-- **`eval_f` splits judged steps into value-only trials and one fused pass for
-  the winner.** The method reads each trial's f cheaply, then the single
-  winner's gradient is bought once. Without `eval_f` every trial is itself a
+- **`eval_f` serves a judged step's trials value-only and buys one fused pass
+  for the winner.** The method reads each trial's f cheaply, then buys the
+  single winner's gradient once. Without `eval_f` every trial is itself a
   fused batch, so the count lands on the `f_g` pair instead of the `f` pair.
 - **`n_paths = 1` is the single-path baseline.** Same code, one path — and with
   one path the parallelism is gone while the default restart bit still fires:
@@ -258,15 +260,16 @@ on whether your objective is really parallel:
   progress in batches: `n_paths` set to the device's parallel limit makes the
   batch count very nearly your wall-clock. Wider paths are close to free, so
   raising `n_paths` — and buying trial values by cheap value-only passes with
-  `eval_f` — shrinks the spread of the best for the same number of batches.
-- **On a CPU.** Batches run mostly serially, so the point count is the honest
-  axis, and width thins every path instead of speeding anything up. The flock
-  advances in lockstep — every path takes one step an iteration — so at a fixed
-  point budget each path gets about `1/n_paths` of the steps a single path
-  would, and best-of-n only shrinks the spread across starts; it cannot put the
-  missing steps back. Whenever the budget runs out before a path converges — the
-  regime this library is for — that lost depth dominates, and a single path ends
-  better per point than a wide one.
+  `eval_f` — shrinks the spread of the best across runs for the same number of
+  batches.
+- **On a CPU.** Batches run mostly serially, so the point count is the honest axis,
+  and width spreads the same point budget thinner across paths instead of speeding
+  anything up. The flock advances in lockstep — every path takes one step an
+  iteration — so at a fixed point budget each path gets about `1/n_paths` of the
+  steps a single path would, and best-of-n only shrinks the spread across starts; it
+  cannot put the missing steps back. Whenever the budget runs out before a path
+  converges — the regime this library is for — that lost depth dominates, and a
+  single path ends better per point than a wide one.
 
 One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
 **point** is one row of data (serial cost, CPU) — and a batch is a
@@ -275,7 +278,8 @@ One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
 ## 6. Swap a piece
 
 The engine owns the schedule; the method and the restart-point source are
-plugins. Either default can be replaced by name. Continuing §1's example:
+plugins. Either default can be replaced by passing an instance of your own
+class. Continuing §1's example:
 
 ```python
 from soar_lite import DiagonalPreconditioner, Domain, n_path_schedule
@@ -285,7 +289,9 @@ result = n_path_schedule(
     domain=Domain([(-5.0, 5.0), (-5.0, 5.0)]),
     n_paths=4,
     max_iters=30,
-    # 4 trial step sizes along the direction, each 0.5x the previous one
+    # 4 trial values of the step multiplier alpha along the scaled direction,
+    # each 0.5x the previous; the per-coordinate scaling is inside d, not one
+    # of these trials
     local_solver=DiagonalPreconditioner(n_alpha=4, backtrack=0.5),
     restart_stalled=True,
 )
