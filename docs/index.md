@@ -1,58 +1,21 @@
 # soar-lite
 
-First-order n-path descent with stalled-path restarts, for objectives
-expensive enough that the evaluation budget is the binding constraint. The
-caller returns value and gradient together: the library fits no Hessian and
-does not solve second-order information directly (the diagonal preconditioner
-is a biased `1/H` estimate, not Newton), and a zero-order objective — value
-only, no gradient — is not its seam. It is another realisation of the SOAR
-framework (Mathesen et al., 2021): the core is the same idea (a global
-restart-point model and a local method each own their half, joined by one
-mechanism), while the details are this library's own — not a port of the
-reference implementation, not interface-compatible, and no claim to reproduce
-its results.
+A JAX optimiser for objectives that are differentiable but expensive: the number
+of evaluations, not wall-clock, is the binding constraint. The caller hands in
+value and gradient together, so the library fits no Hessian and never solves
+second-order information directly — the diagonal preconditioner is a biased
+`1/H` estimate, not Newton.
 
-It is built for moderate- to high-dimensional search spaces and is
-deliberately not tuned for low dimension: with few coordinates several
-restarts collapse into the same basin, and the default sampler draws
-independent uniform/normal points rather than a low-discrepancy sequence
-because the mid-to-high regime is the target. The `n_paths` paths advance in
-lockstep, one fused batch per iteration — a GPU pattern: a batch's wall-clock
-barely grows as it widens. On a CPU the same run works, but it only trades
-evaluations for a best-of-n reduction in variance, not a wall-clock speedup.
+**Use it when** the objective is differentiable, one evaluation costs real time
+or money, and the search space is moderate- to high-dimensional.
 
-`-lite` is the same decision stated as scope: the shipped pieces are a
-lightweight set of defaults, chosen by judgment rather than fitted for
-generality — not a general-purpose toolkit. The local method and the
-restart-point model are both plugin points — write a `LocalSolver` or a
-`GlobalModel` and pass it in — so a more general implementation can drop in
-later; what this repository currently implements is aimed at scientific
-numerical optimisation. The default local solver, `DiagonalPreconditioner`,
-is a per-coordinate secant preconditioner that is unit-invariant: scaling a
-coordinate `x` by `c` scales its step by `c`, and rescaling `f` leaves the
-step alone, so one set of unitless knobs serves mixed units (kg, N/m,
-N·s/m, …). Unit invariance is a property of the preconditioner itself, not of
-the warm-up step, which is by design not unit-invariant — so the
-invariance experiment shows a small, self-correcting offset there, not a
-different descent rate (the contrast is Adam, whose single learning rate is
-per-unit-system).
+**Skip it when** there is no gradient to hand over (a zero-order objective is not
+this library's seam), or the dimension is low — see
+[when this fits](explanation/how-it-works.md#when-this-fits) for what goes wrong
+there.
 
-Two plugin seams under one engine, no dependencies beyond JAX and the standard
-library:
-
-- **`n_path_schedule`** — the engine: runs `n_paths` paths in lockstep, one
-  batched evaluation per iteration, and owns the domain, the shared horizon and the
-  stall state machine. A stalled path is re-drawn unless the run sets
-  `restart_stalled=False`, the run's one restart knob.
-- **`DiagonalPreconditioner`** — the default local method: a per-coordinate
-  diagonal secant step `-d ⊙ m`, where `m` is the momentum (the gradient-history
-  blend; the bare gradient `g` at `mu = 0`), EMA-smoothed, with a gradient-norm
-  floor and an optional alpha grid (`n_alpha`) whose argmin the engine commits.
-  No matrix, no linear solve, no scalar learning rate.
-- **`SampleGlobalModel`** / **`BLRGlobalModel`** — the restart-point source and the
-  run's evidence sink: the engine asks it for one fresh point per restarting path.
-  The default `SampleGlobalModel` draws whatever the `domain` admits; `BLRGlobalModel`
-  is the Bayesian linear-regression surrogate for the same contract.
+`n_paths` paths advance in lockstep, one fused batch per iteration, which is a
+GPU pattern: a batch's wall-clock barely grows as it widens.
 
 ## Install
 
@@ -80,7 +43,7 @@ def squares(x):  # one point (d,) in, one scalar out
     return jnp.sum((x - 3.0) ** 2)
 
 
-eval_f_g, _ = pointwise(squares)
+eval_f_g, _ = pointwise(squares)  # (fused, value-only); the second is unused here
 
 result = n_path_schedule(
     eval_f_g,
@@ -91,11 +54,48 @@ result = n_path_schedule(
 print(result.x, result.fun)  # ≈[3. 3.] 3e-5
 ```
 
+## What's inside
+
+Two plugin seams under one engine, and no dependencies beyond JAX and the
+standard library. The engine schedules the work; each seam owns one half of the
+search, and either can be replaced by passing an instance in.
+
+- **The engine, `n_path_schedule`** — runs the `n_paths` paths in lockstep, one
+  fused batch per iteration, and owns the domain, the shared horizon and the
+  stall state machine.
+- **The local method, `LocalSolver`** — one path's descent step. The default
+  `DiagonalPreconditioner` is a per-coordinate secant step `-d ⊙ m`, where `m` is
+  an EMA-smoothed gradient history (`g` itself at `mu = 0`), with a gradient-norm
+  floor and an optional alpha grid (`n_alpha`) whose argmin the engine commits. No
+  matrix, no linear solve, no scalar learning rate.
+- **The restart source, `GlobalModel`** — one fresh point per restarting path, and
+  the run's evidence sink. The default `SampleGlobalModel` draws whatever the
+  `domain` admits; `BLRGlobalModel` is the Bayesian linear-regression surrogate for
+  the same contract.
+
+What ships is a lightweight set of defaults picked by judgement, not a
+general-purpose toolkit — which is what `-lite` says. Both seams are open, so a
+more general implementation can drop in later; what is implemented today is aimed
+at scientific numerical optimisation.
+
+The name is a nod to the adaptive restart framework of Mathesen et al. (2021). A
+local method runs between restarts, and the **adaptive restart process** decides
+where each next start comes from — mainly by selecting a **sampling criterion**,
+an improvement function such as expected improvement or probabilistic
+improvement, scored against a global model fitted on what has been evaluated.
+This library keeps that outer division — a global side and a local side — and
+folds the fitted model and the sampling criterion into the one `GlobalModel`
+contract, so the question it answers is where to restart. The framework is the
+idea; the code here is this library's own, and
+[how it works](explanation/how-it-works.md#soar-attribution-and-distinction) says
+where the two depart.
+
 ## Where to go next
 
-- **[Tutorial](tutorial/getting-started.md)** — one run end to end: the
-  objective contract, the knobs, and the two swap points.
-- **[API Reference](reference/api.md)** — generated from the docstrings.
-- **[How it works](explanation/how-it-works.md)** — the derivation: what each
-  piece does, the two cost axes, and what this library does and does not take
-  from SOAR.
+- **[Tutorial](tutorial/getting-started.md)** — when you have one run to get
+  right: the objective contract, the knobs, and the two swap points.
+- **[API Reference](reference/api.md)** — when you have a name and need its
+  contract; generated from the docstrings.
+- **[How it works](explanation/how-it-works.md)** — when you want the reasons:
+  the derivation behind the local step, the two cost axes, and how this library
+  departs from SOAR.

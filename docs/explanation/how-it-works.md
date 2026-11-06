@@ -520,13 +520,22 @@ numbers.
 - The restart rate is decided jointly by `restart_stalled` and the local method's
   stopping test (`β`, `μ`, `θ`, `τ_rel`); this page gives the structure, not
   recommended values for a class of problems — those follow from the objective.
+- **Not for low dimension.** With few coordinates several of the `n_paths`
+  restarts collapse into the same basin, so the flock pays for paths that
+  duplicate each other's work; a plain multistart local solve from a scrambled
+  start set is the cheaper call, and the default per-dimension sampler —
+  independent uniform/normal points, not a low-discrepancy sequence — is aimed
+  at the regime above it.
 
 ## SOAR: attribution and distinction
 
 The "soar" in the name is a nod to the **adaptive restart** framework of Mathesen
-et al. 2021: it argues that the global side (which kind of start is worth buying)
-and the local method each have their own stretch, joined by one connecting
-mechanism rather than leaving global diversity to the local search alone. `-lite`
+et al. 2021: it argues that the global side and the local method each have their
+own stretch, joined by an **adaptive restart process** that decides where the next
+start comes from — mainly by selecting a *sampling criterion*, an improvement
+function such as expected improvement or probabilistic improvement scored against
+a global model fitted on what has been evaluated — rather than leaving global
+diversity to the local search alone. `-lite`
 means this package implements only the minimal version of that skeleton: restart
 starts come from a `GlobalModel`. The rest is a different story:
 
