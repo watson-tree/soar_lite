@@ -7,7 +7,7 @@ the home page.
 
 ## 1. Write the batched objective and constraints
 
-The engine sees the objective through exactly one function — the batch function
+The engine sees the objective through one required function — the batch function
 it calls, `eval_f_g` below, whose signature is the table. It takes a batch of
 points in, f values and gradients out together. You do not write that gradient by
 hand: write the objective once, per point, and let `pointwise` build the batch
@@ -193,7 +193,7 @@ correspond:
 
 | Field | Meaning |
 | --- | --- |
-| `x` | argmin, in the coordinates you handed the engine |
+| `x` | argmin over the served points that were feasible and had finite `f`, in the coordinates you handed the engine |
 | `fun` | its value: the best over feasible points, `nan` if none, `-inf` if the objective has no floor |
 | `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path holds no usable point (a refused start leaves the row empty) |
 | `flock_fun` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |
@@ -283,7 +283,8 @@ on whether your objective is really parallel:
 
 One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
 **point** is one row of data (serial cost, CPU) — and a batch is a
-`(M, d)` array whose rows are those points.
+`(M, d)` array whose rows are those points. A result reports both counters, so
+say which axis you are reading.
 
 ## 6. Swap a piece
 
