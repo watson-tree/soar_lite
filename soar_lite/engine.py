@@ -38,11 +38,12 @@ import jax.numpy as jnp
 from soar_lite.domain import Domain
 
 Verdict: TypeAlias = Literal["retry", "accept", "give_up"]
-"""What a judged step decides about one candidate.
+"""How a judged step rules one served candidate.
 
-``"retry"`` serves the candidate but commits nothing yet, ``"accept"`` commits
-it as the path's point, ``"give_up"`` abandons the path's enumeration outright.
-See `LocalSolver.verdict`, which returns it.
+``"retry"`` spends another trial, ``"accept"`` ends the enumeration and commits
+the step's lowest-value finite trial - the candidate just served, for a
+single-sample step - and ``"give_up"`` abandons the path's enumeration outright,
+so the path stalls. See `LocalSolver.verdict`, which returns it.
 """
 
 
@@ -54,7 +55,8 @@ class PathPoint:
     """Coordinates, shape ``(d,)``, in the run's coordinates."""
 
     f: float
-    """The objective's value there: finite, since an unusable point is never held."""
+    """The objective's value there, always finite: a point that fails the finite
+    check is never committed, so no `PathPoint` carries a ``nan``."""
 
     g: jnp.ndarray
     """The gradient there, shape ``(d,)``; finite for the same reason."""
@@ -67,7 +69,8 @@ class PathPoint:
         non-finite f cannot be reported, re-started from or finished on, and a
         non-finite g is proposed from and folded on, so one NaN there poisons
         that coordinate's magnitude EMAs for the rest of the run. f is asked
-        first, so a dead value never pays for the gradient's device sync.
+        first, so a dead value never pays for pulling the gradient back from the
+        device.
         """
         return math.isfinite(self.f) and _all_finite(self.g)
 
@@ -180,10 +183,9 @@ class LocalSolver(Protocol):
     ``verdict`` must reach "accept" or "give_up" on its own; an enumerator with
     no bound of its own is a hang, not a slow run. ``needs_verdict(i, p)`` picks
     the step's shape: a method that rules on each candidate says True, one whose
-    step always commits its single proposal says False, and the engine then
-    serves no value for a ruling it would only rubber-stamp. All state is per
-    path, lives inside the instance, and is opaque to the engine - implementers
-    index it by path i.
+    step always commits its single proposal says False. All state is per path,
+    lives inside the instance, and is opaque to the engine - implementers index
+    it by path i.
 
     One step for a path i: propose(i, p) is called repeatedly, with p the path's
     current point, unchanged for the whole step (the engine commits a point only
@@ -448,10 +450,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     `global_model` supplies **where** a restart lands (one point per restarting
     path, clipped into the box) and is also the run's evidence sink, while
     `local_solver` owns direction, step size and acceptance and keeps its
-    per-path state inside itself. `restart_stalled` is the third ingredient,
-    and it is one flag: **when** a path restarts is the local solver's own
-    stopping test, so a restart is two seams and one boolean. It is on by
-    default, because with restarts off a stalled path just idles.
+    per-path state inside itself. `restart_stalled` is one flag on top of them:
+    **when** a path restarts is the local solver's own stopping test, so the
+    engine needs no restart rule of its own. It is on by default, because with
+    restarts off a stalled path just idles.
 
     `n_paths` is the run's width and nothing else; the dimension is `domain.d`,
     so a run never spells it twice. Iteration 0 is not a special case: no path
@@ -509,8 +511,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         eval_f: the objective's value half alone, same ``x`` rows, returning
             ``(f: (M,), feas: (M,) | None)``. ``None`` means every served trial
             takes its gradient in the same fused pass; supplying it lets a
-            judged step serve its trials for their values alone and buy
-            gradients only for its winners, in one batch.
+            judged step (one whose ``needs_verdict`` answered True) serve its
+            trials for their values alone and buy gradients only for its
+            winners, in one batch.
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
@@ -559,6 +562,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
             >>> result.fun        # its objective value
             0.0
+
+        A per-point scalar can be wrapped into this shape with `pointwise`.
 
     """
     _validate_run(
@@ -677,7 +682,8 @@ def pointwise(
     vmapped here, so the caller writes neither `jax.vmap` nor
     `jax.value_and_grad`. The fused gradient is the per-row one,
     ``vmap(value_and_grad(objective))``, not `value_and_grad` of a summed
-    batch, which would couple the rows through the sum.
+    batch, which would make each row's gradient pass through the sum and so
+    depend on every other row.
 
     Feasibility is vmapped on its own because it cannot ride inside
     `value_and_grad`: that transformer differentiates a scalar output, so a

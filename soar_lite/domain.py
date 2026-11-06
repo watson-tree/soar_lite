@@ -100,7 +100,7 @@ class Domain:
                 box itself, so a domain cannot exist without one.
             scale: per-dimension prior width in coordinate units, a ``(d,)``
                 vector or ``None`` for every dimension at one. A projection that
-                normalizes compares the entries to each other, but the common
+                normalizes compares the entries to each other. The common
                 magnitude is not free either: `scale` is the length the default
                 draw is measured in, so a dimension whose coordinates span far
                 more or far less than one wants its own entry rather than the
@@ -109,9 +109,10 @@ class Domain:
                 entry keeps the default its domain admits - uniform inside a
                 bounded dimension, ``N(0, scale_i^2)`` inside a free one, and
                 that same normal restricted to the domain inside a half-bounded
-                one, where drawing the unrestricted normal would step over the
-                one declared side. Dimensions are drawn independently, so a prior
-                that couples them needs its own `GlobalModel`, not a domain.
+                one (exactly one finite side), where drawing the unrestricted
+                normal would step over the side the caller did declare.
+                Dimensions are drawn independently, so a prior that couples them
+                needs its own `GlobalModel`, not a domain.
 
         Raises:
             ValueError: If the box is absent or malformed, or `scale` is not a
@@ -155,8 +156,8 @@ class Domain:
         the domain inside a half-bounded one - a sampler free to step over the
         side the caller declared is not sampling from the declared box at all.
         An injected sampler is the caller's own statement about the dimension's
-        spread, so nothing checks the drawn values against `scale`: a black-box
-        distribution has no readable spread to check them against.
+        spread, so nothing checks the drawn values against `scale`: an arbitrary
+        distribution publishes no spread to check them against.
 
         Raises:
             ValueError: If `n_points` is below one, or a column does not come

@@ -58,8 +58,8 @@ AcquisitionFn: TypeAlias = Callable[
 
 Takes ``(M, d)`` rows and returns ``(value: (M,), grad: (M, d))``. Lower is
 better, the sign already carried in the value, so a minimizer needs no special
-case. Batched, so a zero-order minimizer reads the values off a whole grid in
-one call and a first-order one gets the gradient it needs alongside.
+case. Batched, so a minimizer that works off values reads a whole grid in one
+call, and one that follows the gradient gets it alongside.
 """
 
 MinimizeFn: TypeAlias = Callable[
@@ -96,9 +96,9 @@ class Projection(abc.ABC):
     """The feature map a restart model reads domain coordinates through.
 
     A projection wraps a `Domain` and adds one map: `features` turns every
-    ``(m, d)`` batch of coordinates into an ``(m, w)`` batch of posterior
-    feature rows - `w` is this projection's width, read off `features` by the
-    model rather than assumed ``d + 1``.
+    ``(m, d)`` batch of coordinates into an ``(m, w)`` batch of feature rows,
+    which a model fits its own posterior over - `w` is this projection's width,
+    read off `features` by the model rather than assumed ``d + 1``.
 
     The domain stays the domain's: a projection *reads* its box, scales and
     draws; it is not one. That keeps the two jobs apart at the type level - a
@@ -143,9 +143,10 @@ class SphereProjection(Projection):
     """Inverse-stereographic projection of a chosen subset of the dimensions.
 
     The restart models read the domain in whatever coordinates the objective
-    takes. This maps them onto the unit sphere, ``[2z; |z|^2 - 1] / (|z|^2 + 1)``,
-    where ``z`` is the coordinates centered, divided by the per-dimension
-    `scale` and by one global lengthscale. Two properties matter downstream.
+    takes. This maps them onto the unit sphere, ``[2z; |z|^2 - 1] / (|z|^2 + 1)``
+    with ``|·|`` the Euclidean norm, where ``z`` is the coordinates centered,
+    divided by the per-dimension `scale` and by one global lengthscale. Two
+    properties matter downstream.
 
     Every projected row has norm one, so a linear head read on these features has
     a constant self inner product: its posterior variance stays bounded far from

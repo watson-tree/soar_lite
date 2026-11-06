@@ -42,6 +42,10 @@ plugins:
             show_source: false
             show_root_heading: true
             show_root_full_path: false
+            # Section headings in the page are h2, so an entry that rendered at
+            # the default h2 sat beside its own section in the outline instead of
+            # under it. Members nest one deeper, at h4.
+            heading_level: 3
             show_signature_annotations: true
             separate_signature: true
             members_order: source

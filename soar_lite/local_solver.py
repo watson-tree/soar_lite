@@ -34,8 +34,8 @@ class DiagonalPreconditioner(LocalSolver):
     The floor λ = θ·|g_i| ("abs") or θ·g_i² ("rms"), θ dimensionless, is
     anchored to the *current* gradient, so a flat-but-not-converged coordinate
     (y → 0 while g ≠ 0) still gets a finite step; a converged coordinate is
-    caught by the stopping test instead. It joins via ``max``, not ``+``: λ is a
-    pure guard on Y → 0 and never deflates a curvature-dominated coordinate.
+    caught by the stopping test instead. It joins via ``max``, so λ only guards
+    Y → 0 and never deflates a curvature-dominated coordinate.
     d ≥ 0 by construction, so at ``mu = 0`` -d⊙g descends and the plain step
     needs no acceptance test. It is a *diagonal* preconditioner, not a diagonal
     Newton: coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside |y_i| and biases d.
@@ -44,10 +44,9 @@ class DiagonalPreconditioner(LocalSolver):
     ``m = (1 - mu)·g + mu·m_prev``, where ``m_prev`` is an EMA of the past
     steps' start gradients (window ≈ ``1/(1-mu)``; the current step's gradient
     enters only once that step has committed, folded by ``fold``). At ``mu = 0``
-    it degenerates to ``g`` exactly. This is the unprojected heavy-ball direction
-    and also Adam's first moment before its second-moment division; being
-    unprojected, it withdraws the descent-direction guarantee, so convergence
-    rests on the engine's best-so-far bookkeeping and restart.
+    it degenerates to ``g`` exactly. This is the unprojected heavy-ball direction;
+    being unprojected, it withdraws the descent-direction guarantee, so
+    convergence rests on the engine's best-so-far bookkeeping and restart.
 
     Both smooths default to a window of about ``e`` steps, ``beta = mu = 0.63``.
     They stay two knobs - ``beta`` smooths the ratio that sets the step's scale,
@@ -212,8 +211,9 @@ class DiagonalPreconditioner(LocalSolver):
         Only consulted for a path that answered True to ``needs_verdict``, and
         the phase does not enter: ``n_alpha > 1`` rules a warm-up grid and a
         steady grid alike, while a single-sample step is committed without a
-        ruling. Only the served trial's value `f` is read - `x` stays in the seam
-        for methods that judge geometry, and this one does not. The engine buys a
+        ruling. Only the served trial's value `f` is read: `x` is in the
+        protocol's signature for methods that judge geometry, so it is dropped
+        here. The engine buys a
         trial's gradient only for the step's winner, so nothing here may depend
         on one; the stopping test reads ``p``, the step's start, whose gradient a
         path always has.
