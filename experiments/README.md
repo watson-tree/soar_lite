@@ -102,7 +102,7 @@ figure is always re-derivable and a trace never is. The unit is one
   are present.
 - `figures/<group>/batches.png` — budget axis: batches served.
 - `figures/<group>/points.png` — budget axis: objective points served (the
-  serial contest, pinned in ADR-0004). Every arm is cut at the shortest extent
+  serial contest). Every arm is cut at the shortest extent
   present **on that axis**, so all curves end together: an `n_paths=16` arm
   serves 16 points per batch, so here it shows only the first ~187 of its 3000
   batches. That is what the axis is for, not a clipped result.

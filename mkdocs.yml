@@ -19,11 +19,6 @@ nav:
 hooks:
   - docs/hooks.py
 
-# Internal notes live beside the site sources and are not published.
-exclude_docs: |
-  /PLAN.md
-  /adr/
-
 markdown_extensions:
   - tables
   - fenced_code

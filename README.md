@@ -106,6 +106,17 @@ result = n_path_schedule(
 print(result.x, result.fun)  # ≈[3. 3.] 3e-5
 ```
 
+## Results
+
+<!-- Placeholder: fill in the panels worth showing (see experiments/figures/),
+     each with its lineup and budget. Numbers live in experiments/RESULTS.md;
+     do not restate them here without the lineup that produced them. -->
+
+What the baseline comparison measures is in
+[`experiments/DESIGN.md`](experiments/DESIGN.md); every number it produced is in
+[`experiments/RESULTS.md`](experiments/RESULTS.md), tagged with the lineup and
+budget that produced it.
+
 ## Development
 
 ```bash

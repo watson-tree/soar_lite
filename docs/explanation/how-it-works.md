@@ -605,7 +605,9 @@ starts come from a `GlobalModel`. The details differ:
   full Hessian, no curvature model, and no direct solve of second-order
   information. A zero-order objective does not fit either — every point on a
   path must carry a finite gradient, and value-plus-gradient is the entry
-  contract.
+  contract. A derivative-free fallback (a finite-difference gradient, say) would
+  reverse that contract rather than extend it, so it is a decision to argue for,
+  not a default to add.
 
 This package's **core agrees** with SOAR — the global side and the local method
 each have their own job, joined by the adaptive restart process — while the

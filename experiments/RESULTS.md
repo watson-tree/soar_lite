@@ -14,8 +14,7 @@ Three rules:
   Quietly updating a number is how a document ends up quoting a run it no
   longer describes.
 - Only measurements belong here. Propositions, rules and the budget contract
-  live in `DESIGN.md`, release history in `CHANGELOG.md`, frozen decisions in
-  `docs/adr/`.
+  live in `DESIGN.md`.
 
 Unless a table says otherwise it holds **medians**, the statistic the figures
 plot. The harness's stdout line is `final mean best` — mean, not median, and
