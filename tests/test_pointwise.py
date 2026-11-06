@@ -94,7 +94,7 @@ def test_the_pair_drives_a_run() -> None:
         domain=domain,
         eval_f=eval_f,
         max_iters=5,
-        # n_alpha >= 2 puts every path in the judged lane, so the f-only seam is
+        # n_alpha >= 2 puts every path in the judged lane, so the value-only seam is
         # exercised from the first iteration instead of whenever a gradient floor
         # happens to be hit - with the default n_alpha=1 it took a lucky path, and
         # a different direction rule moved it out of reach.
@@ -104,6 +104,6 @@ def test_the_pair_drives_a_run() -> None:
     assert result.status == "max_iters", result.status
     assert bool(jnp.all(jnp.isfinite(result.x))), result.x.tolist()
     assert result.fun < 1.0, result.fun
-    # With the f-only seam in play, trials are served for values alone, so the
+    # With the value-only seam in play, trials are served for values alone, so the
     # run must have used both counters rather than the fused half only.
     assert result.n_f_points > 0, result.n_f_points

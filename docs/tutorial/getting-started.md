@@ -5,8 +5,9 @@ the call, what the result fields mean, and where the two swap points are.
 
 ## 1. Write the batched objective and constraints
 
-The engine sees the objective through exactly one function: a batch of points
-in, f values and gradients out together. You do not write that gradient by
+The engine sees the objective through exactly one function — the batch function
+it calls, `eval_f_g` below, whose signature is the table. It takes a batch of
+points in, f values and gradients out together. You do not write that gradient by
 hand: write the objective once, per point, and let `pointwise` build the batch
 for you.
 
@@ -34,11 +35,13 @@ def squares(x):  # one point (d,) in, one scalar out
 eval_f_g, eval_f = pointwise(squares)
 ```
 
-`pointwise` `vmap`s `jax.value_and_grad` for the fused seam and the plain forward
-pass for the optional f-only seam (the second return value), so the only function
-you write is the per-point scalar. Hand-writing `∂f/∂x` is safe for a sum of squares
-and is how a sign or a factor slips in anywhere else. That second return is the seam
-§4 uses: pass it as `eval_f=eval_f` to serve judged trials for their value alone.
+`pointwise` `vmap`s `jax.value_and_grad` for the fused seam — the function the
+engine calls, once per batch — and the plain forward pass for the optional
+value-only seam (the second return value), so the only function you write is the
+per-point scalar. Hand-writing `∂f/∂x` is safe for a sum of squares, but
+elsewhere it is an easy way to introduce a sign or a scale error. That second
+return is the seam §4 uses: pass it as `eval_f=eval_f` to serve judged trials for
+their value alone.
 
 ### 1.2 Constraints
 
@@ -116,8 +119,8 @@ value, indexing by a traced integer) raises there; a function that is not
 differentiable at a point yields whatever subgradient JAX picks, or a `nan` —
 the `nan` stalls the path, a finite-but-wrong one steers it silently. When
 either matters, write the gradient by hand and hand the engine the fused
-`(f, g, feas)` evaluation seam instead of `pointwise`, with the shapes of the
-table above:
+`(f, g, feas)` evaluation seam instead of the `eval_f_g` that `pointwise` builds,
+with the shapes of the table above:
 
 ```python
 import jax
@@ -144,13 +147,14 @@ the horizon `max_iters` or the deadline `time_limit`. Each missing required
 argument is refused by `ValueError` rather than guessed.
 
 `eval_f` is optional: hand it in when the method enumerates trials for their
-values alone; §4 says when that saves budget. The default single-sample step
-does no enumeration, so this run never calls it; it is passed here only to show
-where it goes.
+values alone; §4 says when that saves budget. The default solver proposes one
+trial per step, so this run never calls it; it is passed here only to show where
+it goes.
 
 ```python
 from soar_lite import n_path_schedule
 
+# eval_f_g, eval_f and domain come from §1.2
 result = n_path_schedule(
     eval_f_g,
     domain=domain,
@@ -159,7 +163,7 @@ result = n_path_schedule(
     eval_f=eval_f,
 )
 print(result.x, result.fun, result.status)
-# ≈[3. 3.] 3e-5 max_iters
+# x ≈ [3. 3], fun ≈ 3e-5, status = max_iters
 ```
 
 The status says only why the loop stopped, never that it converged: it is
@@ -215,8 +219,8 @@ restarted afterwards.
 | --- | --- |
 | `n_paths` | engine width: paths advanced in lockstep each iteration |
 | `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
-| `x0` | the flock's start, one point per path `(n_paths, d)`: placed by iteration 0 exactly where you ask; `None` lets the global model draw it — hand it in when runs have to be compared on the same starts |
-| `eval_f` | the optional f-only seam: points in, f values out, no gradient — pass it to save budget, omit it in a fused-only comparison |
+| `x0` | the flock's start, one point per path `(n_paths, d)`: placed by iteration 0 exactly where you ask, and it must lie inside `domain` — an outside row is refused, not clipped; `None` lets the global model draw it — hand it in when runs have to be compared on the same starts |
+| `eval_f` | the optional value-only seam: points in, f values out, no gradient — pass it to save budget, omit it in a fused-only comparison |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
 | `budget_check` | an extra whole-batch gate for a budget the engine cannot see |
@@ -278,8 +282,9 @@ One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
 ## 6. Swap a piece
 
 The engine owns the schedule; the method and the restart-point source are
-plugins. Either default can be replaced by passing an instance of your own
-class. Continuing §1's example:
+plugins — the two plugin seams, objects you swap, where §1's seams were functions
+the engine calls. Either default can be replaced by passing an instance of your
+own class. Continuing §1's example:
 
 ```python
 from soar_lite import DiagonalPreconditioner, Domain, n_path_schedule
@@ -290,8 +295,8 @@ result = n_path_schedule(
     n_paths=4,
     max_iters=30,
     # 4 trial values of the step multiplier alpha along the scaled direction,
-    # each 0.5x the previous; the per-coordinate scaling is inside d, not one
-    # of these trials
+    # each 0.5x the previous; the per-coordinate scaling lives in the step
+    # direction, not in these trials
     local_solver=DiagonalPreconditioner(n_alpha=4, backtrack=0.5),
     restart_stalled=True,
 )
@@ -300,7 +305,8 @@ result = n_path_schedule(
 To replace one outright, implement its protocol and pass the instance:
 
 - **`LocalSolver`** — the search method: `restart`, `needs_verdict`, `propose`,
-  `verdict`, `fold`. You own direction, step size and acceptance; the engine owns
+  `verdict`, `fold`. `needs_verdict` says whether the solver wants a verdict
+  phase at all. You own direction, step size and acceptance; the engine owns
   projection, the horizon and the per-step argmin. `verdict` is handed a
   trial's coords and value, not its gradient — the engine buys gradients only
   for the points it keeps, and `fold` is where a step lands. `restart` is the

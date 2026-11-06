@@ -201,7 +201,8 @@ states it directly. `BLRGlobalModel`
 fits a Bayesian linear posterior and proposes the local minimum of `-log EI` —
 EI there is an acquisition function deciding *where is worth trying*, not a
 restart verdict.
-_Avoid_: restart rule, sampler (the sampler is a per-dimension draw inside the domain)
+_Avoid_: restart rule, sampler (the sampler is a per-dimension draw inside the
+domain)
 
 **restart_stalled**:
 The run's one restart bit, deciding *whether* a stall restarts: on (the
@@ -222,7 +223,7 @@ unusable is refused before the method is told anything.
 _Avoid_: accept, commit (as the name of this handoff)
 
 **settle**:
-The iteration's one g batch on a run with the f-only seam, and the only place a
+The iteration's one g batch on a run with the value-only seam, and the only place a
 produced point becomes a graded one. Everything left unread or ungraded — the
 redraw starts, an unjudged step's proposal, a judged step's winners — is bought
 here, after both halves have decided on values and before anything is placed. A

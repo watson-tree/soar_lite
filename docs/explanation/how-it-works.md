@@ -275,8 +275,8 @@ round's evaluations.
 `propose`'s answer is clipped into the domain, wrapped as a point that still
 owes its `f` and `g`, and handed to `settle` together with the round's step
 winners, so a restart start never buys a gradient batch of its own. With the
-f-only seam connected the merge is even tighter: the restart start's value also
-waits and is bought once in the same fused batch. An unusable start (`f` or `g`
+value-only seam connected the merge is even tighter: the restart start's value
+also waits and is bought once in the same fused batch. An unusable start (`f` or `g`
 not finite) does not land, and the path stays `stalled` to be redrawn next round
 — it never becomes `points[i]`, so "where this path stands" cannot be polluted
 by a degenerate point.
@@ -332,8 +332,8 @@ already-decided judgment a second, invisible stopping rule; the price is one
 contract: `verdict` must eventually return `accept` or `give_up`, so an
 enumeration that never terminates hangs rather than runs slowly.
 
-With the f-only seam connected, each trial in the verdict channel serves `f` only
-(the verdict listens to values only) and the winner's gradient waits for
+With the value-only seam connected, each trial in the verdict channel serves `f`
+only (the verdict listens to values only) and the winner's gradient waits for
 `settle`; without it, each trial is itself a fused batch, so `n_alpha`
 candidates multiply directly into the fused batch count (see Cost).
 
@@ -404,7 +404,7 @@ raises `ValueError`.
 clock, money, an external early stop).
 
 The budget therefore carries two jobs: stopping metering and work reporting.
-**Both pairs of counts are recorded** (fused and f-only; see Cost), but **the
+**Both pairs of counts are recorded** (fused and value-only; see Cost), but **the
 counts never decide a stop**: `stop` reads only three predicates (horizon, wall
 clock, the caller's gate). `charge` only records, `tick` records one iteration
 after a completed round, and `stop` is the only stop query — three inputs
@@ -416,7 +416,7 @@ just reached the horizon, so it is asked once before a new round opens. A
 mid-iteration refusal raises at the point of the request and ends the run, with
 that round not counted in `n_iters` — so the middle layer never checks a return
 value and never passes a flag up or down. **The gate is asked before every batch,
-fused or f-only**: a verdict channel's `while` can spin many turns without
+fused or value-only**: a verdict channel's `while` can spin many turns without
 returning to the loop head, and without that question a step crossing the deadline
 would run to completion.
 
@@ -454,11 +454,11 @@ only), each with a pair of counts, so a result carries four fields:
 | Field | Counts |
 | --- | --- |
 | `n_f_g_points` / `n_f_g_batches` | points / batches of fused batches |
-| `n_f_points` / `n_f_batches` | points / batches of f-only batches |
+| `n_f_points` / `n_f_batches` | points / batches of value-only work |
 
 **Both pairs are recorded** — "billed" means "actually served": a caller may
 bring a value-only `eval_f`, and that half's work is reported honestly, or the
-serial ruler would erase `f`'s cost entirely in a run with the f-only seam
+serial ruler would erase `f`'s cost entirely in a run with the value-only seam
 connected. The counts report and do not budget: `stop` never reads them.
 
 **How many batches a round spends is decided by the evaluation seam**:
@@ -466,7 +466,7 @@ connected. The counts report and do not budget: `stop` never reads them.
 - **With `eval_f` connected**: each trial serves `f` only, and the round's one
   fused batch (`settle`) buys everything still owed — the accepted trial's
   gradient and every redraw start's value and gradient, since a start defers
-  both halves. So an `n_alpha`-candidate step spends `n_alpha` f-only batches
+  both halves. So an `n_alpha`-candidate step spends `n_alpha` value-only batches
   plus one fused batch.
 - **Without `eval_f`**: the fused batch is the only way to read a value, so
   **each trial is itself a fused batch** and the winner needs no `settle` pass.
@@ -484,8 +484,8 @@ Stopping is recorded in iterations, and the four fields report rather than
 budget: `batches` is a different axis from `max_iters`, so "how many batches a
 full horizon spent" must be read from `n_*_batches`, never by using `max_iters` as
 a cost number. **Never mix them**: one table or one plot uses one axis and must
-say which, and fused-axis numbers must not be compared against f-only-axis
-numbers.
+say which, and fused-axis numbers must not be compared against value-only
+ones.
 
 ## When this fits
 

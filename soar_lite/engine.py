@@ -347,7 +347,7 @@ class NPathResult:
 
     Work is reported as four counts instead of scipy's single ``nfev``, on two
     axes that never mix. Which evaluation seam served the work decides the pair:
-    ``n_f_points`` and ``n_f_batches`` for the f-only seam, ``n_f_g_points``
+    ``n_f_points`` and ``n_f_batches`` for the value-only seam, ``n_f_g_points``
     and ``n_f_g_batches`` for the fused one. Points are the serial cost and
     batches the parallel wall-clock cost. Which axis a comparison reads is the
     caller's business; a run handed no ``eval_f`` seam reports zero on both f
@@ -695,12 +695,12 @@ def pointwise(
     lazy closures, so building them runs nothing, and a caller who wants only
     the fused seam discards the other with ``eval_f_g, _ = pointwise(objective)``.
 
-    The f-only half is the fused objective's own forward pass,
+    The value-only half is the fused objective's own forward pass,
     ``vmap(objective)`` - literally the same function, so returning it costs
     nothing and buys the engine's cheap-trial path. That does not make this the
     evaluation seam for a *value-only* objective: a function JAX cannot
     differentiate cannot be `objective` here at all, so a caller holding values
-    and no gradient needs an f-only adapter of its own.
+    and no gradient needs an value-only adapter of its own.
 
     Args:
         objective: the per-point objective, ``(d,) -> ()``; a function
@@ -957,7 +957,7 @@ class _Evaluator:
         """Serve one step's trial batch, as one produced candidate per row.
 
         A trial's gradient is only wanted for the step's winner, so with the
-        f-only seam each trial is served for its value alone and the winners are
+        value-only seam each trial is served for its value alone and the winners are
         graded once, together (`settle`). Without it a fused pass is the
         only way to a value, so every trial carries its gradient whether or not
         the step's argmin keeps it; `settle` then buys nothing.
@@ -976,7 +976,7 @@ class _Evaluator:
     def settle(self, decided: list[_Pending]) -> list[PathPoint]:
         """Buy whatever gradient the iteration's points still owe, in one batch.
 
-        Everything the f-only seam left pending goes out as a single batch, so an
+        Everything the value-only seam left pending goes out as a single batch, so an
         iteration costs one gradient pass however many moves it deferred - its
         restart starts plus its step winners - instead of one pass per trial. A
         point that already carries its gradient is promoted as it stands, so a
@@ -1023,7 +1023,7 @@ class _Evaluator:
         return f_vals, g_batch
 
     def _serve_f(self, x_batch: jnp.ndarray) -> list[float]:
-        """Serve one f-only batch: the same gate, the other pair of counters.
+        """Serve one value-only batch: the same gate, the other pair of counters.
 
         The gate is asked here exactly as the fused half asks it, so a deadline
         that passes mid-step cuts the run at the next value-only batch rather
@@ -1062,7 +1062,7 @@ class _Paths:
       list once and threads it to `_restart_starts` and to the complement both
       halves share.
     - An iteration decides on values and pays for gradients once: whatever the
-      f-only seam left ungraded (restart starts and step winners alike) is bought
+      value-only seam left ungraded (restart starts and step winners alike) is bought
       in one batch before anything is placed, so a decision is never priced
       before it is made.
     - A path is stalled when it did not move at all this iteration - its method
@@ -1145,7 +1145,7 @@ class _Paths:
         The restart decision comes first: a path that holds no point, or that is
         stalled and whose run opted into `restart_stalled`, is given a fresh
         start instead of stepping. Both halves decide where a path goes from
-        values alone when the f-only seam is present, and the gradients those
+        values alone when the value-only seam is present, and the gradients those
         decisions need are then bought together in one batch (`settle`), so an
         iteration costs one gradient pass however many moves it deferred. A run
         without the seam serves everything fused and reaches `settle` already

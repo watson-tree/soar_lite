@@ -242,7 +242,7 @@ def test_give_up_stalls_a_path() -> None:
     )
     assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
     # Nothing to commit: every batch this run serves is a trial, and a trial
-    # without the f-only seam is fused, so the count is one flock plus one round.
+    # without the value-only seam is fused, so the count is one flock plus one round.
     assert res.n_f_g_points == sum(w for w, _d in shapes) == 2 * k
     assert res.status == "max_iters"
 
@@ -387,7 +387,7 @@ def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
         local_solver=StubSolver(),
     )
     assert res.status == "max_iters", res
-    # The flock's batch, then one fused batch per step (no f-only seam is
+    # The flock's batch, then one fused batch per step (no value-only seam is
     # handed in, so a trial arrives already graded).
     assert res.n_f_g_points == sum(w for w, _d in shapes) == k + 3 * k
     # No seam handed in, so the cheap pair never moves: a fused-only run reports
@@ -548,7 +548,7 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
     """A retrying step pays one gradient pass in total, not one per trial.
 
     The ruled-on quantity is f, so each trial is served for its value alone and
-    only the winner is graded. Two trial rounds therefore cost two f-only calls
+    only the winner is graded. Two trial rounds therefore cost two value-only calls
     and one fused batch - the same single fused batch a no-line-search step
     costs, which is what makes a value-only seam cost-matched across the sides.
     """
@@ -779,9 +779,9 @@ def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
 
     The engine leaves both halves of an unjudged proposal owed, so `settle` buys
     the value and its gradient together. A judged step pays for a value of its
-    own: the ruling is f-only, and the winner's gradient is bought again, fused,
+    own: the ruling is value-only, and the winner's gradient is bought again, fused,
     in `settle`. Both lanes therefore bill the same fused batches; what the
-    unjudged one never pays is the f-only pass, which is the whole reason to
+    unjudged one never pays is the value-only pass, which is the whole reason to
     answer False. The engine's own f counters agree with the seam's tally, so what
     the unjudged lane skips shows up as a zero rather than as an absence.
     """
@@ -811,7 +811,7 @@ def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
         )
 
     # The flock needs no ruling either, so iteration 0 is silent. A judged step is
-    # one f-only batch of k points, then the winner's fused pass.
+    # one value-only batch of k points, then the winner's fused pass.
     assert run(StubSolver()) == (k, k, 1, 2, 2 * k)
     assert run(UnjudgedSolver()) == (0, 0, 0, 2, 2 * k)
 
