@@ -78,8 +78,9 @@ Two plugin seams — extension points you can swap — under one engine that
 schedules the work, and nothing beyond JAX and the standard library.
 
 - **The engine, `n_path_schedule`** — runs the `n_paths` paths in lockstep and
-  owns the domain, the shared horizon (`max_iters`), and the rules that decide
-  when a path has stopped making progress and is restarted from a fresh point.
+  owns the domain, the shared horizon (`max_iters`), and the restart schedule: a
+  path reports itself stalled through `LocalSolver`, and the engine redraws it —
+  `restart_stalled` on — from a fresh point.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
   from successive gradients, no matrix and no scalar learning rate to tune. The
@@ -94,9 +95,10 @@ replace either.
 What ships is not a general-purpose toolkit but a small set of defaults picked by
 judgment — which is what `-lite` signals. They are aimed at scientific numerical
 optimization, where the variables carry physical units and the objective's scale
-is rarely yours to pick: the step is invariant to rescaling of the objective, so
-one set of knobs, none of them carrying a unit, serves any units, and nobody has
-to non-dimensionalize the problem by hand first.
+is rarely yours to pick: once the first secant pair exists the step is
+invariant to rescaling of the objective, so one set of knobs, none of them
+carrying a unit, serves any units, and nobody has to non-dimensionalize the
+problem by hand first.
 
 The name nods to the **adaptive restart** framework of
 [Mathesen et al. (2021)](explanation/how-it-works.md#references): a local method
