@@ -1,6 +1,6 @@
 """n-path scheduler self-checks.
 
-Seam (拍板): the engine consumes its width, the callables, and the domain it
+Seam (settled): the engine consumes its width, the callables, and the domain it
 searches
 
     eval_f_g(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)

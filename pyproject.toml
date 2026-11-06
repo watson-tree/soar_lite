@@ -53,23 +53,23 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-  "CPY001",               # 版权头是仪式，LICENSE 已覆盖
-  "D203", "D213",         # 与 D211/D212 互斥，显式写明让位的一侧
-  "PLR2004",              # 形状/容差比对字面量，命名常量只会加噪音
+  "CPY001",               # a copyright header is ceremony; the LICENSE covers it
+  "D203", "D213",         # mutually exclusive with D211/D212, and names which yields
+  "PLR2004",              # shape and tolerance comparisons; a named constant adds noise
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# print 是实验脚本的输出，也是 __main__ 自检的退路；库代码里不允许
+# print is the experiment scripts' output and the __main__ fallback, not library code
 "experiments/**" = ["T201"]
 "tests/**" = ["S101", "T201"]
-# 文档构建钩子，不是分发包的一部分，没有包边界可挂
+# the docs build hook is not part of the distribution; no package boundary to hang it on
 "docs/**" = ["INP001"]
 
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "strict"
-# jax 桩不完整带来的 unknown 噪音，降为 information
+# unknown-noise from jax's incomplete stubs, kept at information level
 reportUnknownVariableType = "information"
 reportUnknownParameterType = "information"
 reportUnknownArgumentType = "information"
