@@ -195,9 +195,9 @@ class DiagonalPreconditioner(LocalSolver):
         """
         if not self.has_secant[i]:
             return p.x + self.alpha[i] * (-p.g)
-        d = self._diag(i, p.g)
+        diag = self._diag(i, p.g)
         m = p.g if self.mu == 0.0 else self._blend_momentum(i, p.g)
-        return p.x - self.alpha[i] * (d * m)
+        return p.x - self.alpha[i] * (diag * m)
 
     def verdict(
         self,
