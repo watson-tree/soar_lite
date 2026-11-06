@@ -10,8 +10,8 @@ model-free restart sampler needs nothing but this and a key.
 
 The box's own spelling lives here too - `Bounds`, and the validation and
 normalization behind it. This module imports nothing from the package, so it is
-the leaf that both the engine's `n_path_schedule` and the model modules read a
-box from; the clip that keeps every proposal inside it stays the engine's.
+the leaf both `n_path_schedule` and the model modules read a box from; the clip
+that keeps every proposal inside it stays the engine's.
 
 A side may be unbounded, and there are three cases, not two: a bounded dimension
 draws uniformly, a free one (both sides infinite) draws ``N(0, scale_i^2)``, and
@@ -30,7 +30,7 @@ from jax.scipy.special import ndtr, ndtri
 
 # The search box in scipy's spelling (which `_box_bounds` normalizes): one
 # `(lb, ub)` pair per dim, a side of None or +-inf meaning unbounded. A `(d, 2)`
-# array is the same data row-wise, for the callers that already hold one.
+# array is the same data row-wise, for callers that already hold one.
 Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
 
 # One dimension's draw, injected per dimension so a restart model can sample
@@ -45,21 +45,21 @@ class Domain:
     """The coordinates a restart model may read, and how a start is drawn.
 
     A domain carries the box, the per-dimension scales and the per-dimension
-    draws, and validates all three once at construction: a NaN side, a lower
-    side above its upper, a scale that is not a ``(d,)`` vector of finite
-    positive values, or a sampler count that is not ``d`` are refused here
-    rather than deep inside a clip or a draw. It is concrete - a caller sampling
-    with no surrogate needs nothing more - and `Projection` wraps one to add the
-    feature map a fitted model reads.
+    draws, and validates all three once at construction: a NaN side, a lower side
+    above its upper, a scale that is not a ``(d,)`` vector of finite positive
+    values, or a sampler count that is not ``d`` are refused here rather than
+    deep inside a clip or a draw. It is concrete - a caller sampling with no
+    surrogate needs nothing more - and `Projection` wraps one to add the feature
+    map a fitted model reads.
 
     A side may be unbounded. The box then declares only the dimension and which
-    sides are unbounded; `scale` is what carries a length there, because no
-    width exists to read one off. Not even a bounded side's width is treated as
-    a natural unit: `scale` is in coordinate units, so a caller changing a
-    variable from metres to millimetres changes `scale`, never the box.
+    sides are unbounded; `scale` is what carries a length there, because no width
+    exists to read one off. Not even a bounded side's width is a natural unit:
+    `scale` is in coordinate units, so a caller changing a variable from metres
+    to millimetres changes `scale`, never the box.
 
-    `draw` is the one contract: ``(key, n) -> (n, d)`` starts drawn one
-    dimension at a time.
+    `draw` is the one contract: ``(key, n) -> (n, d)`` starts drawn one dimension
+    at a time.
     """
 
     def __init__(
@@ -90,9 +90,8 @@ class Domain:
                 bounded dimension, ``N(0, scale_i^2)`` inside a free one, and
                 that same normal restricted to the domain inside a half-bounded
                 one, where drawing the unrestricted normal would step over the
-                one side that is declared. Dimensions are drawn independently,
-                so a prior that couples them needs its own `GlobalModel`, not a
-                domain.
+                one declared side. Dimensions are drawn independently, so a prior
+                that couples them needs its own `GlobalModel`, not a domain.
 
         Raises:
             ValueError: If the box is absent or malformed, or `scale` is not a
@@ -109,8 +108,8 @@ class Domain:
             )
             raise ValueError(msg)
         self.lo, self.hi = box
-        # The dimension is what `bounds` declares: read it off the argument,
-        # not off `lo`/`hi`, which `_box_bounds` just derived from it.
+        # The dimension is what `bounds` declares: read it off the argument, not
+        # off `lo`/`hi`, which `_box_bounds` just derived from it.
         self.d = len(bounds)
         self.bounds = bounds
         self.scale = _check_scale(scale, self.d)
@@ -132,14 +131,12 @@ class Domain:
 
         A dimension with an injected `DrawFn` takes its column from that, else
         from the default its domain admits: uniform inside a bounded side,
-        ``N(0, scale_i^2)`` inside a free one, and the same normal *truncated*
-        to the domain inside a half-bounded one - a sampler free to step over
-        the side the caller declared is not sampling from the declared box at
-        all, and truncating is what the normal the default promises looks like
-        once it may not cross. That default is also why an injected sampler is
-        the caller's own statement about the dimension's spread - nothing checks
-        the drawn values against `scale`, since a black-box distribution has no
-        readable spread to check them against.
+        ``N(0, scale_i^2)`` inside a free one, and the same normal *truncated* to
+        the domain inside a half-bounded one - a sampler free to step over the
+        side the caller declared is not sampling from the declared box at all.
+        An injected sampler is the caller's own statement about the dimension's
+        spread, so nothing checks the drawn values against `scale`: a black-box
+        distribution has no readable spread to check them against.
 
         Raises:
             ValueError: If `n_points` is below one, or a column does not come
@@ -185,11 +182,11 @@ def _check_scale(scale: jnp.ndarray | Sequence[float] | None, d: int) -> jnp.nda
     """Normalize the per-dimension prior width to ``(d,)``, refusing a bad one.
 
     ``None`` is every dimension at one, which puts the coordinate unit itself in
-    charge: the caller has either made each variable's spread O(1) or is about
-    to say what it is. Anything but a ``(d,)`` vector is refused rather than
-    broadcast into one: a scalar or a length-one vector would silently become a
-    uniform vector, which is a real scale but never what a caller reaching for
-    those shapes means.
+    charge: the caller has either made each variable's spread O(1) or is about to
+    say what it is. Anything but a ``(d,)`` vector is refused rather than
+    broadcast: a scalar or a length-one vector would silently become a uniform
+    vector, which is a real scale but never what a caller reaching for those
+    shapes means.
     """
     if scale is None:
         return jnp.ones(d)
@@ -225,9 +222,9 @@ def _check_samplers(
 def _check_bounds(bounds: Bounds | None) -> None:
     """Reject a malformed box at construction, not deep inside a clip.
 
-    Both spellings are checked: one `(lb, ub)` pair per dim, or a `(d, 2)`
-    array. A NaN side is rejected too - it would poison every clip silently
-    instead of failing; +-inf sides are legitimate (unbounded dim).
+    Both spellings are checked: one `(lb, ub)` pair per dim, or a `(d, 2)` array.
+    A NaN side is rejected too - it would poison every clip silently instead of
+    failing; +-inf sides are legitimate (unbounded dim).
     """
     if bounds is None:
         return
@@ -258,8 +255,8 @@ def _check_bounds(bounds: Bounds | None) -> None:
 def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
     """Normalize a box to (lo, hi) arrays; None (no box at all) -> None.
 
-    A `None` side becomes ∓inf, so every downstream consumer sees one spelling
-    of "unbounded". A `(d, 2)` array carries the same pairs one row each.
+    A `None` side becomes ∓inf, so every downstream consumer sees one spelling of
+    "unbounded". A `(d, 2)` array carries the same pairs one row each.
     """
     if bounds is None:
         return None
@@ -275,8 +272,8 @@ _TRUNCATED_TAIL = 9.0
 
 Only the domain's own endpoints can push the CDF inverse past it: `ndtri` is
 undefined at 0 and 1, and a truncation far into the tail rounds both bounds of
-the uniform interval onto the same endpoint. The clip keeps such a draw finite,
-and it costs nothing else - beyond nine scales the normal's mass is 1e-19, so
+the uniform interval onto the same endpoint. The clip keeps such a draw finite
+and costs nothing else - beyond nine scales the normal's mass is negligible, so
 no reachable draw is touched, while a domain truncated that far out collapses
 onto its own boundary, which is the right limit anyway.
 """

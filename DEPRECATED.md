@@ -225,3 +225,113 @@ stopping test for *when*, a boolean for *whether*, and `GlobalModel.propose`
 for *where*; a stopped path either stays put or gets a new point, with nothing
 in between to compare. Expected improvement stays where it still has a
 subject: the surrogate arm's acquisition function.
+
+## Projected momentum direction (`m⊥` in place of `m`)
+
+**Status: deprecated — rejected at the mechanism level, never shipped.**
+`soar_lite/local_solver.py` still steps along the *unprojected* heavy-ball
+momentum, `Δx = -d ⊙ m` with `m = (1−μ)·g + μ·m_prev`.
+
+### What it was
+
+Project the momentum onto the orthogonal complement of the current gradient
+before stepping:
+
+    m⊥ = m − ((m·g)/(g·g))·g,        Δx = -d ⊙ m⊥
+
+`m⊥` has `m⊥·g = 0`, so `Δx·g = -(d ⊙ m⊥)·g ≤ 0` whenever `d ≥ 0` — the
+descent-direction invariant the plain step has at `μ = 0` would then hold at
+every `μ`, and a small enough step would be guaranteed to descend.
+
+### Why it was plausible
+
+With `μ = 0` the step `-d ⊙ g` provably descends (`d ≥ 0` by construction);
+with `μ > 0` the step follows `m` and that guarantee is withdrawn. Projection
+looked like the way to keep both the smoothing and the invariant.
+
+### Why it fails
+
+1. **The projected part is exactly what momentum is for.** The component of `m`
+   along `g` carries heavy-ball's whole value: the zigzag damping on an
+   ill-conditioned quadratic, and the build-up across a flat direction. What
+   projection keeps is the transverse part, which only rotates the direction.
+   It removes the useful component and preserves the cosmetic one.
+2. **The invariant it bought was never cashed out.** It promises that a small
+   enough step would descend, and this method takes one unruled full step (or an
+   `alpha`-grid argmin that compares the grid's samples against each other, never
+   against the step's start). Per-step descent was never enforced to begin with;
+   convergence rests on the engine's best-so-far bookkeeping and restart.
+
+### Verdict
+
+Not adopted. A caller who wants the guarantee has it already: shrink `alpha0`,
+set `n_alpha > 1`, or run a line search outside the seam. The unprojected
+direction stays, and the docstring says plainly that it is unprojected and that
+the guarantee is withdrawn.
+
+## Zhang-Li / `λ_min` saddle escape
+
+**Status: deprecated — not implemented, and no hook is kept for it.**
+The stopping test in `soar_lite/local_solver.py` is a gradient-norm test,
+`‖g‖ ≤ τ_rel·‖g_0‖`, and `give_up` ends the path's enumeration.
+
+### What it was
+
+On `give_up`, instead of letting the path stall and the engine restart it in
+place, step along the eigenvector of the smallest curvature — Zhang-Li style,
+with `λ_min` read off a Hessian approximation — to leave a saddle that the
+gradient-norm test cannot tell from a minimum.
+
+### Why it was plausible
+
+A gradient norm cannot distinguish a saddle from a minimum: both have `g → 0`,
+so a path resting on a saddle declares itself done, and the run spends a restart
+on a point it could have escaped from where it stood. `λ_min < 0` would name the
+escape direction exactly.
+
+### Why it fails
+
+The method deliberately carries no curvature to read it off. `d_i = s_i/y_i` is
+a scalar ratio per coordinate; the off-diagonal coupling is precisely what it
+drops, and near a saddle that coupling *is* the information that names the
+negative-curvature direction. Adding `λ_min` means adding a Hessian
+approximation, i.e. a second method — not a clause in this one. The engine also
+already handles the outcome: a stalled path with `restart_stalled=True` is
+re-drawn, which escapes a saddle for the price of one restart.
+
+### Verdict
+
+Left out. A solver that wants saddle escape implements `LocalSolver` with the
+curvature it needs; today's diagonal preconditioner has none to spend, and the
+stopping test stays a single dimensionless gradient-norm ratio.
+
+## Integer-index `mask` spelling
+
+**Status: deprecated — refused at validation.**
+`SphereProjection`'s `mask` takes the boolean selector only.
+
+### What it was
+
+Accept a list of dimension indices (`mask=[0, 2]`) as an alternative to the
+boolean vector (`mask=[True, False, True]`), matching numpy's `x[:, idx]` idiom.
+
+### Why it was plausible
+
+Naming three dimensions out of sixty is shorter as indices, and the gather
+underneath wants indices anyway.
+
+### Why it fails
+
+The two spellings are indistinguishable at runtime. `bool` is a subclass of
+`int`, so `jnp.asarray` names the dtype from the values: a `[1, 0, 1, 0]` meant
+as booleans arrives as `int32` and, read as indices, projects a different set —
+silently, with a different posterior behind it. Any acceptance rule that tries
+to tell the two apart has to guess the caller's intent from the dtype, and
+guessing wrong is the failure mode, not the fallback. Refusing the index
+spelling removes the ambiguity instead of resolving it; the boolean vector is
+also the form the feature gather consumes.
+
+### Verdict
+
+Refused, with the dtype named in the error. A caller holding indices writes
+`mask = jnp.zeros(d, dtype=bool).at[idx].set(True)`, one line, no guessing.

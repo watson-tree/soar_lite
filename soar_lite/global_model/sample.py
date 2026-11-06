@@ -23,12 +23,10 @@ class SampleGlobalModel(GlobalModel):
     """The model-free default: draws restart points straight from the `Domain`.
 
     Fits nothing - `observe` is a no-op - because with no surrogate the domain's
-    own draw is the only distribution the run can synthesize. Whatever the
-    domain admits, this draws: uniform inside a bounded side, ``N(0, scale^2)``
-    inside a free one, that same normal truncated inside a half-bounded one, and
-    an injected per-dimension sampler where the caller said so. That is what a
-    plain finite-box uniform model could do and more - the extension is the
-    domain's, and this class only hands it the key.
+    own draw is the only distribution the run can synthesize. Whatever the domain
+    admits, this draws: uniform inside a bounded side, ``N(0, scale^2)`` inside a
+    free one, that same normal truncated inside a half-bounded one, and an
+    injected per-dimension sampler where the caller said so.
     """
 
     def __init__(self, *, key: jnp.ndarray) -> None:

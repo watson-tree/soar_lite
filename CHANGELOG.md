@@ -108,8 +108,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mu = 0` keeps the bare gradient. There is no projection onto `g`'s orthogonal
   complement and so no per-step descent invariant - convergence rests on the
   engine's best-so-far accounting and restarts, not on forcing each step down.
-  `ALGORITHM.md` §1.6 records why the projected variant was dropped (that
-  document is now deprecated);
+  `DEPRECATED.md` records why the projected variant was dropped;
   `RESULTS.md` holds the near-minimiser accuracy cost of the stale term.
 
 ### Changed
@@ -445,6 +444,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NoRestartRule` -> `EIRestartRule` at a fixed width the restart step. The
   default rule is passed explicitly for the same reason: a curve that inherits
   it does not say what it measured.
+- The API reference reads as a reference again. The docstrings it is generated
+  from had accumulated design history — rejected directions, benchmark asides,
+  digits measured on one machine — and now carry the contract only: what a
+  symbol does, its args, its returns, its raises, and the one-line reason a
+  load-bearing invariant is spelled the way it is. The rejected directions moved
+  to `DEPRECATED.md` (projected momentum `m⊥`, Zhang-Li / `λ_min` saddle escape,
+  the integer-index `mask` spelling); where a claim is about a third-party
+  reference implementation it is made once, in the module that ports it.
+- The `BLRGlobalModel` hyperparameters are stated as what they are: constructor
+  values, not fitted ones. The reference implementation (`github.com/colmont/
+  linear-bo`, gpytorch) fits lengthscale, coefficient and noise by marginal
+  likelihood; here they are fixed, and the defaults are that implementation's
+  starting points rather than its marginal-likelihood optimum. The docstrings no
+  longer imply a fit that does not happen.
+- The `BLRGlobalModel` docstrings stop calling its pre-fit restart a "uniform
+  draw". The domain draws uniformly only inside a bounded dimension; a free one
+  draws `N(0, scale²)` and a half-bounded one that same normal truncated to its
+  declared side, so "uniform" named one of three cases as if it were all of them.
+- The public docstrings agree with `docs/` on five points they had drifted on:
+  `domain` is required and owned by the engine (it was described as optional
+  when a model is injected, which contradicted the same module's own contract);
+  the dimension is `domain.d`, not the model's; `LocalSolver.give_up` aborts the
+  path's enumeration rather than being a per-coordinate stopping test;
+  `NPathResult` documents `flock_x` / `flock_fun`; and `SphereProjection` takes
+  a `Domain`, not "scipy-style pairs or a `(d, 2)` array". The Doumont et al.
+  citation reads `(2026), AISTATS, PMLR 300`, matching the bibliography in
+  `docs/explanation/how-it-works.md` rather than the 2025 arXiv preprint.
 
 ### Removed
 

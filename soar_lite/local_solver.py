@@ -29,106 +29,57 @@ class DiagonalPreconditioner(LocalSolver):
         "rms": S₂ = EMA(s²), Y₂ = EMA(y²), d = √(S₂/max(Y₂, λ))
 
     Both are unit-invariant: scaling x by c scales d by c² and the step by c,
-    while scaling f by c_f scales d by 1/c_f and leaves the step alone. The
-    floor λ = θ·|g_i| ("abs") or θ·g_i² ("rms"), θ dimensionless, is anchored to the
-    *current* gradient, so a flat-but-not-converged coordinate (y → 0 while
-    g ≠ 0) still gets a finite step; a truly converged coordinate is caught by
-    the stopping test below instead. The floor joins via ``max``, not ``+``:
-    λ is a pure guard on Y → 0, never a deflation of a curvature-dominated
-    coordinate (the additive spelling shrinks every d by √(Y/(Y+λ)), so `max`
-    is the arm that leaves a curvature-dominated coordinate undeformed).
-    d ≥ 0 by construction, so at ``mu = 0`` -d⊙g is a descent direction and the
-    plain step needs no acceptance test; with ``mu > 0`` the step follows the
-    momentum and that guarantee is withdrawn (see below). Named "diagonal
-    preconditioner", not "diagonal Newton": coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside
-    |y_i| and makes d a biased estimator of 1/Hᵢᵢ.
+    while scaling f by c_f scales d by 1/c_f and leaves the step alone.
 
-    With ``mu > 0`` the direction is the *current* momentum, not the bare
-    gradient: ``m = (1 - mu)·g + mu·m_prev``, where ``m_prev`` is an EMA of the
-    past steps' start gradients (window ≈ ``1/(1-mu)``; the current step's own
-    gradient enters only when that step has committed, folded by ``fold``). At
-    ``mu = 0`` it degenerates to ``g`` exactly. This is the unprojected
-    heavy-ball direction, and also Adam's first moment before its second-moment
-    division.
+    The floor λ = θ·|g_i| ("abs") or θ·g_i² ("rms"), θ dimensionless, is
+    anchored to the *current* gradient, so a flat-but-not-converged coordinate
+    (y → 0 while g ≠ 0) still gets a finite step; a converged coordinate is
+    caught by the stopping test instead. It joins via ``max``, not ``+``: λ is a
+    pure guard on Y → 0 and never deflates a curvature-dominated coordinate.
+    d ≥ 0 by construction, so at ``mu = 0`` -d⊙g descends and the plain step
+    needs no acceptance test. It is a *diagonal* preconditioner, not a diagonal
+    Newton: coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside |y_i| and biases d.
 
-    There is no projection onto the orthogonal complement of ``g``, so with
-    ``mu > 0`` there is no descent-direction invariant. Projecting would keep
-    only the part of the momentum transverse to ``g``, and the along-``g`` part
-    is exactly heavy-ball's value - the zigzag damping on an ill-conditioned
-    quadratic, the build-up across a flat direction - while the transverse part
-    it kept only turns the direction. And the invariant never cashed out: it
-    promises that a small enough step would descend, and this method takes one
-    unruled full step (or an alpha-grid argmin that does not compare against the
-    step's start), so per-step descent was never actually enforced. Convergence
-    rests on the engine's best-so-far bookkeeping and restart. A caller that
-    wants the invariant can shrink ``alpha`` or run a line search outside the
-    seam.
+    With ``mu > 0`` the direction is the *current* momentum,
+    ``m = (1 - mu)·g + mu·m_prev``, where ``m_prev`` is an EMA of the past
+    steps' start gradients (window ≈ ``1/(1-mu)``; the current step's gradient
+    enters only once that step has committed, folded by ``fold``). At ``mu = 0``
+    it degenerates to ``g`` exactly. This is the unprojected heavy-ball direction
+    and also Adam's first moment before its second-moment division; being
+    unprojected, it withdraws the descent-direction guarantee, so convergence
+    rests on the engine's best-so-far bookkeeping and restart.
 
     Both smooths default to a window of about ``e`` steps, ``beta = mu = 0.63``.
     They stay two knobs - ``beta`` smooths the ratio that sets the step's scale,
-    ``mu`` smooths the direction, and the two histories are different quantities
-    - but one window is a better-motivated common default than two independently
-    guessed ones, and momentum then shares the diagonal's bandwidth instead of
-    running an order of magnitude longer.
+    ``mu`` smooths the direction - because the two histories are different
+    quantities.
 
-    Momentum is off at ``mu = 0`` (bit for bit the plain direction), and it costs
-    accuracy where the diagonal estimate is already right: near a minimiser
-    ``g → 0`` but ``m_prev`` does not vanish at the same rate, so the stale term
-    ``mu·m_prev`` can outweigh ``g``, the exact one-shot step is scraped into a
-    detour, and the gradient-norm stopping test loses its anchor. It buys
-    progress only where ``d`` is structurally wrong (a rotated Hessian, which no
-    per-coordinate ratio can represent) and there only patchily - a mitigation,
-    not a fix.
-
-    Two phases per path, one step mechanic. Every step samples the alpha grid
+    Two phases, one step mechanic. Every step samples the alpha grid
     {alpha0, alpha0·backtrack, alpha0·backtrack², …} along its own direction and
     hands the win to the engine's per-step argmin, which ``fold`` records. The
     phases differ only in the direction: the warm-up (the first step) has no
-    secant pair yet, so it descends along -g from the start length ``alpha0``
-    (default 1) - a magnitude ratio needs one secant pair before it can estimate
-    anything. The shrink factor (``backtrack``) makes the grid coordinate-free
-    (alpha multiplies the direction, and the constant is dimensionless), but the
-    direction scales the wrong way: a step must add a length-like direction,
-    while -g scales like a gradient (with 1/x under x̃=cx), not a length, so the
-    warm-up step still carries the coordinate scale. Nothing scalar can repair
-    that; a length-like direction could (physical spans, or a box-width
-    scaling), which matters only if the working box ever stops being [0,1]ᵈ -
-    where the engine's clip absorbs it today. Once that pair is in hand the
-    direction becomes -d⊙g, which needs no acceptance test at all (d ≥ 0 ⇒
-    descent), and the default (n_alpha=1) commits the full step
-    unconditionally: no backoff, an overshoot is left to the next secant to
-    correct (Zhang-Li is deliberately dropped). Nothing nonmonotone is used in
-    either phase, because neither phase tests monotonicity: a grid sample is
-    ruled against its siblings, never against the step's start.
+    secant pair yet, so it descends along -g from ``alpha0``, and afterwards the
+    direction is -d⊙m. The default ``n_alpha=1`` commits the full step
+    unconditionally; a larger grid rules its samples against each other, never
+    against the step's start, so nothing here is monotone.
 
     ``needs_verdict`` is therefore phase-independent: it answers True when the
-    grid has more than one sample to compare (n_alpha > 1), and also whenever
-    the stopping test below already holds - ``verdict`` is the contract's only
-    channel for "give_up", and the engine asks for one only from a path that
-    answered True, so a converged path must ask for its own last ruling instead
-    of being committed unjudged and stepping off a stationary point. A
-    single-sample step anywhere else is committed as proposed, so the engine
-    never asks for a ruling there and its own gate on the winner's value and
-    gradient is the whole of its acceptance.
+    grid has more than one sample, and also whenever the stopping test already
+    holds - ``verdict`` is the contract's only channel for "give_up", so a
+    converged path must ask for its own last ruling rather than be committed
+    unjudged and step off a stationary point.
 
-    The stopping test is a gradient-norm test: ‖g‖ ≤ τ_rel·‖g_0‖ gives up, the
-    engine's only way to report a path that is done. The norm (not the
-    per-coordinate test |g_i| ≤ τ_rel·|g_0,i|) keeps one flat coordinate from
-    pinning a path "alive" (a flat-start coordinate that never satisfies the
-    test) or "dead" (a huge-start coordinate that passes immediately): only the
-    gradient's aggregated size relative to its starting size counts, and τ_rel
-    stays dimensionless. That is also the hook a Zhang-Li / λ_min saddle escape
-    would attach to; it is not implemented.
+    The stopping test is a gradient-norm test, ‖g‖ ≤ τ_rel·‖g_0‖, which is how a
+    path reports that it is done. The norm rather than a per-coordinate test
+    keeps one flat coordinate from pinning a path alive (or one huge-start
+    coordinate from declaring it dead), and keeps τ_rel dimensionless.
 
     Derivation: the secant equation ``B·s = y`` read one coordinate at a time
-    (``y_i = B_ii·s_i``, couplings dropped) gives ``d_i = 1/B_ii = s_i/y_i`` -
-    the ratio of the observed displacement to the observed gradient change in
-    that coordinate. The step is then ``dx = -diag(B)^{-1}·g = -d⊙g``:
-    multiplying by ``d`` is what turns a gradient-like direction (whose scale
-    runs opposite to the coordinate's) into a displacement-like one. The same
-    object falls out of the diagonal degeneration of the SR1 update; the secant
-    equation is the shorter route to it. Nothing here is a matrix method: no B
-    is stored, and the smoothing acts on the secant pair, not on the ratio.
+    (couplings dropped) gives ``d_i = 1/B_ii = s_i/y_i``, and the step is
+    ``dx = -diag(B)^{-1}·g = -d⊙g`` - multiplying by ``d`` is what turns a
+    gradient-like direction into a displacement-like one. Nothing is a matrix
+    method here: no B is stored, and the smoothing acts on the secant pair, not
+    on the ratio.
     """
 
     def __init__(  # noqa: PLR0913 - each knob is a distinct, independently-swept facet
@@ -146,14 +97,13 @@ class DiagonalPreconditioner(LocalSolver):
         """Store the knobs; per-path state is seeded by restart.
 
         ``alpha0`` is the step length every path is armed at (``_reset_step``),
-        in units of the natural step: -g in the warm-up, -d⊙g after, and the
+        in units of the natural step: -g in the warm-up, -d⊙m after, and the
         full step of both phases under the default ``n_alpha=1``. It never grows
         back on its own: the alpha grid only samples down from it.
-        ``backtrack`` is that grid's spacing (``n_alpha >= 2``), one constant
-        for both phases. A knob outside its own range raises ValueError here,
-        once per object; nothing downstream re-checks it. ``moment`` is the one
-        knob whose whole range is already its annotation's (a ``Literal``), so
-        it is not re-tested here.
+        ``backtrack`` is that grid's spacing (``n_alpha >= 2``), one constant for
+        both phases. A knob outside its range raises ValueError here, once per
+        object; nothing downstream re-checks it. ``moment`` is the one knob whose
+        whole range is its annotation's (a ``Literal``), so it is not re-tested.
 
         Args:
             moment: which magnitude ratio to smooth, ``"abs"`` (mean of |s|,
@@ -163,9 +113,8 @@ class DiagonalPreconditioner(LocalSolver):
             theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
                 ``θ·g_i²`` for "rms"), >= 0.
             mu: EMA decay of the gradient history blended into the direction,
-                ``(1 - mu)·g + mu·m_prev`` - it sets how far back the history
-                reaches and nothing else; 0 leaves the bare gradient, in [0, 1).
-                Its default pairs with ``beta``: both windows are ≈ ``e`` steps.
+                ``(1 - mu)·g + mu·m_prev``; 0 leaves the bare gradient, in
+                [0, 1).
             alpha0: step length every path is armed at; the full step's
                 length, > 0.
             n_alpha: alpha samples per step along the step's direction; 1 means
@@ -215,8 +164,8 @@ class DiagonalPreconditioner(LocalSolver):
         The engine's only cold start, so this runs at initialization and after
         every restart - the secant history never carries across one.
         """
-        # alpha0 is a scalar multiplier; see the class docstring for what it
-        # does not fix (the direction -g carries the coordinate scale)
+        # alpha0 is a scalar multiplier; the warm-up direction -g carries the
+        # coordinate scale itself
         self.g0[i] = p.g
         self.has_secant[i] = False
         self.s_ema[i] = jnp.zeros_like(p.g)
@@ -229,18 +178,16 @@ class DiagonalPreconditioner(LocalSolver):
         """Rule per candidate when the grid compares samples, or p stops the path.
 
         ``n_alpha > 1`` is the grid case: the step serves that many samples and
-        each served value decides whether to shrink and try again, so the engine
-        must ask for a ruling. The phase does not enter - an ``n_alpha >= 2``
-        warm-up is ruled on its grid like any steady step.
+        each served value decides whether to shrink and try again. The phase does
+        not enter - an ``n_alpha >= 2`` warm-up is ruled on its grid like any
+        steady step.
 
-        The second case is the stopping test. A path already at its
+        The second case is the stopping test: a path already at its
         gradient-norm floor has nothing left to rule on, but ``verdict`` is the
-        contract's only channel for "give_up", so it asks for that one ruling
-        rather than being committed unjudged and stepping off a stationary
-        point. Anywhere else a single-sample step is not ruled: it is committed
-        as proposed, and the engine's own gate on the winner's value and
-        gradient is the whole of its acceptance (a non-finite one stalls the
-        path instead of folding a nan into every later step).
+        contract's only channel for "give_up", so it asks for that one ruling.
+        Anywhere else a single-sample step is committed as proposed, and the
+        engine's gate on the winner's value and gradient is the whole of its
+        acceptance.
         """
         return self.n_alpha > 1 or self._stationary(i, p)
 
@@ -268,12 +215,11 @@ class DiagonalPreconditioner(LocalSolver):
         Only consulted for a path that answered True to ``needs_verdict``, and
         the phase does not enter: ``n_alpha > 1`` rules a warm-up grid and a
         steady grid alike, while a single-sample step is committed without a
-        ruling. Only the served trial's value `f` is read - `x` stays in the
-        seam for methods that judge geometry, and this one does not. The engine
-        buys a trial's gradient only for the step's winner, so nothing here may
-        depend on one, and the winner's gradient is gated by the engine before
-        it folds. The stopping test reads ``p`` - the step's start, whose
-        gradient a path always has.
+        ruling. Only the served trial's value `f` is read - `x` stays in the seam
+        for methods that judge geometry, and this one does not. The engine buys a
+        trial's gradient only for the step's winner, so nothing here may depend
+        on one; the stopping test reads ``p``, the step's start, whose gradient a
+        path always has.
         """
         del x
 
@@ -292,14 +238,12 @@ class DiagonalPreconditioner(LocalSolver):
         Only the winner is folded, never an intermediate grid sample: an
         intermediate secant is a step the path never took, and folding it would
         smear the magnitude EMAs. The engine calls this with the exact point it
-        just committed on "accept", so the folded secant is the accepted step
-        and the two can never disagree. The first call after init/restart is
-        the warm-up pair and seeds the EMAs outright (weight 1); later calls
-        blend at beta - `has_secant` doubles as the first-fold marker, so it is
-        set here rather than in ``verdict``. This is also where a step is
-        re-armed: the fold is the step's commit, so a ruling that the engine did
-        not commit (a winner whose gradient it refused) leaves the method
-        untouched rather than half-reset.
+        just committed, so the folded secant is the accepted step. The first
+        call after a restart is the warm-up pair and seeds the EMAs outright;
+        later calls blend at beta - `has_secant` doubles as the first-fold marker,
+        so it is set here rather than in ``verdict``. This is also where a step
+        is re-armed: a ruling the engine did not commit (a winner whose gradient
+        it refused) leaves the method untouched rather than half-reset.
         """
         first = not self.has_secant[i]
         self._fold(i, best.x - p.x, best.g - p.g, first=first)
@@ -341,12 +285,6 @@ class DiagonalPreconditioner(LocalSolver):
         gradients, folded by `fold` once each step has committed - so this
         step's own gradient enters fresh, at weight ``1 - mu``. With ``mu = 0``
         this is ``g`` exactly, which is why `propose` skips the call then.
-
-        No projection: the along-g part of the history is kept. Its whole point
-        is that part - the zigzag damping and the flat-direction build-up - so
-        the direction is free to stop descending on g, and nothing here pins a
-        descent gain. See the class docstring for why that invariant was
-        withdrawn.
         """
         return (1.0 - self.mu) * g + self.mu * self.m[i]
 
@@ -366,22 +304,17 @@ class DiagonalPreconditioner(LocalSolver):
 
         Reached by the engine only with ``n_alpha >= 2``, in either phase: a
         single-sample step answers False to ``needs_verdict`` and is committed
-        unruled, and the one that answers True (a path at its stopping test) is
-        given up above instead of reaching here - the grid code is the same one
-        sample, so a direct call with ``n_alpha == 1`` still rules that way. One
-        grid of ``n_alpha`` samples along the current step direction, shrinking
-        alpha by the grid's spacing each retry; the win is handed to the engine
-        on "accept", which commits its per-step argmin and folds the winner
-        through ``fold``.
+        unruled, and a path at its stopping test gives up in ``verdict`` before
+        reaching here. One grid of ``n_alpha`` samples along the current step
+        direction, shrinking alpha by the grid's spacing each retry; the win is
+        handed to the engine on "accept", which commits its per-step argmin and
+        folds the winner through ``fold``.
 
-        The ruling reads `f` alone: no sample's gradient is in hand, and the
-        engine gates the winner's gradient before it folds, so a non-finite
-        gradient stalls the path there instead of poisoning a secant here.
         Nothing non-finite may reach ``fold``: one inf folded into Y leaves
         den = inf forever, and that coordinate never steps again. A non-finite
         value drops out of the candidate set - the sweep keeps shrinking alpha,
         a real line search probing past a NaN - and a grid with no finite sample
-        at all gives up, leaving the path to a restart rule.
+        at all gives up.
         """
         if math.isfinite(f):
             self.saw_finite[i] = True

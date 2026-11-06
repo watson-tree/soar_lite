@@ -1,33 +1,32 @@
 """A Bayesian linear-regression surrogate as the engine's restart model.
 
-The second `GlobalModel` concrete, beside `SampleGlobalModel`'s model-free draw. It
-fits a closed-form weight posterior over the feature rows a `Projection` hands
-it and proposes restart points by descending the *log* expected improvement of
-that posterior - the sample-based restart the uniform draw only approximates.
+The second `GlobalModel` concrete, beside `SampleGlobalModel`'s model-free draw.
+It fits a closed-form weight posterior over the feature rows a `Projection`
+hands it and proposes restart points by descending the *log* expected
+improvement of that posterior.
 
 The geometry lives entirely in the injected `Projection`, so the model itself
-is projection-agnostic: `SphereProjection` bends a chosen subset of the box's
-dimensions through inverse stereography, and `IdentityProjection` reads the
-coordinates as their own features. The two are two priors over where the
-optimum sits - the bend pulls the corners toward the pole and centres the bowl,
-the identity keeps every coordinate's own scale and puts the centre nowhere
-special - and the caller picks the one the task's belief deserves. A dimension
-may be unbounded: inverse stereography takes all of ``R``, so the same bend
-applies to a line, and `scale` states each dimension's prior width in
-coordinate units rather than reading a box width as if it were a unit of
+is projection-agnostic: `SphereProjection` bends a chosen subset of the
+coordinates through inverse stereography, and `IdentityProjection` reads the
+coordinates as their own features. The two are two priors over where the optimum
+sits - the bend pulls the corners toward the pole and centres the bowl, the
+identity puts the centre nowhere special - and the caller picks the one its
+belief deserves. A dimension may be unbounded: inverse stereography takes all of
+``R``, so the same bend applies to a line, and `scale` states each dimension's
+prior width in coordinate units rather than reading a box width as a unit of
 measure.
 
-The structure of the sphere is a fixed-hyperparameter port of Doumont, Fan, et
-al., "We Still Don't Understand High-Dimensional Bayesian Optimization" (2025),
-``github.com/colmont/linear-bo``: a linear kernel read after projecting onto the
-unit sphere, a box-diagonal lengthscale normalization, and the resulting
-posterior variance bounded away from the prior away from data. Two things are
-deliberately dropped. That implementation fits its lengthscale, coefficient and
-noise hyperparameters by marginal likelihood (it is gpytorch; this package is
-jax-only), so here the same knobs are constructor values instead. And it
-descends its acquisition with a shipped multi-start L-BFGS-B; here the
-minimizer is injected instead, so a driver can descend with the library's own
-n-path engine rather than a second recipe - see `MinimizeFn`.
+The structure of the sphere is a fixed-hyperparameter port of Doumont et al.
+(2026), "We Still Don't Understand High-Dimensional Bayesian Optimization",
+AISTATS, PMLR 300 (reference implementation ``github.com/colmont/linear-bo``):
+a linear kernel read after projecting onto the unit sphere, a box-diagonal
+lengthscale normalization, and a posterior variance bounded away from the prior
+away from data. Two things differ. That implementation fits its lengthscale,
+coefficient and noise hyperparameters by marginal likelihood (it is gpytorch;
+this package is jax-only), so here the same knobs are constructor values. And it
+descends its acquisition with a shipped multi-start L-BFGS-B, where here the
+minimizer is injected (`MinimizeFn`) so a driver can descend with this library's
+own n-path engine.
 
 What the bend keeps is the part that cures the corner-seeking pathology under a
 Euclidean RBF posterior: the variance returns to the prior far from data and
@@ -94,22 +93,18 @@ class Projection(abc.ABC):
     feature rows - `w` is this projection's width, read off `features` by the
     model rather than assumed ``d + 1``.
 
-    The domain stays the domain's. A projection *reads* its box, scales and
-    draws; it is not one. That keeps the two jobs apart at the type level: a
+    The domain stays the domain's: a projection *reads* its box, scales and
+    draws; it is not one. That keeps the two jobs apart at the type level - a
     caller who only samples builds a `Domain` and never meets a projection, and
     a projection held where a `Domain` is expected is a wiring error instead of
-    a silently accepted one. It also keeps `scale` and `samplers` out of this
+    a silently accepted one - and keeps `scale` and `samplers` out of this
     constructor, where every fitted model would otherwise have restated them.
 
-    `features` is the one contract. It is a pure query of the coordinates: the
-    same ``(m, d)`` input maps to the same ``(m, w)`` rows, with `w` stable
-    across calls for one projection.
-
-    It is also the seam a *different* head reads. A surrogate of another family
-    - a Gaussian process, say - turns coordinates into `features` rows the same
-    way and fits its own kernel there, because nothing in a projection is
-    specific to `BLRGlobalModel`'s posterior: it carries geometry, not fit
-    state.
+    `features` is the one contract: a pure query of the coordinates, the same
+    ``(m, d)`` input mapping to the same ``(m, w)`` rows, with `w` stable across
+    calls for one projection. It is also the seam a surrogate of another family
+    reads - nothing in a projection is specific to `BLRGlobalModel`'s posterior,
+    since it carries geometry, not fit state.
     """
 
     def __init__(self, domain: Domain) -> None:
@@ -118,10 +113,10 @@ class Projection(abc.ABC):
         Args:
             domain: the box, per-dimension `scale` and draws the projection
                 reads its geometry off - centre, width and which sides are
-                unbounded. Holding one domain rather than being one is what
-                keeps the geometry and the fallback draw measured in the same
-                coordinate unit without two knobs to keep in step. Validated by
-                `Domain`'s own constructor.
+                unbounded. Holding one domain rather than being one keeps the
+                geometry and the fallback draw in the same coordinate unit with
+                no second knob to keep in step. Validated by `Domain`'s own
+                constructor.
 
         """
         self.domain = domain
@@ -138,31 +133,30 @@ class Projection(abc.ABC):
 
 
 class SphereProjection(Projection):
-    """Inverse-stereographic projection of a chosen subset of the box's dims.
+    """Inverse-stereographic projection of a chosen subset of the dimensions.
 
-    The restart models read the box in whatever coordinates the objective takes.
-    This maps them onto the unit sphere, ``[2z; |z|^2 - 1] / (|z|^2 + 1)``, where
-    ``z`` is the box's coordinates centered, divided by the per-dimension
+    The restart models read the domain in whatever coordinates the objective
+    takes. This maps them onto the unit sphere, ``[2z; |z|^2 - 1] / (|z|^2 + 1)``,
+    where ``z`` is the coordinates centered, divided by the per-dimension
     `scale` and by one global lengthscale. Two properties matter downstream.
 
-    Every projected row has norm one, so a linear head read on these features
-    has a constant self inner product: its posterior variance stays bounded far
-    from data instead of climbing back to the prior, which is the corner-seeking
+    Every projected row has norm one, so a linear head read on these features has
+    a constant self inner product: its posterior variance stays bounded far from
+    data instead of climbing back to the prior, which is the corner-seeking
     pathology the projection exists to cure. And the last coordinate,
     ``(|z|^2 - 1)/(|z|^2 + 1)``, is a radially symmetric, saturating feature of
     the input - the one extra degree of freedom a linear head gets, an isotropic
     bowl whose center the weights place.
 
     `mask` keeps that bowl off dimensions whose natural prior is uniform - an
-    angle, say, wants no attraction to the box center. A left-out dimension
-    keeps its coordinate and enters a linear head as a plain trend, so the
-    feature vector is ``d + 1`` wide however many dimensions the projection
-    bends.
+    angle, say, wants no attraction to the center. A left-out dimension keeps its
+    coordinate and enters a linear head as a plain trend, so the feature vector is
+    ``d + 1`` wide however many dimensions the projection bends.
 
-    A dimension may be unbounded here too: inverse stereography takes all of
-    ``R``, so the same map bends a line, and the far end of it returns to the
-    pole - the variance goes back to the prior instead of growing with ``|x|``,
-    which is what an unbent coordinate does.
+    A dimension may be unbounded: inverse stereography takes all of ``R``, so the
+    same map bends a line, and its far end returns to the pole - the variance
+    goes back to the prior instead of growing with ``|x|``, which is what an
+    unbent coordinate does.
     """
 
     def __init__(
@@ -175,9 +169,8 @@ class SphereProjection(Projection):
         """Bind the domain and the projected subset.
 
         Args:
-            domain: the domain the projection normalizes, scipy-style pairs or a
-                ``(d, 2)`` array read off its box; a side may be unbounded. Its
-                `scale` is the prior width in coordinate units - only the ratios
+            domain: the `Domain` the projection normalizes; its `scale` is each
+                dimension's prior width in coordinate units. Only the ratios
                 between the bent dimensions' entries move the features, since
                 `glob_ls` divides one global lengthscale back out, but the common
                 magnitude is what the fallback draw and an unbounded dimension's
@@ -244,16 +237,16 @@ class IdentityProjection(Projection):
 
     `features` returns the coordinates unchanged - width ``d``, no centre bowl,
     no normalization to the unit box. Where `SphereProjection` bends the corners
-    toward the pole and seats the box centre at the south pole (a prior that the
+    toward the pole and seats the centre at the south pole (a prior that the
     optimum lives near the middle), this one keeps every coordinate's own scale
     and range and puts the centre nowhere special: a prior that the optimum may
     well sit on a boundary or a corner.
 
     The cost of no geometry is no bound. The posterior variance is a quadratic
-    form in these unbent features, so it grows toward the box corners and
-    expected improvement on this arm is extrapolation-dominated, pointing at
-    corners - exactly the behaviour wanted when the truth lives there, and the
-    one `SphereProjection` exists to cure when it does not.
+    form in these unbent features, so it grows toward the corners and expected
+    improvement on this arm is extrapolation-dominated, pointing at corners -
+    exactly the behaviour wanted when the truth lives there, and the one
+    `SphereProjection` exists to cure when it does not.
 
     `features` ignores the domain's `scale` outright: the coordinates arrive as
     they are, and only the domain's `draw` reads it, to place the fallback
@@ -268,29 +261,26 @@ class IdentityProjection(Projection):
 class BLRGlobalModel(GlobalModel):
     """Restart points from a Bayesian linear posterior's log improvement.
 
-    `observe` accumulates the run's served batches (values only - the gradient
-    is not fitted), and `propose` fits the closed-form weight posterior over
-    those points and returns the minimizers of ``-log EI`` the injected
-    `minimize` finds. Below two observations - and with every value equal -
-    there is no spread to standardize by, so it answers with the uniform draw
-    the default model would give.
+    `observe` accumulates the run's served batches (values only - the gradient is
+    not fitted), and `propose` fits the closed-form weight posterior over those
+    points and returns the minimizers of ``-log EI`` the injected `minimize`
+    finds. Below two observations, and with every value equal, there is no spread
+    to standardize by, so it answers with the domain's own `draw`.
 
-    Every knob is a fixed hyperparameter, not a fitted one; the defaults are the
-    reference implementation's starting points rather than its marginal-
-    likelihood optimum. The geometry lives in the `Projection` this model builds
-    for each ask - `SphereProjection` for the centre-biased bend of the reference
-    model, `IdentityProjection` for no prior on where the optimum sits - and it
-    is built from the domain that ask hands in. So the model carries the recipe
-    and not a box: one instance asked inside a different box has no stale
-    geometry and no second normalization drifting behind it. What this class adds
-    on top is the value fit and the acquisition that descends it; the feature
-    width is read off `features`, so any projection width fits.
+    Every knob is a fixed hyperparameter, not a fitted one. The geometry lives in
+    the `Projection` this model builds for each ask - `SphereProjection` for the
+    centre-biased bend, `IdentityProjection` for no prior on where the optimum
+    sits - and it is built from the domain that ask hands in. So the model
+    carries the recipe and not a box: one instance asked inside a different box
+    has no stale geometry and no second normalization drifting behind it. What
+    this class adds on top is the value fit and the acquisition that descends it;
+    the feature width is read off `features`, so any projection width fits.
 
     The projection is optional. Left unset, the bent arm is the default, because
-    that is the reference model - the one whose geometry cures the corner-
-    seeking pathology. `IdentityProjection` stays the explicit alternate arm, for
-    a task whose optimum lives on a boundary; it is a different prior, not a
-    stand-in for "no projection".
+    that is the reference model - the one whose geometry cures the corner-seeking
+    pathology. `IdentityProjection` stays the explicit alternate arm, for a task
+    whose optimum lives on a boundary; it is a different prior, not a stand-in
+    for "no projection".
     """
 
     def __init__(
@@ -309,12 +299,12 @@ class BLRGlobalModel(GlobalModel):
                 through - ``partial(SphereProjection, mask=..., kappa=...)`` for
                 a custom bend, `IdentityProjection` itself for the unbent arm.
                 ``None`` (the default) is `SphereProjection` with its own
-                defaults: the reference model's centre-biased bend. Called once
+                defaults, the reference model's centre-biased bend. Called once
                 per `propose`, so the geometry is always the box that ask was
                 handed, and `Projection`'s own constructor validates the domain.
-            minimize: the acquisition's inner optimizer, shape
-                ``MinimizeFn``. Owned by the caller: the descent recipe is the
-                engine's, not this model's.
+            minimize: the acquisition's inner optimizer, shape ``MinimizeFn``.
+                Owned by the caller: the descent recipe is the engine's, not
+                this model's.
             var_prior: weight-prior variance (the ridge scale opposite `noise`).
             noise: observation-noise variance added to the posterior mean's
                 self-covariance.
@@ -358,10 +348,10 @@ class BLRGlobalModel(GlobalModel):
         A value-only batch and a fused one contribute the same, since the
         surrogate fits values over coordinates. A non-finite value is dropped,
         not fitted: the engine observes the objective bottoming out at ``-inf``
-        before it stops, and one such row would drag the standardization with
-        it. A point served twice is kept twice - under the tiny observation
-        noise that is a slight double weight, which is what a second look at the
-        same coordinate is worth.
+        before it stops, and one such row would drag the standardization with it.
+        A point served twice is kept twice - under the tiny observation noise
+        that is a slight double weight, which is what a second look at the same
+        coordinate is worth.
 
         Raises:
             ValueError: If `x` is not a two-dimensional batch, has a different
@@ -399,12 +389,12 @@ class BLRGlobalModel(GlobalModel):
 
         The box is the caller's, handed in per ask: the geometry is rebuilt from
         it here, and nothing about it is remembered between calls. Until the fit
-        has a spread to standardize, the answer is the domain's own `draw` - the
-        points the engine's uniform model would give inside a finite box, and the
-        prior's own breadth outside one. Afterwards the answer is the injected
-        `minimize`'s local minimizers of ``-log EI`` over the box; the log form
-        keeps the acquisition's gradient alive in the region where the raw
-        improvement has decayed to zero.
+        has a spread to standardize, the answer is the domain's own `draw` -
+        uniform inside a bounded dimension, the domain's prior breadth inside an
+        unbounded one. Afterwards it is the injected `minimize`'s local
+        minimizers of ``-log EI`` over the box; the log form keeps the
+        acquisition's gradient alive where the raw improvement has decayed to
+        zero.
 
         Raises:
             ValueError: If `n_points` is below one, or if `minimize` returns
@@ -471,13 +461,7 @@ class BLRGlobalModel(GlobalModel):
         return self._posterior_at(projection, batch, weights, cov)
 
     def _projection_for(self, domain: Domain) -> Projection:
-        """Build this ask's geometry: the caller's recipe, or the bent default.
-
-        `None` at construction is the reference model's centre-biased bend -
-        `SphereProjection` with its own defaults - so the common case names no
-        projection at all. A caller who wants a mask, a different `kappa`, or no
-        bend at all passes a factory and gets exactly that.
-        """
+        """Build this ask's geometry: the caller's recipe, or the bent default."""
         if self._projection_factory is None:
             return SphereProjection(domain)
         return self._projection_factory(domain)
@@ -503,9 +487,7 @@ class BLRGlobalModel(GlobalModel):
         square of mean`` loses the spread exactly where a converged run spends
         its batches - values that agree to most of their digits - and can come
         out negative there. The value sum needs no such care: it is carried raw,
-        and the center is that sum over the count. Computed on the host: these
-        are four scalars a batch, and the point of holding them is to keep the
-        fit's shapes fixed.
+        and the center is that sum over the count.
         """
         batch = np.asarray(kept, dtype=np.float64)
         count = batch.size
@@ -530,10 +512,10 @@ class BLRGlobalModel(GlobalModel):
     def _standardize(self, f: jnp.ndarray) -> jnp.ndarray:
         """Return `f` on the fit's standardized scale.
 
-        The center and spread are the accumulated moments', not `f`'s own: the
-        fit has one value scale, and everything read off it answers in that one.
-        Only reached once `_can_fit` has found a non-zero spread, so the divisor
-        never is zero and no floor is needed to keep it finite.
+        The center and spread are the accumulated moments', not `f`'s own: the fit
+        has one value scale, and everything read off it answers in that one. Only
+        reached once `_can_fit` found a non-zero spread, so the divisor is never
+        zero and needs no floor.
         """
         center, spread = self._moments()
         return (f - center) / spread
@@ -543,18 +525,17 @@ class BLRGlobalModel(GlobalModel):
 
         Written as the precision it is: ``P^T P / noise + I / var_prior`` is
         likelihood plus prior, and one inversion gives the covariance matrix
-        itself - not an inverse scaled afterwards - with
-        ``weights = cov @ P^T y / noise`` its mean. `projection` is the geometry
-        built for this ask's domain; nothing about it is remembered.
+        itself, with ``weights = cov @ P^T y / noise`` its mean. `projection` is
+        the geometry built for this ask's domain; nothing about it is remembered.
 
-        The rows are walked one served batch at a time and the three sums kept,
-        rather than concatenated into one array and multiplied once. The products
-        are the same - a sum of per-batch products is the product over all rows -
-        but their shapes stop growing with the run, and a shape that changes is a
-        fresh compilation of the whole fit. Standardizing cannot ride along in the
-        same accumulation, since the center and spread are the fit's rather than
-        the batch's, so the values cross is carried raw and shifted here: the
-        spread divides outside the sum, and the center scales the column sums.
+        The rows are walked one served batch at a time and three sums kept,
+        rather than concatenated into one array and multiplied once: the products
+        are the same, but their shapes stop growing with the run, and a shape that
+        changes is a fresh compilation of the whole fit. Standardizing cannot ride
+        along in the same accumulation, since the center and spread are the fit's
+        rather than the batch's, so the values cross is carried raw and shifted
+        here: the spread divides outside the sum, the center scales the column
+        sums.
         """
         gram, cross, colsum = self._fold_gram(projection)
         precision = (
@@ -611,11 +592,11 @@ class BLRGlobalModel(GlobalModel):
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Return ``-log EI`` and its per-row gradient at ``(m, d)`` rows.
 
-        `jax.value_and_grad` differentiates a scalar output only, and the rows
-        of the acquisition are independent of one another, so the gradient is
-        taken one row at a time under `vmap`. The batch Jacobian is diagonal,
-        and this reads only its diagonal where `jax.jacobian` would build the
-        whole ``m x m`` block and throw all but that away.
+        `jax.value_and_grad` differentiates a scalar output only, and the rows of
+        the acquisition are independent, so the gradient is taken one row at a
+        time under `vmap`. The batch Jacobian is diagonal, and this reads only its
+        diagonal where `jax.jacobian` would build the whole ``m x m`` block and
+        throw all but that away.
         """
 
         def scalar(row: jnp.ndarray) -> jnp.ndarray:
@@ -639,7 +620,7 @@ def _log_h(z: jnp.ndarray) -> jnp.ndarray:
     cancellation is wider than a float32 mantissa, so the leading Mills-ratio
     asymptotics ``log phi(z) - 2 log|z|`` take over - its ``1 - 3/z^2``
     correction is under 3 percent at the seam, under 1 percent from ``z = -20``,
-    and the improvement is already ``~1e-24`` there.
+    and the improvement is negligible there either way.
     """
     log_phi = -0.5 * z * z - _HALF_LOG_2PI
     log_z_phi = jnp.log(jnp.abs(z)) + log_ndtr(z)  # log|z * Phi(z)|
@@ -668,13 +649,8 @@ def _check_mask(
 ) -> jnp.ndarray:
     """Normalize `mask` to a ``(d,)`` boolean selector, refusing a bad one.
 
-    Only the boolean spelling is accepted. The integer-index spelling was
-    refused because it was indistinguishable from a boolean vector at runtime:
-    ``bool`` is a subclass of ``int``, so ``asarray`` names the dtype from the
-    values, and a ``[1, 0, 1, 0]`` meant as booleans would be read as indices
-    and project a different set silently. A caller naming a few dimensions
-    writes the boolean vector instead, which is also the form the feature
-    gather consumes.
+    Only the boolean spelling is accepted; the integer-index spelling is
+    indistinguishable from it at runtime, so it is not offered at all.
     """
     if mask is None:
         return jnp.ones(d, dtype=bool)
