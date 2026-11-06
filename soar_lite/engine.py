@@ -482,7 +482,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
     `fun` is the true minimum over every feasible eval with a finite value -
     every served point when the objective reports no mask, only the points its
-    mask passes otherwise - while the trajectory itself moves on the penalized
+    mask passes otherwise - while the path itself moves on the penalized
     objective. Work is reported, never budgeted: four counts on two axes that
     do not mix - points against batches, and f against f+g - and none of them
     stops the run (see `NPathResult`).

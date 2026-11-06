@@ -18,12 +18,26 @@ new code.
 
 **path**:
 One independent descent chain: a current point plus that chain's own solver
-state. The engine runs `n_paths` of them in lockstep.
+state. The engine runs `n_paths` of them in lockstep. A restart replaces its
+current point with a fresh draw, so the points one path holds across a run are
+continuous in identity, not in space — which is why `best`, the reported answer,
+need not be a point any path still holds.
 _Avoid_: chain, trajectory, thread, particle
 
 **n_paths**:
 The engine's width — the number of paths the engine drives together.
 _Avoid_: population size, swarm size
+
+**flock**:
+The paths' current points as one `(n_paths, d)` array: exactly one point per path,
+so a flock is the run's state at one moment, not the set of paths. Every path
+keeps its row whether or not it holds a usable point (`flock_fun` is `nan` there),
+so a flock always has `n_paths` of them. A *batch* is a set of points too and is
+deliberately a different one: it is the work a single pass serves — the redraw
+starts plus the active paths' trials — so it holds no point for an idle path and
+is not the state. Iteration 0 places the flock from `x0`; the engine's copy is
+the flock as the run ended.
+_Avoid_: the set of paths, population, ensemble, all the paths
 
 **iteration**:
 One pass of the engine's main loop, counted in `n_iters`. Per iteration the engine
@@ -101,7 +115,9 @@ _Avoid_: group, lot, chunk
 
 **point** (noun):
 One candidate — one row of a batch. The four counters (below) count the billed
-ones.
+ones. Its graded form is `PathPoint`: the `x`/`f`/`g` triple a path commits,
+assembled only once both halves exist (see *settle*), so a point that arrived
+fused travels on as one object rather than three arrays.
 _Avoid_: query, sample, evaluation (retired)
 
 **four counters** (`n_f_g_points` / `n_f_g_batches` / `n_f_points` / `n_f_batches`):

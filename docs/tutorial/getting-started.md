@@ -165,7 +165,7 @@ The status says only why the loop stopped, never that it converged: it is
 horizon counts iterations, not work. The four paths get close to the minimizer
 within a few iterations, and every later stop is a fresh start: by default
 (`restart_stalled=True`) a stalled path reloads a draw from the global model each
-time its own stopping test fires, so the flock — all `n_paths` paths — keeps
+time its own stopping test fires, so the flock — the points its paths hold — keeps
 working until the horizon.
 Ask for the frozen version instead and the same run ends much sooner: with
 `restart_stalled=False` a converged path is parked for good — it holds its point
@@ -237,7 +237,7 @@ Four gotchas worth knowing up front:
   one path the parallelism is gone while the default restart bit still fires:
   every stop becomes a random redraw, which on a unimodal problem is a restart
   into the same basin until the horizon. Pass `restart_stalled=False` for the
-  single chain that stops where it stalled.
+  single path that stops where it stalled.
 - **The horizon counts iterations, not work.** What one iteration costs is the
   method's business: it serves the redraw starts plus however many trials the
   method's own line search serves, and a flock with nothing left to do ends the

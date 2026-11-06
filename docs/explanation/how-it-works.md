@@ -43,7 +43,7 @@ coordinate, with units `[x]²/[f]`, independent per coordinate. (The same object
 falls out of the diagonal degeneration of the SR1 update; the secant equation is
 simply the shorter road — it needs no full update formula and never stores `B`.)
 
-A single pair `(s, y)` is noisy, so the trajectory smooths it with an EMA — **the
+A single pair `(s, y)` is noisy, so the path smooths it with an EMA — **the
 smoothing acts on the magnitudes of the secant pair, not on the ratio itself**:
 
 `λ` in both denominators is the per-coordinate floor, defined in *The floor*
@@ -170,7 +170,7 @@ this implementation does not connect one.
 ### Momentum
 
 With `μ > 0` the direction stops using only this step's gradient and becomes the
-**current momentum**, the EMA of the trajectory's gradients just updated with
+**current momentum**, the EMA of the path's gradients just updated with
 `g_k`:
 
 ```text

@@ -8,9 +8,14 @@ Starting out? [The tutorial](../tutorial/getting-started.md) builds a run end to
 end. This page gives the contract for each name; [How it
 works](../explanation/how-it-works.md) gives the reasoning behind it.
 
-A few names carry fixed meanings across the page. A **path** is one chain of
-points; the **flock** is all `n_paths` of them. A **seam** is a function the
-engine calls through, named by what it carries: the two **evaluation seams** are
+A few names carry fixed meanings across the page. A **point** is one candidate:
+coordinates and the value there, with the gradient once it has been bought; the
+graded triple a path commits is a `PathPoint`. A **path** is one sequence of
+points, one per iteration, and a restart replaces its current point, so the
+sequence is continuous in identity, not in space. The **flock** is the points
+the paths hold at one moment — one per path, hence `n_paths` of them; `flock_x`
+is the flock as the run ended. A **seam** is a function the engine calls
+through, named by what it carries: the two **evaluation seams** are
 `eval_f_g` (the fused pass) and `eval_f` (value only), and the two **plugin
 seams** are `LocalSolver` and `GlobalModel`. A **fused pass** is one call that
 returns value and gradient together. A **judged step** has the engine serve each
