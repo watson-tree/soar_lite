@@ -12,7 +12,7 @@ from soar_lite import DiagonalPreconditioner, Domain, n_path_schedule, pointwise
 
 
 def _objective(row: jnp.ndarray) -> jnp.ndarray:
-    """Return a smooth off-centre quadratic, pointwise: ``(d,) -> ()``."""
+    """Return a smooth off-center quadratic, pointwise: ``(d,) -> ()``."""
     return jnp.sum((row - jnp.asarray([0.3, -0.2])) ** 2)
 
 

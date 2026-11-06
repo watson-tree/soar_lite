@@ -79,7 +79,7 @@ _Avoid_: incumbent (retired), best-so-far, current optimum
 
 **stall / stalled**:
 A path that moved nowhere this iteration — it neither redrew nor committed a
-step: its local method signalled `give_up` (its own stopping test fired), it
+step: its local method signaled `give_up` (its own stopping test fired), it
 accepted with no finite sample to win, or the sample it did win had a
 non-finite value or gradient.
 Stalled is not dead: unless the run turned `restart_stalled` off, the path is

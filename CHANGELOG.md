@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in each end at `t = 0` drives `dC/dt = A(k) C`, and the loss is a
   log-squared discrepancy against a hidden design's concentrations on three
   observed compartments over a dyadic geometric time grid. Its coupling is
-  nearest-neighbour in a compartment graph - the structure the diagonal
+  nearest-neighbor in a compartment graph - the structure the diagonal
   approximation is built for - so it is the second real inverse problem on
   soar-lite's side of the panel's dividing line, without repeating the
   oscillator's physics. Two design features are measured rather than assumed
@@ -59,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against an unprojected linear head on rover (60D), lasso-DNA (180D) and SVM
   (388D) at 3 seeds x 150 evaluations, all maximized, and the bent head wins all
   three (-1.28/-1.35, -0.309/-0.333, -0.134/-0.233) - the direction this panel's
-  centre-bias reading predicts. Their bent RBF beats both, so the gain is the
+  center-bias reading predicts. Their bent RBF beats both, so the gain is the
   geometry rather than the linear function class, and their optimum-to-corner
   sweep inverts the ranking, so the projection is a prior that the optimum is
   interior, not a free win. Those numbers are quoted, not measured here: the
@@ -78,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `NoRestartRule`: the explicit no-restart arm. It seeds the flock with the
   initialization probe and then never restarts, so a caller can ask for the
   pure multi-start descent (or the serial single chain) instead of depending on
-  the EI rule's emergent behaviour on a one-sample pool.
+  the EI rule's emergent behavior on a one-sample pool.
 - `eval_f`: an optional value-only evaluator seam, the f-only sibling of
   `eval_f_g` (`(f, feas?)` out, no gradient). Supplying it makes the whole
   search read values: every probe draw and every step trial is served for its
@@ -131,7 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   truncated on points, so the earlier "wide arm cut to ~187 batches" bug does
   not come back.
 - Arm styles encode one attribute each: linestyle is `n_paths` (solid 1, dashed
-  16), colour is the momentum level. `mu=0` is `n_paths=1` and now draws solid,
+  16), color is the momentum level. `mu=0` is `n_paths=1` and now draws solid,
   like the other single-path arms; it had been dash-dot for being an exception,
   which made one width look like two kinds of object.
 
@@ -194,7 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   20-step view of the curvature ratio under a bare gradient. They stay separate
   knobs: `mu = 0` is still the off switch and `beta = 0.95` still reachable. A
   caller that passed neither now runs with momentum it did not ask for, so this
-  is a behaviour change, not a default tidy-up; the measurements in
+  is a behavior change, not a default tidy-up; the measurements in
   `experiments/RESULTS.md` were taken under the old defaults. Near a minimizer
   the momentum carries a stale gradient into the step, which on a quadratic - a
   problem the diagonal step otherwise lands in one shot - degrades 50-step error
@@ -245,7 +245,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proposals the model *generates* - because a generated proposal and an
   authored start are different claims.
 - `BLRGlobalModel`'s `projection_factory` is optional. Left unset, it builds
-  `SphereProjection` with its own defaults - the reference model's centre-biased
+  `SphereProjection` with its own defaults - the reference model's center-biased
   bend - so the common case names no projection at all, and the factory drops
   back to being the override seam for a mask, another `kappa`, or no bend.
   `IdentityProjection` stays a first-class alternate prior rather than a

@@ -9,8 +9,8 @@ The geometry lives entirely in the injected `Projection`, so the model itself
 is projection-agnostic: `SphereProjection` bends a chosen subset of the
 coordinates through inverse stereography, and `IdentityProjection` reads the
 coordinates as their own features. The two are two priors over where the optimum
-sits - the bend pulls the corners toward the pole and centres the bowl, the
-identity puts the centre nowhere special - and the caller picks the one its
+sits - the bend pulls the corners toward the pole and centers the bowl, the
+identity puts the center nowhere special - and the caller picks the one its
 belief deserves. A dimension may be unbounded: inverse stereography takes all of
 ``R``, so the same bend applies to a line, and `scale` states each dimension's
 prior width in coordinate units rather than reading a box width as a unit of
@@ -32,7 +32,7 @@ What the bend keeps is the part that cures the corner-seeking pathology under a
 Euclidean RBF posterior: the variance returns to the prior far from data and
 expected improvement becomes variance-dominated, pointing at the box corners.
 Bounding the feature rows makes improvement follow the fitted values instead -
-a centre-biased prior, which is why `IdentityProjection` exists for tasks whose
+a center-biased prior, which is why `IdentityProjection` exists for tasks whose
 optimum lives on a boundary.
 """
 
@@ -80,7 +80,7 @@ recipe, and a second one here would be a second answer to the same question.
 ProjectionFactory: TypeAlias = Callable[[Domain], "Projection"]
 """Build the `Projection` a model reads one domain through.
 
-Geometry is a pure function of the domain - a centre, a width, one lengthscale -
+Geometry is a pure function of the domain - a center, a width, one lengthscale -
 so the model carries the recipe rather than one projection bound to one box:
 `partial(SphereProjection, kappa=..., mask=...)` for the bent arm,
 `IdentityProjection` itself for the straight one. Called once per ask with the
@@ -118,7 +118,7 @@ class Projection(abc.ABC):
 
         Args:
             domain: the box, per-dimension `scale` and draws the projection
-                reads its geometry off - centre, width and which sides are
+                reads its geometry off - center, width and which sides are
                 unbounded. Holding one domain rather than being one keeps the
                 geometry and the fallback draw in the same coordinate unit with
                 no second knob to keep in step. Validated by `Domain`'s own
@@ -230,7 +230,7 @@ class SphereProjection(Projection):
         Every dimension is first read in its own coordinate unit,
         ``(x - center) / scale``, so no column inherits a box width as its unit.
         The bent dimensions become their stereographic image on the unit sphere,
-        divided by the global lengthscale; the rest keep that centred, scaled
+        divided by the global lengthscale; the rest keep that centered, scaled
         coordinate, so a linear head reads them as a plain linear trend.
         """
         z = (x - self.domain.center) / self.domain.scale
@@ -243,17 +243,17 @@ class SphereProjection(Projection):
 class IdentityProjection(Projection):
     """The no-geometry projection: coordinates are their own features.
 
-    `features` returns the coordinates unchanged - width ``d``, no centre bowl,
+    `features` returns the coordinates unchanged - width ``d``, no center bowl,
     no normalization to the unit box. Where `SphereProjection` bends the corners
-    toward the pole and seats the centre at the south pole (a prior that the
+    toward the pole and seats the center at the south pole (a prior that the
     optimum lives near the middle), this one keeps every coordinate's own scale
-    and range and puts the centre nowhere special: a prior that the optimum may
+    and range and puts the center nowhere special: a prior that the optimum may
     well sit on a boundary or a corner.
 
     The cost of no geometry is no bound. The posterior variance is a quadratic
     form in these unbent features, so it grows toward the corners and expected
     improvement on this arm is extrapolation-dominated, pointing at corners -
-    exactly the behaviour wanted when the truth lives there, and the one
+    exactly the behavior wanted when the truth lives there, and the one
     `SphereProjection` exists to cure when it does not.
 
     `features` ignores the domain's `scale` outright: the coordinates arrive as
@@ -277,7 +277,7 @@ class BLRGlobalModel(GlobalModel):
 
     Every knob is a fixed hyperparameter, not a fitted one. The geometry lives in
     the `Projection` this model builds for each ask - `SphereProjection` for the
-    centre-biased bend, `IdentityProjection` for no prior on where the optimum
+    center-biased bend, `IdentityProjection` for no prior on where the optimum
     sits - and it is built from the domain that ask hands in. So the model
     carries the recipe and not a box: one instance asked inside a different box
     has no stale geometry and no second normalization drifting behind it. What
@@ -307,7 +307,7 @@ class BLRGlobalModel(GlobalModel):
                 through - ``partial(SphereProjection, mask=..., kappa=...)`` for
                 a custom bend, `IdentityProjection` itself for the unbent arm.
                 ``None`` (the default) is `SphereProjection` with its own
-                defaults, the reference model's centre-biased bend. Called once
+                defaults, the reference model's center-biased bend. Called once
                 per `propose`, so the geometry is always the box that ask was
                 handed, and `Projection`'s own constructor validates the domain.
             minimize: the acquisition's inner optimizer, shape ``MinimizeFn``.

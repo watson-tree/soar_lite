@@ -35,8 +35,8 @@ reporting wins — R5):
   converge into a lattice basin and stall; Ackley chains freeze outside the
   funnel. The momentum-off arm (`mu=0`) is the contrast that reads whether the
   default momentum moves either stall, against serial, parallel and Adam.
-- **Restart model — centre bias (rastrigin alone).** Where a restart lands: a
-  BLR posterior centred on the observed best vs a uniform re-draw. Only
+- **Restart model — center bias (rastrigin alone).** Where a restart lands: a
+  BLR posterior centered on the observed best vs a uniform re-draw. Only
   rastrigin gives a restart a stage — chains stall in local basins, and the
   sample's re-draws provably never improve the best. No external baseline: a
   BLR restart serves no objective points, so on the points/batches axes its
@@ -80,7 +80,7 @@ Four run groups plus two appendix panels, one role each:
      and the score is on `f`, never on the distance to the hidden `x*`. This
      is a **design** problem, not a **recovery** one, and not by accident:
      twenty response samples cannot fix sixty parameters (the Jacobian has at
-     most twenty rows, and neighbouring frequencies on a smooth spectrum are
+     most twenty rows, and neighboring frequencies on a smooth spectrum are
      far from independent), so the panel asks whether a method drives the
      response onto the target, never whether it finds the design. `pk_chain`
      is where recovery is the question, and it was built so that its rates are
@@ -94,7 +94,7 @@ Four run groups plus two appendix panels, one role each:
      on three observed compartments, with a bolus in each end at `t = 0`.
      Synthetic truth design → known `f* = 0`; boxes are truth × [¼, 4]. Serves
      **P②** on exactly the coupling shape the diagonal approximation is built
-     for — nearest-neighbour in a compartment graph — without repeating the
+     for — nearest-neighbor in a compartment graph — without repeating the
      oscillator's physics. Two of its features were forced by measurement, not
      chosen: a single bolus leaves most of the rates unconstrained, and the
      window's tail falls below the assay limit, so those samples are dropped
@@ -191,7 +191,7 @@ default (on) in every arm:
   search vs our per-coordinate + batched n_paths).
 - **Multimodal** (**P①**): the same four soar-lite arms, `Adam` (grid lr).
   The momentum axis runs at `n_paths=1` — 0.9, the default, 0 — so the curve
-  family differs from its neighbours by one knob, and the `mu=0.9` arm asks the
+  family differs from its neighbors by one knob, and the `mu=0.9` arm asks the
   momentum question at **Adam's own horizon** instead of ours: 0.9 is a 10-step
   window (~1/(1-0.9)), the same window Adam's first moment runs at `b1=0.9`.
   Adam keeps its defaults rather than being refitted to mirror soar — a baseline
@@ -227,7 +227,7 @@ panels take: a probe showed stalls fire only where a method has already settled
 into a basin (the diagonal quadratic, rastrigin), never on the rotated
 quadratic, Ackley or the oscillator.
 
-The headline BLR panel is **cancelled**: a BLR restart needs a stalled stage to
+The headline BLR panel is **canceled**: a BLR restart needs a stalled stage to
 act on, and the oscillator's non-convexity is resonance-type — not the funnel
 that stalls a chain. The BLR proposition lives on rastrigin, where Sample's
 re-draws provably never improve the best and a fitted restart is the question.
@@ -240,7 +240,7 @@ projection against an unprojected linear head on three real zero-order problems
 at 3 seeds x 150 evaluations each, all maximized: rover (60D) spherical-linear
 -1.28 against standard-linear -1.35, lasso-DNA (180D) -0.309 against -0.333, SVM
 (388D) -0.134 against -0.233. The bent head wins all three, which is the
-direction this panel's centre-bias reading predicts. The bent *RBF* on the same
+direction this panel's center-bias reading predicts. The bent *RBF* on the same
 pipeline beats both on all three, so the gain is the geometry and not the linear
 function class; and the same study slides the optimum to a box corner and the
 ranking inverts, so the projection is a prior that the optimum is interior, not

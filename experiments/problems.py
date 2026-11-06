@@ -223,9 +223,9 @@ def oscillator_chain(
     reads twenty real numbers, one ``|H|`` per frequency, against ``d = 3*n``
     unknowns, so the response's Jacobian has at most twenty rows and cannot be
     full rank for ``n > 6``; at the truth far fewer directions than that are
-    independent, because neighbouring frequencies of a smooth spectrum measure
+    independent, because neighboring frequencies of a smooth spectrum measure
     much the same thing. Parameter recovery is not a question this problem can
-    answer, and that division of labour is deliberate: this is a **design**
+    answer, and that division of labor is deliberate: this is a **design**
     problem - does an optimizer drive the response onto the target - while
     ``pk_chain`` is the recovery problem, built so that its rates are
     identifiable. ``x_star`` is one point on the solution set, the point the

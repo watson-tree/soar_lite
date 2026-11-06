@@ -263,7 +263,7 @@ on.
 A restart is assembled from three distinct decisions, and this implementation
 keeps them in three different places, none answering for another:
 
-- **When**: a path stopping is the local method's own judgement (the `τ_rel`
+- **When**: a path stopping is the local method's own judgment (the `τ_rel`
   stopping test, or a verdict with no finite sample to win). The engine adds no
   second stopping rule and does not guess "how far off we are".
 - **Whether**: `restart_stalled`, a boolean knob, default `True`. While it is
@@ -350,7 +350,7 @@ A failure in the verdict channel has only two exits, both named by the method:
 `give_up` (its convergence test fired) sets `stalled`, and `accept` with no finite
 sample ever served also sets `stalled`. The engine sets no trial limit — how long
 the enumeration runs is the method's business, and adding a limit would give an
-already-decided judgement a second, invisible stopping rule; the price is one
+already-decided judgment a second, invisible stopping rule; the price is one
 contract: `verdict` must eventually return `accept` or `give_up`, so an
 enumeration that never terminates hangs rather than runs slowly.
 

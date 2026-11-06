@@ -61,8 +61,8 @@ class Domain:
     A side may be unbounded. The box then declares only the dimension and which
     sides are unbounded; `scale` is what carries a length there, because no width
     exists to read one off. Not even a bounded side's width is a natural unit:
-    `scale` is in coordinate units, so a caller changing a variable from metres
-    to millimetres changes `scale`, never the box.
+    `scale` is in coordinate units, so a caller changing a variable from meters
+    to millimeters changes `scale`, never the box.
 
     `draw` is the one contract: ``(key, n) -> (n, d)`` starts drawn one dimension
     at a time.
@@ -135,8 +135,8 @@ class Domain:
         self.scale = _check_scale(scale, self.d)
         self._samplers = _check_samplers(samplers, self.d)
         # The domain's shape per dimension. An unbounded side has no width, so
-        # `width` is zero there and the centre falls back to the origin - the
-        # only centre an unbounded dimension has, and `scale` the only length
+        # `width` is zero there and the center falls back to the origin - the
+        # only center an unbounded dimension has, and `scale` the only length
         # a caller can state about it.
         self.bounded = jnp.isfinite(self.lo) & jnp.isfinite(self.hi)
         # Neither side finite. The half-bounded dimension - one side finite,

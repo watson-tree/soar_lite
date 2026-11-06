@@ -1,8 +1,8 @@
 # "soar-lite" borrows one SOAR idea (sample-estimated restart payoff); it is not a SOAR port
 
-The package name honours Mathesen et al. 2021 ("SOAR") but the "-lite" suffix is
+The package name honors Mathesen et al. 2021 ("SOAR") but the "-lite" suffix is
 the decision: this library keeps **one** idea from that framework — a restart's
-payoff is *measured* by the minimum of freshly sampled starts, not *modelled*
+payoff is *measured* by the minimum of freshly sampled starts, not *modeled*
 by a fitted surrogate — and realizes it minimally. The surrogate/ensemble model,
 the statistical acceptance test, multi-fidelity, and SOAR's interfaces are
 deliberately **not** brought over.

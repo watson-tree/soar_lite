@@ -36,7 +36,7 @@ one attribute.
 
 The blr panel carries no external baseline on purpose: a BLR restart serves no
 objective points (its acquisition descent is not an oracle call), so on these
-axes it would look free. The panel reads the centre bias only - rastrigin is
+axes it would look free. The panel reads the center bias only - rastrigin is
 the one problem where chains stall before reaching the floor - and its three
 curves differ in nothing but where a restart lands.
 
@@ -143,7 +143,7 @@ LABEL_BLR_IDENTITY = "n_paths=16, BLR identity"
 LABEL_BLR_SPHERE = "n_paths=16, BLR sphere"
 
 # Style grammar: linestyle encodes `n_paths` (one solid line per width: 1 ->
-# solid, 16 -> dashed) and colour encodes the momentum level. Without a rule
+# solid, 16 -> dashed) and color encodes the momentum level. Without a rule
 # like this two single-path arms read as different kinds of object because one
 # of them happens to switch momentum off.
 STYLE_SERIAL: dict[str, Any] = {"color": "C0", "lw": 2.0}

@@ -76,7 +76,7 @@ def _model(noise: float = 0.01) -> BLRGlobalModel:
 
 
 def _observe(model: BLRGlobalModel, n: int) -> None:
-    """Feed `n` deterministic box points with a smooth, off-centre minimum."""
+    """Feed `n` deterministic box points with a smooth, off-center minimum."""
     axis = jnp.linspace(-1.9, 1.9, n)[:, None] * jnp.asarray([1.0, -1.0])[None, :]
     f = [float(jnp.sum((row - jnp.asarray([0.3, -0.2])) ** 2)) for row in axis]
     model.observe(axis, f, None)
@@ -226,7 +226,7 @@ def test_the_model_carries_no_box_of_its_own() -> None:
 
 
 def test_leaving_the_projection_unset_is_the_bent_arm() -> None:
-    """`None` is `SphereProjection`, not a third behaviour: same seed, same ask."""
+    """`None` is `SphereProjection`, not a third behavior: same seed, same ask."""
     box = _box()
     default = BLRGlobalModel(minimize=_grid_minimize, key=jax.random.PRNGKey(0))
     explicit = BLRGlobalModel(

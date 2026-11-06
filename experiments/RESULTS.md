@@ -31,7 +31,7 @@ panel was re-measured for it. Every trace file listed below is new.
 Why a sixth problem: the panel had one real inverse problem (the oscillator, a
 frequency-domain one) and a synthetic stand-in for dense rotational coupling.
 The compartment chain is a real *time-domain* one, and it sits on exactly the
-structure the diagonal approximation is built for — nearest-neighbour coupling
+structure the diagonal approximation is built for — nearest-neighbor coupling
 in a compartment graph, rates spanning four decades — without repeating the
 oscillator's physics. It is the second real problem and the first one whose
 loss has coupled near-flat directions rather than resonance non-convexity.
@@ -92,7 +92,7 @@ reading does not transfer to this problem.
 
 **Adam's lr is the sweep's only strict interior optimum.** The grid gives 5.03
 at `1e-2`, 1.10e-3 at `1e-1`, 2.75e-2 at `2e-1` (2 seeds, 3000 batches, the
-`--lr-sweep` run that produced the appendix figure): both neighbours are far
+`--lr-sweep` run that produced the appendix figure): both neighbors are far
 worse, so this pick is a real optimum rather than an edge point or one of a tie.
 It is also the only problem in the table where that is true.
 
@@ -126,7 +126,7 @@ its arms are `n_paths=16`, so it is never truncated on points (14368 against
 1000 batches, the identity arm having stopped at batch 898 on every seed).
 
 **Arm styles now encode one attribute each**: linestyle is `n_paths` (solid 1,
-dashed 16) and colour is the momentum level. `mu=0` was drawn dash-dot on the
+dashed 16) and color is the momentum level. `mu=0` was drawn dash-dot on the
 strength of being a special arm, but it is also `n_paths=1`, and only one of
 those two facts should decide a linestyle.
 
@@ -306,7 +306,7 @@ Rastrigin, all arms `n_paths=16`, medians: Sample draws 376.2, BLR identity
 
 Identity beats Sample on 20/20 seeds, and the two distributions do not overlap
 (identity 11-264, Sample 338-410). Sphere also beats Sample on 20/20, but loses
-to identity on 20/20 (251-311): the gain is the centre bias *plus* the right
+to identity on 20/20 (251-311): the gain is the center bias *plus* the right
 projection, not fitting on its own.
 
 Consistency check: the Sample arm's median equals the multimodal panel's
@@ -317,7 +317,7 @@ which is what makes the two panels comparable in the first place.
 
 The 2026-10-28 entry below, whose restart on/off lineup the momentum and BLR
 panels replaced. Its Ackley and unit-rescaling readings are carried here
-unchanged, because they describe behaviour the v2 panels do not touch.
+unchanged, because they describe behavior the v2 panels do not touch.
 
 ## 2026-10-28 — lineup v1 (restart on/off) — SUPERSEDED by the v2 entry
 

@@ -73,7 +73,7 @@ search, and either can be replaced by passing an instance in.
   `domain` admits; `BLRGlobalModel` is the Bayesian linear-regression surrogate for
   the same contract.
 
-What ships is a lightweight set of defaults picked by judgement, not a
+What ships is a lightweight set of defaults picked by judgment, not a
 general-purpose toolkit — which is what `-lite` says. Both seams are open, so a
 more general implementation can drop in later; what is implemented today is aimed
 at scientific numerical optimization.

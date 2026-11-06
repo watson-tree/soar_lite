@@ -64,7 +64,7 @@ idea; the code here is this library's own, and
 [How it works](docs/explanation/how-it-works.md#soar-attribution-and-distinction)
 says where the two depart.
 
-What ships is a lightweight set of defaults picked by judgement, not a
+What ships is a lightweight set of defaults picked by judgment, not a
 general-purpose toolkit — which is what `-lite` says. Both seams are open, so a
 more general implementation can drop in later; what is implemented today is aimed
 at scientific numerical optimization.

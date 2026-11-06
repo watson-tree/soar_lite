@@ -3,7 +3,7 @@
 The seams' contract is only proven by injection: a stub `LocalSolver` and a stub
 `GlobalModel` are plugged into the engine, which must drive them instead of its
 defaults, and a foreign box (a `Domain`) plus the caller's own x->θ map
-composed into `eval_f_g` must be honoured too. These also pin the documented
+composed into `eval_f_g` must be honored too. These also pin the documented
 zero-caller hook — a method returning `"give_up"` — and the run with no extra
 gate (`budget_check=None` -> `status == "max_iters"`).
 
@@ -344,7 +344,7 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
 
 
 def test_the_gate_is_asked_before_a_value_only_batch_too() -> None:
-    """A gate counting value-only work is honoured per batch, not per iteration.
+    """A gate counting value-only work is honored per batch, not per iteration.
 
     `budget_check` is the caller's own function and the engine cannot see what it
     is made of, so the gate is asked at every serve rather than only the fused
@@ -396,7 +396,7 @@ def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
 
 
 def test_box_is_data_not_a_unit_cube_assumption() -> None:
-    """A foreign box [1,2] plus the caller's own θ = x + 1 map: both are honoured.
+    """A foreign box [1,2] plus the caller's own θ = x + 1 map: both are honored.
 
     The engine must clip inside the box it was handed, and must never see the
     caller's parameterization (that map is composed into `eval_f_g`). Every trial

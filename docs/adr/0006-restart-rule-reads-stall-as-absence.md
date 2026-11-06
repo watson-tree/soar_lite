@@ -306,7 +306,7 @@ folded or stalled, a re-probed path did neither, so the rule counted the round
 itself, and the stage became `M + 1` rounds (the newest-M slice absorbs the extra
 fold). That gave the one invariant two channels - `observe_step` for folds
 and stalls, `restart` for the probe round - and it left the docs lying: the
-amendment above says `restart` is a no-op, but a rule that honoured it fell one
+amendment above says `restart` is a no-op, but a rule that honored it fell one
 round late per restart, cumulatively.
 
 This change reunites the round on the one report channel. The engine now reports
