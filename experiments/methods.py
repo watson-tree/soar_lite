@@ -160,7 +160,7 @@ def surrogate_minimize(
     iteration rather than by one run per start.
 
     Args:
-        objective: the acquisition to descend, ``(m, d) -> ((m,), (m, d))``:
+        objective: the acquisition to descend, ``(M, d) -> ((M,), (M, d))``:
             values and their per-row gradients, the engine's `EvalFG` shape
             without the feasibility column.
         bounds: the search box, the engine's `Bounds` (a ``(d, 2)`` array or

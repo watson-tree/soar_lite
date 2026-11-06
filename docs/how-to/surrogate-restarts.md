@@ -7,7 +7,7 @@ This page continues [the tutorial](../tutorial/getting-started.md)'s example:
 but it never descends that acquisition itself: the descent recipe belongs to the
 engine, so the model receives it as an injected `minimize`, a `MinimizeFn` with
 signature `(acquisition, bounds, n_points, key) -> (n_points, d)`. The
-acquisition is `(m, d) -> ((m,), (m, d))` (value and gradient, no feasibility
+acquisition is `(M, d) -> ((M,), (M, d))` (value and gradient, no feasibility
 column) and `key` is a fresh subkey of the model's own key, split for this call
 alone. The natural answer is to hand the engine back to itself: one restart-free
 run whose width is the number of minimizers you want. Read the minimizers off

@@ -113,6 +113,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `BLRGlobalModel` docstrings and its two shape errors write a batch as
+  `(M, d)`, not `(m, d)`. `m` is the momentum in `DiagonalPreconditioner`, so one
+  letter carried two meanings across the package, and the module already wrote
+  `(M, d)` in `AcquisitionFn`. `m` now means the momentum only. The error text
+  changes with it.
 - `ALGORITHM.md` is deprecated and no longer kept in sync: its explanation moved
   to the [How it works](docs/explanation/how-it-works.md) page.
 - `NPathResult.fun` is `nan`, not `inf`, when no feasible point was ever

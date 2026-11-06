@@ -96,7 +96,7 @@ class Projection(abc.ABC):
     """The feature map a restart model reads domain coordinates through.
 
     A projection wraps a `Domain` and adds one map: `features` turns every
-    ``(m, d)`` batch of coordinates into an ``(m, w)`` batch of feature rows,
+    ``(M, d)`` batch of coordinates into an ``(M, w)`` batch of feature rows,
     which a model fits its own posterior over - `w` is this projection's width,
     read off `features` by the model rather than assumed ``d + 1``.
 
@@ -108,7 +108,7 @@ class Projection(abc.ABC):
     constructor, where every fitted model would otherwise have restated them.
 
     `features` is the one contract: a pure query of the coordinates, the same
-    ``(m, d)`` input mapping to the same ``(m, w)`` rows, with `w` stable across
+    ``(M, d)`` input mapping to the same ``(M, w)`` rows, with `w` stable across
     calls for one projection. It is also the one method a surrogate of another
     family reads - nothing in a projection is specific to `BLRGlobalModel`'s
     posterior, since it carries geometry, not fit state.
@@ -130,7 +130,7 @@ class Projection(abc.ABC):
 
     @abc.abstractmethod
     def features(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Return the ``(m, w)`` feature rows for ``(m, d)`` coordinates.
+        """Return the ``(M, w)`` feature rows for ``(M, d)`` coordinates.
 
         `w` is this projection's feature width: the model reads it off the
         returned shape, never off `d`, so a projection is free to widen or
@@ -227,7 +227,7 @@ class SphereProjection(Projection):
         self.glob_ls = jnp.sqrt(kappa_v * tied)
 
     def features(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Return the ``(m, d + 1)`` feature rows for ``(m, d)`` coordinates.
+        """Return the ``(M, d + 1)`` feature rows for ``(M, d)`` coordinates.
 
         Every dimension is first read in its own coordinate unit,
         ``(x - center) / scale``, so no column inherits a box width as its unit.
@@ -373,7 +373,7 @@ class BLRGlobalModel(GlobalModel):
 
         rows = jnp.asarray(x)
         if rows.ndim != 2:
-            msg = f"observe needs an (m, d) batch, got shape {rows.shape}"
+            msg = f"observe needs an (M, d) batch, got shape {rows.shape}"
             raise ValueError(msg)
         if rows.shape[0] != len(f):
             msg = f"observe got {rows.shape[0]} rows but {len(f)} values"
@@ -464,7 +464,7 @@ class BLRGlobalModel(GlobalModel):
         batch = jnp.asarray(x)
         width = self._xs[0].shape[-1]
         if batch.ndim != 2 or batch.shape[1] != width:
-            msg = f"a posterior read needs a (m, {width}) batch, got {batch.shape}"
+            msg = f"a posterior read needs a (M, {width}) batch, got {batch.shape}"
             raise ValueError(msg)
         projection = self._projection_for(domain)
         weights, cov = self._posterior(projection)
@@ -582,7 +582,7 @@ class BLRGlobalModel(GlobalModel):
         weights: jnp.ndarray,
         cov: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """Posterior mean and deviation of the standardized value at ``(m, d)`` rows.
+        """Posterior mean and deviation of the standardized value at ``(M, d)`` rows.
 
         The variance is the observation noise plus the covariance's quadratic
         form, so it stays above `noise` and its root needs no floor.
@@ -600,12 +600,12 @@ class BLRGlobalModel(GlobalModel):
         cov: jnp.ndarray,
         best: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """Return ``-log EI`` and its per-row gradient at ``(m, d)`` rows.
+        """Return ``-log EI`` and its per-row gradient at ``(M, d)`` rows.
 
         `jax.value_and_grad` differentiates a scalar output only, and the rows of
         the acquisition are independent, so the gradient is taken one row at a
         time under `vmap`. The batch Jacobian is diagonal, and this reads only its
-        diagonal where `jax.jacobian` would build the whole ``m x m`` block and
+        diagonal where `jax.jacobian` would build the whole ``M x M`` block and
         throw all but that away.
         """
 
