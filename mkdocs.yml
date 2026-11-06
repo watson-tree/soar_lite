@@ -47,5 +47,9 @@ plugins:
             # under it. Members nest one deeper, at h4.
             heading_level: 3
             show_signature_annotations: true
+            # An attribute's declared value is `__init__`'s expression, not a
+            # contract: `scale: ndarray = _check_scale(scale, self.d)` puts the
+            # normalization on the page as if it were part of the type.
+            show_attribute_values: false
             separate_signature: true
             members_order: source

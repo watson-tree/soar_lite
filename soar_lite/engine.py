@@ -41,15 +41,23 @@ Verdict: TypeAlias = Literal["retry", "accept", "give_up"]
 """How a judged step rules one served candidate.
 
 ``"retry"`` spends another trial, ``"accept"`` ends the enumeration and commits
-the step's lowest-value finite trial - the candidate just served, for a
-single-sample step - and ``"give_up"`` abandons the path's enumeration outright,
-so the path stalls. See `LocalSolver.verdict`, which returns it.
+the step's argmin - the lowest-value finite trial among all the step has served
+so far, the candidate just served for a single-sample step - and ``"give_up"``
+abandons the path's enumeration outright, so the path stalls. ``"accept"``
+commits nothing when the step served no finite trial or the winner fails the
+engine's finite check: the path stalls instead. See `LocalSolver.verdict`, which
+returns it.
 """
 
 
 @dataclass(frozen=True)
 class PathPoint:
-    """One path's point: coords x, value f, gradient g = ∂f/∂x."""
+    """One path's point: coords x, value f, gradient g = ∂f/∂x.
+
+    The engine builds these and the local method receives them; a caller
+    normally reads the run's outcome through `NPathResult` instead of
+    constructing one.
+    """
 
     x: jnp.ndarray
     """Coordinates, shape ``(d,)``, in the run's coordinates."""
@@ -70,7 +78,7 @@ class PathPoint:
         non-finite g is proposed from and folded on, so one NaN there poisons
         that coordinate's magnitude EMAs for the rest of the run. f is asked
         first, so a dead value never pays for pulling the gradient back from the
-        device.
+        GPU (or any accelerator).
         """
         return math.isfinite(self.f) and _all_finite(self.g)
 
@@ -116,8 +124,9 @@ class GlobalModel(Protocol):
     The model answers the two questions the engine cannot: *where* a restart
     lands (`propose`) and *what the run has learned* (`observe`). The engine
     feeds it every batch it serves and asks for points only when a restart
-    fires, so it never seeds a run itself: a model that wants more evidence than
-    it has can answer `propose` with a plain draw and the engine has no opinion.
+    fires, so the model never has to seed a run itself: a model that wants more
+    evidence than it has can answer `propose` with a plain draw and the engine
+    has no opinion.
 
     A model carries no search space of its own. The run has one box, the engine
     owns it, and `propose` is handed that `Domain` at every ask - so a model must
@@ -127,8 +136,9 @@ class GlobalModel(Protocol):
     One instance serves the whole run (like `LocalSolver`), so whatever it
     accumulates lives inside it and the engine never reads it. The methods are
     called by the engine on its own schedule - `observe` once per served batch,
-    `propose` once per cohort of restarting paths - so they trust their
-    arguments: this Protocol is the whole contract.
+    `propose` once per cohort of restarting paths (all the paths that restart in
+    one iteration, in one call) - so they trust their arguments: this Protocol
+    is the whole contract.
 
     The flock is not this contract's: a caller's own starts go to
     `n_path_schedule` as `x0`, and the engine places them without asking any
@@ -150,10 +160,10 @@ class GlobalModel(Protocol):
         its gradient later if it wins - so a model keyed on coordinates sees the
         same design with more evidence.
 
-        Nothing is filtered for feasibility: the engine models the raw objective
-        everywhere and filters only the value it reports. Batches the run never
-        decides on arrive too (a trial that lost its step, the batch that ended
-        an unbounded run), because the work was served.
+        Nothing is filtered for feasibility: the model fits the raw objective
+        everywhere, and only the value the run reports is filtered. Batches the
+        run never decides on arrive too (a trial that lost its step, the batch
+        that ended an unbounded run), because the work was served.
         """
         ...
 
@@ -165,7 +175,10 @@ class GlobalModel(Protocol):
         answer must land in and the one statement of the dimension. The answer
         is in the coordinates the objective takes. The engine still clips it into
         that box, as a defensive clip for a model that oversteps, not as a way
-        of reconciling two boxes.
+        of reconciling two boxes. It checks the shape at the batch boundary and
+        raises ``ValueError`` on a wrong one. A non-finite row is allowed: it is
+        an unusable start, so the engine stalls that path rather than placing
+        it.
 
         The model owns its randomness (an instance holds its key), which is what
         makes a seeded model reproducible.
@@ -176,16 +189,18 @@ class GlobalModel(Protocol):
 class LocalSolver(Protocol):
     """The search method the n-path engine drives (its first plugin point).
 
-    The engine owns the schedule - row composition, projection, the shared
-    horizon, the n-path state machine (restart/step/stall), the best `f⋆` - and
-    the method owns the search: direction, step size, acceptance, **and how long
-    a step's enumeration may run**. The engine loops until the method ends it, so
-    ``verdict`` must reach "accept" or "give_up" on its own; an enumerator with
-    no bound of its own is a hang, not a slow run. ``needs_verdict(i, p)`` picks
-    the step's shape: a method that rules on each candidate says True, one whose
-    step always commits its single proposal says False. All state is per path,
-    lives inside the instance, and is opaque to the engine - implementers index
-    it by path i.
+    The engine owns the schedule - batch composition, the clip into `domain`,
+    the shared horizon, the n-path state machine (restart/step/stall), the best
+    `f⋆` - and the method owns the search: direction, step size, acceptance,
+    **and how long a step's enumeration may run**. The engine keeps asking a
+    step for proposals while ``verdict`` answers "retry", and ``verdict`` must
+    eventually reach "accept" or "give_up" on its own; an enumerator with no
+    bound of its own is a hang, not a slow run. Runs end on the caller's horizon,
+    not on the method.
+    ``needs_verdict(i, p)`` picks the step's shape: a method that rules on each
+    candidate says True, one whose step always commits its single proposal says
+    False. All state is per path, lives inside the instance, and is opaque to the
+    engine - implementers index it by path i.
 
     One step for a path i: propose(i, p) is called repeatedly, with p the path's
     current point, unchanged for the whole step (the engine commits a point only
@@ -193,29 +208,35 @@ class LocalSolver(Protocol):
     serves is the clipped one, so a method judges the point it is handed, not
     its own proposal. verdict(i, p, x, f) is then called once per served
     candidate, with (x, f) the served point's coords and value - never its
-    gradient: the engine may serve a candidate's value alone and buy the
-    gradient only for the step's winner, so a ruling rests on f and on p, whose
-    gradient a start always has. "accept" commits the lowest-f finite trial
-    served this step - the engine's per-step argmin - and calls ``fold(i, p,
-    best)`` with the committed winner, which is the method's only place to fold
-    an accepted step into its model (the engine owns the argmin, so a method
-    that tracked its own copy would drift from it). "retry"
+    gradient: with `eval_f` connected the engine serves a candidate's value
+    alone and buys the gradient only for the step's winner, so a ruling rests on
+    f and on p, whose gradient a start always has. "accept" commits the
+    lowest-f finite trial served this step - the engine's per-step argmin - and
+    calls ``fold(i, p, best)`` with the committed winner, which is the method's
+    only place to fold an accepted step into its model (the engine owns the
+    argmin, so a method that tracked its own copy would drift from it). A step
+    that served no finite trial, or whose winner fails the engine's finite
+    check, stalls the path instead and ``fold`` is never called. "retry"
     spends another trial, "give_up" stalls the path at once.
 
     Arbitration is split: ``verdict`` rules the enumeration and may only mutate
     enumeration-local state (a step length, a trial counter), while ``fold``
     alone mutates the model, so a method folds exactly once per committed step.
 
-    These methods are called by the engine, once per path per iteration, so they
-    trust their arguments: this Protocol is the whole contract.
+    These methods are called by the engine on its own schedule - `restart` on
+    every placement, `needs_verdict` once per path per iteration, `fold` once
+    per committed step, `propose` and `verdict` once per trial - so they trust
+    their arguments: this Protocol is the whole contract.
     """
 
     def restart(self, i: int, p: PathPoint) -> None:
         """Seed path i's state from a fresh start point (its one cold start).
 
-        Called at initialization and again after every restart: the engine has
-        one way to place a path on a point, so a method need not tell "first"
-        from "again" - both drop its per-path state to the cold one.
+        Called by the engine each time it places a path on a point: once at
+        initialization, and again on every redraw of a stalled path, which
+        needs `restart_stalled` on. The engine has one way to place a path, so
+        a method need not tell "first" from "again" - both drop its per-path
+        state to the cold one.
         """
         ...
 
@@ -223,31 +244,35 @@ class LocalSolver(Protocol):
         """Report whether path i's next step from p is ruled candidate by candidate.
 
         Asked once per path per iteration, before ``propose``, so the only point
-        it can see is the step's start p - whose gradient a path always has. It
-        is also where a method with a stopping test says so: answering True is
-        how it gets the one ``verdict`` call that can carry "give_up", since a
-        step it did not ask to rule is committed as proposed.
+        it can see is the step's start p - whose gradient a path always has. A
+        method with a stopping test also speaks here: answering True is how it
+        gets the one ``verdict`` call that can carry "give_up", since a step it
+        did not ask to rule is committed as proposed. That is why a converged
+        path answers True even when its step has a single candidate and no grid
+        to compare.
 
-        ``True`` is the enumerated kind: the engine serves each trial for its
-        value alone and asks ``verdict`` what to do with it. ``False`` promises
+        ``True`` is the enumerated kind: the engine asks ``verdict`` what to do
+        with each served trial - served for its value alone when `eval_f` is
+        connected, fused with its gradient otherwise. ``False`` promises
         the step commits its one proposal unjudged: the engine serves that
-        proposal's value fused with its gradient, in one batch, and gates the
-        winner itself - a value or gradient that is not finite stalls the path
-        instead of being committed. Nothing here grades the proposal; the gate
-        is the whole of its acceptance.
+        proposal's value together with its gradient, in one fused batch, and
+        gates the winner itself - a value or gradient that is not finite stalls
+        the path instead of being committed. Nothing here grades the proposal;
+        the gate is the whole of its acceptance.
 
         ``True`` costs a gradient *per trial* where ``False`` costs one per step,
-        unless the caller handed an `eval_f` seam (without it every served trial
-        is a fused pass). How many trials a step runs is the method's business,
-        so that billing is its choice too.
+        unless the caller handed an `eval_f` seam, whose trials are served by
+        value and whose winners' gradients ride one fused batch per iteration.
+        How many trials a step runs is the method's business, so that billing is
+        its choice too.
         """
         ...
 
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
         """Return path i's raw next candidate, shape ``(d,)``, from its point p.
 
-        Raw: the engine composes and clips it into `domain` before serving, so a
-        method needs no box of its own and never reconciles two of them.
+        Raw: the engine clips it into `domain` before serving, so a method needs
+        no box of its own and never reconciles two of them.
         """
         ...
 
@@ -266,7 +291,9 @@ class LocalSolver(Protocol):
         quality: "retry" asks for another candidate (the method typically
         shrinks a step length or bumps a trial counter first); "accept" ends the
         enumeration and commits the engine's per-step argmin (this trial, for a
-        single-sample method), which is then folded through ``fold``;
+        single-sample method), which is then folded through ``fold`` - unless no
+        trial of the step was finite, or the winner fails the engine's finite
+        check, in which case the path stalls and nothing is folded;
         "give_up" aborts the path's enumeration outright. The engine keeps
         enumerating while this says "retry", so one of the two terminal answers
         is the method's responsibility - there is no engine-side trial cap.
@@ -278,8 +305,8 @@ class LocalSolver(Protocol):
 
         The engine's only call site is the "accept" commit, with best = the
         per-step argmin it committed, so the folded secant is always the
-        accepted step and can never disagree with it. The first call after a
-        restart seeds state outright; later calls blend.
+        accepted step and can never disagree with it. It is never called for a
+        step the engine did not commit.
         """
         ...
 
@@ -290,24 +317,27 @@ EvalFG: TypeAlias = Callable[
     [jnp.ndarray],
     "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]",
 ]
-"""The objective as one fused pass: the one way the engine sees it.
+"""The objective as one fused pass: the one seam a run must supply.
 
 Takes ``x`` rows ``(M, d)`` in the run's coordinates and returns
 ``(f: (M,), grad_x: (M, d), feas: (M,) | None)``. Value and gradient come back
 together on purpose - the caller's fused ``value_and_grad`` is one AD pass, and
-the step's call sites want both at once (scipy's ``jac=True`` form, batched).
+the step's call sites want both at once: the batched equivalent of scipy's
+``jac=True`` convention.
 
-``feas`` is optional: ``None`` means every point is feasible, otherwise only 0
-marks one infeasible.
+``feas`` is optional: ``None`` means every point is feasible, otherwise 0 marks
+a point infeasible and 1 marks it feasible; any other value is refused rather
+than read as truthiness.
 """
 
 EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | None]"]
 """The objective's value half alone, for a caller that also holds one.
 
 Same ``x`` rows in, ``(f: (M,), feas: (M,) | None)`` out. Feasibility is
-included because step selection must still tell "finite but infeasible" from
-viable, which f alone cannot. Opting in lets a judged step serve its trials for
-their values alone and buy gradients only for its winners, in one batch.
+included because it decides the value the run reports and whether a ``-inf``
+ends the run, neither of which ``f`` alone can tell. Opting in lets a judged
+step serve its trials for their values alone and buy the winners' gradients
+afterwards, together in one fused batch.
 """
 
 # The two halves of a `GlobalModel`, as the components that call them see them.
@@ -351,24 +381,26 @@ class NPathResult:
     and ``n_f_g_batches`` for the fused one. Points are the serial cost and
     batches the parallel wall-clock cost. Which axis a comparison reads is the
     caller's business; a run handed no ``eval_f`` seam reports zero on both f
-    counts.
+    counts (``n_f_points`` and ``n_f_batches``).
 
     Two deliberate differences from `OptimizeResult`: ``success``/``message`` are
-    absent, because the engine has no convergence criterion of its own - a run
-    ends early only for an objective with no floor or for a flock every path of
-    which stalled with restarts off - and ``fun`` is the best over *feasible*
-    points only.
+    absent, because the engine has no convergence criterion of its own - apart
+    from the caller's own gates (``time_limit``, ``budget_check``), it stops
+    early on its own initiative only for an objective with no floor or for a
+    flock in which every path stalled with restarts off - and ``fun`` is the best
+    over *feasible* points only.
     """
 
     x: jnp.ndarray
     """The argmin in the coordinates the engine was handed, shape ``(d,)``.
 
     Not necessarily a row of `flock_x`: the best point may come from a path that
-    was restarted afterwards.
+    was restarted afterwards. All ``nan`` when no feasible finite eval was ever
+    served - the same reading as ``fun``.
     """
 
     fun: float
-    """`x`'s objective value, the minimum over feasible recorded evals.
+    """`x`'s objective value, the minimum over finite feasible recorded evals.
 
     ``nan`` when nothing feasible was ever served, ``-inf`` when a feasible
     point evaluated to it.
@@ -377,7 +409,8 @@ class NPathResult:
     flock_x: jnp.ndarray
     """Each path's held coordinates as the run ended, shape ``(n_paths, d)``.
 
-    Already served and neither filtered nor sorted.
+    The coordinates each path actually holds; rows are neither filtered nor
+    sorted. A path that never held a usable point has an all-``nan`` row.
     """
 
     flock_fun: jnp.ndarray
@@ -399,7 +432,11 @@ class NPathResult:
     """Fused batches served: the parallel wall-clock count."""
 
     n_iters: int
-    """Completed engine iterations; iteration 0 is the flock's placement."""
+    """Completed engine iterations; iteration 0 is the flock's placement.
+
+    A half-finished iteration is not counted: neither one a closed gate cut short
+    at a batch, nor the one that ended the run (``unbounded``, ``all_stalled``).
+    """
 
     status: NPathStatus
     """Why the run stopped; see `NPathStatus`."""
@@ -443,25 +480,29 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 ) -> NPathResult:
     """Advance a flock of paths in x from the caller's initial points.
 
-    The engine owns the schedule: it composes and clips every proposal into
-    `domain`, serves each batch as one `eval_f_g` call, keeps the n-path state
-    machine, and owns the best `f⋆`. Two things are injected, spelled
-    `global_model`, `local_solver` in that one order wherever they are named:
+    The engine owns the schedule: it clips every proposal into `domain`, serves
+    each batch as one call through the seam it came from - `eval_f_g` for a
+    fused batch, `eval_f` for a value-only one - keeps the n-path state machine,
+    and owns the best `f⋆` (`fun` in the result). Two things are injected, named
+    `global_model` and `local_solver`, in that order wherever they appear:
     `global_model` supplies **where** a restart lands (one point per restarting
     path, clipped into the box) and is also the run's evidence sink, while
     `local_solver` owns direction, step size and acceptance and keeps its
     per-path state inside itself. `restart_stalled` is one flag on top of them:
-    **when** a path restarts is the local solver's own stopping test, so the
-    engine needs no restart rule of its own. It is on by default, because with
-    restarts off a stalled path just idles.
+    **when** a path stalls is the local solver's own stopping test, **whether**
+    it is then re-drawn is `restart_stalled`, and **where** the new start lands
+    is `global_model.propose`, so the engine needs no restart rule of its own.
+    The flag is on by default, because with restarts off, a stalled path just
+    idles.
 
     `n_paths` is the run's width and nothing else; the dimension is `domain.d`,
-    so a run never spells it twice. Iteration 0 is not a special case: no path
+    so a run never spells it twice. Iteration 0 needs no special case: no path
     holds a point yet, and a path without a point restarts, so the first move
     places the whole flock as one fused batch. It is `x0` where one was handed
     in, and otherwise one start per path from the global model. A start whose
-    served value or gradient comes back non-finite stalls its path on arrival,
-    and that path restarts again next iteration.
+    served value or gradient comes back non-finite stalls its path on arrival;
+    with `restart_stalled` on (the default), that path restarts again next
+    iteration.
 
     `domain` is the run's box and the coordinate space the engine works in: the
     engine clips into it and knows nothing about any map from these coordinates
@@ -472,20 +513,21 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
     The run's own stop is the horizon: at most `max_iters` iterations, or the
     wall-clock deadline when `time_limit` is given. Iterations are the unit on
-    purpose - one iteration is one move per path, so the same number reproduces
-    on any machine - but it is not a cost bound: one iteration serves one or
-    more batches, so migrating a batch budget to `max_iters` can multiply the
-    work done. `budget_check` is the caller's extra stop; it is asked at batch
-    boundaries, so a batch is served whole and the caller's own count can pass
+    purpose - one iteration is one move per path, so the same iteration count
+    reproduces the same run on any machine - but it is not a cost bound: one
+    iteration serves one or more batches, so migrating a batch budget to
+    `max_iters` can multiply the work done. `budget_check` is the caller's extra
+    stop; it is asked at the loop head every iteration and again before each
+    served batch, so a batch is served whole and the caller's own count can pass
     its budget by less than one batch. `NPathStatus` names what each of these
     writes.
 
     `fun` is the true minimum over every feasible eval with a finite value -
     every served point when the objective reports no mask, only the points its
-    mask passes otherwise - while the path itself moves on the penalized
-    objective. Work is reported, never budgeted: four counts on two axes that
-    do not mix - points against batches, and f against f+g - and none of them
-    stops the run (see `NPathResult`).
+    mask passes otherwise - while the paths themselves move on every served
+    value, mask or no mask. Work is reported, never budgeted: four counts on two
+    axes that do not mix - points against batches, and f against f+g - and none
+    of them stops the run (see `NPathResult`).
 
     The caller's inputs are validated here, once per run: the horizon bounds,
     `n_paths`, and `x0`'s shape, finiteness and containment raise ValueError.
@@ -494,12 +536,13 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     here re-checks it at run time.
 
     Args:
-        eval_f_g: the objective as one batched pass; `pointwise` builds one
-            from a per-point scalar. Takes rows ``x`` of shape
-            ``(M, d)`` and returns ``(f: (M,), g: (M, d), feas: (M,) | None)`` -
-            value, gradient and optional feasibility mask. A mask holds 0/1 (or
-            booleans) and nothing else: only 0 marks a point infeasible, so any
-            other flag is refused rather than read as truthiness.
+        eval_f_g: the one seam a run must supply: the objective as one batched
+            pass; `pointwise` builds one from a per-point scalar. Takes rows
+            ``x`` of shape ``(M, d)`` and returns
+            ``(f: (M,), g: (M, d), feas: (M,) | None)`` - value, gradient and
+            optional feasibility mask. A mask holds 0/1 (or
+            booleans) and nothing else: 0 marks a point infeasible, 1 marks it
+            feasible, and any other value is refused rather than read.
         n_paths: how many paths to drive; one point per path per iteration.
         domain: the run's box, a `Domain`.
         x0: the caller's flock: one start per path, shape ``(n_paths, d)``,
@@ -512,8 +555,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             ``(f: (M,), feas: (M,) | None)``. ``None`` means every served trial
             takes its gradient in the same fused pass; supplying it lets a
             judged step (one whose ``needs_verdict`` answered True) serve its
-            trials for their values alone and buy gradients only for its
-            winners, in one batch.
+            trials for their values alone and buy the winners' gradients
+            afterwards, together in one fused batch.
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
@@ -525,11 +568,22 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             ``False`` keeps the flock frozen; a fully stalled flock then ends the
             run with ``status="all_stalled"``.
         global_model: the restart-point source and the run's evidence sink.
-            ``None`` builds a `SampleGlobalModel` over ``domain``, which fits
-            nothing.
+            ``None`` builds a `SampleGlobalModel`, which fits nothing and draws
+            from ``domain``.
         local_solver: the local method (``None`` binds ``DiagonalPreconditioner``).
         key: the PRNG seed of the default model's draws; ``None`` uses the
-            fixed default, so unseeded runs are deterministic.
+            fixed default, so unseeded runs are deterministic. Ignored when
+            `global_model` is supplied (that model owns its key).
+
+    Raises:
+        ValueError: At the entry, once per run: if both `max_iters` and
+            `time_limit` are missing, if `max_iters` is negative or `time_limit`
+            is not positive, if `n_paths` is below one, or if `x0` is not a
+            ``(n_paths, d)`` finite batch inside `domain` (a start the caller
+            authored raises rather than being clipped). An injected piece can
+            raise the same way later, at the batch that serves it: a
+            feasibility mask holding anything but 0/1, or a restart ask of the
+            wrong shape.
 
     Returns:
         The run's end state and work report, an `NPathResult`.
@@ -696,7 +750,7 @@ def pointwise(
     the fused seam discards the other with ``eval_f_g, _ = pointwise(objective)``.
 
     The value-only half is the fused objective's own forward pass,
-    ``vmap(objective)`` - literally the same function, so returning it costs
+    ``vmap(objective)`` - the same forward computation, so returning it costs
     nothing and buys the engine's cheap-trial path. That does not make this the
     evaluation seam for a *value-only* objective: a function JAX cannot
     differentiate cannot be `objective` here at all, so a caller holding values
@@ -1477,16 +1531,17 @@ def _argmin_finite(values: list[float]) -> int | None:
 def _feas_flags(feas: jnp.ndarray) -> list[bool]:
     """Read the caller's feasibility mask as flags, refusing anything but 0/1.
 
-    Only 0 marks an infeasible point, so the mask is never read as a truthiness
-    test: a signed constraint margin arrives looking feasible on every point it
-    rules out, and a NaN arrives looking feasible too, both silently promoting a
-    point into the reported best. No cast repairs that (a NaN casts to True), so
-    the batch is refused rather than guessed at.
+    Only 0 and 1 are read: 0 marks an infeasible point, 1 a feasible one, and
+    the mask is never read as a truthiness test - a signed constraint margin
+    arrives looking feasible on every point it rules out, and a NaN arrives
+    looking feasible too, both silently promoting a point into the reported
+    best. No cast repairs that (a NaN casts to True), so the batch is refused
+    rather than guessed at.
     """
     if not bool(jnp.all((feas == 0) | (feas == 1))):
         msg = (
-            "the feas mask must hold 0/1 (or booleans) - only 0 marks an "
-            f"infeasible point, got {feas.tolist()}"
+            "the feas mask must hold 0/1 (or booleans) - 0 marks infeasible and "
+            f"1 feasible, got {feas.tolist()}"
         )
         raise ValueError(msg)
     return [bool(v) for v in feas.tolist()]

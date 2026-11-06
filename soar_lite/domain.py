@@ -3,7 +3,7 @@
 This module owns the coordinate space a restart model reads and the distribution
 it proposes restart points from - the box (any side possibly unbounded), each
 dimension's prior width in coordinate units, and the per-dimension draw, either
-the default the domain admits or one the caller injected. It is the object a
+the default for that dimension or one the caller injected. It is the object a
 `Projection` is built on: the geometry adds a `features` map, this owns
 everything about *where* the model may look and *how* a start is proposed, so a
 model-free restart sampler needs nothing but this and a key.
@@ -16,8 +16,8 @@ that keeps every proposal inside it stays the engine's.
 A side may be unbounded, and there are three cases, not two: a bounded dimension
 draws uniformly, a free one (both sides infinite) draws ``N(0, scale_i^2)``, and
 a half-bounded one (exactly one finite side) draws that same normal *truncated*
-to its declared side - a sampler free to step over the side the caller declared
-is not sampling from the declared domain at all.
+to its declared side - the default never steps over the side the caller declared,
+because a start outside it is not a start in the declared domain at all.
 """
 
 import math
@@ -83,6 +83,36 @@ class Domain:
 
     """
 
+    d: int
+    """The dimension: the number of pairs `bounds` declares.
+
+    Every shape in the engine is read off it - ``x0`` is ``(n_paths, d)``, a
+    proposal is ``(d,)`` - so a caller never states the dimension twice.
+    """
+
+    lo: jnp.ndarray
+    """The lower side per dimension, ``(d,)``; ``-inf`` where that side is free."""
+
+    hi: jnp.ndarray
+    """The upper side per dimension, ``(d,)``; ``+inf`` where that side is free."""
+
+    bounds: Bounds
+    """The box as the caller declared it, unbounded sides included."""
+
+    scale: jnp.ndarray
+    """The prior width per dimension, ``(d,)``, in coordinate units.
+
+    It is the length the default draw is measured in on an unbounded side, and
+    what `SphereProjection` normalizes by; a dimension whose spread is far from
+    a unit scale needs its own entry here rather than a different box.
+    """
+
+    center: jnp.ndarray
+    """The box's midpoint per dimension, ``(d,)``; zero where it is unbounded."""
+
+    width: jnp.ndarray
+    """The box's width per dimension, ``(d,)``; zero where it is unbounded."""
+
     def __init__(
         self,
         bounds: Bounds,
@@ -95,7 +125,7 @@ class Domain:
         Args:
             bounds: the box, scipy-style pairs or a ``(d, 2)`` array. A side may
                 be ``None`` or ``+-inf`` for an unbounded domain; a NaN side, or
-                a lower side above its upper, is refused. ``None`` is not a
+                a lower side above its upper bound, is refused. ``None`` is not a
                 box: the dimension and the unbounded sides are declared by the
                 box itself, so a domain cannot exist without one.
             scale: per-dimension prior width in coordinate units, a ``(d,)``
@@ -103,10 +133,9 @@ class Domain:
                 normalizes compares the entries to each other. The common
                 magnitude is not free either: `scale` is the length the default
                 draw is measured in, so a dimension whose coordinates span far
-                more or far less than one wants its own entry rather than the
-                default.
+                more or far less than a unit scale should carry its own entry.
             samplers: one optional draw per dimension, ``d`` entries; a ``None``
-                entry keeps the default its domain admits - uniform inside a
+                entry keeps the default for that dimension - uniform inside a
                 bounded dimension, ``N(0, scale_i^2)`` inside a free one, and
                 that same normal restricted to the domain inside a half-bounded
                 one (exactly one finite side), where drawing the unrestricted
@@ -151,13 +180,13 @@ class Domain:
         """Return ``(n_points, d)`` restart starts, one dimension at a time.
 
         A dimension with an injected `DrawFn` takes its column from that, else
-        from the default its domain admits: uniform inside a bounded side,
+        from that dimension's default: uniform inside a bounded side,
         ``N(0, scale_i^2)`` inside a free one, and the same normal *truncated* to
-        the domain inside a half-bounded one - a sampler free to step over the
-        side the caller declared is not sampling from the declared box at all.
-        An injected sampler is the caller's own statement about the dimension's
-        spread, so nothing checks the drawn values against `scale`: an arbitrary
-        distribution publishes no spread to check them against.
+        the domain inside a half-bounded one - the default never steps over the
+        side the caller declared. An injected sampler is the caller's own
+        statement about the dimension's spread, so nothing checks the drawn
+        values against `scale`: an arbitrary distribution publishes no spread to
+        check them against.
 
         Raises:
             ValueError: If `n_points` is below one, or a column does not come

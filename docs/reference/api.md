@@ -10,18 +10,22 @@ works](../explanation/how-it-works.md) gives the reasoning behind it.
 
 A few names carry fixed meanings across the page. A **point** is one candidate:
 coordinates and the value there, with the gradient once it has been bought; the
-graded triple a path commits is a `PathPoint`. A **path** is one sequence of
-points, one per iteration, and a restart replaces its current point, so the
-sequence is continuous in identity, not in space. The **flock** is the points
-the paths hold at one moment — one per path, hence `n_paths` of them; `flock_x`
-is the flock as the run ended. A **seam** is a function the engine calls
-through, named by what it carries: the two **evaluation seams** are
-`eval_f_g` (the fused pass) and `eval_f` (value only), and the two **plugin
-seams** are `LocalSolver` and `GlobalModel`. A **fused pass** is one call that
-returns value and gradient together. A **judged step** has the engine serve each
-candidate for its value alone and lets `LocalSolver.verdict` rule it, buying
-gradients only for the winner; an **unjudged** one serves its single proposal
-fused with its gradient and commits it after the engine's finite check alone. An
+point a path commits — coordinates, value and gradient — is a `PathPoint`. A
+**path** is one sequence of points, one per iteration, and a restart replaces its
+current point, so the sequence is continuous in identity, not in space. The
+**flock** is the points the paths hold at one moment — one per path, hence
+`n_paths` of them; `flock_x` is the flock as the run ended. A **seam** is a
+function the engine calls through, named by what it carries: the two
+**evaluation seams** are `eval_f_g` (the fused pass) and `eval_f` (value only),
+and the two **plugin seams** are `LocalSolver` and `GlobalModel`. A **fused
+pass** is one call that returns value and gradient together. A **judged step**
+has the engine serve each candidate for its value alone - when `eval_f` is
+connected - and lets `LocalSolver.verdict` rule it, buying the winner's gradient
+in one final fused batch; without `eval_f` every trial is itself a fused pass
+and carries its gradient. A judged step whose trials were all non-finite, or
+whose winner fails the engine's finite check, stalls the path rather than
+committing it. An **unjudged** one serves its single proposal as a fused
+value-and-gradient pass and commits it after the engine's finite check alone. An
 **arm** is one variant of a plugin, and an **ask** is one `propose` call.
 
 ## Entry point

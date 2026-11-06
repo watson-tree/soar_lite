@@ -48,7 +48,7 @@ class DiagonalPreconditioner(LocalSolver):
     being unprojected, it withdraws the descent-direction guarantee, so
     convergence rests on the engine's best-so-far bookkeeping and restart.
 
-    Both smooths default to a window of about ``e`` steps, ``beta = mu = 0.63``.
+    Both smooths default to a window of about 2.7 steps: ``beta = mu = 0.63``.
     They stay two knobs - ``beta`` smooths the ratio that sets the step's scale,
     ``mu`` smooths the direction - because the two histories are different
     quantities.
@@ -92,14 +92,16 @@ class DiagonalPreconditioner(LocalSolver):
     ) -> None:
         """Store the knobs; per-path state is seeded by restart.
 
-        ``alpha0`` is the step length every path is armed at (``_reset_step``),
-        in units of the natural step: -g in the warm-up, -d⊙m after, and the
-        full step of both phases under the default ``n_alpha=1``. It never grows
+        ``alpha0`` is the step length every path is armed at, in units of the
+        natural step: -g in the warm-up, -d⊙m after, and the full step of both
+        phases under the default ``n_alpha=1``. It never grows
         back on its own: the alpha grid only samples down from it.
         ``backtrack`` is that grid's spacing (``n_alpha >= 2``), one constant for
-        both phases. A knob outside its range raises ValueError here, once per
-        object; nothing downstream re-checks it. ``moment`` is the one knob whose
-        whole range is its annotation's (a ``Literal``), so it is not re-tested.
+        both phases. A numeric knob outside its range raises ValueError here, once
+        per object; nothing downstream re-checks it. ``moment`` is the one knob
+        whose whole range is its annotation's (a ``Literal``), so it is left to
+        the type checker: at run time any value but ``"abs"`` takes the
+        ``"rms"`` branch.
 
         Args:
             moment: which magnitude ratio to smooth, ``"abs"`` (mean of |s|,
@@ -171,11 +173,11 @@ class DiagonalPreconditioner(LocalSolver):
         self._reset_step(i)
 
     def needs_verdict(self, i: int, p: PathPoint) -> bool:
-        """Rule per candidate when the grid compares samples, or p stops the path.
+        """Answer True when the grid rules per candidate, or the stopping test holds.
 
-        ``n_alpha > 1`` is the grid case: the step serves that many samples and
-        each served value decides whether to shrink and try again. The phase does
-        not enter - an ``n_alpha >= 2`` warm-up is ruled on its grid like any
+        ``n_alpha > 1`` is the grid case: the step serves that many samples,
+        shrinking alpha by the grid's spacing between them. The phase does not
+        enter - an ``n_alpha >= 2`` warm-up is ruled on its grid like any
         steady step.
 
         The second case is the stopping test: a path already at its
@@ -190,8 +192,8 @@ class DiagonalPreconditioner(LocalSolver):
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
         """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - alpha·d⊙m.
 
-        m is g, or the current-momentum blend when mu > 0 (see
-        `_blend_momentum`).
+        `m` is the bare gradient `g` at ``mu = 0``, and the current momentum
+        ``(1 - mu)·g + mu·m_prev`` otherwise.
         """
         if not self.has_secant[i]:
             return p.x + self.alpha[i] * (-p.g)
@@ -211,12 +213,16 @@ class DiagonalPreconditioner(LocalSolver):
         Only consulted for a path that answered True to ``needs_verdict``, and
         the phase does not enter: ``n_alpha > 1`` rules a warm-up grid and a
         steady grid alike, while a single-sample step is committed without a
-        ruling. Only the served trial's value `f` is read: `x` is in the
-        protocol's signature for methods that judge geometry, so it is dropped
-        here. The engine buys a
-        trial's gradient only for the step's winner, so nothing here may depend
-        on one; the stopping test reads ``p``, the step's start, whose gradient a
-        path always has.
+        ruling. `x` is in the protocol's signature for methods that judge
+        geometry, so it is dropped here.
+
+        The grid's rule is a count, not a comparison: every sample but the last
+        answers "retry", and the last closes the step - "accept" if any sample
+        this step served was finite, "give_up" if none was. So `f` is read for
+        that one bit, its finiteness; which sample won is the engine's per-step
+        argmin, not a choice made here. The stopping test reads ``p``, the step's start,
+        whose gradient a path always has - a trial's own gradient is not read,
+        since the engine may buy it only for the step's winner.
         """
         del x
 
@@ -305,7 +311,8 @@ class DiagonalPreconditioner(LocalSolver):
         reaching here. One grid of ``n_alpha`` samples along the current step
         direction, shrinking alpha by the grid's spacing each retry; the win is
         handed to the engine on "accept", which commits its per-step argmin and
-        folds the winner through ``fold``.
+        folds the winner through ``fold`` once that winner passes the engine's
+        finite gate.
 
         Nothing non-finite may reach ``fold``: one inf folded into Y leaves
         den = inf forever, and that coordinate never steps again. A non-finite

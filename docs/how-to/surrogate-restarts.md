@@ -14,9 +14,10 @@ run whose width is the number of minimizers you want. Read the minimizers off
 `flock_x`.
 
 The projection is the other knob — it supplies the prior the model fits.
-`SphereProjection` grows variance with distance from the origin;
-`IdentityProjection`, also in `soar_lite`, passes the raw coordinates through.
-Default to the first unless you have a reason not to.
+`SphereProjection` keeps the posterior variance bounded far from data;
+`IdentityProjection`, also in `soar_lite`, passes the raw coordinates through,
+so its variance grows with distance toward the box corners. Default to the first
+unless you have a reason not to.
 
 ```python
 # eval_f_g and domain come from the tutorial's §1.2

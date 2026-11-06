@@ -54,7 +54,8 @@ AcquisitionFn: TypeAlias = Callable[
     [jnp.ndarray],
     tuple[jnp.ndarray, jnp.ndarray],
 ]
-"""What `propose` minimizes: ``-log EI`` and its per-row gradient.
+"""What the injected `MinimizeFn` minimizes for `BLRGlobalModel.propose`:
+``-log EI`` and its per-row gradient.
 
 Takes ``(M, d)`` rows and returns ``(value: (M,), grad: (M, d))``. Lower is
 better, the sign already carried in the value, so a minimizer needs no special
@@ -68,10 +69,13 @@ MinimizeFn: TypeAlias = Callable[
 ]
 """The inner minimizer `propose` hands its acquisition to.
 
-``minimize(acquisition, bounds, n_points, key)`` returns up to ``n_points``
-local minimizers of the acquisition over ``bounds``, one per row, shape
-``(n_points, d)``. The count comes before the seed, as at every entry here: what
-to ask for is the caller's question, the key only supplies the randomness.
+``minimize(acquisition, bounds, n_points, key)`` returns ``n_points`` local
+minimizers of the acquisition over ``bounds``, one per row, shape
+``(n_points, d)``. The count comes before the seed: what to ask for is the
+caller's question, the key only supplies the randomness. The model checks the
+shape and raises ``ValueError`` on a wrong one; a row the inner run could not use
+may be all-``nan``, which the outer run treats as an unusable start and stalls
+that path on.
 
 Injected by the composition root rather than imported, so this module never
 reaches back into the engine's scheduler - the engine already owns the descent
@@ -144,23 +148,26 @@ class SphereProjection(Projection):
 
     The restart models read the domain in whatever coordinates the objective
     takes. This maps them onto the unit sphere, ``[2z; |z|^2 - 1] / (|z|^2 + 1)``
-    with ``|·|`` the Euclidean norm, where ``z`` is the coordinates centered,
-    divided by the per-dimension `scale` and by one global lengthscale. Two
-    properties matter downstream.
+    with ``|·|`` the Euclidean norm, where ``z`` holds only the projected
+    dimensions' coordinates, centered, divided by the per-dimension `scale` and
+    by one global lengthscale. Two properties matter downstream.
 
-    Every projected row has norm one, so a linear head read on these features has
-    a constant self inner product: its posterior variance stays bounded far from
-    data instead of climbing back to the prior. That climb is the corner-seeking
-    pathology the projection exists to cure - variance growing with distance
-    reads as unexplored room, and an acquisition spends its asks on the box
-    corners. The last coordinate, ``(|z|^2 - 1)/(|z|^2 + 1)``, is then a
-    radially symmetric, saturating feature of the input - the one extra degree of
-    freedom a linear head gets, an isotropic bowl whose center the weights place.
+    Every projected row has its bent part at norm one - the stereographic
+    coordinates plus the closing bowl coordinate - so a linear head read on
+    those features has a constant self inner product: its posterior variance
+    stays bounded far from data instead of climbing back to the prior. That
+    climb is the corner-seeking pathology the projection exists to cure -
+    variance growing with distance reads as unexplored room, and an acquisition
+    spends its asks on the box corners. The last coordinate,
+    ``(|z|^2 - 1)/(|z|^2 + 1)``, is then a radially symmetric, saturating feature
+    of the input - the one extra degree of freedom a linear head gets, an
+    isotropic bowl whose center the weights place.
 
     `mask` keeps that bowl off dimensions whose natural prior is uniform - an
     angle, say, wants no attraction to the center. A left-out dimension keeps its
     coordinate and enters a linear head as a plain trend, so the feature vector is
-    ``d + 1`` wide however many dimensions the projection bends.
+    ``d + 1`` wide however many dimensions the projection bends - and only its
+    bent part is unit-norm.
 
     A dimension may be unbounded: inverse stereography takes all of ``R``, so the
     same map bends a line, and its far end returns to the pole - the variance
@@ -274,7 +281,7 @@ class BLRGlobalModel(GlobalModel):
     `observe` accumulates the run's served batches (values only - the gradient is
     not fitted), and `propose` fits the closed-form weight posterior over those
     points and returns the minimizers of ``-log EI`` the injected `minimize`
-    finds. Below two observations, and with every value equal, there is no spread
+    finds. Below two observations, or with every value equal, there is no spread
     to standardize by, so it answers with the domain's own `draw`.
 
     Every knob is a fixed hyperparameter, not a fitted one. The geometry lives in
@@ -315,7 +322,8 @@ class BLRGlobalModel(GlobalModel):
             minimize: the acquisition's inner optimizer, shape ``MinimizeFn``.
                 Supplied by the caller: this model holds the recipe and calls
                 it, and never picks one itself.
-            var_prior: weight-prior variance (the ridge scale opposite `noise`).
+            var_prior: weight-prior variance (the ridge scale paired with
+                `noise`).
             noise: observation-noise variance added to the posterior mean's
                 self-covariance.
             key: the PRNG key `propose` splits every ask from.
@@ -399,9 +407,10 @@ class BLRGlobalModel(GlobalModel):
 
         The box is the caller's, handed in per ask: the geometry is rebuilt from
         it here, and nothing about it is remembered between calls. Until the fit
-        has a spread to standardize, the answer is the domain's own `draw` -
-        uniform inside a bounded dimension, the domain's prior breadth inside an
-        unbounded one. Afterwards it is the injected `minimize`'s local
+        has a spread to standardize - below two observations, or with every value
+        equal - the answer is the domain's own `draw`: uniform on a bounded side,
+        its prior normal on a free or half-bounded one. Afterwards it is the
+        injected `minimize`'s local
         minimizers of ``-log EI`` over the box; the log form keeps the
         acquisition's gradient alive where the raw improvement has decayed to
         zero.
