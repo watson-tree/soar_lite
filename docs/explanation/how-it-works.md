@@ -11,10 +11,10 @@ The objective is called in batches: given a batch of points `x` of shape
 a feasibility mask. The goal is to minimize `f` over the feasible points.
 
 That is the whole entry contract. There is no Hessian and no curvature estimate:
-a full Hessian is quadratic in the dimension — far too expensive in the
-medium-to-high dimension this method targets, and `n_paths` paths would each
-want one — so the only second-order information is the secant implied by the
-last pair of points. It is first-order in the sense that the caller supplies the
+a full Hessian is quadratic in the dimension, and with `n_paths` paths you would
+need one per path — far too expensive in the medium-to-high dimension this method
+targets — so the only second-order information is the secant implied by the last
+pair of points. It is first-order in the sense that the caller supplies the
 value and the gradient together — a zero-order objective does not fit, because
 every point on a path must carry a finite gradient as well as a finite value.
 
@@ -45,6 +45,9 @@ simply the shorter road — it needs no full update formula and never stores `B`
 
 A single pair `(s, y)` is noisy, so the trajectory smooths it with an EMA — **the
 smoothing acts on the magnitudes of the secant pair, not on the ratio itself**:
+
+`λ` in both denominators is the per-coordinate floor, defined in *The floor*
+below.
 
 | Variant | Numerator | Denominator | Inverse curvature | Step |
 | --- | --- | --- | --- | --- |
@@ -122,7 +125,7 @@ multiplied by, which is why anchoring to `g` cannot make the step explode as
 `g → 0`. The floor is a **guard**: it only touches `d` where `Y < λ`; everywhere
 else `d = S/Y` stands, and how aggressive the step should be stays with the
 separate knobs `alpha0` (whole-step damping), `backtrack` (grid spacing) and
-`n_alpha` (grid size).
+`n_alpha` (grid size) — see *The warm-up step* below.
 
 ### The warm-up step
 
@@ -141,10 +144,14 @@ a value, backtracks, or compares against its start. `needs_verdict` is therefore
 otherwise, because the commit is what was proposed.
 
 One exception to unit invariance: the warm-up step is **not** unit-invariant.
-`−g₀` is a gradient-like quantity (`x̃ = c·x` gives `g̃ = g/c`, so magnifying a
-coordinate shrinks its gradient), and multiplying it by a scalar `α` keeps the
-step scaling backwards with the coordinate scale; only the steady-state `−d⊙g` is
-displacement-like.
+`alpha0` is unitless in both phases; what changes is the direction it scales. In
+the steady state `d⊙g` is already a displacement, so `alpha0` reads as a
+fraction of the natural step. In the warm-up `−g₀` is a gradient-like quantity
+(`x̃ = c·x` gives `g̃ = g/c`, so magnifying a coordinate shrinks its gradient),
+so the same unitless `alpha0` has to be read as carrying `[x]²/[f]` — at the
+default `alpha0 = 1` the warm-up step is literally `x − g₀`, a gradient quantity
+where a displacement belongs. It stays one knob, not two: the grid is shared,
+and only the direction's units differ.
 
 ### Stopping
 
@@ -162,83 +169,48 @@ this implementation does not connect one.
 
 ### Momentum
 
-With `μ > 0` the direction no longer uses only this step's gradient but the
-**current momentum** — the EMA of the gradient, just updated with `g_k`:
+With `μ > 0` the direction stops using only this step's gradient and becomes the
+**current momentum**, the EMA of the trajectory's gradients just updated with
+`g_k`:
 
 ```text
 m_k = (1−μ)·g_k + μ·m_{k−1},        m_k = g_k when μ = 0
 direction = m_k
 ```
 
-`m` is the EMA of the trajectory's gradients (window about `1/(1−μ)` steps), so
-`m_k` is the **unprojected heavy-ball direction** (`m_k = g_k + μ(m_{k−1} − g_k)`,
-an exponentially decaying combination of `g`s), which is also the Adam first
-moment before its denominator. Units are unchanged: `m` has the units of `g`, so
-`m_k` is still gradient-like and, multiplied by `d`, still displacement-like.
+`m` has the units of `g`, so `d⊙m` is still displacement-like and the switch
+costs nothing in units. It is the unprojected heavy-ball direction
+(`m_k = g_k + μ(m_{k−1} − g_k)`), and it is not Nesterov's method: Nesterov
+consumes the gradient difference `y` on its own, hiding the second-order units
+inside a step length, and evaluates `g` at a look-ahead point, which the
+propose-then-evaluate seam cannot do.
 
-**It is not projected, and it does not preserve a descent direction.** An earlier
-version projected `m` onto the `d`-metric orthogonal complement of `g` (direction
-`g + m⊥`) to buy the invariant `⟨d⊙(g+m⊥), g⟩ > 0`. Two reasons rejected it:
+**The default `μ = 0.63` shares its window with `β`.** Both answer the same
+physical question — how fast does the geometry, or the direction, change — so
+both take a window of about `e` steps. They stay two independent knobs: `β`
+smooths the curvature estimate, `μ` averages past gradients, and the secant pair
+keeps reading the raw `y = g_k − g_{k−1}` rather than the smoothed direction, so
+moving one does not entangle the other.
 
-1. **The projection cuts off the only half of the momentum that helps.** The
-   value of heavy-ball is in the component along `g`, `m∥`: it damps zigzag and
-   the oscillation of ill-conditioned quadratics and accumulates in flat regions.
-   The transverse component `m⊥` only rotates the direction, while what
-   off-diagonal coupling actually needs is `m∥`'s overshoot cancellation.
-   "Projection preserves descent" removes momentum exactly where it is the only
-   thing that helps.
-2. **A descent direction delivers no descent for a method with no line search.**
-   The invariant only guarantees that a sufficiently small step decreases `f`,
-   while this method takes one unguarded whole step at `n_alpha = 1` (no value
-   read, no backtrack, no comparison against the start), and its `n_alpha ≥ 2`
-   grid argmin never checks "better than the start" either. Buying "this step
-   really does go down" would take Armijo or a line search, which this project
-   deliberately does not install: convergence does not rest on every step
-   descending, but on the engine's best-so-far accounting plus restarts and
-   stalls. The invariant the projection worked to maintain is therefore an empty
-   shell, and it goes with it; a caller who needs the property can shrink `α` or
-   run the line search outside the seam.
+**It is not projected, and it does not preserve a descent direction.** Projecting
+`m` onto the `d`-metric orthogonal complement of `g` would buy the invariant
+`⟨d⊙(g+m⊥), g⟩ > 0`, at the price of removing the component of `m` along `g` —
+the half that damps zigzag, cancels overshoot and accumulates in flat regions.
+The invariant also buys nothing where no line search runs: a descent direction
+only promises that a small enough step decreases `f`, while this method takes one
+unguarded whole step, read by no value and compared against no start. Convergence
+rests on best-so-far accounting plus restarts and stalls, not on every step
+descending; a caller who wants the guarantee can shrink `α` or run a line search
+outside the seam.
 
-**"Acceleration" does not bring in Nesterov.** Nesterov's `O(1/k²)` (a convex
-smooth bound; Newton in one step on a quadratic) comes from treating the gradient
-difference `y = g_k − g_{k−1}` as second-order information. This method's
-`d = S/Y` is already that same second-order use: dividing `y` by the
-co-directional displacement `s` produces a displacement-like estimate of `H⁻¹`.
-Nesterov consumes `y` alone, without dividing by `s`, hiding the second-order
-units inside its step length
-`1/L` (`L` is curvature, in the `[f]/[x]` system); it also has to evaluate `g` at
-a look-ahead point, which does not fit the propose-then-evaluate seam. So it is
-not introduced, and `μ`'s one job is not second-order: it reuses the old
-direction once more, a mitigation rather than a repair (below).
-
-**The default `μ = 0.63` shares the window with `β`, about `e` steps.** The cost
-of momentum is real: near an optimum `g → 0` while `m` decays on the `1/(1−μ)`
-window, so the history term `μ·m_{k−1}` can be larger than `g_k`, the direction is
-carried off by old gradients, and a one-step-exact step turns into a detour that
-descends less in the same number of steps. The effect is visible directly: on a
-quadratic, accuracy at `μ = 0` of `1.3e-60` degrades to `6.6e-9` at `μ = 0.9`.
-Momentum buys progress only where `d` is **structurally wrong** — the
-off-diagonal curvature of a rotated Hessian, which a per-coordinate ratio cannot
-express — and even there it is "use the old direction once more", a mitigation
-rather than a repair. Choosing 0.63 over 0 treats the window as the one degree of
-freedom the two smoothings share: there is no reason to guess a window for the
-direction an order of magnitude longer than the one for curvature. `μ = 0`
-remains the switch that turns it off, coordinate for coordinate back to the bare
-gradient.
-
-**`μ` and `β` are two independent knobs that happen to share a default window.**
-`β` smooths the **curvature** estimate (`s`/`y`), answering "how often does `d`
-re-learn the geometry"; `μ` averages the past **gradients** into the step's
-direction. Both take "the
-geometry or the direction changes within a few steps" as the same physical scale,
-hence the same default `W ≈ e`; but they remain two knobs, and moving one does
-not move the other. `s` and `y` still share one `β`: they are the two ends of the
-same secant pair, `d = S/Y` is an estimate of a ratio, and different windows at
-the two ends would bias the ratio itself when things change (which is also why
-`s` and `y` do not each get a `β`). The only coupling point: `m` feeds the
-direction alone, and the secant pair still reads the **raw** gradient difference
-(`y = g_k − g_{k−1}`, not routed through `m`); otherwise the two knobs would
-become entangled.
+**The cost is real.** Near an optimum `g → 0` while `m` decays on the `1/(1−μ)`
+window, so `μ·m_{k−1}` can outweigh `g_k` and the direction is carried off by old
+gradients. On a diagonal quadratic the experiment suite measures final accuracy
+at `μ = 0` at machine level and `μ = 0.9` near `1e-8`: momentum buys progress
+only where `d` is **structurally wrong** — the off-diagonal curvature a
+per-coordinate ratio cannot express — and even there it is "use the old direction
+once more", a mitigation rather than a repair. `μ = 0` is the switch that turns
+it off, coordinate for coordinate back to the bare gradient.
 
 ## Restart
 
@@ -310,6 +282,12 @@ not finite) does not land, and the path stays `stalled` to be redrawn next round
 by a degenerate point.
 
 ## The engine
+
+Two vocabularies meet here. `propose` and `observe` from `GlobalModel`, and
+`needs_verdict`, `verdict` and `fold` from `LocalSolver`, are the protocols a
+caller implements; `settle`, `_place` and `_advance` are the engine's own
+internals, named here because the order they run in is the subject and nothing
+outside can call them.
 
 ### One iteration
 
@@ -460,7 +438,9 @@ one of the caller's gates, so no plugin can make the loop run forever.
 ## Cost: two seams, two rulers
 
 One evaluation serves a batch of `(M, d)` points, so the same run has two rulers,
-answering different questions and **never equal**:
+answering different questions. They agree only while every batch carries exactly
+one point — `n_paths = 1` with nothing to judge — and diverge the moment a batch
+holds more:
 
 | Ruler | Counts | Answers |
 | --- | --- | --- |
@@ -513,10 +493,11 @@ numbers.
   Newton/quasi-Newton, and globality comes from the diversity of `n_paths` paths
   plus `restart_stalled` re-drawing fresh starts — from the domain, or from a
   fitted surrogate where one is wired in.
-- The per-coordinate estimate ignores the coupling term `Σ_{j≠i} Hᵢⱼ sⱼ`, which
-  lands inside `|yᵢ|` and makes `d` a biased estimate of `1/Hᵢᵢ` (the stronger the
-  coupling, the bigger the bias, tending to systematic under-stepping: more
-  stable, slower). That is "safe" traded for "potentially fast".
+- The per-coordinate estimate ignores the coupling term `Σ_{j≠i} Hᵢⱼ sⱼ` — the
+  off-diagonal Hessian entries — which lands inside `|yᵢ|` and makes `d` a biased
+  estimate of `1/Hᵢᵢ` (the stronger the coupling, the bigger the bias, tending to
+  systematic under-stepping: more stable, slower). That is "safe" traded for
+  "potentially fast".
 - The restart rate is decided jointly by `restart_stalled` and the local method's
   stopping test (`β`, `μ`, `θ`, `τ_rel`); this page gives the structure, not
   recommended values for a class of problems — those follow from the objective.
@@ -569,8 +550,8 @@ starts come from a `GlobalModel`. The rest is a different story:
   finite gradient, and value-plus-gradient is the entry contract.
 
 This package's **core agrees** with SOAR — the global side and the local method
-each have their own stretch, strung together by one connecting mechanism — while
-the **details differ**: `-lite` is the minimal implementation of that skeleton,
+each have their own stretch, joined by the adaptive restart process — while the
+**details differ**: `-lite` is the minimal implementation of that skeleton,
 not an implementation lifted from the SOAR literature. So it is **not** a pure
 port of SOAR, and it implies no interface compatibility and no reproducible
 results. The citation is for attribution and to locate the difference.
@@ -586,10 +567,11 @@ results. The citation is for attribution and to locate the difference.
   restarts.)
 - Doumont, C., Fan, D., Maus, N., Gardner, J. R., Moss, H., & Pleiss, G. (2026).
   *We Still Don't Understand High-Dimensional Bayesian Optimization*.
-  Proceedings of the Twenty-Eighth International Conference on Artificial
-  Intelligence and Statistics (AISTATS), PMLR 300.
-  <github.com/colmont/linear-bo> — the inverse-stereographic projection the
-  surrogate arm ports.
+  Proceedings of the Twenty-Ninth International Conference on Artificial
+  Intelligence and Statistics (AISTATS), PMLR 300:2629–2637,
+  [proceedings.mlr.press](https://proceedings.mlr.press/v300/doumont26a.html)
+  — the inverse-stereographic projection the surrogate arm ports, from
+  [github.com/colmont/linear-bo](https://github.com/colmont/linear-bo).
 - Jones, D. R., Schonlau, M., & Welch, W. J. (1998). Efficient global optimization
   of expensive black-box functions. *Journal of Global Optimization*, 13,
   455–492. (The closed-form EI.)

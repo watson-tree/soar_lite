@@ -335,3 +335,43 @@ also the form the feature gather consumes.
 
 Refused, with the dtype named in the error. A caller holding indices writes
 `mask = jnp.zeros(d, dtype=bool).at[idx].set(True)`, one line, no guessing.
+
+## Nesterov acceleration in place of the gradient EMA
+
+**Status: not adopted — recorded so it is not re-proposed as an oversight.**
+The direction stays the unprojected gradient EMA `m`; no look-ahead point is
+constructed.
+
+### What it was
+
+Replace `m_k = (1−μ)·g_k + μ·m_{k−1}` with Nesterov's accelerated gradient, and
+justify it by the `O(1/k²)` rate on convex smooth objectives.
+
+### Why it was plausible
+
+Nesterov improves on plain momentum's method with a rate proof attached, and
+Newton reaches the optimum in one step on a quadratic, so "why not the faster
+one" is a fair question on a page that already divides a gradient difference by a
+displacement.
+
+### Why it fails
+
+`O(1/k²)` is a convex, smooth bound and does not transfer: the target here is
+non-convex and medium-to-high dimensional, where the rate says nothing about
+which basin a path lands in. The second-order reading is already spent elsewhere
+— `d = S/Y` divides the gradient difference `y` by the co-directional
+displacement `s`, which is the same use of `y` as curvature information that
+Nesterov's proof introduces; Nesterov consumes `y` on its own and hides the
+second-order units inside the step length `1/L`. The two are one piece of
+information counted differently, not two pieces to stack. And the mechanism does
+not fit the seam: Nesterov evaluates `g` at a look-ahead point, while the engine
+asks a path for one point, buys its value and gradient in one batch, and commits.
+A look-ahead gradient needs a second evaluation between the proposal and the
+step's ruling, which the propose-then-evaluate seam has no room for.
+
+### Verdict
+
+Not introduced. `μ`'s job is not to supply second-order information — `d`
+already does — it is to reuse the old direction once more where the
+per-coordinate estimate is structurally wrong, a mitigation rather than a
+repair. The `How it works` page states that trade-off and its measured cost.

@@ -485,6 +485,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0/1 *or* booleans (`True == 1`), so "read as 0/1 and nothing else" was
   describing the value set while looking like a dtype requirement — and doing it
   beside an example that returns a boolean.
+- The explanation page's momentum section is a statement of the trade-off
+  instead of a defense of it: 825 words to 420, with the projection argument
+  compressed to what a reader needs to know (the projection removes the half of
+  the momentum that helps, and a descent direction buys nothing where no line
+  search runs) and Nesterov's rejection moved to `DEPRECATED.md`. Its measured
+  accuracy cost reads as machine level against about `1e-8` instead of quoting
+  the experiment table's exact digits, which are specific to the machine that
+  produced them.
+- Three reference-to-page mismatches fixed on the same page. The References
+  entry for the inverse-stereographic projection was written `<github.com/...>`,
+  which the Markdown parser reads as an HTML tag, so the citation rendered as a
+  stray `colmont` attribute pair; `λ` appeared in the secant table two
+  subsections before it was defined; and the cost section claimed the point and
+  batch rulers are "never equal", which is false for `n_paths = 1` with nothing
+  to judge, where one round buys one batch of one point. `alpha0`'s units are
+  now stated for both phases — it is unitless in each, but the warm-up direction
+  is gradient-like, so the same knob reads as `[x]²/[f]` there.
+- The Doumont et al. entry carried the wrong ordinal and no page range. AISTATS
+  2026 is the **twenty-ninth**, not the twenty-eighth — the twenty-eighth is the
+  2025 volume (PMLR 258) — and the paper sits at PMLR 300:2629-2637, with the
+  BibTeX behind `proceedings.mlr.press/v300/doumont26a.html`. The 2026 date was
+  right: the volume went to press on 30 August 2026, so nothing needs a
+  "(preprint)" mark.
+- The engine section now says which vocabulary is whose: `propose` and `observe`
+  from `GlobalModel`, `needs_verdict`, `verdict` and `fold` from `LocalSolver`,
+  are the protocols a caller implements, while `settle`, `_place` and `_advance`
+  are internals of a private class that nothing outside can call. The closing
+  SOAR paragraph stopped calling the join "one connecting mechanism", which
+  contradicted the page's own definition of it as the adaptive restart process.
 
 ### Removed
 

@@ -18,7 +18,8 @@ measure.
 
 The structure of the sphere is a fixed-hyperparameter port of Doumont et al.
 (2026), "We Still Don't Understand High-Dimensional Bayesian Optimization",
-AISTATS, PMLR 300 (reference implementation ``github.com/colmont/linear-bo``):
+AISTATS, PMLR 300:2629-2637 (reference implementation
+``github.com/colmont/linear-bo``):
 a linear kernel read after projecting onto the unit sphere, a box-diagonal
 lengthscale normalization, and a posterior variance bounded away from the prior
 away from data. Two things differ. That implementation fits its lengthscale,
