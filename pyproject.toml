@@ -62,6 +62,8 @@ ignore = [
 # print 是实验脚本的输出，也是 __main__ 自检的退路；库代码里不允许
 "experiments/**" = ["T201"]
 "tests/**" = ["S101", "T201"]
+# 文档构建钩子，不是分发包的一部分，没有包边界可挂
+"docs/**" = ["INP001"]
 
 [tool.pyright]
 venvPath = "."

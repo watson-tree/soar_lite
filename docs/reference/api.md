@@ -4,6 +4,16 @@ Generated from the docstrings in `soar_lite/`. The public surface is deliberate
 and small, in four groups: the entry point, the data types it hands back and
 through, the two plugin contracts, and the concrete defaults.
 
+A few names carry fixed meanings across the page. A **path** is one chain of
+points; the **flock** is all `n_paths` of them. A **seam** is a function the
+engine calls through - an injected objective (`EvalFG`, `EvalF`) or one of the
+two plugins. A **fused pass** is one call that returns value and gradient
+together. A **judged step** serves its candidates for their values first and lets
+`LocalSolver.verdict` rule them; an **unjudged** one commits its proposal after
+the engine's finite check alone. An **arm** is one variant of a plugin, and an
+**ask** is one `propose` call. `docs/explanation/how-it-works.md` tells the whole
+story.
+
 ## Entry point
 
 ::: soar_lite.n_path_schedule

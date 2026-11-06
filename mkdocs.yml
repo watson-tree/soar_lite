@@ -14,6 +14,10 @@ nav:
   - How it works: explanation/how-it-works.md
   - API Reference: reference/api.md
 
+# Marks the blocks mkdocstrings generates, which carry no language of their own.
+hooks:
+  - docs/hooks.py
+
 # Internal notes live beside the site sources and are not published.
 exclude_docs: |
   /PLAN.md

@@ -38,6 +38,12 @@ import jax.numpy as jnp
 from soar_lite.domain import Domain
 
 Verdict: TypeAlias = Literal["retry", "accept", "give_up"]
+"""What a judged step decides about one candidate.
+
+``"retry"`` serves the candidate but commits nothing yet, ``"accept"`` commits
+it as the path's point, ``"give_up"`` abandons the path's enumeration outright.
+See `LocalSolver.verdict`, which returns it.
+"""
 
 
 @dataclass(frozen=True)
@@ -45,8 +51,13 @@ class PathPoint:
     """One path's point: coords x, value f, gradient g = ∂f/∂x."""
 
     x: jnp.ndarray
+    """Coordinates, shape ``(d,)``, in the run's coordinates."""
+
     f: float
+    """The objective's value there: finite, since an unusable point is never held."""
+
     g: jnp.ndarray
+    """The gradient there, shape ``(d,)``; finite for the same reason."""
 
     @property
     def usable(self) -> bool:
@@ -268,22 +279,29 @@ class LocalSolver(Protocol):
 
 # --- engine: the n-path schedule ---
 
-# The one way the engine sees the objective: x rows (M,d) in the run's
-# coordinates in, (f (M,), grads_x (M,d), feas (M,)|None) out. Value and gradient
-# come back together on purpose - the caller's fused value_and_grad is one AD
-# pass, and the step's call sites want both at once (scipy's `jac=True` form,
-# batched).
 EvalFG: TypeAlias = Callable[
     [jnp.ndarray],
     "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]",
 ]
+"""The objective as one fused pass: the one way the engine sees it.
 
-# The f-only sibling, for a caller that also holds a value function without the
-# fused gradient. Same x rows in, (f (M,), feas (M,)|None) out - feasibility
-# included because step selection must still tell "finite but infeasible" from
-# viable, which f alone cannot. Opting in lets a judged step serve its trials
-# for their values alone and buy gradients only for its winners, in one batch.
+Takes ``x`` rows ``(M, d)`` in the run's coordinates and returns
+``(f: (M,), grad_x: (M, d), feas: (M,) | None)``. Value and gradient come back
+together on purpose - the caller's fused ``value_and_grad`` is one AD pass, and
+the step's call sites want both at once (scipy's ``jac=True`` form, batched).
+
+``feas`` is optional: ``None`` means every point is feasible, otherwise only 0
+marks one infeasible.
+"""
+
 EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | None]"]
+"""The objective's value half alone, for a caller that also holds one.
+
+Same ``x`` rows in, ``(f: (M,), feas: (M,) | None)`` out. Feasibility is
+included because step selection must still tell "finite but infeasible" from
+viable, which f alone cannot. Opting in lets a judged step serve its trials for
+their values alone and buy gradients only for its winners, in one batch.
+"""
 
 # The two halves of a `GlobalModel`, as the components that call them see them.
 # The model itself never crosses into `_Evaluator` or `_Paths`: each takes the
@@ -294,10 +312,6 @@ EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | Non
 ObserveFn: TypeAlias = Callable[[jnp.ndarray, list[float], jnp.ndarray | None], None]
 ProposeFn: TypeAlias = Callable[[int, Domain], jnp.ndarray]
 
-# Five names for five ways to end a run: the three gates, in the order they are
-# checked (iteration horizon, wall-clock deadline, the caller's extra batch
-# gate), the objective bottoming out at -inf, and a flock that can no longer
-# move with restarts off.
 NPathStatus: TypeAlias = Literal[
     "max_iters",
     "time_limit",
@@ -305,6 +319,14 @@ NPathStatus: TypeAlias = Literal[
     "unbounded",
     "all_stalled",
 ]
+"""Why a run ended: five names for five ways to end one.
+
+The three gates, in the order they are checked: ``"max_iters"`` (the iteration
+horizon), ``"time_limit"`` (the wall-clock deadline), ``"budget_exhausted"``
+(the caller's extra batch gate). Then the two early endings: ``"unbounded"``
+(a feasible point priced the objective at ``-inf``) and ``"all_stalled"`` (no
+path can move and ``restart_stalled`` is off).
+"""
 
 
 @dataclass
@@ -312,47 +334,67 @@ class NPathResult:
     """End state of one n_path_schedule run.
 
     Field names follow `scipy.optimize.OptimizeResult` where the concepts
-    correspond: `x` is the argmin in the coordinates the engine was handed,
-    `fun` its objective value. `n_iters` counts completed engine iterations:
-    iteration 0 is the flock's placement (the run's first restart), and one
-    iteration may serve several batches (a restart's starts plus the method's
-    trials), so it is not a batch count. It is spelled `n_iters` rather than
-    scipy's `nit` to sit beside the four work counts.
+    correspond. It is spelled ``n_iters`` rather than scipy's ``nit`` to sit
+    beside the four work counts: one iteration may serve several batches (a
+    restart's starts plus the method's trials), so an iteration is not a batch.
 
-    Work is reported as four counts instead of scipy's single `nfev`, on two
-    axes that never mix. The seam that served the work decides the pair - `n_f_*`
-    is the value-only seam (`eval_f`), `n_f_g_*` the fused value+gradient one -
+    Work is reported as four counts instead of scipy's single ``nfev``, on two
+    axes that never mix. The seam that served the work decides the pair -
+    ``n_f_*`` is the value-only seam, ``n_f_g_*`` the fused value+gradient one -
     and points versus batches are the serial cost and the parallel wall-clock
-    cost. So `n_f_g_points` is the gradient points served and `n_f_g_batches` the
-    gradient passes, with `n_f_points` / `n_f_batches` the same two units for the
-    cheap half. Which axis a comparison reads is the caller's business; a run
-    handed no `eval_f` seam simply reports zero on the f pair.
+    cost. Which axis a comparison reads is the caller's business; a run handed no
+    ``eval_f`` seam simply reports zero on the f pair.
 
-    Two deliberate differences from `OptimizeResult`: `success`/`message` are
+    Two deliberate differences from `OptimizeResult`: ``success``/``message`` are
     absent, because the engine has no convergence criterion of its own - a run
-    ends early only for an objective with no floor (`status="unbounded"`) or
-    for a flock every path of which stalled with restarts off
-    (`status="all_stalled"`) - and `fun` is the best over *feasible* points
-    only, so it is `nan` when nothing feasible was ever served and `-inf` when a
-    feasible point priced the objective there.
-
-    `flock_x` and `flock_fun` report the flock rather than its single best point:
-    each path's held coordinates and value as the run ended, already served and
-    neither filtered nor sorted. A path that never held a usable point reports
-    `nan` on both halves. `x`/`fun` need not be a row of the flock - the best
-    point may come from a path that was restarted afterwards.
+    ends early only for an objective with no floor or for a flock every path of
+    which stalled with restarts off - and ``fun`` is the best over *feasible*
+    points only.
     """
 
-    x: jnp.ndarray  # (d,) coords of the best point found
-    fun: float  # min over feasible recorded evals; nan if none, -inf if unbounded
-    flock_x: jnp.ndarray  # (n_paths, d) each path's held coords as it ended
-    flock_fun: jnp.ndarray  # (n_paths,) each path's held value; nan if it held none
-    n_f_points: int  # value-only points served (the f seam)
-    n_f_batches: int  # value-only batches served (the f seam)
-    n_f_g_points: int  # fused points served (the serial-cost count)
-    n_f_g_batches: int  # fused batches served (the parallel wall-clock count)
-    n_iters: int  # completed iterations (iteration 0 places the flock)
+    x: jnp.ndarray
+    """The argmin in the coordinates the engine was handed, shape ``(d,)``.
+
+    Not necessarily a row of `flock_x`: the best point may come from a path that
+    was restarted afterwards.
+    """
+
+    fun: float
+    """`x`'s objective value, the minimum over feasible recorded evals.
+
+    ``nan`` when nothing feasible was ever served, ``-inf`` when a feasible
+    point priced the objective there.
+    """
+
+    flock_x: jnp.ndarray
+    """Each path's held coordinates as the run ended, shape ``(n_paths, d)``.
+
+    Already served and neither filtered nor sorted.
+    """
+
+    flock_fun: jnp.ndarray
+    """Each path's held value as the run ended, shape ``(n_paths,)``.
+
+    ``nan`` for a path that never held a usable point.
+    """
+
+    n_f_points: int
+    """Value-only points served (the ``eval_f`` seam)."""
+
+    n_f_batches: int
+    """Value-only batches served (the ``eval_f`` seam)."""
+
+    n_f_g_points: int
+    """Fused points served: the serial-cost count."""
+
+    n_f_g_batches: int
+    """Fused batches served: the parallel wall-clock count."""
+
+    n_iters: int
+    """Completed engine iterations; iteration 0 is the flock's placement."""
+
     status: NPathStatus
+    """Why the run stopped; see `NPathStatus`."""
 
 
 def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
@@ -420,24 +462,20 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     builds a `SampleGlobalModel` and lets the domain draw (`Domain.draw`); `key`
     seeds those draws, and an injected model owns its randomness instead.
 
-    The run's own stop is the horizon: at most `max_iters` iterations (status
-    "max_iters") or, if `time_limit` is given, the wall-clock deadline (status
-    "time_limit"); at least one of the two must be passed. Iterations are the
-    unit on purpose - one iteration is one move per path, so the same number
-    reproduces on any machine - but it is not a cost bound: one iteration serves
-    one or more batches, so migrating a batch budget to `max_iters` can multiply
-    the work done. `budget_check()` is the caller's extra stop, asked at the
-    loop head every iteration and again before each served batch; a False
-    verdict stops all paths (status "budget_exhausted"), and that external
-    budget may over-run by less than one batch. A flock that can no longer move
-    stops the run too: every path stalled with `restart_stalled=False` ends it
-    with status "all_stalled" instead of idling out the horizon.
+    The run's own stop is the horizon: at most `max_iters` iterations, or the
+    wall-clock deadline when `time_limit` is given. Iterations are the unit on
+    purpose - one iteration is one move per path, so the same number reproduces
+    on any machine - but it is not a cost bound: one iteration serves one or
+    more batches, so migrating a batch budget to `max_iters` can multiply the
+    work done. `budget_check` is the caller's extra stop, and that external
+    budget may over-run by less than one batch. `NPathStatus` names what each of
+    these writes.
 
-    `fun` is the true minimum over every feasible recorded eval with a finite
-    value - every served point when the seam reports no mask; with a mask, only
-    points whose mask is True update it. The trajectory itself still moves on
-    the penalized objective. Work is reported as four counts, never mixed, and
-    none of them caps the run (see `NPathResult`).
+    `fun` is the true minimum over every feasible eval with a finite value -
+    every served point when the seam reports no mask, only the points its mask
+    passes otherwise - while the trajectory itself moves on the penalized
+    objective. Work is reported as four counts, never mixed, and none of them
+    caps the run (see `NPathResult`).
 
     The caller's inputs are validated here, once per run: the horizon bounds,
     `n_paths`, and `x0`'s shape, finiteness and containment raise ValueError.
@@ -452,11 +490,6 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             booleans) and nothing else: only 0 marks a point infeasible, so any
             other flag is refused rather than read as truthiness.
         n_paths: how many chains to drive; one point per path per iteration.
-        eval_f: the objective's value half alone, same ``x`` rows, returning
-            ``(f: (M,), feas: (M,) | None)``. ``None`` means every served trial
-            takes its gradient in the same fused pass; supplying it lets a
-            judged step serve its trials for their values alone and buy
-            gradients only for its winners, in one batch.
         domain: the run's box, a `Domain`.
         x0: the caller's flock: one start per path, shape ``(n_paths, d)``,
             placed by iteration 0 exactly where given and never used again.
@@ -464,29 +497,30 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             restart. Validated at the entry, because an authored start outside
             the declared box is the caller saying "search this box" and "begin
             there" at once, which a clip would silently relocate.
+        eval_f: the objective's value half alone, same ``x`` rows, returning
+            ``(f: (M,), feas: (M,) | None)``. ``None`` means every served trial
+            takes its gradient in the same fused pass; supplying it lets a
+            judged step serve its trials for their values alone and buy
+            gradients only for its winners, in one batch.
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
         budget_check: an extra gate for a budget the engine cannot see, asked at
             the loop head every iteration and again before each served batch.
             Additional, not a horizon (``None`` means none).
-        global_model: the restart-point source and the run's evidence sink.
-            ``None`` builds a `SampleGlobalModel` over ``domain``, which fits
-            nothing.
-        local_solver: the local method (``None`` binds ``DiagonalPreconditioner``).
         restart_stalled: whether a path the engine marks stalled (its method gave
             up, or its point was not usable) is re-drawn from the global model.
             ``False`` keeps the flock frozen; a fully stalled flock then ends the
             run with ``status="all_stalled"``.
+        global_model: the restart-point source and the run's evidence sink.
+            ``None`` builds a `SampleGlobalModel` over ``domain``, which fits
+            nothing.
+        local_solver: the local method (``None`` binds ``DiagonalPreconditioner``).
         key: the PRNG seed of the default model's draws; ``None`` uses the
             fixed default, so unseeded runs are deterministic.
 
     Returns:
-        An ``NPathResult``: the run's end state and its work report. ``x`` /
-        ``fun`` are the answer, ``flock_x`` / ``flock_fun`` where every path
-        stopped, the four ``n_*`` counts the work, ``n_iters`` the iterations
-        and ``status`` the reason it stopped. See `NPathResult` for what each one
-        means.
+        The run's end state and work report, an `NPathResult`.
 
     Example:
         Minimize ``f(x) = ‖x - 3‖²`` by handing the engine a batched objective:
@@ -662,8 +696,9 @@ def pointwise(
             `None` both seams accept.
 
     Returns:
-        ``(eval_f_g, eval_f)``: the two seam shapes `n_path_schedule` takes,
-        a fused ``(f, g, feas)`` batch and its value-only ``(f, feas)`` sibling.
+        The two seam shapes `n_path_schedule` takes, as a pair.
+            ``eval_f_g`` a fused ``(f, g, feas)`` batch, ``eval_f`` its
+            value-only ``(f, feas)`` sibling.
 
     """
 

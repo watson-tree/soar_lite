@@ -49,42 +49,43 @@ from jax.scipy.special import log_ndtr
 from soar_lite.domain import Bounds, Domain
 from soar_lite.engine import GlobalModel
 
-# The acquisition `propose` hands the injected minimizer: x rows (m, d) in,
-# (values (m,), gradients (m, d)) out - the engine's `EvalFG` shape with the
-# feasibility column dropped, since an acquisition is finite everywhere and
-# nothing is infeasible. Batched, so a zero-order minimizer reads the values off
-# a whole grid in one call and a first-order one gets the gradient it needs
-# alongside.
 AcquisitionFn: TypeAlias = Callable[
     [jnp.ndarray],
     tuple[jnp.ndarray, jnp.ndarray],
 ]
+"""What `propose` minimizes: ``-log EI`` and its per-row gradient.
 
-# The inner minimizer `propose` hands its own acquisition to, injected by the
-# composition root (the experiment driver) instead of imported, so this module
-# never reaches back into the engine's scheduler:
-# `minimize(acquisition, bounds, n_points, key)` returns up to `n_points` local
-# minimizers of `acquisition` over `bounds`, one per row, shape `(n_points, d)`.
-# The count comes before the seed, as at every entry here: what to ask for is
-# the caller's question, the key only supplies the randomness. The engine
-# already owns the descent recipe; a second one here would be a second answer
-# to the same question.
+Takes ``(M, d)`` rows and returns ``(value: (M,), grad: (M, d))``. Lower is
+better, the sign already carried in the value, so a minimizer needs no special
+case. Batched, so a zero-order minimizer reads the values off a whole grid in
+one call and a first-order one gets the gradient it needs alongside.
+"""
+
 MinimizeFn: TypeAlias = Callable[
     [AcquisitionFn, Bounds, int, jnp.ndarray],
     jnp.ndarray,
 ]
+"""The inner minimizer `propose` hands its acquisition to.
 
-# The projection `propose` builds for the box it is handed. Geometry is a pure
-# function of the domain - a centre, a width, one lengthscale - so the model
-# carries the recipe rather than one projection bound to one box:
-# `partial(SphereProjection, kappa=..., mask=...)` for the bent arm,
-# `IdentityProjection` itself for the unbent one (it takes nothing but the
-# domain).
+``minimize(acquisition, bounds, n_points, key)`` returns up to ``n_points``
+local minimizers of the acquisition over ``bounds``, one per row, shape
+``(n_points, d)``. The count comes before the seed, as at every entry here: what
+to ask for is the caller's question, the key only supplies the randomness.
+
+Injected by the composition root rather than imported, so this module never
+reaches back into the engine's scheduler - the engine already owns the descent
+recipe, and a second one here would be a second answer to the same question.
+"""
+
 ProjectionFactory: TypeAlias = Callable[[Domain], "Projection"]
 """Build the `Projection` a model reads one domain through.
 
-Called once per ask with the box that ask was handed, so the geometry is always
-the caller's box and never a projection bound to an older one.
+Geometry is a pure function of the domain - a centre, a width, one lengthscale -
+so the model carries the recipe rather than one projection bound to one box:
+`partial(SphereProjection, kappa=..., mask=...)` for the bent arm,
+`IdentityProjection` itself for the straight one. Called once per ask with the
+box that ask was handed, so the geometry is always the caller's box and never a
+projection bound to an older one.
 """
 
 _HALF_LOG_2PI = 0.5 * jnp.log(2.0 * jnp.pi)

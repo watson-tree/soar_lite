@@ -28,17 +28,23 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import ndtr, ndtri
 
-# The search box in scipy's spelling (which `_box_bounds` normalizes): one
-# `(lb, ub)` pair per dim, a side of None or +-inf meaning unbounded. A `(d, 2)`
-# array is the same data row-wise, for callers that already hold one.
 Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
+"""The search box in scipy's spelling, which `Domain` normalizes.
 
-# One dimension's draw, injected per dimension so a restart model can sample
-# where a bounded box does not reach: `sampler(key, n)` returns `n` coordinates
-# for that one dimension. `None` leaves the domain's own default in place -
-# uniform inside a bounded side, ``N(0, scale_i^2)`` where the domain is free,
-# and that normal restricted to the declared side where it is half-bounded.
+One ``(lb, ub)`` pair per dimension, a side of ``None`` or ``+-inf`` meaning
+unbounded there. A ``(d, 2)`` array is the same data row-wise, for callers that
+already hold one.
+"""
+
 DrawFn: TypeAlias = Callable[[jnp.ndarray, int], jnp.ndarray]
+"""One dimension's draw, injected per dimension.
+
+``sampler(key, n)`` returns ``n`` coordinates for that one dimension, shape
+``(n,)``. Injected per dimension so a restart model can sample where a bounded
+box does not reach; ``None`` leaves the domain's own default in place - uniform
+inside a bounded side, ``N(0, scale_i**2)`` where the domain is free, and that
+normal restricted to the declared side where it is half-bounded.
+"""
 
 
 class Domain:
