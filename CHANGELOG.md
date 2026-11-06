@@ -471,6 +471,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `Domain`, not "scipy-style pairs or a `(d, 2)` array". The Doumont et al.
   citation reads `(2026), AISTATS, PMLR 300`, matching the bibliography in
   `docs/explanation/how-it-works.md` rather than the 2025 arXiv preprint.
+- The tutorial is a tutorial again. Wiring `BLRGlobalModel` so it descends its
+  own acquisition — the engine inside the engine — took 462 of its words and a
+  second nesting the page's own opening promise ("one run end to end") did not
+  cover; it moved to `docs/how-to/surrogate-restarts.md`, under *Surrogate
+  restarts* in the nav, where the model's `MinimizeFn` contract can be stated in
+  full. The tutorial keeps §1–§6 for one run: §5's GPU/CPU argument is cut to
+  the two facts a reader acts on (batches on a GPU, points on a CPU, and the
+  `1/n_paths` depth that width costs), §1.3 now shows the hand-written
+  `(f, g, feas)` seam it was telling readers to write, and §6's example gains the
+  `n_paths` it had been missing, so it runs as printed.
+- `feasible`'s wording no longer reads as boolean-hostile. The mask accepts
+  0/1 *or* booleans (`True == 1`), so "read as 0/1 and nothing else" was
+  describing the value set while looking like a dtype requirement — and doing it
+  beside an example that returns a boolean.
 
 ### Removed
 

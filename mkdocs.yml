@@ -11,6 +11,7 @@ theme:
 nav:
   - Home: index.md
   - Tutorial: tutorial/getting-started.md
+  - Surrogate restarts: how-to/surrogate-restarts.md
   - How it works: explanation/how-it-works.md
   - API Reference: reference/api.md
 

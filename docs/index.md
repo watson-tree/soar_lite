@@ -94,6 +94,8 @@ where the two depart.
 
 - **[Tutorial](tutorial/getting-started.md)** — when you have one run to get
   right: the objective contract, the knobs, and the two swap points.
+- **[Surrogate restarts](how-to/surrogate-restarts.md)** — when `BLRGlobalModel`
+  is in play and its acquisition has to be descended by the engine itself.
 - **[API Reference](reference/api.md)** — when you have a name and need its
   contract; generated from the docstrings.
 - **[How it works](explanation/how-it-works.md)** — when you want the reasons:
