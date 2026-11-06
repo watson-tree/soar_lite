@@ -113,9 +113,10 @@ not `usable` stalls its path in place — re-drawn by default, parked under
 is not a value to compare but the answer, so the run stops at once with
 `status == "unbounded"` (§3 gives the result semantics). If that `-inf` is not
 the answer you want but a sign the objective was handed a point outside its real
-domain, mark those points infeasible via a `domain` side or the `feasible`
-predicate, and the short-circuit never fires: an infeasible `-inf` is skipped
-like any other non-finite value.
+domain, mark those points infeasible with `pointwise`'s `feasible` predicate,
+and the short-circuit never fires: an infeasible `-inf` is skipped like any other
+non-finite value. Narrowing the domain's sides instead masks nothing — the engine
+clips into the box, so such a point is never served at all.
 
 `pointwise` differentiates with `jax.value_and_grad`, and that is where the
 entry contract shows through. A function that cannot be traced (a Python `if` on a
@@ -275,10 +276,10 @@ on whether your objective is really parallel:
   and width spreads the same point budget thinner across paths instead of speeding
   anything up. The flock advances in lockstep — every path takes one step an
   iteration — so at a fixed point budget each path gets about `1/n_paths` of the
-  steps a single path would, and best-of-n only shrinks the spread across starts; it
-  cannot put the missing steps back. Whenever the budget runs out before a path
-  converges — the regime this library is for — that lost depth dominates, and a
-  single path ends better per point than a wide one.
+  steps a single path would, and best-of-`n_paths` only shrinks the spread
+  across starts; it cannot put the missing steps back. Whenever the budget runs
+  out before a path converges — the regime this library is for — that lost depth
+  dominates, and a single path ends better per point than a wide one.
 
 One sentence to keep them straight: a **batch** is one call (wall-clock, GPU), a
 **point** is one row of data (serial cost, CPU) — and a batch is a
