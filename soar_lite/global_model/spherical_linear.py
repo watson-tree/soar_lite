@@ -81,6 +81,11 @@ MinimizeFn: TypeAlias = Callable[
 # `IdentityProjection` itself for the unbent one (it takes nothing but the
 # domain).
 ProjectionFactory: TypeAlias = Callable[[Domain], "Projection"]
+"""Build the `Projection` a model reads one domain through.
+
+Called once per ask with the box that ask was handed, so the geometry is always
+the caller's box and never a projection bound to an older one.
+"""
 
 _HALF_LOG_2PI = 0.5 * jnp.log(2.0 * jnp.pi)
 
@@ -171,10 +176,11 @@ class SphereProjection(Projection):
         Args:
             domain: the `Domain` the projection normalizes; its `scale` is each
                 dimension's prior width in coordinate units. Only the ratios
-                between the bent dimensions' entries move the features, since
-                `glob_ls` divides one global lengthscale back out, but the common
-                magnitude is what the fallback draw and an unbounded dimension's
-                radius are measured in.
+                between the bent dimensions' entries move the features - the
+                projection derives one global lengthscale from `scale` and
+                `kappa` and divides it back out - but the common magnitude is
+                what the fallback draw and an unbounded dimension's radius are
+                measured in.
             kappa: the tie between the projection's radius and the domain - a
                 bent dimension's far end lands at ``|z|^2 = 1/kappa`` whatever
                 ``d`` is. Must lie in ``(0, 1)``; without such a tie a

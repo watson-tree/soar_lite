@@ -217,11 +217,11 @@ class LocalSolver(Protocol):
 
         ``True`` is the enumerated kind: the engine serves each trial for its
         value alone and asks ``verdict`` what to do with it. ``False`` promises
-        the step commits its one proposal unjudged - the engine leaves both
-        halves of the point to `settle`, so the value is served once, fused with
-        the gradient. What replaces the ruling is the engine's gate: a winner
-        whose value or gradient is not finite stalls the path instead of being
-        committed.
+        the step commits its one proposal unjudged: the engine serves that
+        proposal's value fused with its gradient, in one batch, and gates the
+        winner itself - a value or gradient that is not finite stalls the path
+        instead of being committed. Nothing here grades the proposal; the gate
+        is the whole of its acceptance.
 
         ``True`` costs a gradient *per trial* where ``False`` costs one per step,
         unless the caller handed an `eval_f` seam (without it every served trial

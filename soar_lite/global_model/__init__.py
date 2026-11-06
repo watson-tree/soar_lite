@@ -19,6 +19,7 @@ from soar_lite.global_model.spherical_linear import (
     IdentityProjection,
     MinimizeFn,
     Projection,
+    ProjectionFactory,
     SphereProjection,
 )
 
@@ -28,6 +29,7 @@ __all__ = [
     "IdentityProjection",
     "MinimizeFn",
     "Projection",
+    "ProjectionFactory",
     "SampleGlobalModel",
     "SphereProjection",
 ]

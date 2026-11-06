@@ -37,6 +37,7 @@ from soar_lite.global_model import (
     IdentityProjection,
     MinimizeFn,
     Projection,
+    ProjectionFactory,
     SampleGlobalModel,
     SphereProjection,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "NPathStatus",
     "PathPoint",
     "Projection",
+    "ProjectionFactory",
     "SampleGlobalModel",
     "SphereProjection",
     "Verdict",

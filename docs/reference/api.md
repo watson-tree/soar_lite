@@ -30,6 +30,7 @@ Code against these to replace a piece; the engine calls them, never the reverse.
 ::: soar_lite.Projection
 ::: soar_lite.AcquisitionFn
 ::: soar_lite.MinimizeFn
+::: soar_lite.ProjectionFactory
 
 ## Concrete defaults
 
