@@ -141,7 +141,7 @@ print(result.x, result.fun, result.status)
 
 The status says only why the loop stopped, never that it converged: it is
 `max_iters` here because the run reached the horizon you gave it - and the
-horizon counts iterations, not work. The four paths get close to the minimiser
+horizon counts iterations, not work. The four paths get close to the minimizer
 within a few iterations, and every later stop is a fresh start: by default
 (`restart_stalled=True`) a stalled path reloads a draw from the global model each
 time its own stopping test fires, so the flock keeps working until the horizon.
@@ -296,7 +296,7 @@ the model takes it as the injected `minimize` - a `MinimizeFn`,
 `(acquisition, bounds, n_points, key) -> (n_points, d)`, where the acquisition
 is `(m, d) -> ((m,), (m, d))` (value and gradient, no feasibility column). The
 natural answer, and what the experiment drivers do, is to hand the engine back
-to itself: one restart-free run whose width is the number of minimisers you
+to itself: one restart-free run whose width is the number of minimizers you
 want, read off `flock_x`.
 
 ```python
@@ -323,13 +323,13 @@ def surrogate_minimize(objective, bounds, n_points, key):
     result = n_path_schedule(
         eval_g,
         domain=domain,
-        n_paths=n_points,     # one path per minimiser: one batch, not n runs
+        n_paths=n_points,     # one path per minimizer: one batch, not n runs
         max_iters=INNER_ITERS,
         local_solver=DiagonalPreconditioner(),
         restart_stalled=False,  # a pure descent, no restarting inside it
         key=key,
     )
-    return result.flock_x    # one row per path: n_points local minimisers
+    return result.flock_x    # one row per path: n_points local minimizers
 
 
 global_model = BLRGlobalModel(

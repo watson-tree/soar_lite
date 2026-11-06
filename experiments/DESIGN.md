@@ -153,8 +153,8 @@ The dividing line is **structure, not "scientific vs toy"**:
 - **Adam's side** — strongly ill-conditioned *and* densely rotated, where the
   off-diagonal terms dominate the Hessian and a diagonal reading of it is not
   approximately right at all. That gap is structural, not a missing knob: the
-  quantity soar's preconditioner normalises is a secant ratio, which rotation
-  biases, while Adam's normalises a squared gradient, which it does not.
+  quantity soar's preconditioner normalizes is a secant ratio, which rotation
+  biases, while Adam's normalizes a squared gradient, which it does not.
 - **neither** — gradient-free multimodal relief (Ackley), where the gradient
   says nothing about where to move next.
 

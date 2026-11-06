@@ -50,7 +50,7 @@ class Problem:
     eval_f_g: EvalFG
     f_star: float
     description: str
-    x_star: jnp.ndarray | None = None  # a known global minimiser, for checks
+    x_star: jnp.ndarray | None = None  # a known global minimizer, for checks
 
     def eval_point(self, x: jnp.ndarray) -> tuple[float, jnp.ndarray]:
         """Value and gradient at a single point (a batch of one, squeezed)."""
@@ -80,7 +80,7 @@ def _jit_pointwise(fn: Callable[[jnp.ndarray], jnp.ndarray]) -> EvalFG:
 def diag_quadratic(d: int = 100, cond: float = 1e4) -> Problem:
     """Axis-aligned ill-conditioned quadratic: the diagonal sweet spot.
 
-    Hessian ``diag(a)`` with ``a`` log-spaced from 1 to ``cond``, minimiser at
+    Hessian ``diag(a)`` with ``a`` log-spaced from 1 to ``cond``, minimizer at
     the origin, ``f* = 0``. A per-coordinate secant reads ``1/H_ii`` exactly, so
     this is the positive control: any failure here is a harness bug, not a
     method limit.
@@ -194,7 +194,7 @@ def oscillator_chain(
     exactly on that design. Both sides carry a ``1e-12`` floor, which is a
     ``-inf`` guard for an exact null rather than a shaping term: responses
     drawn from this box stay several orders of magnitude above it, so the
-    slope the optimiser sees is the log mismatch, not the floor. The response
+    slope the optimizer sees is the log mismatch, not the floor. The response
     is a batched complex solve of
 
         A(omega) X = (k_0 + i*omega*c_0) e_0,
@@ -226,7 +226,7 @@ def oscillator_chain(
     independent, because neighbouring frequencies of a smooth spectrum measure
     much the same thing. Parameter recovery is not a question this problem can
     answer, and that division of labour is deliberate: this is a **design**
-    problem - does an optimiser drive the response onto the target - while
+    problem - does an optimizer drive the response onto the target - while
     ``pk_chain`` is the recovery problem, built so that its rates are
     identifiable. ``x_star`` is one point on the solution set, the point the
     target was drawn from; the benchmark scores ``f`` and never the distance to

@@ -109,7 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   complement and so no per-step descent invariant - convergence rests on the
   engine's best-so-far accounting and restarts, not on forcing each step down.
   `DEPRECATED.md` records why the projected variant was dropped;
-  `RESULTS.md` holds the near-minimiser accuracy cost of the stale term.
+  `RESULTS.md` holds the near-minimizer accuracy cost of the stale term.
 
 ### Changed
 
@@ -195,7 +195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knobs: `mu = 0` is still the off switch and `beta = 0.95` still reachable. A
   caller that passed neither now runs with momentum it did not ask for, so this
   is a behaviour change, not a default tidy-up; the measurements in
-  `experiments/RESULTS.md` were taken under the old defaults. Near a minimiser
+  `experiments/RESULTS.md` were taken under the old defaults. Near a minimizer
   the momentum carries a stale gradient into the step, which on a quadratic - a
   problem the diagonal step otherwise lands in one shot - degrades 50-step error
   from ≤ `1e-9` to ~ `3e-6`; `beta = 0.63, mu = 0` holds `1e-9`.

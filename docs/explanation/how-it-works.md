@@ -8,7 +8,7 @@ that way, and which trade-offs it accepts.
 
 The objective is called in batches: given a batch of points `x` of shape
 `(n, d)` it returns `f` of shape `(n,)`, `∇f` of shape `(n, d)`, and optionally
-a feasibility mask. The goal is to minimise `f` over the feasible points.
+a feasibility mask. The goal is to minimize `f` over the feasible points.
 
 That is the whole entry contract. There is no Hessian and no curvature estimate:
 a full Hessian is quadratic in the dimension — far too expensive in the
@@ -359,7 +359,7 @@ With the f-only seam connected, each trial in the verdict channel serves `f` onl
 `settle`; without the seam, each trial is itself a fused batch, so `n_alpha`
 candidates multiply directly into the fused batch count (see Cost).
 
-For a start to be usable in the optimisation, **both halves must be finite**: a
+For a start to be usable in the optimization, **both halves must be finite**: a
 start with finite `f` but a non-finite gradient would be read by `propose` and
 enter `fold`, and one NaN is enough to poison that coordinate's magnitude EMA
 permanently. Such a start is treated as a dead start, is `stalled` on arrival, and

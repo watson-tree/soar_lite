@@ -1,6 +1,6 @@
 # soar-lite
 
-A JAX optimiser for objectives that are differentiable but expensive: the number
+A JAX optimizer for objectives that are differentiable but expensive: the number
 of evaluations, not wall-clock, is the binding constraint. The caller hands in
 value and gradient together, so the library fits no Hessian and never solves
 second-order information directly — the diagonal preconditioner is a biased
@@ -76,7 +76,7 @@ search, and either can be replaced by passing an instance in.
 What ships is a lightweight set of defaults picked by judgement, not a
 general-purpose toolkit — which is what `-lite` says. Both seams are open, so a
 more general implementation can drop in later; what is implemented today is aimed
-at scientific numerical optimisation.
+at scientific numerical optimization.
 
 The name is a nod to the adaptive restart framework of Mathesen et al. (2021). A
 local method runs between restarts, and the **adaptive restart process** decides

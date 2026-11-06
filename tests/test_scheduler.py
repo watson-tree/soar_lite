@@ -230,7 +230,7 @@ def test_batch_shape_and_point_counting() -> None:
 
     def quartic(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         # A quartic, not a quadratic: one half-step of steepest descent lands a
-        # 1-D quadratic exactly on its minimiser, where the gradient is zero and
+        # 1-D quadratic exactly on its minimizer, where the gradient is zero and
         # every further trial is rejected - the run would stall long before the
         # eval budget is spent, and this test is about the budget accounting.
         d = theta - 0.7
@@ -462,7 +462,7 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
 def test_a_frozen_flock_that_fully_stalls_ends_the_run() -> None:
     """Every path stalled with restarts off stops the run, not the horizon.
 
-    The single path is placed on the quadratic's own minimiser, so its method
+    The single path is placed on the quadratic's own minimizer, so its method
     finds no strict decrease, spends its trial cap and gives up - and with
     `restart_stalled=False` nothing can un-stall it. The run names that state and
     returns instead of idling out `max_iters`. The same flock left on the

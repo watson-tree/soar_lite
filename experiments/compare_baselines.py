@@ -265,7 +265,7 @@ def _soar_ladder() -> list[Arm]:
     A partial grid, not a chain: the momentum axis runs at `n_paths=1` (`mu`
     0.63 / 0.9 / 0) and one width step (`n_paths` 1 -> 16) sits at the default
     `mu`. The momentum-off arm is what shows the diagonal sweet spot landing in
-    a single step, which the default's `mu` gives up near a minimiser - a cost
+    a single step, which the default's `mu` gives up near a minimizer - a cost
     the panel should show, not state.
 
     The `mu=0.9` arm reads the momentum *horizon*, and it is a comparison arm,

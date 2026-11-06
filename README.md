@@ -3,7 +3,7 @@
 [![CI](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml/badge.svg)](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/watson-tree/soar_lite/blob/main/notebooks/quickstart.ipynb)
 
-A JAX optimiser for objectives that are differentiable but expensive: the number
+A JAX optimizer for objectives that are differentiable but expensive: the number
 of evaluations, not wall-clock, is the binding constraint. The caller hands in
 value and gradient together, so the library fits no Hessian and never solves
 second-order information directly — the diagonal preconditioner is a biased
@@ -67,7 +67,7 @@ says where the two depart.
 What ships is a lightweight set of defaults picked by judgement, not a
 general-purpose toolkit — which is what `-lite` says. Both seams are open, so a
 more general implementation can drop in later; what is implemented today is aimed
-at scientific numerical optimisation.
+at scientific numerical optimization.
 
 ## Install
 
@@ -124,7 +124,7 @@ recorded golden numbers that would encode this repository's history.
 
 ## Scope
 
-This package is the optimiser only. The evaluation budget it consumes is the
+This package is the optimizer only. The evaluation budget it consumes is the
 caller's business: `eval_f_g` takes a batch of points and returns f values,
 gradients and an optional feasibility mask, so the same engine drives a scalar
 objective, a batched one, or a penalized transform of a constrained problem. The
