@@ -17,11 +17,14 @@ you less. See [when this fits](explanation/how-it-works.md#when-this-fits) for
 the reasoning.
 
 A run moves `n_paths` paths in lockstep: every path takes one step per iteration,
-each following its own descent. Per iteration the engine calls the objective on all
-their points in one fused pass — a single call that returns value and gradient for
-every point at once. On a GPU a wider batch barely costs more wall-clock than a
-narrow one, which is why the engine is built around batched evaluations; on a CPU
-the same run works, just without that saving.
+each following its own descent. Iteration 0 is the exception — it places them,
+serving one batch of starts before any step is taken. With the default
+`n_alpha = 1` an iteration is one fused pass — a single call that returns value
+and gradient for every served point at once; a judged step (`n_alpha > 1`) serves
+extra trial batches first (see [How it works](explanation/how-it-works.md)). On a
+GPU a wider batch barely costs more wall-clock than a narrow one, which is why
+the engine is built around batched evaluations; on a CPU the same run works,
+just without that saving.
 
 ## Install
 
@@ -50,8 +53,8 @@ def squares(x):  # one point (d,) in, one scalar out
 
 
 # pointwise returns two functions: eval_f_g for value and gradient in one pass,
-# and eval_f for the value alone. This run needs only the first; the second is
-# what you hand in as `eval_f=` if the objective is only available as values.
+# and eval_f for the value alone. This run needs only the first; `eval_f` is the
+# value-only seam for judged trials (`n_alpha > 1`), not a gradient-free entry.
 eval_f_g, _ = pointwise(squares)
 
 result = n_path_schedule(
@@ -64,13 +67,14 @@ print(result.x)    # x ≈ [3. 3]
 print(result.fun)  # fun ≈ 3e-5
 ```
 
-`x` is the best point the run evaluated, shape `(d,)` — the argmin over
-everything served — and `fun` is its value. Do not read it as a row of `flock_x`:
-the flock is the points the paths hold at one moment, one per path, so `flock_x`
-is the flock as the run ended, and the best point may be one a path has left
-behind. Field names follow scipy's `OptimizeResult` (`x` the minimizer, `fun` the
-minimum); the extra fields are the flock pair, four work counts (points and
-batches, with and without a gradient) and a `status`.
+`x` is the best point the run evaluated, shape `(d,)` — the argmin over the
+feasible points with finite `f` that were served — and `fun` is its value. Do not
+read it as a row of `flock_x`: the flock is the points the paths hold at one
+moment, one per path, so `flock_x` is the flock as the run ended, and the best
+point may be one a path has left behind. Field names follow scipy's
+`OptimizeResult` (`x` the minimizer, `fun` the minimum); the extra fields are the
+flock pair, four work counts (points and batches, with and without a gradient)
+and a `status`.
 
 ## What's inside
 
@@ -83,8 +87,9 @@ schedules the work, and nothing beyond JAX and the standard library.
   `restart_stalled` on — from a fresh point.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
-  from successive gradients, no matrix and no scalar learning rate to tune. The
-  engine commits the trial with the lowest value, moving the path there.
+  from successive gradients, no matrix and no scalar learning rate to tune. On a
+  judged step the engine commits the served trial with the lowest value; with the
+  default `n_alpha = 1` it commits the proposal as proposed.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
   the record of everything evaluated so far. `SampleGlobalModel` draws from the
   domain; `BLRGlobalModel` is a Bayesian surrogate for the same contract.
@@ -96,9 +101,9 @@ What ships is not a general-purpose toolkit but a small set of defaults picked b
 judgment — which is what `-lite` signals. They are aimed at scientific numerical
 optimization, where the variables carry physical units and the objective's scale
 is rarely yours to pick: once the first secant pair exists the step is
-invariant to rescaling of the objective, so one set of knobs, none of them
-carrying a unit, serves any units, and nobody has to non-dimensionalize the
-problem by hand first.
+invariant to rescaling of the objective, so one set of knobs serves any units,
+and nobody has to non-dimensionalize the problem by hand first. The warm-up step
+is the exception — its whole-step length is still chosen for the units in play.
 
 The name nods to the **adaptive restart** framework of
 [Mathesen et al. (2021)](explanation/how-it-works.md#references): a local method
