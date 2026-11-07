@@ -1,0 +1,113 @@
+"""A ``--problems``/``--arms`` filter that matches nothing must be refused.
+
+The filters exist so one arm can be re-measured without its panel. They match by
+name, which means a misspelled name - or two names that are each real but belong
+to different arms - used to finish as a clean exit with no arm run at all. That
+is the one failure a re-measurement cannot show: the figure it redraws is the
+old one, at the old budget, and nothing says so.
+
+Needs the ``exp`` dependency group (the harness imports matplotlib and optax), so
+a plain ``dev`` test run skips this file instead of failing it.
+
+The seam under test is private on purpose: ``main`` is the public entry, but a
+legal selection makes it measure, so only ``_selection`` can be asked what it
+picks without running an arm.
+"""
+
+# ruff: noqa: SLF001
+# pyright: reportPrivateUsage=false
+
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+os.environ.setdefault("MPLBACKEND", "Agg")
+pytest.importorskip("matplotlib")
+pytest.importorskip("optax")
+
+from experiments import compare_baselines as harness
+
+
+@pytest.fixture(autouse=True)
+def _isolated_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Point both output trees at a temp dir so a refusal writes nothing anywhere."""
+    monkeypatch.setattr(harness, "RESULTS", tmp_path / "results")
+    monkeypatch.setattr(harness, "FIGURES", tmp_path / "figures")
+
+
+def _run(*argv: str, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run ``main`` with these arguments and return the message it exits with."""
+    monkeypatch.setattr(sys, "argv", ["compare_baselines", *argv])
+    with pytest.raises(SystemExit) as caught:
+        harness.main()
+    return str(caught.value)
+
+
+def test_a_misspelled_problem_name_is_refused_before_anything_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The typo is named, and so is the name it probably meant."""
+    message = _run("--problems", "ackley_100", monkeypatch=monkeypatch)
+
+    assert "no such problem: ackley_100" in message
+    assert "ackley_d100" in message
+    assert not (tmp_path / "results").exists()
+
+
+def test_names_that_never_meet_in_one_arm_are_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both names are real; the Adam arm of the diagonal quadratic is `adam-lr0.01`."""
+    message = _run(
+        "--groups",
+        "smooth",
+        "--problems",
+        "diag_quad_d100_cond10000",
+        "--arms",
+        "adam-lr2",
+        monkeypatch=monkeypatch,
+    )
+
+    assert "no single arm carries both filters" in message
+
+
+def test_a_legal_filter_selects_exactly_the_pair_it_names() -> None:
+    """Naming the arm the problem actually has leaves one pair, and only that one."""
+    selected = harness._selection(
+        "smooth",
+        frozenset({"diag_quad_d100_cond10000"}),
+        frozenset({"adam-lr0.01"}),
+    )
+
+    assert [(prob.name, arm.key) for prob, arm in selected] == [
+        ("diag_quad_d100_cond10000", "adam-lr0.01"),
+    ]
+
+
+@pytest.mark.parametrize("group", ["bogus", "all"])
+def test_an_undrawable_group_is_named_before_anything_runs(
+    group: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`all` is a real problem group, but it is a union to iterate, not a panel."""
+    message = _run("--groups", group, monkeypatch=monkeypatch)
+
+    assert f"no group {group!r}" in message
+    assert "headline" in message
+
+
+@pytest.mark.parametrize("flag", ["--plot-only", "--lr-sweep"])
+def test_a_filter_on_a_flag_that_measures_nothing_is_refused(
+    flag: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither flag runs an arm, so a filter would be dropped without a word."""
+    message = _run(flag, "--problems", "rastrigin_d100", monkeypatch=monkeypatch)
+
+    assert flag in message

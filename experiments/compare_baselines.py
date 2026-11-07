@@ -71,6 +71,7 @@ Usage:
 
 import argparse
 import json
+import textwrap
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -471,6 +472,28 @@ def refuse_budget_change(
     raise SystemExit(msg)
 
 
+def _selection(
+    panel: str,
+    problems_filter: frozenset[str] | None = None,
+    arms_filter: frozenset[str] | None = None,
+) -> list[tuple[problems.Problem, Arm]]:
+    """Select the ``(problem, arm)`` pairs of ``panel`` that both filters leave.
+
+    A filter matches by name and nothing more: a name the panel does not carry
+    selects nothing here rather than raising, so the caller compares the result
+    with the filters it passed and can refuse the run when it comes back empty.
+    """
+    arms = PANELS[panel]
+    probs = problems.build(panel)
+    return [
+        (prob, arm)
+        for prob in probs
+        if not problems_filter or prob.name in problems_filter
+        for arm in arms(prob)
+        if not arms_filter or arm.key in arms_filter
+    ]
+
+
 def run_panel(
     panel: str,
     n_seeds: int,
@@ -483,29 +506,23 @@ def run_panel(
 
     The filters are how one arm is re-measured without its panel: they select
     on the arm key (and on the problem), so the run touches only the files it
-    names and every other trace stays as it was.
+    names and every other trace stays as it was. ``main`` refuses a selection
+    that comes back empty before this is reached.
     """
-    for prob in problems.build(panel):
-        if problems_filter and prob.name not in problems_filter:
-            continue
-        for arm in PANELS[panel](prob):
-            if arms_filter and arm.key not in arms_filter:
-                continue
-            refuse_budget_change(
-                prob.name,
-                arm.key,
-                n_seeds=n_seeds,
-                max_steps=max_steps,
-            )
-            traces = [
-                arm.runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)
-            ]
-            path = save_arm(prob, arm, traces, n_seeds=n_seeds, max_steps=max_steps)
-            fins = [t.fun for t in traces]
-            print(
-                f"  {prob.name:26s} {arm.key:44s} "
-                f"final mean best = {np.mean(fins):.4e}  -> {path.relative_to(HERE)}",
-            )
+    for prob, arm in _selection(panel, problems_filter, arms_filter):
+        refuse_budget_change(
+            prob.name,
+            arm.key,
+            n_seeds=n_seeds,
+            max_steps=max_steps,
+        )
+        traces = [arm.runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)]
+        path = save_arm(prob, arm, traces, n_seeds=n_seeds, max_steps=max_steps)
+        fins = [t.fun for t in traces]
+        print(
+            f"  {prob.name:26s} {arm.key:44s} "
+            f"final mean best = {np.mean(fins):.4e}  -> {path.relative_to(HERE)}",
+        )
 
 
 # --- plotting ---------------------------------------------------------------
@@ -822,6 +839,90 @@ def _comma_set(text: str) -> frozenset[str] | None:
     return items or None
 
 
+def _refuse_undrawable_groups(groups: list[str]) -> None:
+    """Refuse a ``--groups`` name that no panel draws, before anything runs.
+
+    ``problems.build`` knows one group this does not: ``all``, which is the union
+    a sweep iterates, not a panel anyone can draw.
+    """
+    choices = ", ".join([*PANELS, "invariance"])
+    for group in groups:
+        if group != "invariance" and group not in PANELS:
+            msg = f"no group {group!r}; pick one of {choices}"
+            raise SystemExit(msg)
+
+
+def _refuse_empty_selection(
+    groups: list[str],
+    problems_filter: frozenset[str] | None,
+    arms_filter: frozenset[str] | None,
+) -> None:
+    """Refuse a ``--problems``/``--arms`` selection that matches no arm at all.
+
+    A filter matches by name, so a typo used to finish as a clean exit with no
+    arm run at all - the one failure a re-measurement cannot show. The check
+    costs no batches: it reads the panels, never the objective. An unknown group
+    name surfaces here too, from `problems.build`.
+    """
+    if not (problems_filter or arms_filter):
+        return
+    chosen = [group for group in groups if group != "invariance"]
+    if any(_selection(group, problems_filter, arms_filter) for group in chosen):
+        return
+    raise SystemExit(_empty_selection_msg(groups, problems_filter, arms_filter))
+
+
+def _empty_selection_msg(
+    groups: list[str],
+    problems_filter: frozenset[str] | None,
+    arms_filter: frozenset[str] | None,
+) -> str:
+    """Explain a filter that would measure nothing, and name what it could use.
+
+    The names it offers are read off the panels themselves, so the list cannot
+    drift from the arms the harness has.
+    """
+    pairs = [
+        pair for group in groups if group != "invariance" for pair in _selection(group)
+    ]
+    if not pairs:
+        return (
+            f"{'/'.join(groups)} writes no per-arm traces, so --problems and "
+            f"--arms select nothing. Drop them, or name a panel group."
+        )
+    known = {
+        "problem": sorted({prob.name for prob, _ in pairs}),
+        "arm": sorted({arm.key for _, arm in pairs}),
+    }
+    lines = ["the filters select no arm, so nothing would be measured."]
+    named = False
+    for label, given in (("problem", problems_filter), ("arm", arms_filter)):
+        if not given:
+            continue
+        unknown = sorted(given - set(known[label]))
+        if not unknown:
+            continue
+        named = True
+        lines.append(f"  no such {label}: {', '.join(unknown)}")
+        lines.append(
+            textwrap.fill(
+                f"  known {label}s: {', '.join(known[label])}",
+                width=80,
+                subsequent_indent="    ",
+                # A name is meant to be copied out of this message, so break only
+                # between names: the keys are full of hyphens.
+                break_on_hyphens=False,
+                break_long_words=False,
+            ),
+        )
+    if not named:
+        lines.append(
+            "  every name is one this harness has, but no single arm carries both "
+            "filters.",
+        )
+    return "\n".join(lines)
+
+
 def main() -> None:
     """Parse args, run the selected arms, write a trace file each, then draw."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -856,6 +957,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    groups = ["smooth"] if args.quick else args.groups.split(",")
+    n_seeds = 2 if args.quick else args.seeds
+    max_steps = 300 if args.quick else args.max_steps
+    problems_filter = _comma_set(args.problems)
+    arms_filter = _comma_set(args.arms)
+    _refuse_undrawable_groups(groups)
+
+    if (problems_filter or arms_filter) and (args.plot_only or args.lr_sweep):
+        flag = "--plot-only" if args.plot_only else "--lr-sweep"
+        msg = (
+            f"--problems and --arms name what to measure, and {flag} measures "
+            f"nothing, so they would be dropped without a word. Drop them, or "
+            f"run the measurement they name."
+        )
+        raise SystemExit(msg)
+
     if args.quick:
         # A smoke check must not touch the record. Its 2-seed, 300-batch traces
         # would carry exactly the file names a full run's do and would replace
@@ -870,18 +987,14 @@ def main() -> None:
         return
 
     if args.plot_only:
-        for group in args.groups.split(","):
-            if group in {"invariance", "lr_sweep"}:
+        for group in groups:
+            if group == "invariance":
                 print(f"{group} writes no trace files; rerun --groups {group} (fast)")
                 continue
             plot_panel(group, FIGURES / group)
         return
 
-    groups = ["smooth"] if args.quick else args.groups.split(",")
-    n_seeds = 2 if args.quick else args.seeds
-    max_steps = 300 if args.quick else args.max_steps
-    problems_filter = _comma_set(args.problems)
-    arms_filter = _comma_set(args.arms)
+    _refuse_empty_selection(groups, problems_filter, arms_filter)
 
     for group in groups:
         if group == "invariance":

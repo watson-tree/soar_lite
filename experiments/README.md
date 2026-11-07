@@ -161,6 +161,14 @@ uv run --group exp python -m experiments.compare_baselines --plot-only
 `--plot-only` names any arm that has no trace file instead of drawing a gap, so
 a half-filled panel is visible rather than plausible.
 
+A filter is a name match, so it is checked before the first batch: a misspelled
+problem, an arm key that belongs to another panel, or two names that are each
+real but never meet in one arm stops the run and prints the names it does have.
+Without that check the command would exit clean having measured nothing, and the
+figure it redrew would be the old one — a re-measurement that silently did not
+happen. `--plot-only` and `--lr-sweep` measure no arm at all, so they refuse
+`--problems` and `--arms` instead of ignoring them.
+
 ## Reproducibility contract
 
 - **Fixed seeds**: `range(n_seeds)` from 0; every runner takes the seed, and JAX
