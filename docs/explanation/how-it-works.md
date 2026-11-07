@@ -178,8 +178,12 @@ the direction (`alpha0`, `backtrack`, `n_alpha`) is shared between them.
 With the default `n_alpha = 1`, both phases take **one unguarded whole step**:
 warm-up commits `x − α0·g₀` and steady state commits `x − α0·d⊙m`. Neither reads
 a value, runs a line search, or compares against its start. `needs_verdict` is
-therefore **independent of the phase**: it answers True when `n_alpha > 1` and
-False otherwise, because the engine commits exactly what the method proposed.
+therefore **independent of the phase**: it answers True when `n_alpha > 1` — the
+grid has candidates to compare — and False otherwise, because the engine commits
+exactly what the method proposed. Its one other reason to answer True is not
+about the step's shape at all: a path whose stopping test already holds asks for
+the single ruling that can say `give_up` (see
+[Verdict and no-verdict channels](#verdict-and-no-verdict-channels)).
 
 One exception to unit invariance: the warm-up step is **not** unit-invariant.
 `alpha0` is a bare number, but its effective units depend on the phase. In
@@ -388,13 +392,16 @@ together" and "decide one at a time, then buy" are the same schedule.
 
 `needs_verdict(i, p)` (`i` the path index, `p` that path's current point) asks
 "does this path need per-candidate verdicts for its next step?". With the
-default `n_alpha = 1` it answers False for the whole step: the method commits as
-proposed, the engine takes its single proposal as the
+default `n_alpha = 1` it normally answers False for the whole step: the method
+commits as proposed, the engine takes its single proposal as the
 winner of this step **without reading a value first**, and the value and
-gradient are bought once in `settle`'s fused batch. An `n_alpha > 1` step grid
-answers True: the method proposes candidate by candidate, the engine clips and
-serves each, and the method's `verdict` returns `retry` (ask for the next
-candidate in the same step), `accept`, or `give_up`.
+gradient are bought once in `settle`'s fused batch. The exception is a path
+whose stopping test already holds: no grid, but `verdict` is the contract's only
+channel for `give_up`, so it asks for that one ruling rather than be committed
+unjudged and step off a stationary point. An `n_alpha > 1` step grid answers
+True for the other reason: the method proposes candidate by candidate, the
+engine clips and serves each, and the method's `verdict` returns `retry` (ask
+for the next candidate in the same step), `accept`, or `give_up`.
 
 A failure in the verdict channel has only two exits, both named by the method:
 `give_up` (its convergence test fired) sets `stalled`, and so does `accept`
