@@ -12,7 +12,8 @@ Three rules:
 - **Numbers are never re-edited.** A new measurement is a new entry plus a
   status change on the old one, and the old numbers stay exactly as measured.
   Quietly updating a number is how a document ends up quoting a run it no
-  longer describes.
+  longer describes. A claim that has gone false gets an added note, not a
+  rewrite.
 - Only measurements belong here. Propositions, rules and the budget contract
   live in `DESIGN.md`.
 

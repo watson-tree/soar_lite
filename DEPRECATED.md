@@ -6,12 +6,13 @@ evidence, so a future reader does not re-run the same line. Nothing in this
 file is shipped: probe scripts cited here live in `.scratch/` and are not
 committed, every number that matters is reproduced inline.
 
-Three rules, the same discipline as `experiments/RESULTS.md`:
+Entries are records: nothing is deleted, and nothing is rewritten to assert
+something else. A `Status` line states the delivered code at the time of
+writing; when the code changes, a new entry is appended below and the old claim
+stays as written.
 
-- **Entries are records: never re-edit them.** A `Status` line states the
-  delivered code at the time of writing; when the code later changes, that
-  historical claim stays exactly as written and a new entry is appended below.
-  Rewriting an old `Status` erases the before/after the file exists to preserve.
+Two more rules:
+
 - **Only abandoned or superseded directions belong here.** The direction that
   remains in the code stays in the `How it works` page / `DESIGN.md`; this
   file archives what was dropped and what replaced it, not the code's current
