@@ -33,7 +33,7 @@ record of the 0.63 default; figures drawn from them say so. The roster is now
 measurement is `np16-mu0` on every problem plus the blr panel's three arms at
 `mu=0`.
 
-Why the window moves back, in one line: memory damps the residual spectrum and
+Why the window moves back, in one line: memory damps the scaled spectrum and
 shrinks direction noise, and both are landscape properties the preconditioner
 cannot see — so the default is the branch that assumes neither, and it is also
 the one that keeps a descending direction. The argument is in

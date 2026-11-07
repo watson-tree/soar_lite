@@ -179,9 +179,10 @@ happen. `--plot-only` and `--lr-sweep` measure no arm at all, so they refuse
 - **No *tuned* knobs on soar-lite** — which is not the same as no knobs.
   `DiagonalPreconditioner` exposes eight (`moment`, `beta`, `theta`, `mu`,
   `alpha0`, `n_alpha`, `backtrack`, `tau_rel`), and two are live smoothing
-  windows: `beta` sets the preconditioner's memory, `mu` the direction's (0 by
-  default — see `docs/explanation/how-it-works.md` §Momentum — so a run takes
-  direction memory only if it asks). What the formal runs do is take them at
+  windows: `beta` sets the preconditioner's memory (see
+  `docs/explanation/how-it-works.md` §Smoothing), `mu` the direction's (0 by
+  default, so a run takes direction memory only if it asks — §Momentum on the
+  same page). What the formal runs do is take them at
   their factory defaults end to end, so soar-lite pays no per-problem search;
   Adam pays the per-problem lr grid each time. That asymmetry is about
   *tuning*, not about having parameters, and it is the point.
