@@ -88,7 +88,8 @@ On a single pair the two variants agree (`|s|/|y| = |s/y|`); they differ only in
 which moment is smoothed — `"abs"` averages the magnitude, so every pair counts in
 proportion to its size, while `"rms"` averages the square, so large pairs
 dominate. The EMA window is about `1/(1−β)` steps, where `β` is the EMA decay
-rate, and the default `β = 0.63` is about 2.7 steps. Magnitudes rather than the
+rate, and the default `β = 0.63` is about 2.7 steps (`β = 0` keeps none, so one
+pair decides). Magnitudes rather than the
 signed `sᵢ` or `yᵢ` are used to keep the estimate strictly positive: a signed
 value drifts, and a pair of opposite-sign differences can drive it through zero
 — flipping `d`'s sign or blowing it up — while smoothing `|s|` and `|y|` keeps
@@ -271,12 +272,33 @@ rests on best-so-far accounting plus restarts and stalls, not on every step
 descending; a caller who wants the guarantee can leave `μ` at its default,
 shrink `alpha0`, or run a line search outside the engine.
 
-`β` is a separate question with its own answer: it smooths the curvature
-*estimate*, its window follows how fast the geometry changes under the step
-size, and it defaults to 0.63 (~2.7 steps) on that basis. The two remain
-independent knobs — different histories, and the secant pair keeps reading the
-raw `y = g_k − g_{k−1}` rather than the smoothed direction — so moving one does
-not entangle the other.
+`β` is a separate question with its own answer: it sets how much history the
+curvature estimate keeps. A fresh pair is already as current as the method
+knows — `y = g_k − g_{k−1}` is the average of `H` along the step just taken, not
+a point sample — so more history is never *more* accuracy; it is a trade of
+currentness for stability, and the two sides are:
+
+- **Stability.** One pair should report `1/Hᵢᵢ`, but the off-diagonal entries
+  creep in: `sᵢ/yᵢ = 1/(Hᵢᵢ + Σ_{j≠i} Hᵢⱼ·sⱼ/sᵢ)`. The extra term is not a
+  constant — it is set by the step's *direction*, through the ratios `sⱼ/sᵢ`.
+  The same true `Hᵢᵢ` therefore comes back higher on one step and lower on the
+  next, purely because the path turned; that step-to-step wobble carries no
+  information about the curvature. An EMA spanning a few steps averages the
+  wobble out and leaves `d` steadier. On a rotated quadratic, where the
+  direction turns hard every step, this is `β`'s whole effect.
+- **Currentness.** Where the true curvature changes along the path — a
+  non-quadratic landscape — every pair's reading is honest, and blending older
+  pairs re-weights the estimate toward points the path has left behind. There
+  the window is pure lag: it flattens the path of `d`, but the shape it flattens
+  is the real terrain, not a coupling artifact.
+
+On a diagonal quadratic neither side applies — each pair reads `1/Hᵢᵢ` exactly
+and nothing varies — so `β` is there neutral. `β = 0` is the currentness end of
+the range `[0, 1)`: `d` reads only the newest accepted secant. `β` defaults to
+0.63 (a window of about 2.7 steps) — a plain default, with no deeper tuning
+behind the number. (`μ` shapes the *direction* and `β` the *scale*; the scale
+reads the raw gradient difference `g_k − g_{k−1}`, never the smoothed `m`, so
+the two knobs never feed each other.)
 
 **The cost is real.** Near an optimum `g → 0` while `m` decays on the `1/(1−μ)`
 window, so `μ·m_{k−1}` can outweigh `g_k` and the direction is carried off by old

@@ -376,6 +376,13 @@ Measured again under v2 (3000 batches, 20 seeds): `n_paths=16` 19.59, Adam
 19.57, `n_paths=1` 19.78 — the edge over Adam is gone, the ordering otherwise
 unchanged.
 
+Measured again under v3 (3000 batches, 20 seeds, medians): `n_paths=16` 19.55,
+Adam 19.57, `n_paths=1` at `mu` 0 / 0.63 / 0.9 → 19.71 / 19.71 / 19.79. The two
+single-chain `mu` arms are identical to the digit, which is what a frozen path
+looks like: with no step taken there is no secant to fold, so **no `beta`
+question can be asked on this problem** either. No cell of the multimodal panel
+discriminates on ackley; the rastrigin cell is what carries that panel.
+
 ### The unit-rescaling residual was exactly the warm-up guard
 
 Diag quadratic d=100, `x' = 10x`, zero retune, measured while the warm-up still

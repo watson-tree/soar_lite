@@ -600,6 +600,27 @@ def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
     assert result.fun < 1e-12
 
 
+def test_beta_zero_is_legal_and_reads_only_the_newest_secant() -> None:
+    """`beta = 0` is the currentness end of the range: one pair, exactly.
+
+    The smooth trades currentness for stability: it damps the step-to-step wobble
+    the dropped coupling puts into the ratio. A diagonal problem has no coupling
+    and nothing wobbling, so a caller may ask for the raw secant; the knob's range
+    is [0, 1) and 0 folds each pair on top of the last instead of refusing to
+    exist.
+    """
+    solver = DiagonalPreconditioner(beta=0.0, theta=0.0)
+    p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
+    solver.restart(0, p)
+    solver.fold(0, p, PathPoint(x=p.x - p.g, f=0.0, g=2.0 * p.g))
+    assert close(solver.s_ema[0], jnp.square(p.g), 1e-12)
+    # A second, different pair replaces the first rather than blending into it.
+    q = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([3.0, 4.0]))
+    solver.fold(0, q, PathPoint(x=q.x - q.g, f=0.0, g=2.0 * q.g))
+    assert close(solver.s_ema[0], jnp.square(q.g), 1e-12)
+    assert close(solver.y_ema[0], jnp.square(q.g), 1e-12)
+
+
 def test_diag_knobs_out_of_range_are_rejected() -> None:
     """A knob out of its own range fails at construction, naming the knob.
 

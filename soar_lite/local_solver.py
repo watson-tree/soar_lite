@@ -38,7 +38,12 @@ class DiagonalPreconditioner(LocalSolver):
     Y → 0 and never deflates a curvature-dominated coordinate.
     d ≥ 0 by construction, so at ``mu = 0`` -d⊙g descends and the plain step
     needs no acceptance test. It is a *diagonal* preconditioner, not a diagonal
-    Newton: coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside |y_i| and biases d.
+    Newton: coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside |y_i| and makes the secant
+    ratio depend on the step's direction; the EMA spans a few steps so ``d``
+    tracks the underlying curvature instead of that direction. Where a path
+    keeps one direction the smooth only lags it; on a diagonal problem no
+    coupling enters, each pair already reads 1/Hᵢᵢ exactly, and ``beta = 0``
+    reads the newest secant.
 
     With ``mu > 0`` the direction is the *current* momentum,
     ``m = (1 - mu)·g + mu·m_prev``, where ``m_prev`` is an EMA of the past
@@ -117,7 +122,8 @@ class DiagonalPreconditioner(LocalSolver):
             moment: which magnitude ratio to smooth, ``"abs"`` (mean of |s|,
                 |y|) or ``"rms"`` (mean of s², y²).
             beta: EMA decay for the secant-magnitude smooth (window ≈ 1/(1-β)
-                steps), in (0, 1).
+                steps), in [0, 1); 0 keeps no history, so ``d`` reads the
+                newest accepted secant.
             theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
                 ``θ·g_i²`` for "rms"), >= 0.
             mu: EMA decay of the gradient history blended into the direction,
@@ -133,7 +139,7 @@ class DiagonalPreconditioner(LocalSolver):
 
         """
         for name, value, ok, want in (
-            ("beta", beta, 0.0 < beta < 1.0, "in (0, 1)"),
+            ("beta", beta, 0.0 <= beta < 1.0, "in [0, 1)"),
             ("theta", theta, theta >= 0.0, ">= 0"),
             ("mu", mu, 0.0 <= mu < 1.0, "in [0, 1)"),
             ("alpha0", alpha0, alpha0 > 0.0, "> 0"),
