@@ -77,3 +77,9 @@ reportUnknownMemberType = "information"
 reportUnknownLambdaType = "information"
 reportUnknownCallResultType = "information"
 reportMissingTypeStubs = "information"
+
+# PyPI is pinned so a mirror configured on a contributor's machine cannot rewrite
+# uv.lock to that mirror's URLs; the lock stays installable anywhere.
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
