@@ -108,14 +108,35 @@ print(result.x, result.fun)  # ≈[3. 3.] 3e-5
 
 ## Results
 
-<!-- Placeholder: fill in the panels worth showing (see experiments/figures/),
-     each with its lineup and budget. Numbers live in experiments/RESULTS.md;
-     do not restate them here without the lineup that produced them. -->
+Each method gets the same objective, the same seeds and the same batch budget.
+A curve is best-so-far, the line a median over 20 seeds and the band its Q1-Q3
+spread. Click a panel for the full size.
 
-What the baseline comparison measures is in
-[`experiments/DESIGN.md`](experiments/DESIGN.md); every number it produced is in
-[`experiments/RESULTS.md`](experiments/RESULTS.md), tagged with the lineup and
-budget that produced it.
+[![The two real inverse problems, best-so-far against objective points served](docs/figures/headline-points.png)](docs/figures/headline-points.png)
+
+**The two real inverse problems** - a mixed-unit oscillator chain and a
+non-convex compartment chain - on the objective-points axis, the unit this
+library bills in and the one where a wide arm pays for its width. 20 seeds x
+3000 batches.
+
+[![One physics measured in two unit systems, with no retuning](docs/figures/invariance-units.png)](docs/figures/invariance-units.png)
+
+**Unit invariance.** One physics measured in two unit systems (`x' = 10x`) with
+nothing retuned: the per-coordinate secant overlaps, while a single global
+learning rate separates because the effective step rescales with the unit. 20
+seeds x 3000 batches.
+
+[![Rastrigin under uniform sample re-draws against two fitted restart models](docs/figures/blr-restarts-points.png)](docs/figures/blr-restarts-points.png)
+
+**The restart seam, measured.** Rastrigin with `n_paths = 16` on every arm -
+uniform sample re-draws against two fitted restart models - at its own budget
+of 20 seeds x 1000 batches.
+
+The panels not shown here (`smooth`, `multimodal`, the Adam lr sweep), the
+medians behind every curve and the caveats that qualify them are in
+[`experiments/RESULTS.md`](experiments/RESULTS.md); what the comparison measures
+is in [`experiments/DESIGN.md`](experiments/DESIGN.md). The commands that redraw
+these three panels are in [`docs/figures/README.md`](docs/figures/README.md).
 
 ## Development
 

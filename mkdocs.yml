@@ -5,6 +5,11 @@ repo_url: https://github.com/watson-tree/soar_lite
 repo_name: watson-tree/soar_lite
 docs_dir: docs
 
+# `docs/figures/README.md` is written for the GitHub file view and links out of
+# `docs_dir` to `experiments/`; it is not a site page.
+exclude_docs: |
+  figures/README.md
+
 theme:
   name: readthedocs
 
