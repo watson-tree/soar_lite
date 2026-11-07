@@ -85,7 +85,6 @@ reportUnknownParameterType = "information"
 reportUnknownArgumentType = "information"
 reportUnknownMemberType = "information"
 reportUnknownLambdaType = "information"
-reportUnknownCallResultType = "information"
 reportMissingTypeStubs = "information"
 
 # PyPI is pinned so a mirror configured on a contributor's machine cannot rewrite
