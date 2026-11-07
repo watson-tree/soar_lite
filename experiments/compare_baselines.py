@@ -179,8 +179,14 @@ ADAM_LR: dict[str, float] = {
 
 
 def _adam_lr(prob: problems.Problem) -> float:
-    """Return the grid-tuned Adam lr for this problem (fallback 1e-2)."""
-    return ADAM_LR.get(prob.name, 1e-2)
+    """Return the grid-tuned Adam lr for this problem.
+
+    There is no fallback: `_refuse_untuned_problems` keeps the table a claim
+    about the whole roster, so a miss here is a bug in that guard, not a case
+    to paper over with a default - the arm key and the sweep's C0 diamond both
+    read this number, and neither would say it had been guessed.
+    """
+    return ADAM_LR[prob.name]
 
 
 def adam_arm(prob: problems.Problem) -> Arm:
@@ -654,11 +660,11 @@ def run_lr_sweep(n_seeds: int, max_steps: int) -> None:
             for lr in lr_grid
         ]
         print(
-            f"{prob.name:26s} pick={ADAM_LR.get(prob.name)}",
+            f"{prob.name:26s} pick={_adam_lr(prob)}",
             " ".join(f"{lr:g}:{f:.6g}" for lr, f in zip(lr_grid, fins, strict=True)),
         )
         ax.plot(lr_grid, np.maximum(fins, 1e-16), marker="o", lw=1.5, color="C3")
-        best_lr = ADAM_LR.get(prob.name)
+        best_lr = _adam_lr(prob)
         best_idx = lr_grid.index(best_lr) if best_lr in lr_grid else None
         if best_idx is not None:
             ax.plot(
@@ -787,6 +793,23 @@ def _comma_set(text: str) -> frozenset[str] | None:
     """Parse a comma list into a filter set, or None when it selects everything."""
     items = frozenset(item.strip() for item in text.split(",") if item.strip())
     return items or None
+
+
+def _refuse_untuned_problems() -> None:
+    """Refuse a problem with no entry in ``ADAM_LR``, before anything runs.
+
+    The table is keyed by problem name, which `problems.build` and this table
+    agree on by hand. A rename therefore reads as a brand-new problem: the arm
+    becomes ``adam-lr0.01`` and a figure is drawn at a lr nobody tuned, with the
+    number in the file name as the only trace of it.
+    """
+    missing = [prob.name for prob in problems.build("all") if prob.name not in ADAM_LR]
+    if missing:
+        msg = (
+            f"no tuned Adam lr for {', '.join(missing)}; add an entry to ADAM_LR "
+            f"(the lr sweep picks one)"
+        )
+        raise SystemExit(msg)
 
 
 def _refuse_undrawable_groups(groups: list[str]) -> None:
@@ -942,6 +965,7 @@ def main(argv: list[str] | None = None) -> None:
     problems_filter = _comma_set(args.problems)
     arms_filter = _comma_set(args.arms)
     _refuse_undrawable_groups(groups)
+    _refuse_untuned_problems()
 
     if (problems_filter or arms_filter) and (args.plot_only or args.lr_sweep):
         flag = "--plot-only" if args.plot_only else "--lr-sweep"
