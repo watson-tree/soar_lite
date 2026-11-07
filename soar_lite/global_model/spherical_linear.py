@@ -40,7 +40,7 @@ optimum lives on a boundary.
 import abc
 import math
 from collections.abc import Callable, Sequence
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 import jax
 import jax.numpy as jnp
@@ -642,7 +642,9 @@ def _log_h(z: jnp.ndarray) -> jnp.ndarray:
     ``z = -20``, and the improvement is negligible there either way.
     """
     log_phi = -0.5 * z * z - _HALF_LOG_2PI
-    log_z_phi = jnp.log(jnp.abs(z)) + log_ndtr(z)  # log|z * Phi(z)|
+    # pyright cannot solve the type parameter jax 0.11 gives `custom_jvp` (a PEP
+    # 695 generic applied through `functools.partial`); the value is an Array.
+    log_z_phi = jnp.log(jnp.abs(z)) + cast("jnp.ndarray", log_ndtr(z))  # log|z*Phi(z)|
     log_h_sum = jnp.logaddexp(log_phi, log_z_phi)
     gap = jnp.minimum(log_z_phi - log_phi, -1e-7)
     log_h_diff = log_phi + jnp.log(-jnp.expm1(gap))
