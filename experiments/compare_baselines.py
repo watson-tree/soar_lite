@@ -873,8 +873,8 @@ def _empty_selection_msg(
     return "\n".join(lines)
 
 
-def main() -> None:
-    """Parse args, run the selected arms, write a trace file each, then draw."""
+def _parser() -> argparse.ArgumentParser:
+    """Build the command line, declared apart from `main` so a test can read it."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--quick", action="store_true", help="2-seed smoke check")
     parser.add_argument(
@@ -914,11 +914,31 @@ def main() -> None:
         action="store_true",
         help="rebuild figures from the trace files (no re-run)",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def _budget(args: argparse.Namespace) -> tuple[int, int]:
+    """Return this run's ``(seeds, max_steps)``; ``--quick`` means 2 x 300."""
+    return (2, 300) if args.quick else (args.seeds, args.max_steps)
+
+
+def _use_smoke_roots() -> None:
+    """Point both output roots under ``smoke/``, before anything writes.
+
+    The arm key does not encode the budget, so a 2-seed, 300-batch trace carries
+    exactly the file name a full run's does and would replace it.
+    """
+    global RESULTS, FIGURES  # noqa: PLW0603 - the output roots are script state
+    RESULTS = RESULTS / "smoke"  # pyright: ignore[reportConstantRedefinition]
+    FIGURES = FIGURES / "smoke"  # pyright: ignore[reportConstantRedefinition]
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse args, run the selected arms, write a trace file each, then draw."""
+    args = _parser().parse_args(argv)
 
     groups = ["smooth"] if args.quick else args.groups.split(",")
-    n_seeds = 2 if args.quick else args.seeds
-    max_steps = 300 if args.quick else args.max_steps
+    n_seeds, max_steps = _budget(args)
     problems_filter = _comma_set(args.problems)
     arms_filter = _comma_set(args.arms)
     _refuse_undrawable_groups(groups)
@@ -932,17 +952,12 @@ def main() -> None:
         )
         raise SystemExit(msg)
 
+    # Below this line every branch writes, so a smoke check rebinds the roots here.
     if args.quick:
-        # A smoke check must not touch the record. Its 2-seed, 300-batch traces
-        # would carry exactly the file names a full run's do and would replace
-        # them, the arm key not encoding the budget. Separate roots are what
-        # make "just check the environment" safe to type.
-        global RESULTS, FIGURES  # noqa: PLW0603 - the output roots are script state
-        RESULTS = RESULTS / "smoke"  # pyright: ignore[reportConstantRedefinition]
-        FIGURES = FIGURES / "smoke"  # pyright: ignore[reportConstantRedefinition]
+        _use_smoke_roots()
 
     if args.lr_sweep:
-        run_lr_sweep(n_seeds=2, max_steps=args.max_steps)
+        run_lr_sweep(n_seeds=2, max_steps=max_steps)
         return
 
     if args.plot_only:

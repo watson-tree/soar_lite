@@ -18,7 +18,6 @@ picks without running an arm.
 # pyright: reportPrivateUsage=false
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -40,29 +39,25 @@ def _isolated_roots(
     monkeypatch.setattr(harness, "FIGURES", tmp_path / "figures")
 
 
-def _run(*argv: str, monkeypatch: pytest.MonkeyPatch) -> str:
+def _run(*argv: str) -> str:
     """Run ``main`` with these arguments and return the message it exits with."""
-    monkeypatch.setattr(sys, "argv", ["compare_baselines", *argv])
     with pytest.raises(SystemExit) as caught:
-        harness.main()
+        harness.main([*argv])
     return str(caught.value)
 
 
 def test_a_misspelled_problem_name_is_refused_before_anything_runs(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """The typo is named, and so is the name it probably meant."""
-    message = _run("--problems", "ackley_100", monkeypatch=monkeypatch)
+    message = _run("--problems", "ackley_100")
 
     assert "no such problem: ackley_100" in message
     assert "ackley_d100" in message
     assert not (tmp_path / "results").exists()
 
 
-def test_names_that_never_meet_in_one_arm_are_refused(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_names_that_never_meet_in_one_arm_are_refused() -> None:
     """Both names are real; the Adam arm of the diagonal quadratic is `adam-lr0.01`."""
     message = _run(
         "--groups",
@@ -71,7 +66,6 @@ def test_names_that_never_meet_in_one_arm_are_refused(
         "diag_quad_d100_cond10000",
         "--arms",
         "adam-lr2",
-        monkeypatch=monkeypatch,
     )
 
     assert "no single arm carries both filters" in message
@@ -91,23 +85,17 @@ def test_a_legal_filter_selects_exactly_the_pair_it_names() -> None:
 
 
 @pytest.mark.parametrize("group", ["bogus", "all"])
-def test_an_undrawable_group_is_named_before_anything_runs(
-    group: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_an_undrawable_group_is_named_before_anything_runs(group: str) -> None:
     """`all` is a real problem group, but it is a union to iterate, not a panel."""
-    message = _run("--groups", group, monkeypatch=monkeypatch)
+    message = _run("--groups", group)
 
     assert f"no group {group!r}" in message
     assert "headline" in message
 
 
 @pytest.mark.parametrize("flag", ["--plot-only", "--lr-sweep"])
-def test_a_filter_on_a_flag_that_measures_nothing_is_refused(
-    flag: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_a_filter_on_a_flag_that_measures_nothing_is_refused(flag: str) -> None:
     """Neither flag runs an arm, so a filter would be dropped without a word."""
-    message = _run(flag, "--problems", "rastrigin_d100", monkeypatch=monkeypatch)
+    message = _run(flag, "--problems", "rastrigin_d100")
 
     assert flag in message
