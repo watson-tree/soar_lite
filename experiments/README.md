@@ -119,7 +119,7 @@ figure is always re-derivable and a trace never is. The unit is one
   below the log axis).
 
 The arm key is the file name and spells out the arm's whole configuration
-(`soar-sample-np1-mu0.63-restart-on`, `adam-lr0.01`, `lbfgs`), so a changed
+(`soar-sample-np1-mu0-restart-on`, `adam-lr0.01`, `lbfgs`), so a changed
 default or a changed lr is a new key and a new file: the old trace stays as a
 record of the old configuration instead of being silently overwritten.
 
@@ -178,16 +178,17 @@ happen. `--plot-only` and `--lr-sweep` measure no arm at all, so they refuse
   ⇒ same number.
 - **No *tuned* knobs on soar-lite** — which is not the same as no knobs.
   `DiagonalPreconditioner` exposes eight (`moment`, `beta`, `theta`, `mu`,
-  `alpha0`, `n_alpha`, `backtrack`, `tau_rel`), and two of them are live
-  smoothing windows: `beta` sets the preconditioner's memory and `mu` the
-  direction's, so neither is inert. What the formal runs do is take them at
+  `alpha0`, `n_alpha`, `backtrack`, `tau_rel`), and two are live smoothing
+  windows: `beta` sets the preconditioner's memory, `mu` the direction's (0 by
+  default — see `docs/explanation/how-it-works.md` §Momentum — so a run takes
+  direction memory only if it asks). What the formal runs do is take them at
   their factory defaults end to end, so soar-lite pays no per-problem search;
   Adam pays the per-problem lr grid each time. That asymmetry is about
   *tuning*, not about having parameters, and it is the point.
 - **No seam on soar-lite either**: the comparison runs the factory
   `value_and_grad` path — no `eval_f` (value-only) seam — so every batch the
   axis counts is a full value+gradient batch. The only attributes stepped are
-  `n_paths` (1 → 16) and `mu` (0 → 0.9 → the class default); `restart_stalled`
+  `n_paths` (1 → 16) and `mu` (0 → 0.9); `restart_stalled`
   stays at its engine default (on) in every arm, and the blr panel injects its
   restart model through the public `model=` factory (`BLRGlobalModel`; the other
   arms use the default `SampleGlobalModel`).

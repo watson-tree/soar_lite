@@ -114,7 +114,7 @@ though the whole step may still fail to decrease `f`.
 With `μ > 0` the direction is the momentum and that guarantee is gone — see
 [Momentum](#momentum), where the loss of that guarantee is deliberate — but the
 closer `μ` is to zero, the more nearly the direction still descends. The default
-`μ = 0.63` therefore does not hold the guarantee.
+`μ = 0` therefore keeps the guarantee; it is `μ > 0` that gives it up, knowingly.
 
 ### Unit invariance, and why there is no scalar learning rate
 
@@ -171,8 +171,8 @@ grid `{alpha0, alpha0·backtrack, alpha0·backtrack², …}` along the current
 direction, let the engine's step-wise argmin pick the winner, and let `fold`
 record it. The two phases differ only in the **direction**: warm-up has no secant
 pair yet, so `d` cannot be estimated and the direction is `−g₀`; once the first
-`(s, y)` exists it becomes `−d⊙m` — the momentum, equal to `g` at `μ = 0`, and
-the default `μ = 0.63` uses it (see [Momentum](#momentum)). Everything except
+`(s, y)` exists it becomes `−d⊙m` — the momentum, equal to `g` at the default
+`μ = 0` (see [Momentum](#momentum)). Everything except
 the direction (`alpha0`, `backtrack`, `n_alpha`) is shared between them.
 
 With the default `n_alpha = 1`, both phases take **one unguarded whole step**:
@@ -224,12 +224,35 @@ consumes the gradient difference `y` on its own, hiding the second-order units
 inside a step length, and evaluates `g` at a look-ahead point, which the
 propose-then-evaluate protocol cannot do.
 
-**The default `μ = 0.63` shares its window with `β`.** Both answer the same
-physical question — how fast does the geometry, or the direction, change — so
-both take a window of about 2.7 steps. They stay two independent knobs: `β`
-smooths the curvature estimate, `μ` averages past gradients, and the secant pair
-keeps reading the raw `y = g_k − g_{k−1}` rather than the smoothed direction, so
-moving one does not entangle the other.
+**The default is `μ = 0`, and the knob is the caller's prior.** What a gradient
+memory buys is a property of two things the preconditioner cannot see:
+
+- **The scaled spectrum.** Memory trades overshoot along steep directions
+  against slow progress along flat ones, so the window that helps is set by how
+  far the curvatures spread *after* `d` has taken the per-coordinate scale out —
+  the conditioning the iteration actually feels, not the one `f` has on its
+  own. A wide spread wants a long window, a spectrum already near one scale
+  wants none, and the ideal damping follows the *shape* of that spread as well
+  as its widest ratio, so it is never one number: the answer differs from
+  problem to problem, and more sharply from coordinate to coordinate (a
+  per-coordinate `μ` is one of the things Adam's first moment buys, at the
+  price of a knob per dimension).
+- **Noise in the objective.** An EMA shrinks the variance of the direction at
+  the cost of lag, so an objective whose gradient is noisy — a simulation, an
+  fp32 evaluation, an average over samples — is the case a memory is *for*.
+  A deterministic, well-resolved objective is not.
+
+Zeroing both priors is the default: no memory. That is also the branch that
+keeps a descending direction, so the default is the assumption-free one rather
+than a tuned compromise. A caller who knows their spectrum, or their noise,
+picks `μ` on purpose, from that knowledge rather than from a number here.
+
+**`μ` does not repair the diagonal approximation.** It adds no off-diagonal
+curvature, changes no `d`, and cannot turn a wrong direction into a right one;
+what it changes is the iteration's *response* along the direction `d` already
+gives. Where the off-diagonal part of `H` is dropped, it stays dropped —
+recovering it is what the global side is for, and nothing on the local side
+stands in for it.
 
 **It is not projected, and it does not preserve a descent direction.** Projecting
 `m` onto `g`'s orthogonal complement under the metric weighted by `d` would give
@@ -241,16 +264,20 @@ The invariant also buys nothing where no line search runs: a descent direction
 only promises that a small enough step decreases `f`, while this method takes one
 unguarded whole step, read by no value and compared against no start. Convergence
 rests on best-so-far accounting plus restarts and stalls, not on every step
-descending; a caller who wants the guarantee can shrink `alpha0` or run a line
-search outside the engine.
+descending; a caller who wants the guarantee can leave `μ` at its default,
+shrink `alpha0`, or run a line search outside the engine.
+
+`β` is a separate question with its own answer: it smooths the curvature
+*estimate*, its window follows how fast the geometry changes under the step
+size, and it defaults to 0.63 (~2.7 steps) on that basis. The two remain
+independent knobs — different histories, and the secant pair keeps reading the
+raw `y = g_k − g_{k−1}` rather than the smoothed direction — so moving one does
+not entangle the other.
 
 **The cost is real.** Near an optimum `g → 0` while `m` decays on the `1/(1−μ)`
 window, so `μ·m_{k−1}` can outweigh `g_k` and the direction is carried off by old
-gradients. Momentum buys progress only where `d` is **structurally wrong** — the
-off-diagonal curvature a per-coordinate ratio cannot express — and even there it
-is "use the old direction once more", a mitigation rather than a repair. `μ = 0`
-is the switch that turns it off, coordinate for coordinate back to the bare
-gradient.
+gradients. `μ = 0` is the switch that turns it off, coordinate for coordinate
+back to the bare gradient, and it is the default (above).
 
 ## Restart
 

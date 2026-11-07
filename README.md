@@ -36,7 +36,8 @@ Two plugin seams and the engine that joins them, a few modules
   `DiagonalPreconditioner` reads the secant equation one coordinate at a time,
   `d_i = 1/B_ii = s_i/y_i`, smooths the secant pair with an EMA, floors the
   denominator with a gradient-norm term, and steps `-d ⊙ m`, where `m` is the
-  momentum (the gradient-history blend; the bare gradient `g` at `mu = 0`). No
+  momentum (the gradient-history blend; the bare gradient `g` at `mu = 0`, its
+  default). No
   matrix, no linear solve, no scalar learning rate, and unit-invariant: scaling a
   coordinate by `c` scales its step by `c`, and rescaling `f` leaves the step
   alone, so one set of unitless knobs serves mixed units.

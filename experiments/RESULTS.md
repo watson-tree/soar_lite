@@ -20,6 +20,25 @@ Unless a table says otherwise it holds **medians**, the statistic the figures
 plot. The harness's stdout line is `final mean best` — mean, not median, and
 not comparable with the tables below.
 
+## 2026-11-07 — lineup v5 (`mu` default back to 0) — CURRENT, NOT YET MEASURED
+
+`DiagonalPreconditioner`'s default `mu` moved from 0.63 back to 0. Every arm
+that takes the default re-keys with it (`...-mu0.63-...` → `...-mu0-...`), and
+the momentum-off arm is no longer a curve of its own: it *is* the default arm.
+
+**Nothing has been re-measured against this lineup.** No table here describes
+what the harness now draws. The v3 traces stay on disk and stay valid as the
+record of the 0.63 default; figures drawn from them say so. The roster is now
+`n_paths=1` (default `mu=0`), `n_paths=1, mu=0.9`, `n_paths=16`; the missing
+measurement is `np16-mu0` on every problem plus the blr panel's three arms at
+`mu=0`.
+
+Why the window moves back, in one line: memory damps the residual spectrum and
+shrinks direction noise, and both are landscape properties the preconditioner
+cannot see — so the default is the branch that assumes neither, and it is also
+the one that keeps a descending direction. The argument is in
+`docs/explanation/how-it-works.md` §Momentum.
+
 ## 2026-11-04 — lineup v4 supplement: the compartment-kinetics problem
 
 Budget 20 seeds x 3000 batches, `headline` panel, at the code of this commit.
@@ -178,7 +197,7 @@ than as a reason to raise the default - the same `mu=0.9` costs 3.8x on the
 diagonal quadratic, where `mu=0` is exact, and the oscillator is non-monotone in
 `mu` (1.6e-5 at 0.9 against 9.2e-6 at the default).
 
-## 2026-11-04 — lineup v3 (`mu=0.63` default, BLR panel at its own budget) — CURRENT
+## 2026-11-04 — lineup v3 (`mu=0.63` default, BLR panel at its own budget) — SUPERSEDED by the v5 entry, which no run has measured yet
 
 Budget: 20 seeds x 3000 batches for `headline`, `smooth`, `multimodal` and
 `invariance`; **20 seeds x 1000 batches for `blr`**, which has its own budget

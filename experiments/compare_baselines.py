@@ -8,7 +8,7 @@ re-measuring one arm rewrites exactly one file and every panel listing that arm
 picks the new numbers up.
 
 The arm key spells out the arm's whole configuration
-(`soar-sample-np1-mu0.63-restart-on`), never a path through a default it could
+(`soar-sample-np1-mu0-restart-on`), never a path through a default it could
 have inherited. An engine default moving therefore changes the key and the file
 path: the old trace stays as a record of the old configuration.
 
@@ -85,7 +85,6 @@ DEFAULT_MU = DiagonalPreconditioner().mu
 
 LABEL_SERIAL = f"soar-lite n_paths=1, mu={DEFAULT_MU:g} (default)"
 LABEL_PARALLEL = f"soar-lite n_paths=16, mu={DEFAULT_MU:g}"
-LABEL_NO_MOMENTUM = "soar-lite n_paths=1, mu=0 (momentum off)"
 LABEL_MOMENTUM_09 = "soar-lite n_paths=1, mu=0.9 (Adam's window)"
 # The blr panel's arms: one method, three restart models, so nothing but where
 # a restart lands differs.
@@ -99,7 +98,6 @@ LABEL_BLR_SPHERE = "n_paths=16, BLR sphere"
 # of them happens to switch momentum off.
 STYLE_SERIAL: dict[str, Any] = {"color": "C0", "lw": 2.0}
 STYLE_PARALLEL: dict[str, Any] = {"color": "C0", "lw": 2.0, "ls": "--"}
-STYLE_NO_MOMENTUM: dict[str, Any] = {"color": "C6", "lw": 1.5}
 STYLE_MOMENTUM_09: dict[str, Any] = {"color": "C1", "lw": 1.5}
 
 
@@ -219,11 +217,12 @@ LBFGS_ARM = Arm(
 def _soar_ladder() -> list[Arm]:
     """Build the soar-lite roster both proposition panels read: one knob at a time.
 
-    A partial grid, not a chain: the momentum axis runs at `n_paths=1` (`mu`
-    0.63 / 0.9 / 0) and one width step (`n_paths` 1 -> 16) sits at the default
-    `mu`. The momentum-off arm is what shows the diagonal sweet spot landing in
-    a single step, which the default's `mu` gives up near a minimizer - a cost
-    the panel should show, not state.
+    A partial grid, not a chain: the momentum axis runs at `n_paths=1` (`mu` 0
+    and 0.9) and one width step (`n_paths` 1 -> 16) sits at the default `mu`.
+    The default is `mu=0`, so "momentum off" *is* the default arm - one curve,
+    not two names reading one file. It is also what shows the diagonal sweet
+    spot landing in a single step, which a `mu > 0` gives up near a minimizer -
+    a cost the panel should show, not state.
 
     The `mu=0.9` arm reads the momentum *horizon*, and it is a comparison arm,
     not a tuned one: its window is ~1/(1-0.9) = 10 steps, the same window Adam's
@@ -247,12 +246,6 @@ def _soar_ladder() -> list[Arm]:
             mu=DEFAULT_MU,
             label=LABEL_PARALLEL,
             style=STYLE_PARALLEL,
-        ),
-        soar_arm(
-            n_paths=1,
-            mu=0.0,
-            label=LABEL_NO_MOMENTUM,
-            style=STYLE_NO_MOMENTUM,
         ),
     ]
 

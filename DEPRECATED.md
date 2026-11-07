@@ -145,6 +145,44 @@ default unifies on that scale; `β` and `μ` stay two independent controls
 (`μ = 0` is still the off switch, `β = 0.95` is still reachable on its own) —
 what changed is only where they rest, not how many of them there are.
 
+## Default momentum `μ = 0.63` (reverted to `μ = 0`)
+
+**Status: superseded — `DiagonalPreconditioner().mu` reads `0.0`; `β` keeps
+its `0.63` default.**
+
+### What it was
+
+The default momentum window shared `β`'s: `β = μ = 0.63`, on the argument in
+the entry above — that one ≈e-step physical scale answers both EMAs.
+
+### Why the argument did not hold
+
+"The two EMAs ask the same question" was a claim about two windows being of the
+same *kind*, used as if it settled what each one is *for*. They buy different
+things: `β` smooths the curvature *estimate* the step divides by, a property of
+one object inside the method, while `μ` trades overshoot along steep directions
+against slow progress along flat ones. That trade is set by the landscape's
+scaled spectrum and by the objective's noise, and neither is visible from inside
+the solver — so a default window is a prior about a caller's problem, not a
+bandwidth the method can pick for itself.
+
+It is also not a repair for the diagonal approximation. Momentum re-shapes the
+iteration along the direction `d` already gives; the dropped off-diagonal
+curvature stays dropped. "The momentum covers what the diagonal misses" is
+false in the direction that matters: the missing term is a directional
+correction, not a temporal one.
+
+Two costs came with turning it on by default. It moved the delivered default off
+the one branch that keeps a descending direction, and onto a value only a
+caller's landscape should pick.
+
+### What replaced it
+
+`μ = 0` (no memory), `β = 0.63` unchanged. The `μ` knob stays, and
+`experiments` keeps a `μ = 0.9` arm as the momentum comparison against Adam's
+`b1 = 0.9`. Argument and wording: `docs/explanation/how-it-works.md`
+§Momentum.
+
 ## Additive denominator floor (`+` instead of `max`)
 
 **Status: rejected at the design level — `soar_lite/local_solver.py` reads

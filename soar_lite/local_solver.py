@@ -48,10 +48,20 @@ class DiagonalPreconditioner(LocalSolver):
     being unprojected, it withdraws the descent-direction guarantee, so
     convergence rests on the engine's best-so-far bookkeeping and restart.
 
-    Both smooths default to a window of about 2.7 steps: ``beta = mu = 0.63``.
-    They stay two knobs - ``beta`` smooths the ratio that sets the step's scale,
-    ``mu`` smooths the direction - because the two histories are different
-    quantities.
+    ``beta`` defaults to a window of about 2.7 steps (0.63); ``mu`` defaults to
+    0, no memory. The window that helps a direction belongs to how far the
+    curvatures spread once ``d`` has taken the per-coordinate scale out (and to
+    the shape of that spread, not only its widest ratio), and to how noisy the
+    objective is - neither is knowable from inside the solver, so the default is
+    the branch that assumes neither, and it is also the branch that keeps the
+    descent guarantee stated above. A caller who knows their spectrum, or whose
+    objective is noisy (fp32 evaluation, a simulation, a sampled average), sets
+    ``mu`` accordingly; there is no window to copy from here. It is not a repair
+    for the diagonal approximation either: momentum re-shapes the iteration
+    along the direction ``d`` already gives, and the dropped off-diagonal
+    curvature stays dropped. The two smooths stay two knobs - ``beta`` smooths
+    the ratio that sets the step's scale, ``mu`` smooths the direction - because
+    the two histories are different quantities.
 
     Two phases, one step mechanic. Every step samples the alpha grid
     {alpha0, alpha0·backtrack, alpha0·backtrack², …} along its own direction and
@@ -84,7 +94,7 @@ class DiagonalPreconditioner(LocalSolver):
         moment: Literal["abs", "rms"] = "rms",  # mean ratio / mean-square ratio
         beta: float = 0.63,  # EMA decay; the window is ≈ 1/(1-β) ≈ e steps
         theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
-        mu: float = 0.63,  # gradient-EMA decay for the direction; 0 = bare g
+        mu: float = 0.0,  # gradient-EMA decay for the direction; 0 = bare g, default
         alpha0: float = 1.0,  # the full step's length, in units of the natural step
         n_alpha: int = 1,  # alpha samples per step; 1 = no line search
         backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
@@ -111,8 +121,8 @@ class DiagonalPreconditioner(LocalSolver):
             theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
                 ``θ·g_i²`` for "rms"), >= 0.
             mu: EMA decay of the gradient history blended into the direction,
-                ``(1 - mu)·g + mu·m_prev``; 0 leaves the bare gradient, in
-                [0, 1).
+                ``(1 - mu)·g + mu·m_prev``; 0 (the default) leaves the bare
+                gradient, in [0, 1).
             alpha0: step length every path is armed at; the full step's
                 length, > 0.
             n_alpha: alpha samples per step along the step's direction; 1 means

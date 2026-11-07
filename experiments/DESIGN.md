@@ -19,10 +19,13 @@ reporting wins — R5):
 - **P② — direction repair (smooth + headline).** The per-coordinate secant's
   error is in the *direction* `-d ⊙ g`: it drops off-diagonal curvature. Two
   questions: does the preconditioner still beat Adam's adaptive step on scale /
-  conditioning / unit-mixing, and does direction momentum (the default `mu`, an
-  `≈e`-step gradient window) repair the dropped part — a residual folded back
-  from the search history — where the rotation coupling (rotated quadratic) and
-  interaction coupling (oscillator) live? `L-BFGS-B` is the ceiling reference
+  conditioning / unit-mixing, and does adding direction momentum change the
+  *response* of that dropped part — the zigzag and the overshoot a wide residual
+  spectrum produces — where the rotation coupling (rotated quadratic) and
+  interaction coupling (oscillator) live? Momentum does not repair the dropped
+  term (see `docs/explanation/how-it-works.md` §Momentum): it re-shapes the
+  iteration along the direction `d` already gives, so the panel reads it as an
+  axis of its own, never as a candidate fix. `L-BFGS-B` is the ceiling reference
   (full-memory + exact line search),
   so the panel shows how much of any gap is "diagonal vs full second order"
   rather than a tuning failure.
@@ -33,8 +36,9 @@ reporting wins — R5):
   hoped to buy in deep-network optimizers. What the panels do test is whether
   the momentum push changes *where a stalled chain ends up*. Rastrigin chains
   converge into a lattice basin and stall; Ackley chains freeze outside the
-  funnel. The momentum-off arm (`mu=0`) is the contrast that reads whether the
-  default momentum moves either stall, against serial, parallel and Adam.
+  funnel. Momentum off is the default, so the contrast arm is `mu=0.9`: it reads
+  whether a gradient memory moves either stall, against serial, parallel and
+  Adam.
 - **Restart model — center bias (rastrigin alone).** Where a restart lands: a
   BLR posterior centered on the observed best vs a uniform re-draw. Only
   rastrigin gives a restart a stage — chains stall in local basins, and the
@@ -53,7 +57,7 @@ showed stalls fire only where a method converges into a basin — the diagonal
 quadratic (~step 4) and rastrigin (~batch 700) — never on the rotated
 quadratic, Ackley or the oscillator, so the restart bit is not a step any
 panel takes. The two single-attribute steps are the width (`n_paths` 1 → 16)
-and the momentum (`mu` 0 → the default); each curve moves exactly one.
+and the momentum (`mu` 0 → 0.9); each curve moves exactly one.
 
 ## Problem set
 
@@ -184,13 +188,12 @@ Curves differ per panel; each curve has one role, and each single-attribute
 step moves exactly one knob (`n_paths` or `mu`); restart stays at the engine
 default (on) in every arm:
 
-- **Smooth + headline** (**P②**): `soar-lite n_paths=1` (default `mu`),
-  `soar-lite n_paths=1, mu=0.9`, `soar-lite n_paths=16`,
-  `soar-lite n_paths=1, mu=0` (momentum off), `Adam` (grid lr), `L-BFGS-B`
-  (ceiling *reference*, not a head-to-head baseline — full-memory + serial line
-  search vs our per-coordinate + batched n_paths).
-- **Multimodal** (**P①**): the same four soar-lite arms, `Adam` (grid lr).
-  The momentum axis runs at `n_paths=1` — 0.9, the default, 0 — so the curve
+- **Smooth + headline** (**P②**): `soar-lite n_paths=1` (default `mu=0`),
+  `soar-lite n_paths=1, mu=0.9`, `soar-lite n_paths=16`, `Adam` (grid lr),
+  `L-BFGS-B` (ceiling *reference*, not a head-to-head baseline — full-memory +
+  serial line search vs our per-coordinate + batched n_paths).
+- **Multimodal** (**P①**): the same three soar-lite arms, `Adam` (grid lr).
+  The momentum axis runs at `n_paths=1` — 0 and 0.9 — so the curve
   family differs from its neighbors by one knob, and the `mu=0.9` arm asks the
   momentum question at **Adam's own horizon** instead of ours: 0.9 is a 10-step
   window (~1/(1-0.9)), the same window Adam's first moment runs at `b1=0.9`.
@@ -270,11 +273,11 @@ NAAdam (Adam + `σ_t = σ0/√t` decaying Gaussian noise) was measured and
 **dropped**: on ackley/rastrigin at d=100 the noise never separates from plain
 Adam — larger `σ0` is flat (rastrigin) to worse (ackley) — so it would only be
 a redundant, exactly-overlapping curve. The multimodal panel is therefore
-`soar-lite` n_paths=1 (default `mu`, `mu=0.9`, `mu=0`) / 16 vs `Adam`, which is the
+`soar-lite` n_paths=1 (default `mu=0`, `mu=0.9`) / 16 vs `Adam`, which is the
 honest contrast: momentum is read as a *drift* on these landscapes, not
 asserted to be an escape mechanism in general.
 
-Two rules keep the `mu=0.63` default from being over-read. Momentum is a
+Two rules keep the momentum arm from being over-read. A `mu > 0` is a
 **trade, not a uniform win**: it costs where the choice of basin dominates and
 pays where off-diagonal coupling does, and the lattice landscape that pays the
 cost is not the headline. And on a landscape where every method converges, the
@@ -415,7 +418,7 @@ window is a knob with a measurable effect.
   1000-batch run, so the `blr` figure truncates that arm to the shorter extent
   present instead of re-measuring it.
 - The arm key spells out the arm's whole configuration
-  (`soar-sample-np1-mu0.63-restart-on`, `adam-lr0.01`, `lbfgs`) instead of
+  (`soar-sample-np1-mu0-restart-on`, `adam-lr0.01`, `lbfgs`) instead of
   leaning on a default. An engine default moving therefore changes the key and
   so the path: the old trace survives as a record of the old configuration, and
   a rerun cannot overwrite a measurement whose meaning has changed. The arms
