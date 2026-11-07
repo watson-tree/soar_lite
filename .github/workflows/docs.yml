@@ -33,7 +33,13 @@ jobs:
           path: site
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    # Pages needs a public repo on the free plan. Gate on a repo variable instead
+    # of deleting the job: set PAGES_ENABLED=true once Pages is on, and the deploy
+    # resumes with no edit. An unset variable is the empty string, so this is
+    # skipped until then while `build` keeps checking the docs on every push.
+    if: >-
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      && vars.PAGES_ENABLED == 'true'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
