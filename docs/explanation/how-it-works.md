@@ -177,7 +177,8 @@ can be right for all coordinates at once. (The warm-up step is the one exception
 ### The floor: a guard on the denominator
 
 `λ = θ·|gᵢ|` for `"abs"` (units `[f]/[x]`) or `λ = θ·gᵢ²` for `"rms"` (units
-`[f]²/[x]²`), with `θ > 0` unitless (default `1e-3`), and the denominator is
+`[f]²/[x]²`), with `θ ≥ 0` unitless (default `1e-3`; `θ = 0` turns the floor
+off, so `d = S/Y` has nothing catching a vanishing `Y`), and the denominator is
 `max(Y, λ)`. It is anchored to the **current gradient** rather than to the first
 secant `y₀` or the current value `|f_k|`: the floor has to vanish with `g`, not
 with `y`. A flat but unconverged coordinate (`y → 0` while `g ≠ 0`) still gets a
@@ -193,7 +194,7 @@ multiplied by, which is why anchoring to `g` cannot make the step explode as
 `g → 0`. The floor is a **guard**: it only touches `d` where `Y < λ`; everywhere
 else `d = S/Y` stands, and how aggressive the step should be stays with the
 separate knobs `alpha0` (whole-step damping, default `1`), `backtrack` (grid
-spacing, used when `n_alpha > 1`) and `n_alpha` (grid size, default `1`) — see
+spacing, used when `n_alpha > 1`) and `n_alpha` (grid size, default `1`) — `DiagonalPreconditioner` parameters, not schedule ones — see
 [The warm-up step](#the-warm-up-step).
 
 ### The warm-up step
@@ -389,8 +390,8 @@ stands" cannot be polluted by a degenerate point.
 ### One iteration
 
 A round first puts the paths in path-index order, then serves its batches in
-that order — one fused `settle` batch (step 5), preceded by up to `n_alpha` trial
-batches when a step needs verdicts (see Cost):
+that order — one fused `settle` batch (step 5), preceded by the trial batches
+its judged steps spend, up to `n_alpha` each (see Cost):
 
 1. **Redraw set**: paths with no point (the iteration-0 placeholder) or that are
    `stalled` with `restart_stalled` on.
@@ -402,10 +403,12 @@ batches when a step needs verdicts (see Cost):
    a wrong shape is a `ValueError` at once — the width belongs to the engine, and
    a model returning a different width fails at the batch boundary instead of
    deep inside a broadcast.
-4. **Steps**: each path in the queue takes one step through one of two channels
-   by `needs_verdict`, producing the winner of that step.
+4. **Steps**: each non-stalled path in the queue takes one step through one of
+   two channels by `needs_verdict`, producing the winner of that step; the
+   stalled-and-not-redrawn ones propose nothing (step 2).
 5. **One `settle` batch**: redraw starts first, then the step winners in path
-   order; the **same** batch goes to `settle` to buy the gradients still owed.
+   order; the **same** batch buys the halves still owed — a judged winner's
+   gradient, an unjudged winner's or redraw start's value and gradient.
 6. **Landing**: a start goes through `_place` (unusable leaves it `stalled`,
    redrawn next round) and a winner through `_advance` (unusable is `stalled`, no
    `fold`).
@@ -575,11 +578,12 @@ value-only seam connected. The counts report and do not budget: the budget's
 
 **How many batches a round spends is decided by the evaluation seam**:
 
-- **With `eval_f` connected**: each trial serves `f` only, and the round's one
-  fused batch (`settle`) buys everything still owed — the accepted trial's
-  gradient and every redraw start's value and gradient, since a start defers
-  both halves. So an `n_alpha`-candidate step spends at most `n_alpha` value-only
-  batches plus one fused batch — fewer if `verdict` accepts early.
+- **With `eval_f` connected**: each judged trial serves `f` only, and the round's
+  one fused batch (`settle`) buys everything still owed — each accepted trial's
+  gradient, and every unjudged winner's and redraw start's value and gradient,
+  since both of those defer both halves. So an `n_alpha`-candidate step spends at
+  most `n_alpha` value-only batches plus one fused batch — fewer if `verdict`
+  accepts early.
 - **Without `eval_f`**: the fused batch is the only way to read a value, so
   **each trial is itself a fused batch** and the winner needs no `settle` pass.
   An `n_alpha`-candidate step spends at most `n_alpha` fused batches, one per

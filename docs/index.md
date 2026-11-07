@@ -16,12 +16,14 @@ scrambled starts plus a quasi-Newton method find the answer cheaply, that costs
 you less. See [when this fits](explanation/how-it-works.md#when-this-fits) for
 the reasoning.
 
-A run moves `n_paths` paths in lockstep: every path takes one step per iteration,
-each following its own descent. Iteration 0 is the exception — it places them,
-serving one batch of starts before any step is taken. With the default
-`n_alpha = 1` an iteration is one fused pass — a single call that returns value
-and gradient for every served point at once; a judged step (`n_alpha > 1`) serves
-extra trial batches first (see [How it works](explanation/how-it-works.md)). On a
+A run moves `n_paths` paths in lockstep, each following its own descent.
+Iteration 0 is the exception on the schedule — it places them, serving one batch
+of starts before any step is taken (the engine's move logic itself needs no
+special case: a path with no point simply restarts). After that, with the default
+`n_alpha = 1` a round is usually one fused pass — a single call returning value
+and gradient for every served point — while a judged step (`n_alpha > 1`) serves
+trial batches first, and a path whose stopping test already holds asks for one
+ruling instead (see [How it works](explanation/how-it-works.md)). On a
 GPU a wider batch barely costs more wall-clock than a narrow one, which is why
 the engine is built around batched evaluations; on a CPU the same run works,
 just without that saving.

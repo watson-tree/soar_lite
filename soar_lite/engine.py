@@ -56,18 +56,21 @@ class PathPoint:
 
     The engine builds these and the local method receives them; a caller
     normally reads the run's outcome through `NPathResult` instead of
-    constructing one.
+    constructing one. A point is a candidate until `usable` passes, so a
+    non-finite half is allowed on a point that has not been committed.
     """
 
     x: jnp.ndarray
     """Coordinates, shape ``(d,)``, in the run's coordinates."""
 
     f: float
-    """The objective's value there, always finite: a point that fails the finite
-    check is never committed, so no `PathPoint` carries a ``nan``."""
+    """The objective's value there. Finite for any point a path actually holds
+    (``usable`` gates the commit); a point still being considered may carry a
+    non-finite value."""
 
     g: jnp.ndarray
-    """The gradient there, shape ``(d,)``; finite for the same reason."""
+    """The gradient there, shape ``(d,)``; finite under the same ``usable`` gate
+    as ``f`` - held points are finite, candidates need not be yet."""
 
     @property
     def usable(self) -> bool:
@@ -77,8 +80,7 @@ class PathPoint:
         non-finite f cannot be reported, re-started from or finished on, and a
         non-finite g is proposed from and folded on, so one NaN there poisons
         that coordinate's magnitude EMAs for the rest of the run. f is asked
-        first, so a dead value never pays for pulling the gradient back from the
-        GPU (or any accelerator).
+        first, so a dead value skips g's finite scan.
         """
         return math.isfinite(self.f) and _all_finite(self.g)
 
@@ -385,18 +387,20 @@ class NPathResult:
 
     Two deliberate differences from `OptimizeResult`: ``success``/``message`` are
     absent, because the engine has no convergence criterion of its own - apart
-    from the caller's own gates (``time_limit``, ``budget_check``), it stops
-    early on its own initiative only for an objective with no floor or for a
-    flock in which every path stalled with restarts off - and ``fun`` is the best
-    over *feasible* points only.
+    from the caller's own gates (``max_iters``, ``time_limit``,
+    ``budget_check``), it stops early on its own initiative only for an
+    objective with no floor or for a flock in which every path stalled with
+    restarts off - and ``fun`` is the best over *feasible* points only.
     """
 
     x: jnp.ndarray
     """The argmin in the coordinates the engine was handed, shape ``(d,)``.
 
     Not necessarily a row of `flock_x`: the best point may come from a path that
-    was restarted afterwards. All ``nan`` when no feasible finite eval was ever
-    served - the same reading as ``fun``.
+    was restarted afterwards. All ``nan`` when nothing feasible was ever served,
+    the ``nan`` reading of ``fun``. A feasible ``-inf`` names its point instead:
+    ``x`` is that point and ``fun`` is ``-inf``, so ``x`` is ``nan`` only when no
+    feasible point was served at all.
     """
 
     fun: float
@@ -496,9 +500,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     idles.
 
     `n_paths` is the run's width and nothing else; the dimension is `domain.d`,
-    so a run never spells it twice. Iteration 0 needs no special case: no path
-    holds a point yet, and a path without a point restarts, so the first move
-    places the whole flock as one fused batch. It is `x0` where one was handed
+    so a run never spells it twice. Iteration 0 needs no special case in the move
+    loop: no path holds a point yet, and a path without a point restarts, so the
+    first move places the whole flock as one fused batch - which is why the run's
+    schedule sees iteration 0 as the placement round. It is `x0` where one was
+    handed
     in, and otherwise one start per path from the global model. A start whose
     served value or gradient comes back non-finite stalls its path on arrival;
     with `restart_stalled` on (the default), that path restarts again next
@@ -524,8 +530,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
     `fun` is the true minimum over every feasible eval with a finite value -
     every served point when the objective reports no mask, only the points its
-    mask passes otherwise - while the paths themselves move on every served
-    value, mask or no mask. Work is reported, never budgeted: four counts on two
+    mask passes otherwise. A feasible ``-inf`` is the answer rather than a
+    contender: the run ends on the spot and reports that point as ``x`` with
+    ``fun = -inf``. The paths themselves move on every served value, mask or no
+    mask. Work is reported, never budgeted: four counts on two
     axes that do not mix - points against batches, and f against f+g - and none
     of them stops the run (see `NPathResult`).
 
