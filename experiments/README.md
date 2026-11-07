@@ -59,11 +59,13 @@ points served" axis, so both billing notions come from one execution.
 Run one panel to save time, e.g. `--groups smooth`; any subset works, and each
 panel writes its files as it finishes.
 
-The restart-model panel is run separately and on purpose: `--groups blr` draws
-rastrigin alone (all arms `n_paths=16`) — `Sample` vs `BLR identity` vs `BLR
-sphere` — as its own single-subplot figure. It is left out of the default list
-because a fitted BLR restart walks an acquisition descent on every redraw, so
-it is the most expensive panel per batch.
+The restart-model panel is run separately and on purpose, at its own budget:
+`--groups blr --max-steps 1000` draws rastrigin alone (all arms `n_paths=16`) —
+`Sample` vs `BLR identity` vs `BLR sphere` — as its own single-subplot figure;
+the committed traces hold this panel at 1000 batches, so the default 3000 is
+refused by the budget guard rather than overwriting them. It is left out of the
+default list because a fitted BLR restart walks an acquisition descent on every
+redraw, so it is the most expensive panel per batch.
 
 ## The Adam learning-rate grid
 

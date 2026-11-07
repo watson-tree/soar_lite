@@ -1,72 +1,22 @@
-r"""Run the soar-lite / baseline comparison and write per-arm traces plus figures.
+"""Measure the arms on each panel, write per-arm traces, draw figures.
 
-Storage is one file per (problem, arm): ``experiments/results/<problem>/
-<arm-key>.json`` holds that arm's raw per-seed trace, not a resampled grid -
-the grid is a plotting decision that depends on which other arms are present.
-A panel is then a *roster over those files*, so re-measuring one arm rewrites
-exactly one file and every panel listing that arm picks the new numbers up.
-Two panels can share an arm without storing it twice: rastrigin's
-``n_paths=16`` arm is one file that both the multimodal and the blr panel
-draw, which is why their Sample medians agree to the last digit rather than to
-whichever copy ran last.
+Storage is one file per (problem, arm):
+`experiments/results/<problem>/<arm-key>.json` holds that arm's raw per-seed
+trace, not a resampled grid - the grid is a plotting decision that depends on
+which other arms are present. A panel is a *roster over those files*, so
+re-measuring one arm rewrites exactly one file and every panel listing that arm
+picks the new numbers up.
 
 The arm key spells out the arm's whole configuration
-(``soar-sample-np1-mu0.63-restart-on``), never a path through a default it
-could have inherited. So an engine default moving changes the key and
-therefore the file path: the old trace stays as a record of the old
-configuration, and no rerun can quietly overwrite a measurement that no longer
-describes what the code does. The arms that take no knobs read the
-preconditioner's defaults from the class for the same reason.
+(`soar-sample-np1-mu0.63-restart-on`), never a path through a default it could
+have inherited. An engine default moving therefore changes the key and the file
+path: the old trace stays as a record of the old configuration.
 
-The panels, following the design in `DESIGN.md`:
+The budget is part of the record (`meta.seeds`, `meta.max_steps`): a run that
+asks for a different budget is refused rather than allowed to overwrite.
 
-* smooth + headline (preconditioning proposition): soar-lite n_paths=1 (the
-  default momentum), n_paths=16, n_paths=1 with momentum off (mu=0), Adam,
-  L-BFGS-B (ceiling reference);
-* multimodal (momentum-drift proposition): the same soar-lite arms, Adam;
-* blr (restart-model proposition): n_paths=16 whose starts come from the
-  uniform sample or from a BLR posterior under the identity /
-  inverse-stereographic projection.
-
-Every arm leaves `restart_stalled` at the engine default (on): a probe showed
-stalls fire only where the method converges into a basin (the diagonal
-quadratic, rastrigin), so the restart bit is not a step the panels take. The
-width step (n_paths 1 -> 16) and the momentum step (mu 0 -> default) each move
-one attribute.
-
-The blr panel carries no external baseline on purpose: a BLR restart serves no
-objective points (its acquisition descent is not an oracle call), so on these
-axes it would look free. The panel reads the center bias only - rastrigin is
-the one problem where chains stall before reaching the floor - and its three
-curves differ in nothing but where a restart lands.
-
-Every method gets the same number of **batches** (one batch = one eval of
-parallel points, ``--max-steps``) - the wall-clock axis of a batched
-setting, and the only axis on which an n_paths=16 run and a single chain compare
-at equal cost per step. The second figure replots the same runs against
-objective points served, the fair information unit for a serial setting: there a
-chain serves one point per batch, so the point axis is truncated at
-``--max-steps`` points and a batched run shows only the batches it could afford -
-no figure re-runs anything. Curves are the median best-so-far over seeds,
-shaded the [Q1, Q3] interquartile band, log y (mean +/- std would model a
-skewed spread as symmetric and dip below the axis).
-
-Adam carries a per-problem learning rate, grid-tuned per problem
-(reproduce the sweep with --lr-sweep): the picks span over two orders of
-magnitude across the panels, and lr=1e-4 costs 52 orders of magnitude on the
-diagonal quadratic against its pick. On the diagonal quadratic and Ackley the
-whole grid from 1e-2 up is one floor or plateau, so those two picks are one
-point of a tie rather than a strict argmin. That tuning is budget the axis
-never shows -- every trial is more objective points served, and it is manual
-rather than adaptive. soar-lite has no learning rate to tune.
-
-Usage:
-    python -m experiments.compare_baselines --quick     # 2-seed smoke check
-    python -m experiments.compare_baselines             # the full run
-    python -m experiments.compare_baselines --lr-sweep  # Adam lr sensitivity panel
-    python -m experiments.compare_baselines --groups smooth \\
-        --problems diag_quad_d100_cond10000 \\
-        --arms soar-sample-np1-mu0-restart-on           # re-measure one arm
+Panels and their propositions: `DESIGN.md`. Commands and storage layout:
+`README.md`. What the last full run measured: `RESULTS.md`.
 """
 
 import argparse
@@ -927,14 +877,23 @@ def main() -> None:
     """Parse args, run the selected arms, write a trace file each, then draw."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--quick", action="store_true", help="2-seed smoke check")
-    parser.add_argument("--seeds", type=int, default=20)
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        default=20,
+        help="seeds per arm",
+    )
     parser.add_argument(
         "--max-steps",
         type=int,
         default=3000,
         help="batches per method",
     )
-    parser.add_argument("--groups", default="headline,smooth,multimodal,invariance")
+    parser.add_argument(
+        "--groups",
+        default="headline,smooth,multimodal,invariance",
+        help=f"panels to draw: {', '.join([*PANELS, 'invariance'])}",
+    )
     parser.add_argument(
         "--problems",
         default="",

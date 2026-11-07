@@ -400,17 +400,20 @@ window is a knob with a measurable effect.
   arm files with no re-run, naming any arm that has no trace instead of drawing a
   gap. The invariance panel writes no trace — it is re-run (fast) rather than
   re-plotted.
-- The `blr` panel runs at **its own budget**, 1000 batches rather than 3000.
-  A restart model acts only once a chain stalls, rastrigin stalls it around
+- The `blr` panel runs at **its own budget**, 1000 batches rather than 3000,
+  in its own invocation (`--groups blr --max-steps 1000`), because
+  a restart model acts only once a chain stalls, rastrigin stalls it around
   batch 700, and the remaining 2000 batches buy that panel nothing. Two
   consequences are load-bearing. The cross-panel consistency check - the
   `Sample` arm's median matching the multimodal panel's `n_paths=16` median -
   holds only because both panels share a budget, so with different budgets the
   `blr` panel is read against its own arms alone and never subtracted from a
   3000-batch panel. And the shared rastrigin `n_paths=16` arm is one file that
-  both panels write: because a run is prefix-deterministic, the 3000-batch
-  trace's first 1000 batches *are* a 1000-batch run, so the `blr` figure
-  truncates that arm to the panel's budget instead of re-measuring it.
+  both panels *read*: only the multimodal invocation writes it, at 3000, and
+  the budget guard refuses a second writer at another budget. Because a run is
+  prefix-deterministic, the 3000-batch trace's first 1000 batches *are* a
+  1000-batch run, so the `blr` figure truncates that arm to the shorter extent
+  present instead of re-measuring it.
 - The arm key spells out the arm's whole configuration
   (`soar-sample-np1-mu0.63-restart-on`, `adam-lr0.01`, `lbfgs`) instead of
   leaning on a default. An engine default moving therefore changes the key and
