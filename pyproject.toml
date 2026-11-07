@@ -11,18 +11,22 @@ keywords = [
   "first-order",
   "gradient-descent",
   "quasi-newton",
-  "restart",
   "multi-start",
+  "nonconvex",
   "jax",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering",
   "Topic :: Scientific/Engineering :: Mathematics",
+  "Typing :: Typed",
 ]
 dependencies = ["jax"]
 
