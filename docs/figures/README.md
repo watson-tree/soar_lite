@@ -8,7 +8,7 @@ which command redraws it.
 
 | file | panel | budget |
 | --- | --- | --- |
-| `headline-points.png` | `headline`, objective-points axis | 20 seeds × 3000 batches |
+| `headline-batches.png` | `headline`, batches axis | 20 seeds × 3000 batches |
 | `invariance-units.png` | `invariance` | 20 seeds × 3000 batches |
 
 The canonical run draws both (and `smooth`, `multimodal`):
@@ -20,7 +20,7 @@ uv run --group exp python -m experiments.compare_baselines \
 
 ## Updating one
 
-Re-run the command, look at `experiments/figures/<panel>/points.png`, copy it
+Re-run the command, look at `experiments/figures/<panel>/batches.png`, copy it
 over the file here only if it is the panel the caption claims, and adjust the
 row above when the budget moved. Nothing syncs these automatically: an automatic
 copy would let the image drift every time somebody re-ran something, which is

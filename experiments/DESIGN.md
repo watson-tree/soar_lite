@@ -274,19 +274,29 @@ settled against: the residual error is in the step's *direction*, not its length
   gradient-norm test, L-BFGS-B's tolerance), so 3000 is an upper bound, not a
   fixed cost. `L-BFGS-B` takes the same cap as `maxfun`/`maxiter` and is a serial
   reference, not the same cost axis.
-- Two honest budgets, both read off the **same** runs, no re-runs:
+- Two honest budgets, both read off the **same** runs, no re-runs. They differ in
+  exactly one arm: every arm serves one point per batch, so its curve is the same
+  on both axes, and only the wide `n_paths=16` arm moves between them.
   - **batches** figure — every method 3000 batches. This is the wall-clock axis
-    of a batched setting, and the only axis where `n_paths=16` and a single chain
-    compare at equal cost per step; it is the main chart.
+    of a batched setting, the axis this library is built for, and the only axis
+    where `n_paths=16` and a single chain compare at equal cost per step. It is
+    the main chart, and the one `README.md` shows, with the wide arm whole at its
+    16 points per batch.
   - **points** figure — the same runs on the information unit of a serial
-    setting. Unlike the batch axis, a point axis is *not* level across arms: a
-    point count is what `n_paths` inflates, so an `n_paths=16` arm serves 16
-    points per batch and would trail 16x past every single chain - 48000 against
-    3000 on these runs. Every arm is therefore cut at the shortest extent present
-    **on the points axis**, so all curves end together and the wide arm shows the
-    first ~187 of its 3000 batches. That truncation is the reading, not a loss:
-    the axis asks what each method bought from the same number of objective
-    points served, and the batches figure is where the wide arm is shown whole.
+    setting, where `n_paths` pays for its width. A point count is what
+    `n_paths` inflates, so an `n_paths=16` arm serves 16 points per batch and
+    would trail 16x past every single chain - 48000 against 3000 on these runs.
+    Every arm is therefore cut at the shortest extent present **on the points
+    axis**, so all curves end together and the wide arm shows the first ~187 of
+    its 3000 batches. That truncation is the reading, not a loss: on equal
+    points, `n_paths=16` splits one long run into sixteen short ones - 1/16 the
+    depth each - and reports their best, so the axis asks whether a breadth of
+    short independent searches beats one deep one. Parallelism is a trade of
+    per-chain depth for a tighter best-of-n spread, and the points axis is the
+    only place that trade is charged instead of hidden behind a 16x point
+    budget. It is the axis of the curve's *shape*, not of a final value: a
+    converged median read off a truncated curve is an artefact, so final numbers
+    come from the batches column in `RESULTS.md`.
 - Seeds `N=20`; report **median, shaded [Q1, Q3]** (interquartile band), log-y,
   log x — mean ± std would model a skewed best-so-far spread as symmetric and
   dip below the log axis.

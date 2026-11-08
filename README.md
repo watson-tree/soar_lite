@@ -113,12 +113,14 @@ Each method gets the same objective, the same seeds and the same batch budget.
 A curve is best-so-far, the line a median over 20 seeds and the band its Q1-Q3
 spread. Click a panel for the full size.
 
-[![The two real inverse problems, best-so-far against objective points served](docs/figures/headline-points.png)](docs/figures/headline-points.png)
+[![The two real inverse problems, best-so-far against batches served](docs/figures/headline-batches.png)](docs/figures/headline-batches.png)
 
 **The two real inverse problems** - a mixed-unit oscillator chain and a
-non-convex compartment chain - on the objective-points axis, the unit this
-library bills in and the one where a wide arm pays for its width. 20 seeds x
-3000 batches.
+non-convex compartment chain - on the batches axis: one batch is one parallel
+pass, the wall clock of a GPU setting, which is what this library is built for.
+20 seeds x 3000 batches. A wide `n_paths=16` arm is shown whole here and pays 16
+objective points per batch for it; the same runs on the points axis, where that
+width is charged per point, are in `experiments/RESULTS.md`.
 
 [![One physics measured in two unit systems, with no retuning](docs/figures/invariance-units.png)](docs/figures/invariance-units.png)
 
