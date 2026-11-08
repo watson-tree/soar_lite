@@ -344,10 +344,6 @@ class DiagonalPreconditioner(LocalSolver):
             m=m,
         ).armed(self.alpha0)
 
-    def _reset_step(self, i: int) -> None:
-        """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
-        self._state[i] = self._state[i].armed(self.alpha0)
-
     def _stationary(self, i: int, p: PathPoint) -> bool:
         """Return whether path i's gradient has hit its floor: ‖g‖ ≤ τ_rel·‖g_0‖.
 
