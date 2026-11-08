@@ -16,12 +16,6 @@ import pytest
 from soar_lite import Domain
 
 
-def test_a_domain_needs_a_declared_box() -> None:
-    """Refuse a domain with nothing to read its dimension off."""
-    with pytest.raises(ValueError, match="needs one"):
-        Domain(None)  # pyright: ignore[reportArgumentType]
-
-
 def test_a_malformed_box_is_refused_at_construction() -> None:
     """A box that is not a box fails here, not inside a clip.
 

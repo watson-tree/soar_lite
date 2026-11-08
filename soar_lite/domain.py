@@ -125,9 +125,9 @@ class Domain:
         Args:
             bounds: the box, scipy-style pairs or a ``(d, 2)`` array. A side may
                 be ``None`` or ``+-inf`` for an unbounded domain; a NaN side, or
-                a lower side above its upper bound, is refused. ``None`` is not a
-                box: the dimension and the unbounded sides are declared by the
-                box itself, so a domain cannot exist without one.
+                a lower side above its upper bound, is refused. There is no box
+                for a domain to default to: the dimension and the unbounded
+                sides are what the box declares.
             scale: per-dimension prior width in coordinate units, a ``(d,)``
                 vector or ``None`` for every dimension at one. A projection that
                 normalizes compares the entries to each other. The common
@@ -144,22 +144,14 @@ class Domain:
                 needs its own `GlobalModel`, not a domain.
 
         Raises:
-            ValueError: If the box is absent or malformed, or `scale` is not a
-                ``(d,)`` vector of finite positive values, or `samplers` is not
-                ``d`` entries long.
+            ValueError: If the box is malformed, or `scale` is not a ``(d,)``
+                vector of finite positive values, or `samplers` is not ``d``
+                entries long.
 
         """
-        _check_bounds(bounds)
-        box = _box_bounds(bounds)
-        if box is None:
-            msg = (
-                "a domain reads its dimension and its unbounded sides off the "
-                f"box it is given, so it needs one: got {bounds!r}"
-            )
-            raise ValueError(msg)
-        self.lo, self.hi = box
+        self.lo, self.hi = _normalize_bounds(bounds)
         # The dimension is what `bounds` declares: read it off the argument, not
-        # off `lo`/`hi`, which `_box_bounds` just derived from it.
+        # off `lo`/`hi`, which `_normalize_bounds` just derived from it.
         self.d = len(bounds)
         self.bounds = bounds
         self.scale = _check_scale(scale, self.d)
@@ -269,15 +261,15 @@ def _check_samplers(
     return given
 
 
-def _check_bounds(bounds: Bounds | None) -> None:
-    """Reject a malformed box at construction, not deep inside a clip.
+def _normalize_bounds(bounds: Bounds) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Reject a malformed box and normalize it to ``(lo, hi)``, in one pass.
 
-    Both spellings are checked: one `(lb, ub)` pair per dim, or a `(d, 2)` array.
-    A NaN side is rejected too - it would poison every clip silently instead of
+    Both spellings are read the same way: one `(lb, ub)` pair per dim, or a
+    `(d, 2)` array. A `None` side becomes ∓inf before anything is looked at, so
+    the check and the box it hands out cannot disagree about what a side means.
+    A NaN side is rejected - it would poison every clip silently instead of
     failing; +-inf sides are legitimate (unbounded dim).
     """
-    if bounds is None:
-        return
     pairs: list[tuple[float | None, float | None]]
     if isinstance(bounds, jnp.ndarray):
         if bounds.ndim != 2 or bounds.shape[1] != 2:
@@ -291,6 +283,8 @@ def _check_bounds(bounds: Bounds | None) -> None:
                 msg = f"bounds[{j}] must be a (lb, ub) pair, got {pair!r}"
                 raise ValueError(msg)
             pairs.append((pair[0], pair[1]))
+    lo: list[float] = []
+    hi: list[float] = []
     for j, (low, high) in enumerate(pairs):
         lo_f = -math.inf if low is None else low
         hi_f = math.inf if high is None else high
@@ -300,20 +294,8 @@ def _check_bounds(bounds: Bounds | None) -> None:
         if lo_f > hi_f:
             msg = f"bounds[{j}] has lo={lo_f} > hi={hi_f}"
             raise ValueError(msg)
-
-
-def _box_bounds(bounds: Bounds | None) -> tuple[jnp.ndarray, jnp.ndarray] | None:
-    """Normalize a box to (lo, hi) arrays; None (no box at all) -> None.
-
-    A `None` side becomes ∓inf, so every downstream consumer sees one spelling of
-    "unbounded". A `(d, 2)` array carries the same pairs one row each.
-    """
-    if bounds is None:
-        return None
-    if isinstance(bounds, jnp.ndarray):
-        return bounds[:, 0], bounds[:, 1]  # (d, 2) array: one pair per row
-    lo = [-math.inf if pair[0] is None else pair[0] for pair in bounds]
-    hi = [math.inf if pair[1] is None else pair[1] for pair in bounds]
+        lo.append(lo_f)
+        hi.append(hi_f)
     return jnp.asarray(lo), jnp.asarray(hi)
 
 
