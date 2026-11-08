@@ -330,5 +330,7 @@ def test_the_caller_flock_is_placed_in_one_batch() -> None:
     for i in range(3):
         assert float(held(run, i).x[0]) == pytest.approx(float(starts[i][0]))
     assert [slot.stalled for slot in run.flock] == [False] * 3
-    assert [point.x[0] for point in solver.got] == pytest.approx(list(starts[:, 0]))
+    assert [float(point.x[0]) for point in solver.got] == pytest.approx(
+        [float(start) for start in starts[:, 0]]
+    )
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 3)
