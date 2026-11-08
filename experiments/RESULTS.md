@@ -471,7 +471,8 @@ These numbers were measured on the engine as it stood before the 0.1.0
 refactor. They are the evidence behind an architectural verdict — the residual
 error is in the *direction* `-d ⊙ g`, not its length — so a stale number does
 not retract the verdict; treat any figure here as a floor on effort, not as a
-reproducible result.
+reproducible result. The abandoned direction itself — why it was tried, and why
+it was dropped — is recorded in `DEPRECATED.md`.
 
 - **`n_alpha` grid** (300 batches, 3 seeds, rotated `cond=1e6` d=100):
   `n_alpha` larger is strictly worse — `n_paths=1` at `backtrack=0.5`:
@@ -492,4 +493,4 @@ quadratics), which isolates the off-diagonal direction error. Measured for
 rotation coupling only; that the headline's interaction coupling is equally
 immune is an analogy from this, not a separate measurement. Silent on the
 diagonal part of the error, where the per-coordinate secant is itself a biased
-curvature estimate — unmeasured, and deliberately left open in `DESIGN.md`.
+curvature estimate — unmeasured, and deliberately left open in `DEPRECATED.md`.

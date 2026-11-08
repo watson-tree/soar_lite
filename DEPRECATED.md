@@ -485,3 +485,98 @@ panel to show coincident flat lines.
 If that demonstration is ever wanted back, a low `d` freezes the same way at a
 fraction of the cost — the plateau is a property of the box, not of the
 dimension.
+
+## NAAdam (noise-augmented Adam)
+
+**Status: deprecated — measured and dropped before any committed arm.**
+`compare_baselines.py` has no NAAdam arm; the multimodal panel runs `Adam` with
+its default moments.
+
+### What it was
+
+Adam with annealed Gaussian noise added to the iterate, `σ_t = σ0/√t`: jitter the
+step so the method leaves the basin it would settle into instead of settling.
+Cheap to add — one term in the arm's step — and it would have given the
+multimodal panel a *stochastic* first-order reference to set beside a
+memory-based method.
+
+### Why it was plausible
+
+The panel's question is whether accumulated direction finds something a plain
+step misses. A method that jitters its way out of basins by construction is the
+natural control for that: it separates "explores because of noise" from
+"explores because of memory".
+
+### Why it fails
+
+Measured on the multimodal pair at d=100, before Ackley was retired and while
+restarts were still on: the noise never separated from plain Adam. Larger `σ0`
+read flat on rastrigin and worse on ackley — at no setting tried did the noise
+produce a curve that plain Adam's own traversal did not already produce. The
+mechanism behind that was not diagnosed, and the panel did not need it: a curve
+that overlaps its baseline is not a control but a second copy of it, so the arm
+would have spent a full panel drawing Adam twice.
+
+Caveat on the record: these probes predate the retirement of Ackley and the
+restart-off roster, and no traces were kept, so the readings cannot be replayed
+from this harness.
+
+### Verdict
+
+Dropped, and not restored. The multimodal panel compares memory against no
+memory — `soar-lite n_paths=1` at `mu` 0 and 0.9 — which is the contrast that was
+wanted. That leaves the panel with no *stochastic* first-order reference; the gap
+is deliberate and stated, not an oversight.
+
+## Scalar step rescaling (`alpha0` damping, `n_alpha` grid)
+
+**Status: deprecated as a tuning direction — settled against, and its sweep
+driver is gone.** `compare_baselines.py` no longer sweeps either knob. The knobs
+stay on `DiagonalPreconditioner`: `alpha0` arms every fresh step in
+`_reset_step` and defaults to `1.0` (the full step), `n_alpha` stays `1`
+(inert), both exposed so the relief is available if a harder landscape ever
+shows the symptom.
+
+### What it was
+
+The hypothesis that the diagonal preconditioner's loss on a rotated problem is a
+*step-length* problem, so a scalar knob could buy some of it back: damp the full
+step (`alpha0 < 1`), or sample a backtracking grid of `alpha`s along the step's
+own direction (`n_alpha >= 2` — named for what it counts, since its old name
+`ls_rounds` wrongly suggested engine rounds) and let the engine commit the
+grid's argmin.
+
+### Why it was plausible
+
+The rotated quadratic is where soar-lite loses by many orders of magnitude. A
+step that overshoots along a wrong direction is a real failure mode, and both
+knobs are cheap — one scalar, or a few extra objective samples per step. If the
+loss were length, either knob would have shown up as a win.
+
+### Why it fails
+
+Both sweeps came back monotone the wrong way. Larger `n_alpha` is strictly worse
+on the rotated quadratic (`n_paths=1`, `backtrack=0.5`: `1285 → 4220 → 7382 →
+12535`); damping is monotone worse too (`alpha0` 1 → 0.5 → 0.25 → 0.125:
+`1285 → 1976 → 3211 → 5356`), and `alpha0 > 1` is catastrophic (`8e5`). The full
+step is already the right length. The reason is structural: the residual error is
+in the **direction** `-d ⊙ g` — the diagonal secant ignores off-diagonal
+curvature — and no scalar rescaling of a step fixes its direction. That loss is a
+**capability boundary, not a tuning failure**.
+
+### Scope
+
+One landscape — the rotated and diagonal quadratics — so the measurement covers
+**rotation** coupling only; the diagonal-error question is left open. `RESULTS.md`
+under `pre-2026-10` states both limits in full, next to the readings.
+
+### Verdict
+
+Settled against, on architectural grounds: direction, not length. **Provenance:**
+the sweeps ran on the engine as it stood before the 0.1.0 refactor and are not
+reproducible — their `alpha0` sweep driver no longer exists. `RESULTS.md` under
+`pre-2026-10` holds the readings as the evidence behind this verdict, not as
+current benchmarks; a stale number does not retract an architectural conclusion.
+The defaults are not a claim that the knobs are useless elsewhere — they are a
+contract on the benchmark, which `README.md`'s reproducibility contract states in
+full.

@@ -157,6 +157,19 @@ The dividing line is **structure, not "scientific vs toy"**:
   quantity soar's preconditioner normalizes is a secant ratio, which rotation
   biases, while Adam's normalizes a squared gradient, which it does not.
 
+Off-diagonal coupling has two sources, and the headline chain has the second:
+*rotation coupling* needs same-unit components of one vector (spatial velocity
+or acceleration components, a preferred direction mixing them) — heterogeneous
+units cannot rotate into each other, which is why the rotated quadratic is a
+pure artificial stress test; *interaction coupling* needs no unit match — the
+loss depends jointly on two parameters (a resonance tunes with mass and
+stiffness together, `omega^2 ~ k/m`, and the stiffness profile couples within
+the chain), and the oscillator's `kg`/`N/m`/`N*s/m` coordinates carry exactly
+that, stated in its own spec ("approximately right, not exact"). So the headline
+panel is *not* exempt from the direction error: whether soar-lite still wins
+there while dropping real coupling is what that panel measures, not something
+asserted up front.
+
 A third side used to close that line: gradient-free multimodal relief (Ackley),
 where the gradient says nothing about where to move next and neither method
 moves. It is no longer a panel — every arm froze at the same plateau, so it
@@ -228,14 +241,6 @@ also gets stuck", which says nothing about how a first-order memory shapes the
 way down. It is also serial (not the batched cost axis; see Budget) and its
 line search is fragile on Rastrigin's cos oscillation.
 
-NAAdam (Adam + `σ_t = σ0/√t` decaying Gaussian noise) was measured and
-**dropped**: on ackley/rastrigin at d=100 the noise never separates from plain
-Adam — larger `σ0` is flat (rastrigin) to worse (ackley) — so it would only be
-a redundant, exactly-overlapping curve. The multimodal panel is therefore
-`soar-lite` n_paths=1 (default `mu=0`, `mu=0.9`) / 16 vs `Adam`, which is the
-honest contrast: momentum is read as a *process* — what it does to the way down —
-not asserted to be an escape mechanism in general.
-
 Two rules keep the momentum arm from being over-read. A `mu > 0` is a
 **trade, not a uniform win**: it costs where the choice of basin dominates and
 pays where off-diagonal coupling does, and the lattice landscape that pays the
@@ -253,70 +258,10 @@ rather than a strict argmin — the figure's diamond marks the pick, not a
 minimum. The grid and picks live in `ADAM_LR` / `--lr-sweep` in
 `compare_baselines.py`, which prints the table it draws; soar-lite has no
 learning rate. Tuning is itself budget — every trial is more objective points,
-and it is manual, not adaptive.
-
-### Step-length calibration (settled: the knob is real, the win is not)
-
-**Provenance: the sweeps behind this verdict ran on the engine as it stood
-before the 0.1.0 refactor, and they are not reproducible any more — their
-`alpha0` sweep driver is gone.** They are recorded in `RESULTS.md` under
-`pre-2026-10`: evidence behind the verdict, not current benchmarks. The verdict
-is architectural (direction, not length), so a stale number does not retract
-it.
-
-The verdict, measured on one landscape before any library default moved: **on
-the rotated quadratic the full step is already the right length, and no scalar
-step rescaling helps.**
-
-- `n_alpha` (renamed from `ls_rounds` — a count, and "rounds" wrongly
-  suggested engine rounds) is the `alpha`-grid size, used by both phases: at
-  `n_alpha >= 2` it samples `alpha0 · backtrack^j` along the step's own
-  direction (`-g` in the warm-up, `-d ⊙ g` after) and the engine's per-step
-  argmin commits the winner. `n_alpha=1` is inert (default): with neither a
-  guard nor a grid there, `backtrack` only sets the spacing of a grid that is
-  never sampled.
-- Both sweeps — the `n_alpha` grid and the `alpha0` damping — are in
-  `RESULTS.md`.
-
-Why, once seen: the residual error is in the **direction** `-d ⊙ g` (the
-diagonal secant ignores off-diagonal curvature), not in its length — no scalar
-`alpha` grid or damping can fix a wrong direction. This is the diagonal
-preconditioner's standing limitation, and the rotated quadratic is where it is
-meant to lose: that loss is a **capability boundary, not a tuning failure**.
-
-Off-diagonal coupling has two sources, and the headline chain has the second:
-*rotation coupling* needs same-unit components of one vector (spatial velocity
-or acceleration components, a preferred direction mixing them) — heterogeneous
-units cannot rotate into each other, which is why the rotated quadratic is a
-pure artificial stress test; *interaction coupling* needs no unit match — the
-loss depends jointly on two parameters (a resonance tunes with mass and
-stiffness together, `omega^2 ~ k/m`, and the stiffness profile couples within
-the chain), and the oscillator's `kg`/`N/m`/`N*s/m` coordinates carry exactly
-that, stated in its own spec ("approximately right, not exact"). So the
-headline panel is *not* exempt from the direction error: whether soar-lite
-still wins there while dropping real coupling is what that panel measures, not
-something asserted up front.
-
-Scope, to avoid over-claiming: the sweeps in `RESULTS.md` ran on **one
-landscape** (the rotated and diagonal quadratics). That landscape isolates the
-*off-diagonal, direction* error, to which any scalar step knob is structurally
-immune —
-measured for rotation coupling only; that the headline's interaction coupling
-is equally immune is an **analogy from this, not a separate measurement**. It
-is silent on a different failure — the **diagonal part of the error**, where the
-per-coordinate secant is itself a biased curvature estimate under non-quadratic
-terms or curvature that changes with position (complexity the two quadratics do
-not have). Whether `alpha0` damping or a finer `n_alpha` grid relieves *that*
-is **unmeasured**, and deliberately left open: `alpha0` names the one
-hard-coded `=1` in `_reset_step`, `n_alpha` stays as `1`-inert, both exposed so
-the relief is available if a harder landscape ever shows the symptom. The
-defaults are not a claim that the knobs are useless elsewhere — they are a
-contract on the *benchmark*: the formal runs contribute no **tuned** knobs (Adam
-pays a per-problem lr grid each time), so "no tuning" is a fact about the
-benchmark, not a universal theorem about the method. "No tuning" is also not
-"no parameters": the class exposes eight, and `beta` and `mu` are live windows,
-not inert placeholders — the `mu=0.9` arm exists precisely because the momentum
-window is a knob with a measurable effect.
+and it is manual, not adaptive. soar-lite contributes no tuned knob to any run —
+its step knobs sit at their defaults because scalar step rescaling was swept and
+settled against: the residual error is in the step's *direction*, not its length
+(`DEPRECATED.md`). `README.md` states that contract in full.
 
 ## Budget, statistics, outputs
 
