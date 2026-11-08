@@ -13,6 +13,7 @@ Needs the ``exp`` dependency group (the harness imports matplotlib and optax), s
 a plain ``dev`` test run skips this file instead of failing it.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -114,6 +115,34 @@ def test_out_refuses_a_path(
         harness.main(["--groups", "smooth", "--out", out])
 
     assert not (tmp_path / "results").exists()
+
+
+def test_a_budget_conflict_stops_the_run_before_the_first_arm_is_measured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A conflict on any selected arm stops the run, not just the arm it lands on.
+
+    Checking inside the measuring loop made the guard fire on whichever arm came
+    after the re-measured ones, leaving those files at a budget the panel did
+    not agree on.
+
+    """
+    prob, arm = panels.selection("smooth")[-1]
+    path = harness.Roots(
+        results=tmp_path / "results",
+        figures=tmp_path / "figures",
+    ).trace(prob.name, arm.key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"meta": {"seeds": 99, "max_batches": 3000}}))
+    monkeypatch.setattr(
+        panels,
+        "run_panel",
+        lambda *_a, **_rest: pytest.fail("measured"),
+    )
+
+    with pytest.raises(SystemExit, match="budget conflict"):
+        harness.main(["--groups", "smooth"])
 
 
 def test_quick_and_out_are_two_answers_to_one_question(

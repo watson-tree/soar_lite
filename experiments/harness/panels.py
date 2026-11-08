@@ -13,7 +13,7 @@ import numpy as np
 
 from experiments.harness import problems
 from experiments.harness.arms import DEFAULT_MU, LBFGS_ARM, Arm, adam_arm, soar_arm
-from experiments.harness.record import HERE, Roots, refuse_budget_change, save_arm
+from experiments.harness.record import HERE, Roots, save_arm
 
 LABEL_SERIAL = f"soar-lite n_paths=1, mu={DEFAULT_MU:g} (default)"
 LABEL_PARALLEL = f"soar-lite n_paths=16, mu={DEFAULT_MU:g}"
@@ -100,16 +100,10 @@ def run_panel(  # noqa: PLR0913 - roots, panel, budget and two filters
     The filters are how one arm is re-measured without its panel: they select
     on the arm key (and on the problem), so the run touches only the files it
     names and every other trace stays as it was. ``main`` refuses a selection
-    that comes back empty before this is reached.
+    that comes back empty, and refuses a budget that would replace a trace
+    measured at another one, both before this is reached.
     """
     for prob, arm in selection(panel, problems_filter, arms_filter):
-        refuse_budget_change(
-            roots,
-            prob.name,
-            arm.key,
-            n_seeds=n_seeds,
-            max_batches=max_batches,
-        )
         traces = [
             arm.runner(prob, max_batches=max_batches, seed=s) for s in range(n_seeds)
         ]

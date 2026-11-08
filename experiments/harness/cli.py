@@ -11,7 +11,7 @@ import textwrap
 
 from experiments.harness import appendix, figures, panels, record
 from experiments.harness.panels import GROUPS, TRACELESS, selection
-from experiments.harness.record import Roots
+from experiments.harness.record import Roots, refuse_budget_change
 
 
 def _comma_set(text: str) -> frozenset[str] | None:
@@ -237,6 +237,19 @@ def main(argv: list[str] | None = None) -> Roots:
         return roots
 
     _refuse_empty_selection(groups, problems_filter, arms_filter)
+    # A trace that holds another budget has to stop the run before the first arm
+    # is measured, not on whichever arm happens to sit after a re-measured one.
+    for group in groups:
+        if group in TRACELESS:
+            continue
+        for prob, arm in selection(group, problems_filter, arms_filter):
+            refuse_budget_change(
+                roots,
+                prob.name,
+                arm.key,
+                n_seeds=n_seeds,
+                max_batches=max_batches,
+            )
 
     for group in groups:
         if group == "invariance":
