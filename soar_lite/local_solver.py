@@ -262,7 +262,7 @@ class DiagonalPreconditioner(LocalSolver):
         return self.n_alpha > 1 or self._stationary(i)
 
     def propose(self, i: int) -> jnp.ndarray:
-        """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - alpha·d⊙m.
+        """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x + alpha·(-d⊙m).
 
         Steps from the point the record holds - `restart` placed it and `fold`
         moved it - so the step's start is not passed in a second time. ``m`` is
@@ -275,7 +275,7 @@ class DiagonalPreconditioner(LocalSolver):
         if state.warm_up:
             return state.p.x + state.alpha * (-state.p.g)
         diag = self._diag(i, state.p.g)
-        return state.p.x - state.alpha * (diag * state.m)
+        return state.p.x + state.alpha * (-diag * state.m)
 
     def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
         """Give up at a stationary point, else count one alpha-grid sample.
