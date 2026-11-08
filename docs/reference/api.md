@@ -1,8 +1,9 @@
 # API Reference
 
 Generated from the docstrings in `soar_lite/`. The public surface is
-`soar_lite.__all__`, grouped here in six: the entry point, the results, the
-domain, the type aliases, the plugin contracts, and the concrete defaults.
+`soar_lite.__all__`, grouped here in seven: the entry point, the results, the
+domain, the type aliases, the local solvers, the global models, and the
+projections.
 
 Starting out? [The tutorial](../tutorial/getting-started.md) builds a run end to
 end. This page gives the contract for each name; [How it
@@ -60,24 +61,33 @@ The shapes a caller writes down when it plugs something in.
 ::: soar_lite.AcquisitionFn
 ::: soar_lite.MinimizeFn
 
-## Plugin contracts
+## Local solvers
 
-Code against these to replace a piece. The engine calls `LocalSolver` and
-`GlobalModel`, never the reverse; `Projection` is the model's own extension point,
-read by `BLRGlobalModel`, and comes with the factory alias a caller writes to
-build one.
+`LocalSolver` is the engine's local seam: the engine calls it, never the
+reverse. `DiagonalPreconditioner` is the solver the engine runs when the caller
+names no other.
 
 ::: soar_lite.LocalSolver
-::: soar_lite.GlobalModel
-::: soar_lite.Projection
-::: soar_lite.ProjectionFactory
-
-## Concrete defaults
-
-Pass one by name to swap it, or implement the contract above to replace it.
-
 ::: soar_lite.DiagonalPreconditioner
+
+## Global models
+
+`GlobalModel` is the engine's restart seam, called by the engine and never
+calling back. `SampleGlobalModel` draws from the domain; `BLRGlobalModel` fits a
+posterior over the features its `Projection` hands it.
+
+::: soar_lite.GlobalModel
 ::: soar_lite.SampleGlobalModel
 ::: soar_lite.BLRGlobalModel
-::: soar_lite.IdentityProjection
+
+## Projections
+
+The geometry a global model reads its features through: the model's own
+extension point, not an engine seam. `SphereProjection` bends the coordinates
+toward the pole, `IdentityProjection` reads them as they are, and a
+`ProjectionFactory` is the recipe a caller hands the model to pick one per ask.
+
+::: soar_lite.Projection
+::: soar_lite.ProjectionFactory
 ::: soar_lite.SphereProjection
+::: soar_lite.IdentityProjection
