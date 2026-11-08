@@ -9,7 +9,6 @@ It implements the engine's `LocalSolver` contract and owns only direction, step
 size and acceptance - no curvature model, no Hessian.
 """
 
-import math
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -52,7 +51,6 @@ class _PathState:
     # this step's progress: re-armed after every commit and every restart
     alpha: float
     alpha_sample: int
-    saw_finite: bool
 
     @classmethod
     def restarted(cls, g0: jnp.ndarray, alpha0: float) -> "_PathState":
@@ -65,7 +63,6 @@ class _PathState:
             g0=g0,
             alpha=alpha0,
             alpha_sample=0,
-            saw_finite=False,
         )
 
     def armed(self, alpha0: float) -> "_PathState":
@@ -74,7 +71,7 @@ class _PathState:
         ``alpha0`` is a scalar multiplier, not a step length in x: the warm-up
         direction ``-g`` carries the coordinate scale itself.
         """
-        return replace(self, alpha=alpha0, alpha_sample=0, saw_finite=False)
+        return replace(self, alpha=alpha0, alpha_sample=0)
 
 
 class DiagonalPreconditioner(LocalSolver):
@@ -272,23 +269,24 @@ class DiagonalPreconditioner(LocalSolver):
         x: jnp.ndarray,
         f: float,
     ) -> Verdict:
-        """Give up at a stationary point; otherwise rule one alpha-grid sample.
+        """Give up at a stationary point; otherwise count one alpha-grid sample.
 
         Only consulted for a path that answered True to ``needs_verdict``, and
         the phase does not enter: ``n_alpha > 1`` rules a warm-up grid and a
         steady grid alike, while a single-sample step is committed without a
-        ruling. `x` is in the protocol's signature for methods that judge
-        geometry, so it is dropped here.
+        ruling. `x` and `f` are in the protocol's signature for methods that
+        judge geometry or value, so both are dropped here: this method's ruling
+        is the count alone.
 
-        The grid's rule is a count, not a comparison: every sample but the last
-        answers "retry", and the last closes the step - "accept" if any sample
-        this step served was finite, "give_up" if none was. So `f` is read for
-        that one bit, its finiteness; which sample won is the engine's per-step
-        argmin, not a choice made here. The stopping test reads ``p``, the step's start,
-        whose gradient a path always has - a trial's own gradient is not read,
-        since the engine may buy it only for the step's winner.
+        Which sample won is the engine's per-step argmin, and it takes only
+        finite ones, so finiteness is not ruled on here as well - a step whose
+        samples were all non-finite leaves the engine no winner to commit, and
+        the path stalls there (`Verdict` says as much for "accept" with no
+        finite trial). The stopping test reads ``p``, the step's start, whose
+        gradient a path always has - a trial's own gradient is not read, since
+        the engine may buy it only for the step's winner.
         """
-        del x
+        del x, f
 
         # Checked on the *current* point, so a path that has just landed on a
         # stationary one gives up on the next iteration (costing that one trial's
@@ -297,7 +295,7 @@ class DiagonalPreconditioner(LocalSolver):
         # true only for a zero-gradient start.
         if self._stationary(i, p):
             return "give_up"
-        return self._step_verdict(i, f)
+        return self._step_verdict(i)
 
     def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
         """Fold the engine's committed argmin for path i (the step that won).
@@ -376,46 +374,39 @@ class DiagonalPreconditioner(LocalSolver):
             jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self._state[i].g0),
         )
 
-    def _step_verdict(self, i: int, f: float) -> Verdict:
-        """Judge one alpha-grid sample on its value; never fold here.
+    def _step_verdict(self, i: int) -> Verdict:
+        """Count one alpha-grid sample; never fold here.
 
         Reached by the engine only with ``n_alpha >= 2``, in either phase: a
         single-sample step answers False to ``needs_verdict`` and is committed
         unruled, and a path at its stopping test gives up in ``verdict`` before
         reaching here. One grid of ``n_alpha`` samples along the current step
-        direction, shrinking alpha by the grid's spacing each retry; the win is
-        handed to the engine on "accept", which commits its per-step argmin and
-        folds the winner through ``fold`` once that winner passes the engine's
-        finite gate.
+        direction, shrinking alpha by the grid's spacing each retry; the last
+        sample closes the step with "accept", handing the engine its per-step
+        argmin, which ``fold`` receives only once it passes the engine's finite
+        gate.
 
         Nothing non-finite may reach ``fold``: one inf folded into Y leaves
-        den = inf forever, and that coordinate never steps again. A non-finite
-        value drops out of the candidate set - the sweep keeps shrinking alpha,
-        a real line search probing past a NaN - and a grid with no finite sample
-        at all gives up.
+        den = inf forever, and that coordinate never steps again. That gate is
+        the engine's, not this method's: a non-finite sample drops out of the
+        candidate set - the sweep keeps shrinking alpha, a real line search
+        probing past a NaN - and a grid whose samples were all non-finite leaves
+        the engine no winner to commit, so the path stalls there.
 
         This is a command wearing a query's signature: besides the ruling it
-        records whether any sample so far was finite and moves alpha one grid
-        spacing down, which the next ``propose`` reads. The two stay in one call
-        because the contract gives the ruling and the grid a single call site -
-        there is no later call to defer the bookkeeping to - and splitting the
-        ruling from the grid it counts would let a caller rule twice on one
-        sample.
+        moves alpha one grid spacing down, which the next ``propose`` reads. The
+        two stay in one call because the contract gives the ruling and the grid
+        a single call site - there is no later call to defer the bookkeeping to -
+        and splitting the ruling from the grid it counts would let a caller rule
+        twice on one sample.
         """
         state = self._state[i]
-        saw_finite = state.saw_finite or math.isfinite(f)
         n_served = state.alpha_sample + 1
         if n_served < self.n_alpha:
             self._state[i] = replace(
-                state,
-                saw_finite=saw_finite,
-                alpha_sample=n_served,
-                alpha=state.alpha * self.backtrack,
+                state, alpha_sample=n_served, alpha=state.alpha * self.backtrack
             )
             return "retry"
-        self._state[i] = replace(state, saw_finite=saw_finite, alpha_sample=n_served)
-        if not saw_finite:  # every sample this step was non-finite
-            return "give_up"
         return "accept"
 
     def _blended_secant(

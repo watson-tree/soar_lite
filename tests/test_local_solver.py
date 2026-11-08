@@ -90,13 +90,19 @@ def test_a_stationary_path_asks_for_the_ruling_that_ends_it() -> None:
 
 
 def test_diag_warmup_grid_drops_a_nonfinite_sample() -> None:
-    """A non-finite warm-up sample is a retry; an all-non-finite grid gives up."""
+    """A non-finite sample is a retry; the last sample closes the step regardless.
+
+    The method counts samples, it does not judge their values: which sample wins
+    is the engine's per-step argmin, and it takes only finite ones - so a grid of
+    nothing but non-finite samples leaves it no winner, and the path stalls
+    there rather than here.
+    """
     for bad in (math.nan, math.inf, -math.inf):
         solver = DiagonalPreconditioner(n_alpha=2)
         p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
         solver.restart(0, p)
         assert solver.verdict(0, p, p.x - p.g, bad) == "retry"
-        assert solver.verdict(0, p, p.x, bad) == "give_up"
+        assert solver.verdict(0, p, p.x, bad) == "accept"
 
 
 def _warm_up(
@@ -273,34 +279,24 @@ def test_diag_gives_up_only_when_the_gradient_norm_converged() -> None:
     assert solver.verdict(0, converged, converged.x, converged.f) == "give_up"
 
 
-def test_diag_gives_up_on_a_nonfinite_trial() -> None:
-    """Past the warm-up a non-finite trial stalls rather than committing or looping."""
-    for bad in (math.nan, math.inf, -math.inf):
+def test_diag_judges_a_trial_by_its_count_alone() -> None:
+    """A trial arrives as x and f: neither one decides the ruling.
+
+    The engine buys a trial's gradient only for the step's winner, and drops a
+    non-finite sample out of the candidate set itself, so the method's ruling is
+    the count alone - the only sample a single-sample step serves accepts
+    whatever its value is. Finiteness is the engine's question (`Verdict`:
+    "accept" with no finite trial commits nothing, and the path stalls); ruling
+    it here as well would be the same rule implemented twice.
+    """
+    for value in (0.4, math.nan, math.inf, -math.inf):
         solver = DiagonalPreconditioner()
         p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
         solver.restart(0, p)
         warm = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 0.5]))
         assert solver.verdict(0, p, warm.x, warm.f) == "accept"
         solver.fold(0, p, warm)
-        trial = PathPoint(x=warm.x - 0.1 * warm.g, f=bad, g=warm.g)
-        assert solver.verdict(0, warm, trial.x, trial.f) == "give_up"
-
-
-def test_diag_judges_a_trial_on_its_value_alone() -> None:
-    """A trial is handed over as x and f: its gradient cannot decide anything.
-
-    The engine buys a trial's gradient only for the step's winner and gates it
-    there, so the method's ruling is a function of f (and the step's start). A
-    non-finite *value* is still a ruling: past the warm-up the only sample gives
-    up, and nothing about a gradient can change that.
-    """
-    solver = DiagonalPreconditioner()
-    p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
-    solver.restart(0, p)
-    warm = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 0.5]))
-    assert solver.verdict(0, p, warm.x, warm.f) == "accept"
-    solver.fold(0, p, warm)
-    assert solver.verdict(0, warm, warm.x, 0.4) == "accept"
+        assert solver.verdict(0, warm, warm.x, value) == "accept"
 
 
 def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
@@ -548,25 +544,44 @@ def test_diag_line_search_walks_the_grid_and_folds_the_argmin() -> None:
     assert solver._state[0].alpha == solver.alpha0  # next step re-arms at the full step
 
 
-def test_diag_line_search_gives_up_when_no_sample_is_finite() -> None:
-    """A grid with every sample non-finite gives up rather than committing."""
-    h = jnp.array([2.0, 4.0])
-    x0 = jnp.ones(2)
+def test_a_step_with_no_finite_sample_stalls_the_path() -> None:
+    """The engine, not the method, is what refuses a step it cannot commit.
 
-    def quad(x: jnp.ndarray) -> tuple[float, jnp.ndarray]:
-        """Return (f, g) = (½Σhᵢxᵢ², h⊙x) at x."""
-        return 0.5 * float(jnp.sum(h * x**2)), h * x
+    The start is served finite and off the minimizer, so its gradient is not
+    stationary; from the second batch on, every service answers NaN, so the
+    path's first step serves its whole grid and none of it can be a winner. The
+    method rules every sample "accept" all the same - it counts, it does not
+    judge values - and the engine's per-step argmin finds nothing to commit,
+    which stalls the path exactly as `Verdict` promises for "accept" with no
+    finite trial. The frozen flock means nothing un-stalls it, so the run ends
+    there, still holding the start it was given.
+    """
+    n_batches = [0]
 
-    f0, g0 = quad(x0)
-    p = PathPoint(x=x0, f=f0, g=g0)
-    solver = DiagonalPreconditioner(theta=0.0, n_alpha=3)
-    solver.restart(0, p)
-    p = _warm_up(solver, p, quad)
-    for rnd in range(3):  # two shrinks, then the last sample finds no finite win
-        x = solver.propose(0, p)
-        trial = PathPoint(x=x, f=math.nan, g=jnp.full(2, math.nan))
-        v = solver.verdict(0, p, trial.x, trial.f)
-        assert v == ("give_up" if rnd == 2 else "retry")
+    def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        """Return f = Σ(x - ½)² and its gradient; NaN on every step batch."""
+        n_batches[0] += 1
+        d = x - 0.5
+        f = jnp.sum(d**2, axis=1)
+        if n_batches[0] > 1:  # the step lane, from here on
+            f = jnp.full_like(f, jnp.nan)
+        return f, 2.0 * d, None
+
+    res = n_path_schedule(
+        eval_f_g,
+        **flock_kwargs(
+            jnp.array([[0.2, 0.2]]),
+            Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1)),
+            key=jax.random.PRNGKey(0),
+        ),
+        max_iters=10,
+        restart_stalled=False,
+        local_solver=DiagonalPreconditioner(theta=0.0, n_alpha=3),
+    )
+
+    assert res.n_f_g_batches == 4, res.n_f_g_batches  # the flock + the whole grid
+    assert res.status == "all_stalled"
+    assert math.isfinite(float(res.fun))  # the start it was left holding
 
 
 def test_diag_line_search_drives_a_quadratic_through_the_engine() -> None:
