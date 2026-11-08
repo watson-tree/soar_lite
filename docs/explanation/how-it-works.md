@@ -13,7 +13,7 @@ it; a path's **warm-up** is its first step (no secant pair yet) and **steady
 state** is every step after one exists.
 
 Two interfaces supply the method names used below: `propose(n, domain)` and
-`observe` belong to `GlobalModel`, while `propose(i, p)`, `needs_verdict`,
+`observe` belong to `GlobalModel`, while `propose(i)`, `needs_verdict(i)`,
 `verdict` and `fold` belong to `LocalSolver` — two different `propose` methods,
 each called with its own arguments. The engine's own internals — `settle`,
 `_place`, `_advance` — are ordinary steps, explained where they run, and not
@@ -418,8 +418,8 @@ together" and "decide one at a time, then buy" are the same schedule.
 
 ### Verdict and no-verdict channels
 
-`needs_verdict(i, p)` (`i` the path index, `p` that path's current point) asks
-"does this path need per-candidate verdicts for its next step?". With the
+`needs_verdict(i)` (`i` the path index) asks "does this path need
+per-candidate verdicts for its next step?". With the
 default `n_alpha = 1` it normally answers False for the whole step: the method
 commits as proposed, the engine takes its single proposal as the
 winner of this step **without reading a value first**, and the value and
@@ -453,19 +453,42 @@ poison that coordinate's magnitude EMA permanently. Such a start is treated as
 a dead start, is `stalled` on arrival, and `restart_stalled` decides whether to
 redraw it.
 
+### The current point is state, not an argument
+
+A method that steps from a point has to know where the path stands, and the
+contract hands that point over in exactly two places: `restart(i, p)` places it
+and `fold(i, p)` moves it. Both are the engine's own commit points, so a method
+that keeps the point it was handed holds the same one the engine holds.
+`propose(i)`, `needs_verdict(i)` and `verdict(i, x, f)` pass only the path index;
+each reads the point out of the method's own state. The engine commits a point
+only on `accept`, so the point cannot move under a step's enumeration, and the
+start a step works from is whichever point the last `restart` or `fold` left.
+
+Keeping the point is the least a stepping method keeps, not the whole of what it
+may keep: the abstract contract asks only that `propose(i)` and the two questions
+after it can be answered, so a method whose step needs no history keeps no
+history. `DiagonalPreconditioner` keeps more, and that extra is the concrete
+method's requirement rather than the contract's — its secant pair `(s, y)` is
+read off the point it stepped from together with the point it landed on, so it is
+the default, not the interface, that needs the previous point as well as the
+current one.
+
 ### One argmin owner and one commit point
 
 In a verdict step the engine commits **the lowest `f` among all served trials**,
 not the last one. **The engine owns "who won" uniquely**: the method learns the
-landing point only through `fold(i, step_start, winner)` and keeps no second
-argmin of its own, so the bookkeeping of restarts and folds cannot drift from the
-method's internal state.
+landing point only through `fold(i, p)`, with `p` the point the engine committed,
+and keeps no second argmin of its own, so the bookkeeping of restarts and folds
+cannot drift from the method's internal state.
 
-A verdict receives only the **coordinate and the value**: `verdict(i, p, x, f)`,
-where `p` is the step's start and `x` is the point actually served after clipping.
-A trial's gradient is deliberately not in the contract — the engine buys `g` for
+A verdict receives only the **coordinate and the value**: `verdict(i, x, f)`,
+where `x` is the point actually served after clipping and `f` its value. A
+trial's gradient is deliberately not in the contract — the engine buys `g` for
 the winner only, and a method that needs another trial's gradient to judge is not
-something this engine can drive. Correspondingly the winner's gradient is **first
+something this engine can drive. Whether the value is *used* is the method's
+business: `DiagonalPreconditioner` rules on the count alone (the winner is the
+engine's argmin, so it has nothing to add about values), while a method running a
+sufficient-decrease test needs exactly the `f` handed here. Correspondingly the winner's gradient is **first
 seen at the commit point** (`f` decided first, `g` bought with it), and in a
 no-verdict step even `f` is first seen here. So the commit gate checks **both
 halves**: if either `f` or `g` is non-finite, nothing is committed and the path is

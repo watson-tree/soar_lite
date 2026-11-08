@@ -64,40 +64,40 @@ class StubSolver:
         self.inited: list[int] = []
         self.verdicts: list[int] = []
         self.folds: list[int] = []
+        self.points: dict[int, PathPoint] = {}
 
     def restart(self, i: int, p: PathPoint) -> None:
         """Record path i's cold start (the engine's only seed call)."""
-        del p
+        self.points[i] = p
         self.inited.append(i)
 
-    def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
-        """Return a halved steepest-descent step from p."""
-        del i
-        return p.x - 0.5 * p.g
+    def propose(self, i: int) -> jnp.ndarray:
+        """Return a halved steepest-descent step from the point held for i."""
+        return self.points[i].x - 0.5 * self.points[i].g
 
-    def needs_verdict(self, i: int, p: PathPoint) -> bool:
+    def needs_verdict(self, i: int) -> bool:
         """Rule every trial: this stub's `give_up` policy needs a ruling to fire."""
-        del i, p
+        del i
         return True
 
-    def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
+    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
         """Record the verdict: accept, or give up on the first trial."""
-        del p, x, f
+        del x, f
         self.verdicts.append(i)
         return "give_up" if self.give_up else "accept"
 
-    def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
-        """Record the folded committed step; this stub folds nothing."""
-        del p, best
+    def fold(self, i: int, p: PathPoint) -> None:
+        """Record the folded committed step and stand on it; nothing else is kept."""
+        self.points[i] = p
         self.folds.append(i)
 
 
 class UnjudgedSolver(StubSolver):
     """A method whose step commits its one proposal unread: no verdict needed."""
 
-    def needs_verdict(self, i: int, p: PathPoint) -> bool:
+    def needs_verdict(self, i: int) -> bool:
         """Never rule: every step is taken as proposed."""
-        del i, p
+        del i
         return False
 
 
@@ -115,9 +115,9 @@ class RetryingSolver(StubSolver):
         self.retries = retries
         self.rejected: dict[int, int] = {}
 
-    def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
+    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
         """Retry the first `retries` trials for a path, then accept."""
-        del p, x, f
+        del x, f
         self.verdicts.append(i)
         n = self.rejected.get(i, 0)
         self.rejected[i] = n + 1
@@ -132,10 +132,9 @@ class PushTo(UnjudgedSolver):
         super().__init__()
         self.x_star = x_star
 
-    def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
+    def propose(self, i: int) -> jnp.ndarray:
         """Return the stored point, whatever the start."""
-        del i
-        return jnp.full_like(p.x, self.x_star)
+        return jnp.full_like(self.points[i].x, self.x_star)
 
 
 class RecordingModel:
@@ -525,9 +524,9 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
             super().__init__()
             self.rounds = 0
 
-        def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
+        def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
             """Reject the first trial, accept the second (no reason but the round)."""
-            del p, x, f
+            del x, f
             self.verdicts.append(i)
             self.rounds += 1
             return "retry" if self.rounds == 1 else "accept"

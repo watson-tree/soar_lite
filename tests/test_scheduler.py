@@ -116,34 +116,34 @@ class HalfStep:
         """Bound one step's enumeration at `trial_cap` rejects (the method's own)."""
         self.trial_cap = trial_cap
         self.n_rejects: dict[int, int] = {}
+        self.points: dict[int, PathPoint] = {}
 
     def restart(self, i: int, p: PathPoint) -> None:
-        """Take no per-path state beyond the reject counter, which restarts."""
-        del p
+        """Keep the start and reset the reject counter, which restarts."""
+        self.points[i] = p
         self.n_rejects[i] = 0
 
-    def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
-        """Return half a steepest-descent step from p."""
-        del i
-        return p.x - 0.5 * p.g
+    def propose(self, i: int) -> jnp.ndarray:
+        """Return half a steepest-descent step from the point held for i."""
+        return self.points[i].x - 0.5 * self.points[i].g
 
-    def needs_verdict(self, i: int, p: PathPoint) -> bool:
+    def needs_verdict(self, i: int) -> bool:
         """Rule every trial: the strict-decrease test is this method's acceptance."""
-        del i, p
+        del i
         return True
 
-    def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
+    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
         """Accept a strict decrease; give up once the trial cap is spent."""
         del x
-        if f < p.f:
+        if f < self.points[i].f:
             self.n_rejects[i] = 0  # the cap is per step, like an enumeration
             return "accept"
         self.n_rejects[i] = self.n_rejects.get(i, 0) + 1
         return "retry" if self.n_rejects[i] < self.trial_cap else "give_up"
 
-    def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
-        """Fold nothing: this method keeps no model."""
-        del i, p, best
+    def fold(self, i: int, p: PathPoint) -> None:
+        """Stand on the committed point; this method keeps no model."""
+        self.points[i] = p
 
 
 class Recorder:
@@ -757,26 +757,28 @@ def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
 
         def __init__(self) -> None:
             self.calls: dict[int, int] = {}
+            self.points: dict[int, PathPoint] = {}
 
         def restart(self, i: int, p: PathPoint) -> None:
-            del p
+            self.points[i] = p
             self.calls[i] = 0
 
-        def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
+        def propose(self, i: int) -> jnp.ndarray:
             self.calls[i] = self.calls.get(i, 0) + 1
+            p = self.points[i]
             return p.x + p.g if self.calls[i] <= n_rejects else p.x - p.g
 
-        def needs_verdict(self, i: int, p: PathPoint) -> bool:
+        def needs_verdict(self, i: int) -> bool:
             """Rule every trial: this stub's whole point is a long enumeration."""
-            del i, p
+            del i
             return True
 
-        def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
-            del i, x
-            return "accept" if f < p.f else "retry"
+        def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
+            del x
+            return "accept" if f < self.points[i].f else "retry"
 
-        def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
-            del i, p, best
+        def fold(self, i: int, p: PathPoint) -> None:
+            self.points[i] = p
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum(theta**2), 2.0 * theta

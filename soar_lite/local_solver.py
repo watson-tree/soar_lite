@@ -19,11 +19,15 @@ from soar_lite.engine import LocalSolver, PathPoint, Verdict
 
 @dataclass(frozen=True, eq=False)
 class _PathState:
-    """One path's secant estimate, momentum history, and current step.
+    """One path's point, secant estimate, momentum history, and current step.
 
-    Two lifetimes share the record, which is why the fields are grouped by
+    Three lifetimes share the record, which is why the fields are grouped by
     them:
 
+    - the point the path stands at is written only when a point arrives, and the
+      contract hands one over in exactly two places: `restart` places it and
+      `fold` moves it. Neither `propose` nor `verdict` is handed it again, so a
+      method that steps from a point keeps it - this field is that copy;
     - the curvature estimate, the direction's history, and the stopping test's
       anchor live for the whole run: the first two are folded into by every
       committed step, and a restart re-seeds all three at the new start;
@@ -36,6 +40,10 @@ class _PathState:
     ``eq=False`` keeps a stray ``==`` off a field-wise array comparison.
     """
 
+    # where the path stands: `restart` places it and `fold` moves it, nothing
+    # else writes it - the two calls that pair with the engine's own two writes
+    # to its copy, so the two can never disagree
+    p: PathPoint
     # no pair in hand yet: set by `restart`, cleared by the first committed step,
     # so `propose` descends along -g and that first `fold` seeds outright
     warm_up: bool
@@ -53,14 +61,15 @@ class _PathState:
     alpha_sample: int
 
     @classmethod
-    def restarted(cls, g0: jnp.ndarray, alpha0: float) -> "_PathState":
-        """Return the state a path cold-starts at: no secant, nothing folded yet."""
+    def restarted(cls, p: PathPoint, alpha0: float) -> "_PathState":
+        """Return the state a path cold-starts at from p: no secant, nothing folded."""
         return cls(
+            p=p,
             warm_up=True,
-            s_ema=jnp.zeros_like(g0),
-            y_ema=jnp.zeros_like(g0),
-            m=g0,
-            g0=g0,
+            s_ema=jnp.zeros_like(p.g),
+            y_ema=jnp.zeros_like(p.g),
+            m=p.g,
+            g0=p.g,
             alpha=alpha0,
             alpha_sample=0,
         )
@@ -227,13 +236,15 @@ class DiagonalPreconditioner(LocalSolver):
         The engine's only cold start, so this runs at initialization and after
         every restart - the secant history never carries across one. The
         momentum history is re-seeded at this start's own gradient for the same
-        reason: a restart is where a path's history begins again.
+        reason: a restart is where a path's history begins again. The point
+        itself is kept, because no later call hands it back: it is the first of
+        the contract's two arrivals.
         """
         # alpha0 is a scalar multiplier; the warm-up direction -g carries the
         # coordinate scale itself
-        self._state[i] = _PathState.restarted(p.g, self.alpha0)
+        self._state[i] = _PathState.restarted(p, self.alpha0)
 
-    def needs_verdict(self, i: int, p: PathPoint) -> bool:
+    def needs_verdict(self, i: int) -> bool:
         """Answer True when the grid rules per candidate, or the stopping test holds.
 
         ``n_alpha > 1`` is the grid case: the step serves that many samples,
@@ -248,29 +259,25 @@ class DiagonalPreconditioner(LocalSolver):
         engine's gate on the winner's value and gradient is the whole of its
         acceptance.
         """
-        return self.n_alpha > 1 or self._stationary(i, p)
+        return self.n_alpha > 1 or self._stationary(i)
 
-    def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
+    def propose(self, i: int) -> jnp.ndarray:
         """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - alpha·d⊙m.
 
-        ``m`` is the history ``fold`` left behind: the EMA over the gradients at
+        Steps from the point the record holds - `restart` placed it and `fold`
+        moved it - so the step's start is not passed in a second time. ``m`` is
+        the history ``fold`` left behind: the EMA over the gradients at
         committed points, which includes the gradient of the point this step
         starts from. At ``mu = 0`` the last fold stored that gradient outright,
         so the direction is the bare gradient.
         """
         state = self._state[i]
         if state.warm_up:
-            return p.x + state.alpha * (-p.g)
-        diag = self._diag(i, p.g)
-        return p.x - state.alpha * (diag * state.m)
+            return state.p.x + state.alpha * (-state.p.g)
+        diag = self._diag(i, state.p.g)
+        return state.p.x - state.alpha * (diag * state.m)
 
-    def verdict(
-        self,
-        i: int,
-        p: PathPoint,
-        x: jnp.ndarray,
-        f: float,
-    ) -> Verdict:
+    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
         """Give up at a stationary point, else count one alpha-grid sample.
 
         Only consulted for a path that answered True to ``needs_verdict``, and
@@ -294,9 +301,9 @@ class DiagonalPreconditioner(LocalSolver):
         call site - no later call exists to defer it to, and splitting them
         would let a caller rule twice on one sample.
 
-        The stopping test reads ``p``, the step's start, whose gradient a path
-        always has; a trial's own gradient is not read, since the engine may buy
-        it only for the step's winner.
+        The stopping test reads the record's own point - the step's start,
+        whose gradient a path always has - never the trial, whose gradient the
+        engine may not have bought yet.
         """
         del x, f
 
@@ -305,7 +312,7 @@ class DiagonalPreconditioner(LocalSolver):
         # eval, which the engine's best still counts) rather than stepping
         # off it. g0 is the anchor: the same test at the start is ‖g0‖ ≤ τ‖g0‖,
         # true only for a zero-gradient start.
-        if self._stationary(i, p):
+        if self._stationary(i):
             return "give_up"
         state = self._state[i]
         n_served = state.alpha_sample + 1
@@ -316,8 +323,12 @@ class DiagonalPreconditioner(LocalSolver):
             return "retry"
         return "accept"
 
-    def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
+    def fold(self, i: int, p: PathPoint) -> None:
         """Fold the engine's committed argmin for path i (the step that won).
+
+        ``p`` means what it means in `restart`: the point the path now stands
+        at, handed over once. The point it stepped from is the record's own, so
+        the pair the step observed is read entirely off (record, p).
 
         Only the winner is folded, never an intermediate grid sample: an
         intermediate secant is a step the path never took, and folding it would
@@ -332,33 +343,35 @@ class DiagonalPreconditioner(LocalSolver):
         untouched rather than half-reset.
         """
         state = self._state[i]
-        s_ema, y_ema = self._blended_secant(state, best.x - p.x, best.g - p.g)
+        s_ema, y_ema = self._blended_secant(state, p.x - state.p.x, p.g - state.p.g)
         # Folded only now that the step has committed, and folded from the point
         # it committed to: the gradient this step started from was already spent
         # on this step's direction, so the arriving one is the news. `restart`
         # seeds the chain with the start's own gradient, which is why every fold
         # after it blends rather than seeding; at mu = 0 the blend keeps only the
         # arriving gradient, which is the default's bare direction.
-        m = self.mu * state.m + (1.0 - self.mu) * best.g
+        m = self.mu * state.m + (1.0 - self.mu) * p.g
         self._state[i] = replace(
             state,
+            p=p,
             warm_up=False,
             s_ema=s_ema,
             y_ema=y_ema,
             m=m,
         ).armed(self.alpha0)
 
-    def _stationary(self, i: int, p: PathPoint) -> bool:
+    def _stationary(self, i: int) -> bool:
         """Return whether path i's gradient has hit its floor: ‖g‖ ≤ τ_rel·‖g_0‖.
 
         The anchor is ``g_0``, the gradient at the path's cold start, so the test
         at the start itself reads ‖g_0‖ ≤ τ·‖g_0‖ and holds only for a
-        zero-gradient one. Read off the step's starting point ``p`` - the point
-        ``verdict`` also reads - so the ask in ``needs_verdict`` and the ruling
-        in ``verdict`` can never disagree.
+        zero-gradient one. Read off the record's own point - the step's start,
+        the point ``verdict`` also reads - so the ask in ``needs_verdict`` and
+        the ruling in ``verdict`` can never disagree.
         """
+        state = self._state[i]
         return bool(
-            jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self._state[i].g0),
+            jnp.linalg.norm(state.p.g) <= self.tau_rel * jnp.linalg.norm(state.g0),
         )
 
     def _diag(self, i: int, g: jnp.ndarray) -> jnp.ndarray:

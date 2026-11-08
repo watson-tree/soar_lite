@@ -199,22 +199,27 @@ class LocalSolver(Protocol):
     eventually reach "accept" or "give_up" on its own; an enumerator with no
     bound of its own is a hang, not a slow run. Runs end on the caller's horizon,
     not on the method.
-    ``needs_verdict(i, p)`` picks the step's shape: a method that rules on each
+    ``needs_verdict(i)`` picks the step's shape: a method that rules on each
     candidate says True, one whose step always commits its single proposal says
     False. All state is per path, lives inside the instance, and is opaque to the
     engine - implementers index it by path i.
 
-    One step for a path i: propose(i, p) is called repeatedly, with p the path's
-    current point, unchanged for the whole step (the engine commits a point only
-    on "accept") and therefore also the step's start. The candidate the engine
-    serves is the clipped one, so a method judges the point it is handed, not
-    its own proposal. verdict(i, p, x, f) is then called once per served
-    candidate, with (x, f) the served point's coords and value - never its
-    gradient: with `eval_f` connected the engine serves a candidate's value
-    alone and buys the gradient only for the step's winner, so a ruling rests on
-    f and on p, whose gradient a start always has. "accept" commits the
-    lowest-f finite trial served this step - the engine's per-step argmin - and
-    calls ``fold(i, p, best)`` with the committed winner, which is the method's
+    A path's point reaches the method in exactly two places: ``restart(i, p)``,
+    which places it, and ``fold(i, p)``, which moves it. Both are the engine's
+    own commit points, so a method that keeps the point it was handed holds the
+    one the engine holds. A method that steps from a point must keep it, because
+    no later call hands it back: ``propose(i)`` reads the current point off the
+    method's own state and answers from it, repeatedly for one step - the engine
+    commits a point only on "accept", so nothing moves under a step's
+    enumeration. The candidate the engine serves is the clipped one, so a method
+    judges the point it is handed, not its own proposal. verdict(i, x, f) is
+    then called once per served candidate, with (x, f) the served point's coords
+    and value - never its gradient: with `eval_f` connected the engine serves a
+    candidate's value alone and buys the gradient only for the step's winner, so
+    a ruling rests on f and on the method's own point, whose gradient a start
+    always has. "accept" commits the lowest-f finite trial served this step - the
+    engine's per-step argmin - and calls ``fold(i, p)`` with the committed
+    winner, which is the method's
     only place to fold an accepted step into its model (the engine owns the
     argmin, so a method that tracked its own copy would drift from it). A step
     that served no finite trial, or whose winner fails the engine's finite
@@ -238,20 +243,21 @@ class LocalSolver(Protocol):
         initialization, and again on every redraw of a stalled path, which
         needs `restart_stalled` on. The engine has one way to place a path, so
         a method need not tell "first" from "again" - both drop its per-path
-        state to the cold one.
+        state to the cold one. One of the two calls that hand a point over, so
+        a method that steps from a point keeps this one.
         """
         ...
 
-    def needs_verdict(self, i: int, p: PathPoint) -> bool:
-        """Report whether path i's next step from p is ruled candidate by candidate.
+    def needs_verdict(self, i: int) -> bool:
+        """Report whether path i's next step is ruled candidate by candidate.
 
-        Asked once per path per iteration, before ``propose``, so the only point
-        it can see is the step's start p - whose gradient a path always has. A
-        method with a stopping test also speaks here: answering True is how it
-        gets the one ``verdict`` call that can carry "give_up", since a step it
-        did not ask to rule is committed as proposed. That is why a converged
-        path answers True even when its step has a single candidate and no grid
-        to compare.
+        Asked once per path per iteration, before ``propose``, so the point it
+        can see is the one the method holds - its current point, whose gradient
+        a path always has. A method with a stopping test also speaks here:
+        answering True is how it gets the one ``verdict`` call that can carry
+        "give_up", since a step it did not ask to rule is committed as
+        proposed. That is why a converged path answers True even when its step
+        has a single candidate and no grid to compare.
 
         ``True`` is the enumerated kind: the engine asks ``verdict`` what to do
         with each served trial - served for its value alone when `eval_f` is
@@ -270,24 +276,27 @@ class LocalSolver(Protocol):
         """
         ...
 
-    def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
-        """Return path i's raw next candidate, shape ``(d,)``, from its point p.
+    def propose(self, i: int) -> jnp.ndarray:
+        """Return path i's raw next candidate, shape ``(d,)``, from its point.
 
-        Raw: the engine clips it into `domain` before serving, so a method needs
-        no box of its own and never reconciles two of them.
+        The point is the method's own: ``restart`` placed it and ``fold`` moved
+        it, and no call re-passes it, so a method that steps from a point keeps
+        it. Raw: the engine clips it into `domain` before serving, so a method
+        needs no box of its own and never reconciles two of them.
         """
         ...
 
-    def verdict(self, i: int, p: PathPoint, x: jnp.ndarray, f: float) -> Verdict:
+    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
         """Rule the step's enumeration from the served trial's coords and value.
 
         `x` is the served (clipped) point and `f` its value - a Python float,
         not a JAX scalar, because every served batch is pulled to the host once.
         The trial's own gradient is deliberately absent, because the engine may
         have served the value alone and left the gradient to be bought for the
-        winner. `p` is the step's start, whose gradient a path always has. Only
-        asked for a path that answered True to ``needs_verdict``, so a step that
-        commits its one proposal unjudged never reaches here.
+        winner; the point the step starts from is the method's own, and it no
+        longer has to be passed. Only asked for a path that answered True to
+        ``needs_verdict``, so a step that commits its one proposal unjudged
+        never reaches here.
 
         The return is an enumeration decision, not a verdict on the trial's
         quality: "retry" asks for another candidate (the method typically
@@ -302,13 +311,16 @@ class LocalSolver(Protocol):
         """
         ...
 
-    def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
-        """Fold the step the engine just committed (p -> best) into the model.
+    def fold(self, i: int, p: PathPoint) -> None:
+        """Fold the step the engine just committed into the model: the path is at p.
 
-        The engine's only call site is the "accept" commit, with best = the
+        The engine's only call site is the "accept" commit, with p = the
         per-step argmin it committed, so the folded secant is always the
         accepted step and can never disagree with it. It is never called for a
-        step the engine did not commit.
+        step the engine did not commit. `p` means what it means in ``restart``:
+        the point the path now stands at. The point it stepped from is the
+        method's own record, not an argument - the same rule that makes
+        ``propose`` read its point instead of being handed it.
         """
         ...
 
@@ -1298,8 +1310,9 @@ class _Paths:
         step enumerated: the method proposes, the engine clips and serves, the
         method judges. Trial passes run in lockstep over the still-rejecting
         subset, each served whole or not at all. A path's point is unchanged
-        while it rejects, so the point handed to propose and verdict is also the
-        step's start. A path that needs none commits its one proposal unread -
+        while it rejects - the engine commits one only on "accept" - so the
+        point the method holds for the whole step is also the step's start. A
+        path that needs none commits its one proposal unread -
         the same deal a restart start gets - so its value is served once, fused
         with its gradient, by the caller's `settle`.
 
@@ -1337,13 +1350,12 @@ class _Paths:
             # the box the engine advertised. The clipped step is the actual one,
             # so the verdict is handed the served point.
             raw = jnp.stack(
-                [self.local_solver.propose(i, self.points[i]) for i in rejecting],
+                [self.local_solver.propose(i) for i in rejecting],
             )
             x_trial = jnp.clip(raw, lo, hi)
             served = self.evaluator.serve_trials(x_trial)
             still_rejecting: list[int] = []
             for pos, i in enumerate(rejecting):
-                point = self.points[i]
                 trial = served[pos]
                 f_trial = trial.value()
                 # A gradient the seam already served is gated here, on the same
@@ -1355,7 +1367,7 @@ class _Paths:
                 )
                 if finite and (i not in best or f_trial < best[i].value()):
                     best[i] = trial
-                verdict = self.local_solver.verdict(i, point, trial.x, f_trial)
+                verdict = self.local_solver.verdict(i, trial.x, f_trial)
                 if verdict == "retry":
                     still_rejecting.append(i)
                 elif verdict == "accept":
@@ -1379,7 +1391,7 @@ class _Paths:
         for i in cohort:
             if self.stalled[i]:
                 continue
-            ruled = self.local_solver.needs_verdict(i, self.points[i])
+            ruled = self.local_solver.needs_verdict(i)
             (judged if ruled else unjudged).append(i)
         return unjudged, judged
 
@@ -1390,7 +1402,7 @@ class _Paths:
         served point is the clipped one. Both halves are left owed, which is what
         makes the iteration serve this point's value once rather than twice.
         """
-        raw = jnp.stack([self.local_solver.propose(i, self.points[i]) for i in paths])
+        raw = jnp.stack([self.local_solver.propose(i) for i in paths])
         clipped = jnp.clip(raw, self.domain.lo, self.domain.hi)
         return dict(zip(paths, self.evaluator.pending_unread(clipped), strict=True))
 
@@ -1417,6 +1429,8 @@ class _Paths:
         The fold is the step's commit half: it is what tells the method the point
         landed, and it is the only place the secant is read, so a winner the
         engine refuses here is refused before the method has been told anything.
+        The point the step started from is not passed on: the method kept it when
+        it was placed or last folded.
         """
         for i, best in won.items():
             if not best.usable:
@@ -1426,9 +1440,8 @@ class _Paths:
                 # `_place`: an unusable point never becomes a path's point.
                 self.stalled[i] = True
                 continue
-            point = self.points[i]  # the step's start, for the fold's secant
             self.points[i] = best
-            self.local_solver.fold(i, point, best)
+            self.local_solver.fold(i, best)
 
 
 def _validate_run(

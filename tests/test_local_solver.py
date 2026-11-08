@@ -49,13 +49,13 @@ def test_diag_warmup_is_one_unruled_gradient_step() -> None:
     solver.restart(0, p)
     assert solver._state[0].warm_up
     # n_alpha=1 and a gradient far above its floor: nothing to compare
-    assert not solver.needs_verdict(0, p)
+    assert not solver.needs_verdict(0)
     assert solver._state[0].alpha == 1.0
-    assert close(solver.propose(0, p), p.x + 1.0 * (-p.g), 1e-12)
+    assert close(solver.propose(0), p.x + 1.0 * (-p.g), 1e-12)
     # Committed exactly as proposed: the engine never asks for a ruling, and the
     # step's value need not beat the start's.
     above = PathPoint(x=p.x - p.g, f=9.0, g=p.g)
-    solver.fold(0, p, above)
+    solver.fold(0, above)
     assert not solver._state[0].warm_up
     assert close(solver._state[0].s_ema, jnp.square(-p.g), 1e-12)
 
@@ -65,12 +65,12 @@ def test_diag_warmup_is_ruled_when_the_grid_compares_samples() -> None:
     solver = DiagonalPreconditioner(n_alpha=2)
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.restart(0, p)
-    assert solver.needs_verdict(0, p)
+    assert solver.needs_verdict(0)
     # No descent test any more: a sample worse than the start still advances the
     # grid, because only the sibling comparison will decide the winner.
-    assert solver.verdict(0, p, p.x - p.g, 7.0) == "retry"
+    assert solver.verdict(0, p.x - p.g, 7.0) == "retry"
     assert solver._state[0].alpha == solver.backtrack
-    assert solver.verdict(0, p, p.x - solver.backtrack * p.g, 8.0) == "accept"
+    assert solver.verdict(0, p.x - solver.backtrack * p.g, 8.0) == "accept"
 
 
 def test_a_stationary_path_asks_for_the_ruling_that_ends_it() -> None:
@@ -84,9 +84,12 @@ def test_a_stationary_path_asks_for_the_ruling_that_ends_it() -> None:
     solver = DiagonalPreconditioner()
     start = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.restart(0, start)
-    floor = PathPoint(x=start.x, f=1.0, g=jnp.array([1e-9, -1e-9]))
-    assert solver.needs_verdict(0, floor)
-    assert solver.verdict(0, floor, floor.x, floor.f) == "give_up"
+    # The floor is where the path ends up, so it is a committed point: folded in,
+    # not passed to the ruling - what the stopping test reads is the path itself.
+    floor = PathPoint(x=start.x - start.g, f=0.5, g=jnp.array([1e-9, -1e-9]))
+    solver.fold(0, floor)
+    assert solver.needs_verdict(0)
+    assert solver.verdict(0, floor.x, floor.f) == "give_up"
 
 
 def test_diag_warmup_grid_drops_a_nonfinite_sample() -> None:
@@ -101,27 +104,27 @@ def test_diag_warmup_grid_drops_a_nonfinite_sample() -> None:
         solver = DiagonalPreconditioner(n_alpha=2)
         p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
         solver.restart(0, p)
-        assert solver.verdict(0, p, p.x - p.g, bad) == "retry"
-        assert solver.verdict(0, p, p.x, bad) == "accept"
+        assert solver.verdict(0, p.x - p.g, bad) == "retry"
+        assert solver.verdict(0, p.x, bad) == "accept"
 
 
 def _warm_up(
     solver: DiagonalPreconditioner,
-    p: PathPoint,
     quad: Callable[[jnp.ndarray], tuple[float, jnp.ndarray]],
 ) -> PathPoint:
     """Drive the warm-up by hand for path 0 the way the engine does.
 
     An unruled step is committed as proposed; a ruled one walks its alpha grid
-    until the method accepts.
+    until the method accepts. The start is whatever `restart` was last given: the
+    method holds it, so nothing here passes it back in.
     """
     for _ in range(20):  # the loop bound is this helper's, not the engine's
-        x = solver.propose(0, p)
+        x = solver.propose(0)
         f, g = quad(x)
         trial = PathPoint(x=x, f=f, g=g)
-        ruled = solver.needs_verdict(0, p)
-        if not ruled or solver.verdict(0, p, trial.x, trial.f) == "accept":
-            solver.fold(0, p, trial)
+        ruled = solver.needs_verdict(0)
+        if not ruled or solver.verdict(0, trial.x, trial.f) == "accept":
+            solver.fold(0, trial)
             return trial
     raise AssertionError  # 20 trials without an accepted warm-up step
 
@@ -142,13 +145,15 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     # alpha = 1 overshoots by a factor 25 (f = 215) and is committed anyway:
     # the secant is exact at any length on a quadratic, so the overshoot costs
     # one point rather than a backtrack walk.
-    trial = _warm_up(solver, p, quad)
+    _warm_up(solver, quad)
     # The warm-up ends re-armed at a full step: the next proposal is x - d·g
     # (alpha 1.0), and alpha only ever acts as the alpha-grid's multiplier.
     assert solver._state[0].alpha == 1.0
     assert not solver._state[0].warm_up
-    # y = h·s ⇒ √(S/Y) = 1/h ⇒ Δx = -(1/h)·h·x₁ = -x₁, the Newton step.
-    assert close(solver.propose(0, trial), jnp.zeros(3), 1e-12)
+    # y = h·s ⇒ √(S/Y) = 1/h ⇒ Δx = -(1/h)·h·x₁ = -x₁, the Newton step. The step
+    # is taken from the point the fold left the path on, which is what `_warm_up`
+    # committed.
+    assert close(solver.propose(0), jnp.zeros(3), 1e-12)
 
 
 def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
@@ -164,8 +169,8 @@ def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
     p = PathPoint(x=x0, f=f0, g=g0)
     solver = DiagonalPreconditioner(theta=0.0, moment="abs", mu=0.0)
     solver.restart(0, p)
-    trial = _warm_up(solver, p, quad)
-    assert close(solver.propose(0, trial), jnp.zeros(3), 1e-12)
+    _warm_up(solver, quad)
+    assert close(solver.propose(0), jnp.zeros(3), 1e-12)
 
 
 def test_diag_step_scales_with_the_coordinate_unit() -> None:
@@ -188,8 +193,8 @@ def test_diag_step_scales_with_the_coordinate_unit() -> None:
         best = PathPoint(x=c * s, f=-1.0, g=g / c + y / c)
         solver = DiagonalPreconditioner(theta=0.0)
         solver.restart(0, p)
-        solver.fold(0, p, best)
-        return solver.propose(0, best) - best.x
+        solver.fold(0, best)
+        return solver.propose(0) - best.x
 
     c = jnp.array([1e3, 1e-3])
     assert close(step_under(c), c * step_under(jnp.ones(2)), 1e-9)
@@ -203,11 +208,11 @@ def test_diag_gradient_floor_carries_a_flat_secant() -> None:
     solver.restart(0, p)
     x1 = p.x - g  # alpha = 1, accepted: f = 0.5 <= 1 - 1e-4·5
     trial = PathPoint(x=x1, f=0.5, g=g)  # g unchanged ⇒ y = 0
-    assert solver.verdict(0, p, trial.x, trial.f) == "accept"
-    solver.fold(0, p, trial)
+    assert solver.verdict(0, trial.x, trial.f) == "accept"
+    solver.fold(0, trial)
     # d_i = |s_i|/(√θ·|g_i|) = |g_i|/(√θ·|g_i|) = 1/√θ = 100 for both dims.
-    assert close(solver.propose(0, trial), x1 - 100.0 * g, 1e-9)
-    step = solver.propose(0, trial) - x1
+    assert close(solver.propose(0), x1 - 100.0 * g, 1e-9)
+    step = solver.propose(0) - x1
     assert float(jnp.vdot(step, g)) < 0.0  # d > 0 ⇒ always a descent direction
 
 
@@ -227,12 +232,12 @@ def test_diag_floor_is_a_floor_not_an_addend() -> None:
     # crossover Y = θ·g1² = λ (elementwise, in the mean-square spelling).
     g1 = g0 / (1.0 + math.sqrt(theta))
     trial = PathPoint(x=p.x - g0, f=0.9, g=g1)  # committed unruled; f is not read
-    assert solver.verdict(0, p, trial.x, trial.f) == "accept"
-    solver.fold(0, p, trial)
+    assert solver.verdict(0, trial.x, trial.f) == "accept"
+    solver.fold(0, trial)
     lam = theta * jnp.square(g1)
     assert close(solver._state[0].y_ema, lam, 1e-12)  # secant sits on the crossover
     # max floor: d = √(S/max(Y, λ)) = √(g0²/θg1²) = (1+√θ)/√θ per coordinate.
-    step = solver.propose(0, trial) - trial.x
+    step = solver.propose(0) - trial.x
     scale = (1.0 + math.sqrt(theta)) / math.sqrt(theta)
     assert close(step, -scale * g1, 1e-9)
     # The additive form would propose 1/√2 of this; assert it does not.
@@ -248,15 +253,15 @@ def test_diag_decay_blends_later_secants() -> None:
     x1 = p.x - g0  # alpha = 1, the full step, committed unruled
     g1 = jnp.array([0.5, 1.0])
     first = PathPoint(x=x1, f=0.9, g=g1)
-    assert solver.verdict(0, p, first.x, first.f) == "accept"
-    solver.fold(0, p, first)
+    assert solver.verdict(0, first.x, first.f) == "accept"
+    solver.fold(0, first)
     s1, y1 = x1 - p.x, g1 - g0
     assert close(solver._state[0].s_ema, jnp.square(s1), 1e-12)
     assert close(solver._state[0].y_ema, jnp.square(y1), 1e-12)
     s2, y2 = jnp.array([0.25, -0.5]), jnp.array([0.1, 0.2])
     second = PathPoint(x=x1 + s2, f=0.8, g=g1 + y2)
-    assert solver.verdict(0, first, second.x, second.f) == "accept"
-    solver.fold(0, first, second)
+    assert solver.verdict(0, second.x, second.f) == "accept"
+    solver.fold(0, second)
     s_expect = 0.5 * jnp.square(s1) + 0.5 * jnp.square(s2)
     y_expect = 0.5 * jnp.square(y1) + 0.5 * jnp.square(y2)
     assert close(solver._state[0].s_ema, s_expect, 1e-12)
@@ -270,13 +275,17 @@ def test_diag_gives_up_only_when_the_gradient_norm_converged() -> None:
     solver.restart(0, p)
     # The start never trips the test: ‖g0‖ <= τ‖g0‖ is false for τ < 1.
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
-    assert solver.verdict(0, p, first.x, first.f) == "accept"  # warm-up
-    solver.fold(0, p, first)
+    assert solver.verdict(0, first.x, first.f) == "accept"  # warm-up
+    solver.fold(0, first)
+    # Each point below is where a step landed, so folding it is also how the path
+    # gets there: the ruling reads the path, not a point handed to it.
     # dim 1's magnitude dominates the norm: not converged.
     partial = PathPoint(x=first.x, f=0.5, g=jnp.array([1e-5, 1.0]))
-    assert solver.verdict(0, partial, partial.x, partial.f) == "accept"
-    converged = PathPoint(x=first.x, f=0.5, g=jnp.array([9e-4, 3e-4]))
-    assert solver.verdict(0, converged, converged.x, converged.f) == "give_up"
+    solver.fold(0, partial)
+    assert solver.verdict(0, partial.x, partial.f) == "accept"
+    converged = PathPoint(x=partial.x, f=0.5, g=jnp.array([9e-4, 3e-4]))
+    solver.fold(0, converged)
+    assert solver.verdict(0, converged.x, converged.f) == "give_up"
 
 
 def test_diag_judges_a_trial_by_its_count_alone() -> None:
@@ -294,9 +303,9 @@ def test_diag_judges_a_trial_by_its_count_alone() -> None:
         p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
         solver.restart(0, p)
         warm = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 0.5]))
-        assert solver.verdict(0, p, warm.x, warm.f) == "accept"
-        solver.fold(0, p, warm)
-        assert solver.verdict(0, warm, warm.x, value) == "accept"
+        assert solver.verdict(0, warm.x, warm.f) == "accept"
+        solver.fold(0, warm)
+        assert solver.verdict(0, warm.x, value) == "accept"
 
 
 def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
@@ -305,8 +314,8 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 2.0]))
     solver.restart(0, p)
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
-    assert solver.verdict(0, p, first.x, first.f) == "accept"
-    solver.fold(0, p, first)
+    assert solver.verdict(0, first.x, first.f) == "accept"
+    solver.fold(0, first)
     assert not solver._state[0].warm_up
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
     solver.restart(0, fresh)
@@ -314,7 +323,7 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     assert close(solver._state[0].g0, fresh.g, 1e-12)
     assert close(solver._state[0].s_ema, jnp.zeros(2), 1e-12)
     assert solver._state[0].alpha == 1.0  # the warm-up length is re-armed too
-    assert close(solver.propose(0, fresh), fresh.x + 1.0 * (-fresh.g), 1e-12)
+    assert close(solver.propose(0), fresh.x + 1.0 * (-fresh.g), 1e-12)
 
 
 # --- momentum blend (opt-in, mu > 0) ---
@@ -344,13 +353,14 @@ def _solver_with_secant(
     start = PathPoint(x=jnp.zeros_like(g), f=1.0, g=g - y)
     best = PathPoint(x=start.x + s, f=0.5, g=g)
     solver.restart(0, start)
-    solver.fold(0, start, best)
+    solver.fold(0, best)
     return solver, best
 
 
-def _direction(solver: DiagonalPreconditioner, p: PathPoint) -> jnp.ndarray:
+def _direction(solver: DiagonalPreconditioner) -> jnp.ndarray:
     """Return the proposed direction d⊙m, with the alpha multiplier divided out."""
-    return (p.x - solver.propose(0, p)) / solver._state[0].alpha
+    state = solver._state[0]
+    return (state.p.x - solver.propose(0)) / state.alpha
 
 
 def test_diag_momentum_is_the_committed_gradient_blend() -> None:
@@ -363,10 +373,10 @@ def test_diag_momentum_is_the_committed_gradient_blend() -> None:
     """
     g = jnp.array([0.5, -1.5])
     mu = 0.5
-    plain, at_plain = _solver_with_secant(0.0, g)
-    mom, at_mom = _solver_with_secant(mu, g)
-    d_plain = _direction(plain, at_plain)  # d⊙g, alpha divided out
-    d_mom = _direction(mom, at_mom)
+    plain, _ = _solver_with_secant(0.0, g)
+    mom, _ = _solver_with_secant(mu, g)
+    d_plain = _direction(plain)  # d⊙g, alpha divided out
+    d_mom = _direction(mom)
     d = d_plain / g  # per-coordinate d; both solvers fold the same secant
     m_prev = g - Y_MOM  # restart seeded m with the step start's gradient
     assert close(d_mom, d * ((1.0 - mu) * g + mu * m_prev), 1e-12)
@@ -387,10 +397,10 @@ def test_diag_momentum_folds_only_at_the_commit_not_in_propose() -> None:
     m_before = solver._state[0].m
     # The fold already blended the committed g into the seeded (g - y).
     assert close(m_before, 0.5 * (at.g - Y_MOM) + 0.5 * at.g, 1e-12)
-    first = solver.propose(0, at)
+    first = solver.propose(0)
     assert jnp.array_equal(solver._state[0].m, m_before)  # propose wrote nothing
-    assert solver.verdict(0, at, first, 1.0) == "retry"  # alpha *= backtrack
-    second = solver.propose(0, at)
+    assert solver.verdict(0, first, 1.0) == "retry"  # alpha *= backtrack
+    second = solver.propose(0)
     assert jnp.array_equal(solver._state[0].m, m_before)  # still nothing
     # Same step direction; only the grid's alpha differs.
     assert close((at.x - second) / solver._state[0].alpha, (at.x - first) / 1.0, 1e-12)
@@ -411,7 +421,7 @@ def test_diag_restart_drops_the_momentum_history() -> None:
     solver.restart(0, fresh)
     assert close(solver._state[0].m, fresh.g, 1e-12)  # nothing crossed the restart
     landed = PathPoint(x=fresh.x + S_MOM, f=0.5, g=fresh.g + Y_MOM)
-    solver.fold(0, fresh, landed)
+    solver.fold(0, landed)
     assert close(solver._state[0].m, 0.5 * fresh.g + 0.5 * landed.g, 1e-12)
 
 
@@ -427,7 +437,7 @@ def test_diag_mu_zero_leaves_no_history_behind() -> None:
     solver, at = _solver_with_secant(0.0, g)
     solver._state[0] = replace(solver._state[0], m=jnp.array([1e6, -1e6]))
     landed = PathPoint(x=at.x + S_MOM, f=0.25, g=jnp.array([1.0, 2.0]))
-    solver.fold(0, at, landed)
+    solver.fold(0, landed)
     assert jnp.array_equal(solver._state[0].m, landed.g)
 
 
@@ -445,9 +455,9 @@ def test_diag_momentum_moves_only_where_d_has_support() -> None:
     solver.restart(0, start)
     # y = [-1, 0] against s = [1, 0] leaves d = [1, 0]; g lives on coordinate 1.
     at = PathPoint(x=start.x + jnp.array([1.0, 0.0]), f=0.5, g=jnp.array([0.0, 0.5]))
-    solver.fold(0, start, at)  # m = ½·start.g + ½·at.g, live on coordinate 0
+    solver.fold(0, at)  # m = ½·start.g + ½·at.g, live on coordinate 0
     assert close(solver._state[0].m, 0.5 * start.g + 0.5 * at.g, 1e-12)
-    step = at.x - solver.propose(0, at)
+    step = at.x - solver.propose(0)
     assert close(step[1], 0.0, 1e-12)  # d = 0 there: no step, history or not
     assert not close(step[0], 0.0, 1e-12)  # d > 0 and history live: it moves
 
@@ -525,14 +535,14 @@ def test_diag_line_search_walks_the_grid_and_folds_the_argmin() -> None:
     p = PathPoint(x=x0, f=f0, g=g0)
     solver = DiagonalPreconditioner(theta=0.0, n_alpha=3)
     solver.restart(0, p)
-    p = _warm_up(solver, p, quad)  # secant in hand; alpha re-armed to 1.0
+    p = _warm_up(solver, quad)  # secant in hand; alpha re-armed to 1.0
     trials: list[PathPoint] = []
     verdicts: list[str] = []
     for _ in range(3):  # n_alpha=3: exactly three grid samples
-        x = solver.propose(0, p)
+        x = solver.propose(0)
         f, g = quad(x)
         trial = PathPoint(x=x, f=f, g=g)
-        verdicts.append(solver.verdict(0, p, trial.x, trial.f))
+        verdicts.append(solver.verdict(0, trial.x, trial.f))
         trials.append(trial)
     assert verdicts == ["retry", "retry", "accept"]
     # The grid shrank by the backtrack constant: 1.0, bt, bt².
@@ -543,7 +553,7 @@ def test_diag_line_search_walks_the_grid_and_folds_the_argmin() -> None:
     # only that secant, blended into the warm-up pair at beta.
     argmin = min(trials, key=lambda t: t.f)
     s_old, y_old = solver._state[0].s_ema, solver._state[0].y_ema
-    solver.fold(0, p, argmin)
+    solver.fold(0, argmin)
     s, y = argmin.x - p.x, argmin.g - p.g
     b = solver.beta  # the EMA decay the fold blends at
     assert close(solver._state[0].s_ema, b * s_old + (1.0 - b) * jnp.square(s), 1e-12)
@@ -626,11 +636,12 @@ def test_beta_zero_is_legal_and_reads_only_the_newest_secant() -> None:
     solver = DiagonalPreconditioner(beta=0.0, theta=0.0)
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.restart(0, p)
-    solver.fold(0, p, PathPoint(x=p.x - p.g, f=0.0, g=2.0 * p.g))
+    solver.fold(0, PathPoint(x=p.x - p.g, f=0.0, g=2.0 * p.g))
     assert close(solver._state[0].s_ema, jnp.square(p.g), 1e-12)
     # A second, different pair replaces the first rather than blending into it.
-    q = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([3.0, 4.0]))
-    solver.fold(0, q, PathPoint(x=q.x - q.g, f=0.0, g=2.0 * q.g))
+    # Its start is the point the path now stands on, not one passed in again.
+    q = solver._state[0].p
+    solver.fold(0, PathPoint(x=q.x - q.g, f=0.0, g=2.0 * q.g))
     assert close(solver._state[0].s_ema, jnp.square(q.g), 1e-12)
     assert close(solver._state[0].y_ema, jnp.square(q.g), 1e-12)
 
