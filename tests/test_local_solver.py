@@ -14,6 +14,7 @@ invariance of the steady-state step. No engine wiring. Run with:
 
 import math
 from collections.abc import Callable
+from dataclasses import replace
 
 import jax
 import jax.numpy as jnp
@@ -46,7 +47,7 @@ def test_diag_warmup_is_one_unruled_gradient_step() -> None:
     solver = DiagonalPreconditioner()
     p = PathPoint(x=jnp.zeros(3), f=2.0, g=jnp.array([3.0, 0.0, 4.0]))
     solver.restart(0, p)
-    assert not solver._state[0].has_secant
+    assert solver._state[0].warm_up
     # n_alpha=1 and a gradient far above its floor: nothing to compare
     assert not solver.needs_verdict(0, p)
     assert solver._state[0].alpha == 1.0
@@ -55,7 +56,7 @@ def test_diag_warmup_is_one_unruled_gradient_step() -> None:
     # step's value need not beat the start's.
     above = PathPoint(x=p.x - p.g, f=9.0, g=p.g)
     solver.fold(0, p, above)
-    assert solver._state[0].has_secant
+    assert not solver._state[0].warm_up
     assert close(solver._state[0].s_ema, jnp.square(-p.g), 1e-12)
 
 
@@ -139,7 +140,7 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     # The warm-up ends re-armed at a full step: the next proposal is x - d·g
     # (alpha 1.0), and alpha only ever acts as the alpha-grid's multiplier.
     assert solver._state[0].alpha == 1.0
-    assert solver._state[0].has_secant
+    assert not solver._state[0].warm_up
     # y = h·s ⇒ √(S/Y) = 1/h ⇒ Δx = -(1/h)·h·x₁ = -x₁, the Newton step.
     assert close(solver.propose(0, trial), jnp.zeros(3), 1e-12)
 
@@ -310,10 +311,10 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
     assert solver.verdict(0, p, first.x, first.f) == "accept"
     solver.fold(0, p, first)
-    assert solver._state[0].has_secant
+    assert not solver._state[0].warm_up
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
     solver.restart(0, fresh)
-    assert not solver._state[0].has_secant
+    assert solver._state[0].warm_up
     assert close(solver._state[0].g0, fresh.g, 1e-12)
     assert close(solver._state[0].s_ema, jnp.zeros(2), 1e-12)
     assert solver._state[0].alpha == 1.0  # the warm-up length is re-armed too
@@ -413,12 +414,18 @@ def test_diag_restart_drops_the_momentum_history() -> None:
     assert close(solver._state[0].m, fresh.g, 1e-12)  # nothing crossed the restart
 
 
-def test_diag_mu_zero_leaves_the_history_alone() -> None:
-    """The default pays nothing: the history is never folded into a direction."""
+def test_diag_mu_zero_reads_no_history() -> None:
+    """The default keeps no memory in the direction: a weight of 0 spends none.
+
+    The record still folds a history at every ``mu`` - it costs one vector and
+    is there for the moment the knob is turned up - so the property worth
+    pinning is that scrambling it moves no bit of the direction.
+    """
     g = jnp.array([0.5, -1.5])
     solver, at = _solver_with_secant(0.0, g)
-    solver.propose(0, at)
-    assert close(solver._state[0].m, at.g - Y_MOM, 1e-12)  # the seed, untouched
+    before = _direction(solver, at)
+    solver._state[0] = replace(solver._state[0], m=jnp.array([1e6, -1e6]))
+    assert jnp.array_equal(_direction(solver, at), before)
 
 
 def test_diag_momentum_moves_only_where_d_has_support() -> None:

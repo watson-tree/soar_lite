@@ -22,13 +22,12 @@ from soar_lite.engine import LocalSolver, PathPoint, Verdict
 class _PathState:
     """One path's secant estimate, momentum history, and current step.
 
-    Three lifetimes share the record, which is why the fields are grouped by
+    Two lifetimes share the record, which is why the fields are grouped by
     them:
 
-    - the curvature estimate and the stopping test's anchor are re-seeded by
-      every restart and otherwise persist for the whole run;
-    - ``m``, the direction's history, is seeded by the first committed step and
-      is the one field a restart keeps;
+    - the curvature estimate, the direction's history, and the stopping test's
+      anchor live for the whole run: the first two are folded into by every
+      committed step, and a restart re-seeds all three at the new start;
     - the step's ``alpha`` progress is re-armed after every commit and every
       restart.
 
@@ -38,15 +37,18 @@ class _PathState:
     ``eq=False`` keeps a stray ``==`` off a field-wise array comparison.
     """
 
+    # no pair in hand yet: set by `restart`, cleared by the first committed step,
+    # so `propose` descends along -g and that first `fold` seeds outright
+    warm_up: bool
     # the curvature estimate: seeded by `restart`, blended once per committed step
-    has_secant: bool
     s_ema: jnp.ndarray
     y_ema: jnp.ndarray
+    # the direction's history: past step-start gradients, maintained at every
+    # `mu` (0 only leaves it out of the direction), re-seeded at every restart
+    # to that start's own gradient, so the history never crosses one
+    m: jnp.ndarray
     # the stopping test's anchor: the gradient at the path's cold start
     g0: jnp.ndarray
-    # the direction's history: past step-start gradients, re-seeded at every
-    # restart to that start's own gradient, so the history never crosses one
-    m: jnp.ndarray
     # this step's progress: re-armed after every commit and every restart
     alpha: float
     alpha_sample: int
@@ -56,11 +58,11 @@ class _PathState:
     def restarted(cls, g0: jnp.ndarray, alpha0: float) -> "_PathState":
         """Return the state a path cold-starts at: no secant, nothing folded yet."""
         return cls(
-            has_secant=False,
+            warm_up=True,
             s_ema=jnp.zeros_like(g0),
             y_ema=jnp.zeros_like(g0),
-            g0=g0,
             m=g0,
+            g0=g0,
             alpha=alpha0,
             alpha_sample=0,
             saw_finite=False,
@@ -156,8 +158,8 @@ class DiagonalPreconditioner(LocalSolver):
         *,
         moment: Literal["abs", "rms"] = "rms",  # mean ratio / mean-square ratio
         beta: float = 0.63,  # EMA decay; the window is ≈ 1/(1-β) ≈ e steps
-        theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
         mu: float = 0.0,  # gradient-EMA decay for the direction; 0 = bare g, default
+        theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
         alpha0: float = 1.0,  # the full step's length, in units of the natural step
         n_alpha: int = 1,  # alpha samples per step; 1 = no line search
         backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
@@ -182,11 +184,11 @@ class DiagonalPreconditioner(LocalSolver):
             beta: EMA decay for the secant-magnitude smooth (window ≈ 1/(1-β)
                 steps), in [0, 1); 0 keeps no history, so ``d`` reads the
                 newest accepted secant.
-            theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
-                ``θ·g_i²`` for "rms"), >= 0.
             mu: EMA decay of the gradient history blended into the direction,
                 ``(1 - mu)·g + mu·m_prev``; 0 (the default) leaves the bare
                 gradient, in [0, 1).
+            theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
+                ``θ·g_i²`` for "rms"), >= 0.
             alpha0: step length every path is armed at; the full step's
                 length, > 0.
             n_alpha: alpha samples per step along the step's direction; 1 means
@@ -198,8 +200,8 @@ class DiagonalPreconditioner(LocalSolver):
         """
         for name, value, ok, want in (
             ("beta", beta, 0.0 <= beta < 1.0, "in [0, 1)"),
-            ("theta", theta, theta >= 0.0, ">= 0"),
             ("mu", mu, 0.0 <= mu < 1.0, "in [0, 1)"),
+            ("theta", theta, theta >= 0.0, ">= 0"),
             ("alpha0", alpha0, alpha0 > 0.0, "> 0"),
             ("n_alpha", n_alpha, n_alpha >= 1, ">= 1"),
             ("backtrack", backtrack, 0.0 < backtrack < 1.0, "in (0, 1)"),
@@ -210,8 +212,8 @@ class DiagonalPreconditioner(LocalSolver):
                 raise ValueError(msg)
         self.moment = moment
         self.beta = beta
-        self.theta = theta
         self.mu = mu
+        self.theta = theta
 
         self.alpha0 = alpha0
         self.n_alpha = n_alpha
@@ -258,11 +260,10 @@ class DiagonalPreconditioner(LocalSolver):
         ``(1 - mu)·g + mu·m_prev`` otherwise.
         """
         state = self._state[i]
-        if not state.has_secant:
+        if state.warm_up:
             return p.x + state.alpha * (-p.g)
         diag = self._diag(i, p.g)
-        m = p.g if self.mu == 0.0 else self._blend_momentum(i, p.g)
-        return p.x - state.alpha * (diag * m)
+        return p.x - state.alpha * (diag * self._blended_momentum(i, p.g))
 
     def verdict(
         self,
@@ -306,27 +307,28 @@ class DiagonalPreconditioner(LocalSolver):
         smear the magnitude EMAs. The engine calls this with the exact point it
         just committed, so the folded secant is the accepted step. The first
         call after a restart is the warm-up pair and seeds the EMAs outright;
-        later calls blend at beta - `has_secant` doubles as the first-fold marker,
-        so it is set here rather than in ``verdict``. This is also where a step
-        is re-armed: a ruling the engine did not commit (a winner whose gradient
-        it refused) leaves the method untouched rather than half-reset.
+        later calls blend at beta - the record's ``warm_up`` is that same
+        first-fold marker, cleared here rather than in ``verdict``. This is also
+        where a step is re-armed: a ruling the engine did not commit (a winner
+        whose gradient it refused) leaves the method untouched rather than
+        half-reset.
         """
         state = self._state[i]
-        first = not state.has_secant
-        s_ema, y_ema = self._fold_ema(state, best.x - p.x, best.g - p.g, first=first)
-        momentum = state.m
-        if self.mu > 0.0:
-            # The step's start gradient, folded only now that the step has
-            # committed, so the momentum the next propose reads is history and
-            # never the gradient that propose is about to use. The first fold
-            # seeds the EMA outright, exactly as it seeds S and Y.
-            momentum = p.g if first else self.mu * state.m + (1.0 - self.mu) * p.g
+        s_ema, y_ema = self._blended_secant(
+            state, best.x - p.x, best.g - p.g, seed=state.warm_up
+        )
+        # The step's start gradient, folded only now that the step has committed,
+        # so the momentum the next propose reads is history and never the
+        # gradient that propose is about to use. The first fold after a restart
+        # seeds it outright, for the same reason that fold seeds the EMAs
+        # outright: there is no history yet to blend against.
+        m = p.g if state.warm_up else self.mu * state.m + (1.0 - self.mu) * p.g
         self._state[i] = replace(
             state,
-            has_secant=True,
+            warm_up=False,
             s_ema=s_ema,
             y_ema=y_ema,
-            m=momentum,
+            m=m,
         ).armed(self.alpha0)
 
     def _reset_step(self, i: int) -> None:
@@ -350,13 +352,14 @@ class DiagonalPreconditioner(LocalSolver):
         d = jnp.where(den > 0.0, state.s_ema / den, 0.0)
         return jnp.sqrt(d) if self.moment == "rms" else d
 
-    def _blend_momentum(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
+    def _blended_momentum(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
         """Return path i's current momentum: (1 - mu)·g + mu·m_prev.
 
         ``m_prev`` (``state.m``) is history only - the past step-start
         gradients, folded by `fold` once each step has committed - so this
         step's own gradient enters fresh, at weight ``1 - mu``. With ``mu = 0``
-        this is ``g`` exactly, which is why `propose` skips the call then.
+        this is ``g`` exactly, whatever the history holds: the blend carries no
+        memory of it, which is the default's bare gradient.
         """
         return (1.0 - self.mu) * g + self.mu * self._state[i].m
 
@@ -390,6 +393,14 @@ class DiagonalPreconditioner(LocalSolver):
         value drops out of the candidate set - the sweep keeps shrinking alpha,
         a real line search probing past a NaN - and a grid with no finite sample
         at all gives up.
+
+        This is a command wearing a query's signature: besides the ruling it
+        records whether any sample so far was finite and moves alpha one grid
+        spacing down, which the next ``propose`` reads. The two stay in one call
+        because the contract gives the ruling and the grid a single call site -
+        there is no later call to defer the bookkeeping to - and splitting the
+        ruling from the grid it counts would let a caller rule twice on one
+        sample.
         """
         state = self._state[i]
         saw_finite = state.saw_finite or math.isfinite(f)
@@ -407,26 +418,27 @@ class DiagonalPreconditioner(LocalSolver):
             return "give_up"
         return "accept"
 
-    def _fold_ema(
+    def _blended_secant(
         self,
         state: _PathState,
         s: jnp.ndarray,
         y: jnp.ndarray,
         *,
-        first: bool,
+        seed: bool,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """Fold one accepted secant (s, y) into the path's magnitude EMAs.
+        """Return the magnitude EMAs of the secant pair (s, y), blended in.
 
-        The warm-up pair seeds the EMA outright (weight 1, no β-mixing against a
-        zero); later pairs blend at β. Signed quantities are reduced to
-        magnitudes first (|·| for "abs", squaring for "rms"), which is what makes the
-        ratio positive and cancels the sign cancellation `E[s]/E[y]` suffers.
+        A ``seed`` fold (the warm-up pair) replaces the EMA outright (weight 1,
+        no β-mixing against a zero); later pairs blend at β. Signed quantities
+        are reduced to magnitudes first (|·| for "abs", squaring for "rms"),
+        which is what makes the ratio positive and cancels the sign cancellation
+        `E[s]/E[y]` suffers.
         """
         if self.moment == "abs":
             s_mag, y_mag = jnp.abs(s), jnp.abs(y)
         else:
             s_mag, y_mag = jnp.square(s), jnp.square(y)
-        if first:
+        if seed:
             return s_mag, y_mag
         return (
             self.beta * state.s_ema + (1.0 - self.beta) * s_mag,
