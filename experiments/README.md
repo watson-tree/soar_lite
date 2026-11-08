@@ -67,8 +67,11 @@ panel writes its files as it finishes.
 
 ## The Adam learning-rate grid
 
-Adam pays a per-problem lr chosen by an offline sweep
-(`ADAM_LR` in `experiments/harness/arms.py`); the figure below draws that sweep.
+Adam pays a per-problem lr chosen by an offline sweep. The pick is recorded
+per (method, problem) in `experiments/tuning/adam.json`, written by
+`--lr-sweep` and read by `experiments/harness/tuning.py`. It is that sweep's
+argmin, ties going to the smallest rate - a number derived from the curve, not
+typed next to it. The figure below draws that sweep.
 Reproduce the sweep figure with:
 
 ```bash
@@ -79,15 +82,15 @@ The sweep is eight learning rates x five problems, so it keeps its own 2 seeds;
 `--seeds` reaches it like it reaches every other mode, and raising it there is
 rarely worth the compute.
 
-The C0 diamond marks the lr the panels actually use (`ADAM_LR`). It coincides
-with the sweep's lowest point on the rotated quadratic, the oscillator and
-rastrigin, but it is not a strict argmin everywhere: on the diagonal quadratic
-every grid point from `1e-2` up sits on the same floor or plateau,
-so the pick is one point of that tie (`lr=1e-4` costs 52 orders of magnitude on
-the diagonal quadratic against it). On the rotated quadratic and the oscillator
-the curve is still falling at the right edge — `lr=2.0` — so there the diamond
-is the best *sampled* point, not an interior minimum; on rastrigin the floor is
-flat over `1e-3..2e-1` and the pick sits ~5% below it. The compartment chain
+The C0 diamond marks the lr the panels actually use, which is the argmin of
+every curve here (`lr=1e-4` costs 52 orders of magnitude on the diagonal
+quadratic against its pick). What that argmin is worth varies. On the diagonal
+quadratic every rate from `1e-2` up has already reached the quadratic's
+rounding floor (`1e-49..1e-52`), so the winner there is decided by rounding,
+not by a rate difference. On the rotated quadratic and the oscillator the curve
+is still falling at the right edge — `lr=2.0` — so a wider grid could move
+those picks. On rastrigin the floor is flat over `1e-3..2e-1` and the pick sits
+~5% below it: real, but a short gap. The compartment chain
 (`pk_chain_n21_d61`) is the one problem that goes the other way: its curve rises
 steeply on both sides of the diamond, so there the pick is a strict interior
 optimum rather than an edge or a tie.
@@ -123,7 +126,7 @@ figure is always re-derivable and a trace never is. The unit is one
   below the log axis).
 
 The arm key is the file name and spells out the arm's whole configuration
-(`soar-sample-np1-mu0-restart-off`, `adam-lr0.01`, `lbfgs`), so a changed
+(`soar-sample-np1-mu0-restart-off`, `adam-lr0.1`, `lbfgs`), so a changed
 default or a changed lr is a new key and a new file: the old trace stays as a
 record of the old configuration instead of being silently overwritten.
 

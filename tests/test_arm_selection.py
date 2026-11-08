@@ -55,7 +55,7 @@ def test_a_misspelled_problem_name_is_refused_before_anything_runs(
 
 
 def test_names_that_never_meet_in_one_arm_are_refused() -> None:
-    """Both names are real; the Adam arm of the diagonal quadratic is `adam-lr0.01`."""
+    """Both names are real; the Adam arm of the diagonal quadratic is `adam-lr0.1`."""
     message = _run(
         "--groups",
         "smooth",
@@ -73,11 +73,11 @@ def test_a_legal_filter_selects_exactly_the_pair_it_names() -> None:
     selected = harness.selection(
         "smooth",
         frozenset({"diag_quad_d100_cond10000"}),
-        frozenset({"adam-lr0.01"}),
+        frozenset({"adam-lr0.1"}),
     )
 
     assert [(prob.name, arm.key) for prob, arm in selected] == [
-        ("diag_quad_d100_cond10000", "adam-lr0.01"),
+        ("diag_quad_d100_cond10000", "adam-lr0.1"),
     ]
 
 

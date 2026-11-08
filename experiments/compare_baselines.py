@@ -13,13 +13,11 @@ Panels: `DESIGN.md`. Commands and storage layout: `README.md`. What the last
 full run measured: `RESULTS.md`.
 """
 
-from experiments.harness.arms import ADAM_LR
 from experiments.harness.cli import main
 from experiments.harness.panels import selection, soar_ladder
 from experiments.harness.record import Roots, refuse_budget_change
 
 __all__ = [
-    "ADAM_LR",
     "Roots",
     "main",
     "refuse_budget_change",

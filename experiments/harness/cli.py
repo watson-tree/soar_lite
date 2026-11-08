@@ -9,8 +9,7 @@ back and draws the group.
 import argparse
 import textwrap
 
-from experiments.harness import appendix, figures, panels, problems, record
-from experiments.harness.arms import ADAM_LR
+from experiments.harness import appendix, figures, panels, record
 from experiments.harness.panels import GROUPS, TRACELESS, selection
 from experiments.harness.record import Roots
 
@@ -19,23 +18,6 @@ def _comma_set(text: str) -> frozenset[str] | None:
     """Parse a comma list into a filter set, or None when it selects everything."""
     items = frozenset(item.strip() for item in text.split(",") if item.strip())
     return items or None
-
-
-def _refuse_untuned_problems() -> None:
-    """Refuse a problem with no entry in ``ADAM_LR``, before anything runs.
-
-    The table is keyed by problem name, which `problems.build` and this table
-    agree on by hand. A rename therefore reads as a brand-new problem: the arm
-    becomes ``adam-lr0.01`` and a figure is drawn at a lr nobody tuned, with the
-    number in the file name as the only trace of it.
-    """
-    missing = [prob.name for prob in problems.build("all") if prob.name not in ADAM_LR]
-    if missing:
-        msg = (
-            f"no tuned Adam lr for {', '.join(missing)}; add an entry to ADAM_LR "
-            f"(the lr sweep picks one)"
-        )
-        raise SystemExit(msg)
 
 
 def _refuse_undrawable_groups(groups: list[str]) -> None:
@@ -206,7 +188,6 @@ def _validate(
 
     """
     _refuse_undrawable_groups(groups)
-    _refuse_untuned_problems()
     if args.quick and args.out:
         msg = "--quick writes to the smoke roots and --out names another: pick one."
         raise SystemExit(msg)

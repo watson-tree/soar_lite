@@ -12,7 +12,7 @@ from typing import Any, TypeAlias
 
 import jax.numpy as jnp
 
-from experiments.harness import problems
+from experiments.harness import problems, tuning
 from experiments.harness.methods import (
     Trace,
     run_adam,
@@ -82,42 +82,9 @@ def soar_arm(  # noqa: PLR0913 - one keyword per attribute the key must name
     return Arm(key=key, label=label, runner=runner, style=style)
 
 
-# Per-problem Adam learning rate, the pick the panels use (see --lr-sweep).
-# The picks span over two orders of magnitude across the panels, and lr=1e-4
-# costs 52 orders of magnitude on the diagonal quadratic against its pick.
-# Tuning is itself budget the y axis never shows -- every trial is more
-# objective points served, and it is manual, not adaptive; soar-lite has no
-# learning rate at all. Two optima sit at the sweep grid's right edge (the
-# rotated quadratic and the oscillator keep improving to lr=2.0). On the
-# diagonal quadratic every grid point from 1e-2 up is a floor or a plateau, so
-# that pick is one point of a tie, not a strict argmin; on
-# rastrigin the floor is flat over 1e-3..2e-1 and 0.5 sits ~5% below it. The
-# compartment chain is the one strict interior argmin: its curve falls from
-# 5.0 at lr=1e-2 to 1.1e-3 at 1e-1 and back up to 2.8e-2 at 2e-1, so there the
-# pick is a real optimum rather than an edge or a tie.
-ADAM_LR: dict[str, float] = {
-    "oscillator_n20_F20": 2.0,
-    "pk_chain_n21_d61": 1e-1,
-    "diag_quad_d100_cond10000": 1e-2,
-    "rot_quad_d100_cond1e+06": 2.0,
-    "rastrigin_d100": 0.5,
-}
-
-
-def adam_lr(prob: problems.Problem) -> float:
-    """Return the grid-tuned Adam lr for this problem.
-
-    There is no fallback: `_refuse_untuned_problems` keeps the table a claim
-    about the whole roster, so a miss here is a bug in that guard, not a case
-    to paper over with a default - the arm key and the sweep's C0 diamond both
-    read this number, and neither would say it had been guessed.
-    """
-    return ADAM_LR[prob.name]
-
-
 def adam_arm(prob: problems.Problem) -> Arm:
-    """Adam at this problem's grid-tuned lr; the lr is part of the identity."""
-    lr = adam_lr(prob)
+    """Adam at this problem's tuned lr (`tuning/adam.json`); the lr is in the key."""
+    lr = tuning.pick("adam", prob.name)
     key = f"adam-lr{lr:g}"
 
     def runner(p: problems.Problem, *, max_batches: int, seed: int) -> Trace:

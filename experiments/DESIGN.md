@@ -136,8 +136,8 @@ Two appendix panels, property demos rather than races:
    `test_diag_step_scales_with_the_coordinate_unit`); the end-to-end claim is
    asserted statistically. A *property demo*, not a race.
 5. **Adam lr sweep.** Log-scan of `lr` per problem, marking the panel pick
-   (`ADAM_LR`) — the evidence that soar-lite has no learning rate where Adam
-   pays a grid. Emitted by `--lr-sweep`.
+   (`experiments/tuning/adam.json`) — the evidence that soar-lite has no
+   learning rate where Adam pays a grid. Emitted by `--lr-sweep`.
 
 ## What the problem set can support
 
@@ -238,10 +238,12 @@ orders of magnitude (diag 1e-2 → rotated quadratic and oscillator
 (`6.6e3` against `8.8e-49`). On diag every grid point from 1e-2 up
 sits on the same floor or plateau, so that pick is one point of that tie
 rather than a strict argmin — the figure's diamond marks the pick, not a
-minimum. The grid and picks live in `ADAM_LR` / `--lr-sweep` in
-`compare_baselines.py`, which prints the table it draws; soar-lite has no
-learning rate. Tuning is itself budget — every trial is more objective points,
-and it is manual, not adaptive. soar-lite contributes no tuned knob to any run —
+minimum. The grid and the picks live in `experiments/tuning/adam.json`,
+written by `--lr-sweep` and read by `harness/tuning.py`: the pick is that
+sweep's argmin, ties to the smallest rate. soar-lite has no learning rate.
+Tuning is itself
+budget — every trial is more objective points, and it is manual, not
+adaptive. soar-lite contributes no tuned knob to any run —
 its step knobs sit at their defaults because scalar step rescaling was swept and
 settled against: the residual error is in the step's *direction*, not its length
 (`DEPRECATED.md`). `README.md` states that contract in full.
@@ -297,7 +299,7 @@ settled against: the residual error is in the step's *direction*, not its length
   gap. The invariance panel writes no trace — it is re-run (fast) rather than
   re-plotted.
 - The arm key spells out the arm's whole configuration
-  (`soar-sample-np1-mu0-restart-off`, `adam-lr0.01`, `lbfgs`) instead of
+  (`soar-sample-np1-mu0-restart-off`, `adam-lr0.1`, `lbfgs`) instead of
   leaning on a default. An engine default moving therefore changes the key and
   so the path: the old trace survives as a record of the old configuration, and
   a rerun cannot overwrite a measurement whose meaning has changed. The arms
