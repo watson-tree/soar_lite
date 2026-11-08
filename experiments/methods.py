@@ -85,11 +85,11 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
     engine requires - deliberately non-binding, so it never ends the run first.
 
     ``restart_stalled`` is whether a path the engine marks stalled is re-drawn.
-    Every arm leaves it at the engine default (on): the panels' steps are meant
-    to move one attribute each, and `False` would move the restart bit too.
-    ``mu`` is the direction-momentum coefficient handed to the built
-    preconditioner (the analog of Adam's first moment decay: the panels run it
-    at the class default and at 0, never at a third hand-set strength), and
+    The default mirrors the engine's (on), but every panel arm passes `False`:
+    a re-drawing chain would spend budget the baselines do not, and off keeps
+    stopping symmetric. ``mu`` is the direction-momentum coefficient handed to
+    the built preconditioner (the analog of Adam's first moment decay: the
+    panels run it at the class default and at 0.9, Adam's own window), and
     ``model`` builds the restart model from the run's key - how a BLR arm swaps
     the uniform draw for a fitted posterior.
 

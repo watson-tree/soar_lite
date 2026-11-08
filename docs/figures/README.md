@@ -10,22 +10,12 @@ which command redraws it.
 | --- | --- | --- |
 | `headline-points.png` | `headline`, objective-points axis | 20 seeds × 3000 batches |
 | `invariance-units.png` | `invariance` | 20 seeds × 3000 batches |
-| `blr-restarts-points.png` | `blr`, objective-points axis | 20 seeds × 1000 batches |
 
-The canonical run draws the first two (and `smooth`, `multimodal`):
+The canonical run draws both (and `smooth`, `multimodal`):
 
 ```bash
 uv run --group exp python -m experiments.compare_baselines \
     --seeds 20 --groups headline,smooth,multimodal,invariance --max-steps 3000
-```
-
-The restart-model panel runs separately, at its own budget — a fitted BLR
-restart walks an acquisition descent on every redraw, so it is the most
-expensive panel per batch:
-
-```bash
-uv run --group exp python -m experiments.compare_baselines \
-    --seeds 20 --groups blr --max-steps 1000
 ```
 
 ## Updating one

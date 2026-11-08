@@ -416,27 +416,17 @@ def pk_chain(
 def build(group: str) -> list[Problem]:
     """Return the problems of one design group.
 
-    group: "smooth" (preconditioning), "multimodal" (momentum drift), "headline"
-    (the two real inverse problems: mixed units and a non-convex response),
-    "blr" (restart model: rastrigin, the one problem where a restart has a
-    stage), or "all" (the union of the four, one entry per problem even though
-    the groups overlap).
+    group: "smooth" (preconditioning), "multimodal" (descent rate), "headline"
+    (the two real inverse problems: mixed units and a non-convex response), or
+    "all" (the union of the three, one entry per problem).
     """
     groups = {
         "headline": lambda: [oscillator_chain(), pk_chain()],
         "smooth": lambda: [diag_quadratic(), rotated_quadratic()],
         "multimodal": lambda: [ackley(), rastrigin()],
-        "blr": lambda: [rastrigin()],
     }
     if group == "all":
-        # The groups overlap on rastrigin (multimodal and blr both list it), so
-        # dedupe by name: a caller that draws one panel per entry would
-        # otherwise draw the same problem twice.
-        unique: dict[str, Problem] = {}
-        for g in groups.values():
-            for p in g():
-                unique.setdefault(p.name, p)
-        return list(unique.values())
+        return [p for g in groups.values() for p in g()]
     if group not in groups:
         # The name arrives from `--groups`, which is argv and therefore a plain
         # string: a typo has to be named here rather than surface as a KeyError.

@@ -8,14 +8,14 @@ re-measuring one arm rewrites exactly one file and every panel listing that arm
 picks the new numbers up.
 
 The arm key spells out the arm's whole configuration
-(`soar-sample-np1-mu0-restart-on`), never a path through a default it could
+(`soar-sample-np1-mu0-restart-off`), never a path through a default it could
 have inherited. An engine default moving therefore changes the key and the file
 path: the old trace stays as a record of the old configuration.
 
 The budget is part of the record (`meta.seeds`, `meta.max_steps`): a run that
 asks for a different budget is refused rather than allowed to overwrite.
 
-Panels and their propositions: `DESIGN.md`. Commands and storage layout:
+Panels: `DESIGN.md`. Commands and storage layout:
 `README.md`. What the last full run measured: `RESULTS.md`.
 """
 
@@ -86,11 +86,6 @@ DEFAULT_MU = DiagonalPreconditioner().mu
 LABEL_SERIAL = f"soar-lite n_paths=1, mu={DEFAULT_MU:g} (default)"
 LABEL_PARALLEL = f"soar-lite n_paths=16, mu={DEFAULT_MU:g}"
 LABEL_MOMENTUM_09 = "soar-lite n_paths=1, mu=0.9 (Adam's window)"
-# The blr panel's arms: one method, three restart models, so nothing but where
-# a restart lands differs.
-LABEL_BLR_SAMPLE = "n_paths=16, Sample draws"
-LABEL_BLR_IDENTITY = "n_paths=16, BLR identity"
-LABEL_BLR_SPHERE = "n_paths=16, BLR sphere"
 
 # Style grammar: linestyle encodes `n_paths` (one solid line per width: 1 ->
 # solid, 16 -> dashed) and color encodes the momentum level. Without a rule
@@ -131,7 +126,7 @@ def soar_arm(  # noqa: PLR0913 - one keyword per attribute the key must name
     label: str,
     style: dict[str, Any],
     model: str = "sample",
-    restart_stalled: bool = True,
+    restart_stalled: bool = False,
 ) -> Arm:
     """Build one soar-lite arm, its key derived from exactly these attributes."""
     key = (
@@ -251,51 +246,19 @@ def _soar_ladder() -> list[Arm]:
 
 
 def _preconditioning_arms(prob: problems.Problem) -> list[Arm]:
-    """Build the P② roster: the soar-lite ladder, Adam, the L-BFGS-B ceiling."""
+    """Build the smooth/headline roster: the soar-lite ladder, Adam, L-BFGS-B."""
     return [*_soar_ladder(), adam_arm(prob), LBFGS_ARM]
 
 
 def _drift_arms(prob: problems.Problem) -> list[Arm]:
-    """Build the P① roster: the same ladder, to read where a stalled chain rests."""
+    """Build the multimodal roster: the same ladder, to read the descent rate."""
     return [*_soar_ladder(), adam_arm(prob)]
-
-
-def _blr_arms(prob: problems.Problem) -> list[Arm]:
-    """Build the restart-model roster: every arm n_paths=16, only the model differs.
-
-    The Sample arm is the same key as the parallel arm, so the two panels share
-    one trace file - the consistency check is structural, not a coincidence.
-    """
-    del prob  # same roster on every problem; only rastrigin lists the panel
-    return [
-        soar_arm(
-            n_paths=16,
-            mu=DEFAULT_MU,
-            label=LABEL_BLR_SAMPLE,
-            style=STYLE_PARALLEL,
-        ),
-        soar_arm(
-            model="blr-identity",
-            n_paths=16,
-            mu=DEFAULT_MU,
-            label=LABEL_BLR_IDENTITY,
-            style={"color": "C4", "lw": 2.0, "ls": "--"},
-        ),
-        soar_arm(
-            model="blr-sphere",
-            n_paths=16,
-            mu=DEFAULT_MU,
-            label=LABEL_BLR_SPHERE,
-            style={"color": "C5", "lw": 2.0, "ls": "-."},
-        ),
-    ]
 
 
 PANELS: dict[str, Callable[[problems.Problem], list[Arm]]] = {
     "headline": _preconditioning_arms,
     "smooth": _preconditioning_arms,
     "multimodal": _drift_arms,
-    "blr": _blr_arms,
 }
 
 INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x

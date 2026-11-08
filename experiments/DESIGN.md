@@ -1,10 +1,10 @@
 # Experiment design: `compare_baselines`
 
-The canonical reproducible comparison artifact. One script, four problem
-groups (`headline`, `smooth`, `multimodal`, `blr`) plus two appendix panels
-(unit-rescaling invariance, Adam's lr sweep), three propositions. This
-document is the lossless handoff: read it before touching
-`compare_baselines.py` so no settled detail is re-derived from memory.
+The canonical reproducible comparison artifact. One script, three problem
+groups (`headline`, `smooth`, `multimodal`) plus two appendix panels
+(unit-rescaling invariance, Adam's lr sweep). This document is the lossless
+handoff: read it before touching `compare_baselines.py` so no settled detail is
+re-derived from memory.
 
 This document states no measured numbers. Every figure and table an experiment
 produced lives in `RESULTS.md`, tagged with the lineup and budget that produced
@@ -13,55 +13,52 @@ budget contract and the conclusions those readings support.
 
 ## Goal
 
-Prove three propositions by **drawing their win/lose boundaries** (never only
-reporting wins — R5):
+Draw the boundary of where **soar-lite beats the baselines**, never only where
+it wins. The question is comparative on every panel: under the same budget,
+does the per-coordinate secant preconditioner reach a lower best-so-far than
+Adam (a grid-tuned adaptive step), and how much of any remaining gap is
+"diagonal vs full second order"? `L-BFGS-B` supplies that second number as the
+full-memory ceiling, so a gap to it is not read as a tuning failure.
 
-- **P② — direction repair (smooth + headline).** The per-coordinate secant's
-  error is in the *direction* `-d ⊙ g`: it drops off-diagonal curvature. Two
-  questions: does the preconditioner still beat Adam's adaptive step on scale /
-  conditioning / unit-mixing, and does adding direction momentum change the
-  *response* of that dropped part — the zigzag and the overshoot a wide residual
-  spectrum produces — where the rotation coupling (rotated quadratic) and
-  interaction coupling (oscillator) live? Momentum does not repair the dropped
-  term (see `docs/explanation/how-it-works.md` §Momentum): it re-shapes the
-  iteration along the direction `d` already gives, so the panel reads it as an
-  axis of its own, never as a candidate fix. `L-BFGS-B` is the ceiling reference
-  (full-memory + exact line search),
-  so the panel shows how much of any gap is "diagonal vs full second order"
-  rather than a tuning failure.
-- **P① — momentum drift / stall shape (multimodal).** Reframes the old "escape
-  the saddle" question without answering it: these panels do not test whether
-  `mu` escapes a saddle — that needs a landscape whose discriminator is
-  saddle-vs-minimum, and escaping is just what momentum terms are usually
-  hoped to buy in deep-network optimizers. What the panels do test is whether
-  the momentum push changes *where a stalled chain ends up*. Rastrigin chains
-  converge into a lattice basin and stall; Ackley chains freeze outside the
-  funnel. Momentum off is the default, so the contrast arm is `mu=0.9`: it reads
-  whether a gradient memory moves either stall, against serial, parallel and
-  Adam.
-- **Restart model — center bias (rastrigin alone).** Where a restart lands: a
-  BLR posterior centered on the observed best vs a uniform re-draw. Only
-  rastrigin gives a restart a stage — chains stall in local basins, and the
-  sample's re-draws provably never improve the best. No external baseline: a
-  BLR restart serves no objective points, so on the points/batches axes its
-  cost is invisible and a shared plot would sell a free lunch. Its figure is
-  separate, all arms `n_paths=16`.
+Two single-attribute steps explain *why* a curve sits where it does. Neither is
+a claim on its own:
 
-Design rule (from the start): problems must be **high-dimensional, d≈50–200** —
-in low dimension the sampled paths entangle: with few coordinates to spread
-them apart, several starts converge into the same basin, so the width `n_paths`
-buys little and soar's multi-path advantage is dulled there, not sharpened.
+- **Width** (`n_paths` 1 → 16) spreads independent starts over the domain.
+- **Momentum** (`mu` default → 0.9) reads the **descent process**, not an
+  endpoint. The figures are read for rate as well as for final position, and a
+  memory is what moves that rate: it trades overshoot along steep directions
+  against slow progress along flat ones, on the window the *scaled spectrum*
+  calls for (see `docs/explanation/how-it-works.md` §Momentum). No panel here
+  has a problem whose discriminator is a stall — a stalled chain has already
+  settled, so a memory cannot change where it stops, only how fast it got
+  there. It is a trade, not a repair: momentum re-shapes the iteration along the
+  direction `d` already gives, so it never buys back the dropped off-diagonal
+  curvature — only the landscape moves the sign of the trade.
 
-Every arm leaves `restart_stalled` at the engine default (**on**). A probe
-showed stalls fire only where a method converges into a basin — the diagonal
-quadratic (~step 4) and rastrigin (~batch 700) — never on the rotated
-quadratic, Ackley or the oscillator, so the restart bit is not a step any
-panel takes. The two single-attribute steps are the width (`n_paths` 1 → 16)
-and the momentum (`mu` 0 → 0.9); each curve moves exactly one.
+Design rule (from the start): problems must be **medium-to-high dimensional** —
+the regime this library positions itself in. In low dimension the sampled paths
+entangle: with few coordinates to spread them apart, several starts converge
+into the same basin, so the width `n_paths` buys little and soar's multi-path
+advantage is dulled there, not sharpened. There is no upper bound on `d` in
+principle; the set runs at `d≈60–100`, and the `d≈200` end of the band is a
+**budget** ceiling — above it every batch pays more for the same kind of
+evidence, not for a new one.
+
+Every arm runs with `restart_stalled` **off**. A restart would hand soar-lite an
+advantage the baselines do not have: Adam and L-BFGS-B stop on their own
+criterion, while a stalled soar path that keeps re-drawing keeps spending
+budget. Off, a converged chain also just stops, so stopping is symmetric. A
+probe showed stalls fire only where a method converges into a basin — the
+diagonal quadratic (~step 4) and rastrigin (~batch 700) — never on the rotated
+quadratic, Ackley or the oscillator, and on rastrigin a uniform re-draw
+provably never improves the best, so nothing is lost by turning it off. The
+engine keeps the restart capability, and the harness keeps its public `model=`
+factory (`BLRGlobalModel`), for a future problem where a fitted restart pays;
+no panel arms it as a step.
 
 ## Problem set
 
-Four run groups plus two appendix panels, one role each:
+Three run groups plus two appendix panels, one role each:
 
 1. **Headline — the two real inverse problems.** Both mix physical units and
    both have a non-convex response; one is read in the frequency domain, the
@@ -77,7 +74,7 @@ Four run groups plus two appendix panels, one role each:
      `H` the frequency response of a tridiagonal (banded) system, solved
      densely - one `n×n` complex solve per frequency, O(n³) rather than O(n),
      which at N=20 is the cheap side of the set. Synthetic target design → known
-     `f* = 0`; boxes are physical ranges. Serves **P② + unit-invariance**.
+     `f* = 0`; boxes are physical ranges. Serves the headline race.
      The response is scale-invariant (`m`, `k`, `c` scaled together leave
      `|H|` unchanged), so `f* = 0` is a whole ray through the truth rather
      than a point: what is identified is the transmissibility, not the design,
@@ -97,8 +94,8 @@ Four run groups plus two appendix panels, one role each:
      `Σ_{j,i} log₁₀(C_i(t_j) / C*_i(t_j))²` over a dyadic geometric time grid,
      on three observed compartments, with a bolus in each end at `t = 0`.
      Synthetic truth design → known `f* = 0`; boxes are truth × [¼, 4]. Serves
-     **P②** on exactly the coupling shape the diagonal approximation is built
-     for — nearest-neighbor in a compartment graph — without repeating the
+     the headline race on exactly the coupling shape the diagonal approximation
+     is built for — nearest-neighbor in a compartment graph — without repeating the
      oscillator's physics. Two of its features were forced by measurement, not
      chosen: a single bolus leaves most of the rates unconstrained, and the
      window's tail falls below the assay limit, so those samples are dropped
@@ -113,16 +110,14 @@ Four run groups plus two appendix panels, one role each:
      ~1e6. Dense `H` breaks the diagonal assumption; shows the *cost* of the
      diagonal approximation. This is where direction momentum is asked whether
      it can buy any of the dropped coupling back.
-   Serves **P②**.
 3. **Multimodal — Ackley / Rastrigin**, d=100 (drop to 50 if cost bites). A
-   funnel / lattice of local minima. Serves **P①**.
-4. **BLR — Rastrigin alone.** The one problem where a restart has a stage:
-   chains converge into local basins and stall, and Sample's re-draws provably
-   never improve the best. Serves the **restart-model** proposition.
+   funnel / lattice of local minima, and the pair where progress is piecewise:
+   flat plateaus on Ackley, cos oscillation on Rastrigin. The panel reads the
+   descent rate there, not where a chain stops.
 
 Two appendix panels, property demos rather than races:
 
-5. **Invariance — unit-rescaling consistency.** Run on the diag control:
+4. **Invariance — unit-rescaling consistency.** Run on the diag control:
    re-measure in two unit systems (here `x' = 10x`, see `INVARIANCE_SCALE` in
    `compare_baselines.py`), **zero retune**. Claim is **outcome-level, not
    trajectory-level**: the best-so-far-vs-cost curves overlap in both unit
@@ -138,7 +133,7 @@ Two appendix panels, property demos rather than races:
    The exact claim is asserted at the step level (injected secant pair, as in
    `test_diag_step_scales_with_the_coordinate_unit`); the end-to-end claim is
    asserted statistically. A *property demo*, not a race.
-6. **Adam lr sweep.** Log-scan of `lr` per problem, marking the panel pick
+5. **Adam lr sweep.** Log-scan of `lr` per problem, marking the panel pick
    (`ADAM_LR`) — the evidence that soar-lite has no learning rate where Adam
    pays a grid. Emitted by `--lr-sweep`.
 
@@ -185,14 +180,13 @@ in `RESULTS.md`, not papered over.
 ## Methods × panels
 
 Curves differ per panel; each curve has one role, and each single-attribute
-step moves exactly one knob (`n_paths` or `mu`); restart stays at the engine
-default (on) in every arm:
+step moves exactly one knob (`n_paths` or `mu`); restart is off in every arm:
 
-- **Smooth + headline** (**P②**): `soar-lite n_paths=1` (default `mu=0`),
+- **Smooth + headline**: `soar-lite n_paths=1` (default `mu=0`),
   `soar-lite n_paths=1, mu=0.9`, `soar-lite n_paths=16`, `Adam` (grid lr),
   `L-BFGS-B` (ceiling *reference*, not a head-to-head baseline — full-memory +
   serial line search vs our per-coordinate + batched n_paths).
-- **Multimodal** (**P①**): the same three soar-lite arms, `Adam` (grid lr).
+- **Multimodal**: the same three soar-lite arms, `Adam` (grid lr).
   The momentum axis runs at `n_paths=1` — 0 and 0.9 — so the curve
   family differs from its neighbors by one knob, and the `mu=0.9` arm asks the
   momentum question at **Adam's own horizon** instead of ours: 0.9 is a 10-step
@@ -206,76 +200,34 @@ default (on) in every arm:
   cost. It does not - the cost stays and only the landscape moves the sign - so
   the trade belongs to the mechanism, not to the horizon. `RESULTS.md` holds the
   numbers.
-- **BLR** (**restart model**, rastrigin alone, its own figure, all
-  `n_paths=16`): `Sample draws`, `BLR identity`, `BLR sphere` — one method,
-  three restart models, so nothing but where a restart lands differs.
-
-  This panel measures **a surrogate against no surrogate**, and only that. A
-  fitted restart's proposal is found by descending the acquisition over the
-  surrogate, and those evaluations are not charged: the batch budget counts the
-  `eval_f_g` calls the engine serves, and a model read is not one of them.
-  `Sample draws` spends its whole budget on the function; the two fitted arms
-  spend the same function budget **plus** an unbilled search over their own
-  model. So the comparison is about which landing place is better, not about
-  what it costs - a cost-matched fitted arm would have to pay for its
-  acquisition descent out of the same budget, and that variant is not measured.
-  Read every `blr` gap with that asymmetry in hand.
 - **Invariance**: `soar-lite` (n_paths=1) vs `Adam`, two unit systems, overlaid
   after the coordinate transform.
 
-The width step (`n_paths` 1 → 16) and the momentum steps (`mu` default → 0.9 and
-default → 0) are the single-attribute moves; a single `n_paths=16` curve that
-also flipped restart would charge the whole gap to "parallelism". Restart is not a step the
-panels take: a probe showed stalls fire only where a method has already settled
-into a basin (the diagonal quadratic, rastrigin), never on the rotated
-quadratic, Ackley or the oscillator.
+The width step (`n_paths` 1 → 16) and the momentum step (`mu` default → 0.9)
+are the single-attribute moves; a single `n_paths=16` curve that also flipped
+restart would charge the whole gap to "parallelism". Restart is not a step the
+panels take, and it is off everywhere (see Goal): that is what makes
+soar-lite's stopping rule symmetric with Adam's and L-BFGS-B's.
 
-The headline BLR panel is **canceled**: a BLR restart needs a stalled stage to
-act on, and the oscillator's non-convexity is resonance-type — not the funnel
-that stalls a chain. The BLR proposition lives on rastrigin, where Sample's
-re-draws provably never improve the best and a fitted restart is the question.
-
-**External evidence: the bent projection on real problems.** The restart-model
-question is not only ours. Tripp and Fable, "Why Does Spherical-Linear Bayesian
-Optimization Work?" (2026), an analysis of Doumont, Fan et al., "We Still Don't
-Understand High-Dimensional Bayesian Optimization" (2025), run the same
-projection against an unprojected linear head on three real zero-order problems
-at 3 seeds x 150 evaluations each, all maximized: rover (60D) spherical-linear
--1.28 against standard-linear -1.35, lasso-DNA (180D) -0.309 against -0.333, SVM
-(388D) -0.134 against -0.233. The bent head wins all three, which is the
-direction this panel's center-bias reading predicts. The bent *RBF* on the same
-pipeline beats both on all three, so the gain is the geometry and not the linear
-function class; and the same study slides the optimum to a box corner and the
-ranking inverts, so the projection is a prior that the optimum is interior, not
-a free win.
-
-Two limits keep that evidence external rather than a panel of ours. The three
-objectives are black boxes with no gradient — a `scipy` spline path cost over
-obstacles, a per-point `sklearn` SVR fit, a per-point `LassoBench` path solve —
-so they cannot ride this engine's `eval_f_g` seam, and re-measuring them here
-would mean a finite-difference gradient at 60-388 evaluations per step. And 150
-evaluations is a zero-order BO count, not this harness's batch axis. The numbers
-above are therefore quoted, not measured here.
-
-L-BFGS-B appears only on the P② panels. Its role there is the *ceiling
+L-BFGS-B appears only on the smooth and headline panels. Its role there is the *ceiling
 reference* — how close soar-lite's diagonal secant gets to a full-memory
 second-order method on smooth, convex landscape. That role does not exist on
-the P① panel: the question there is whether direction momentum changes a
-stalled chain's resting place, not whether a full second-order method stalls.
-L-BFGS-B is second-order and restart-free — on Ackley/Rastrigin it would dive
-deterministically into the nearest local minimum and stay there at
+the multimodal panel: the question there is the descent *rate* where progress is
+piecewise, and a full-memory method answers a different one. L-BFGS-B is
+second-order and restart-free — on Ackley/Rastrigin it would dive
+deterministically into the nearest local minimum and set there at
 second-order precision, so its curve could only show "a second-order method
-also gets stuck", which discriminates nothing about drift or stall. It is also
-serial (not the batched cost axis; see Budget) and its line search is fragile
-on Rastrigin's cos oscillation.
+also gets stuck", which says nothing about how a first-order memory shapes the
+way down. It is also serial (not the batched cost axis; see Budget) and its
+line search is fragile on Rastrigin's cos oscillation.
 
 NAAdam (Adam + `σ_t = σ0/√t` decaying Gaussian noise) was measured and
 **dropped**: on ackley/rastrigin at d=100 the noise never separates from plain
 Adam — larger `σ0` is flat (rastrigin) to worse (ackley) — so it would only be
 a redundant, exactly-overlapping curve. The multimodal panel is therefore
 `soar-lite` n_paths=1 (default `mu=0`, `mu=0.9`) / 16 vs `Adam`, which is the
-honest contrast: momentum is read as a *drift* on these landscapes, not
-asserted to be an escape mechanism in general.
+honest contrast: momentum is read as a *process* — what it does to the way down —
+not asserted to be an escape mechanism in general.
 
 Two rules keep the momentum arm from being over-read. A `mu > 0` is a
 **trade, not a uniform win**: it costs where the choice of basin dominates and
@@ -383,8 +335,6 @@ window is a knob with a measurable effect.
     first ~187 of its 3000 batches. That truncation is the reading, not a loss:
     the axis asks what each method bought from the same number of objective
     points served, and the batches figure is where the wide arm is shown whole.
-    The rule is per-axis, so a panel whose arms share one width (the `blr` panel,
-    all `n_paths=16`) is not truncated at all.
 - Seeds `N=20`; report **median, shaded [Q1, Q3]** (interquartile band), log-y,
   log x — mean ± std would model a skewed best-so-far spread as symmetric and
   dip below the log axis.
@@ -396,29 +346,13 @@ window is a knob with a measurable effect.
   `figures/lr_sweep/lr_sweep.png` — so a figure is always re-derivable from the
   traces and a trace never from a figure. A panel is a roster over arm files, not a
   container that owns them, so re-measuring one arm rewrites one file and every
-  panel listing it picks the new numbers up — rastrigin's `n_paths=16` arm is a
-  single file that both the multimodal and the blr panel draw. The default run is
-  `headline,smooth,multimodal,invariance`; `--groups blr` adds the restart-model
-  panel (a single rastrigin subplot). `--plot-only` rebuilds figures from the
+  panel listing it picks the new numbers up. The default run is
+  `headline,smooth,multimodal,invariance`. `--plot-only` rebuilds figures from the
   arm files with no re-run, naming any arm that has no trace instead of drawing a
   gap. The invariance panel writes no trace — it is re-run (fast) rather than
   re-plotted.
-- The `blr` panel runs at **its own budget**, 1000 batches rather than 3000,
-  in its own invocation (`--groups blr --max-steps 1000`), because
-  a restart model acts only once a chain stalls, rastrigin stalls it around
-  batch 700, and the remaining 2000 batches buy that panel nothing. Two
-  consequences are load-bearing. The cross-panel consistency check - the
-  `Sample` arm's median matching the multimodal panel's `n_paths=16` median -
-  holds only because both panels share a budget, so with different budgets the
-  `blr` panel is read against its own arms alone and never subtracted from a
-  3000-batch panel. And the shared rastrigin `n_paths=16` arm is one file that
-  both panels *read*: only the multimodal invocation writes it, at 3000, and
-  the budget guard refuses a second writer at another budget. Because a run is
-  prefix-deterministic, the 3000-batch trace's first 1000 batches *are* a
-  1000-batch run, so the `blr` figure truncates that arm to the shorter extent
-  present instead of re-measuring it.
 - The arm key spells out the arm's whole configuration
-  (`soar-sample-np1-mu0-restart-on`, `adam-lr0.01`, `lbfgs`) instead of
+  (`soar-sample-np1-mu0-restart-off`, `adam-lr0.01`, `lbfgs`) instead of
   leaning on a default. An engine default moving therefore changes the key and
   so the path: the old trace survives as a record of the old configuration, and
   a rerun cannot overwrite a measurement whose meaning has changed. The arms
@@ -442,15 +376,16 @@ window is a knob with a measurable effect.
 
 0. **Wait for explicit go-ahead before heavy coding.**
 1. Add experiment deps via a dependency group (`optax`, `matplotlib`).
-2. `experiments/problems.py` — the four groups (`headline`, `smooth`,
-   `multimodal`, `blr`) + the invariance and `all` builders, each problem
+2. `experiments/problems.py` — the three groups (`headline`, `smooth`,
+   `multimodal`) + the invariance and `all` builders, each problem
    exposing the soar-lite seam `x_batch → (loss, grad, feas)`.
-3. `experiments/methods.py` — drivers: soar-lite n_paths=1 / 16 / (1, mu=0),
-   Adam, L-BFGS-B, and the three BLR arms (`surrogate_minimize` + the identity /
-   sphere projections).
+3. `experiments/methods.py` — drivers: soar-lite n_paths=1 / 16 at default `mu`,
+   plus the `mu=0.9` arm, Adam, L-BFGS-B. The restart-model factory
+   (`surrogate_minimize` + the identity / sphere projections) stays wired, but
+   no panel arms it.
 4. `experiments/compare_baselines.py` — harness over `N=20` seeds, one raw trace
    file per (problem, arm) under `results/`; panels: headline / smooth /
-   multimodal / blr, plus invariance and the lr sweep.
+   multimodal, plus invariance and the lr sweep.
 5. Plot from the arm files. **Self-check first**: two curves on the diag
    quadratic (soar-lite n_paths=1 vs Adam) before running everything.
 6. `experiments/README.md` — run instructions, written alongside the code.
@@ -480,8 +415,8 @@ basin. Expecting the smooth panel's ceiling to transfer here would be wrong.
 The funnel slot has a known blind spot, and it is deliberate: no
 saddle/vanishing-gradient handling is built in. A Zhang-Li power iteration
 triggered on a small gradient norm was considered and rejected — multi-path
-sampling plus restart already cover that regime, so the extra complexity would
-buy nothing. Ackley is where that shows; `RESULTS.md` holds the numbers.
+sampling already covers that regime, and the engine keeps a restart knob for it,
+so the extra complexity would buy nothing. Ackley is where that shows; `RESULTS.md` holds the numbers.
 
 ## Readings live elsewhere
 

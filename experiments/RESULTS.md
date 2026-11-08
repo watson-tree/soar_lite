@@ -21,7 +21,38 @@ Unless a table says otherwise it holds **medians**, the statistic the figures
 plot. The harness's stdout line is `final mean best` — mean, not median, and
 not comparable with the tables below.
 
-## 2026-11-07 — lineup v5 (`mu` default back to 0) — CURRENT, NOT YET MEASURED
+## 2026-11-08 — lineup v6 (`restart_stalled` off, restart-model panel retired) — CURRENT, NOT YET MEASURED
+
+Two changes to what the harness runs. Nothing has been re-measured against
+either.
+
+**Every arm now runs with `restart_stalled` off.** Soar-lite's arm keys gain
+`-restart-off` where they read `-restart-on`, and a converged chain stops the
+way Adam and L-BFGS-B stop instead of re-drawing inside the same budget. Where
+a stall fires — the diagonal quadratic (~step 4) and rastrigin (~batch 700) —
+a v1–v5 trace is a `restart-on` record and no longer describes what the harness
+does. Where it never fired (the rotated quadratic, Ackley, the oscillator) the
+run is the same either way; `pk_chain` has not been checked on that point.
+
+**The restart-model panel is retired**: `blr-identity`, `blr-sphere` and the
+`n_paths=16` rastrigin arm they were read against are out of the harness,
+`--groups blr` is refused, and the figure left the README. That follows from
+the line above rather than from the numbers: a restart model's only mechanism
+is a restart, and with restarts off for symmetry the panel has no stage left.
+It also never showed the payoff the design anticipated — the bent (sphere)
+projection, the one the external evidence supports, was the worse of the two
+fitted models in both entries below, losing to a plain identity linear head.
+Against that it ran at a budget of its own on a contrived bowl, and its
+acquisition descent made it the most expensive panel per batch (the v2 entry's
+3h12m of a 5h06m run). The library support stays (`BLRGlobalModel`, the
+projections, the public `model=` factory), and the harness keeps that factory
+wired for a problem where a fitted restart pays.
+
+The blr readings below stay exactly as measured, as the record of a retired
+panel. They are not reproducible from this harness — their arms no longer
+exist, so redrawing them takes the code at their own commit.
+
+## 2026-11-07 — lineup v5 (`mu` default back to 0) — SUPERSEDED by the v6 entry, which no run has measured yet
 
 `DiagonalPreconditioner`'s default `mu` moved from 0.63 back to 0. Every arm
 that takes the default re-keys with it (`...-mu0.63-...` → `...-mu0-...`), and
@@ -33,6 +64,10 @@ record of the 0.63 default; figures drawn from them say so. The roster is now
 `n_paths=1` (default `mu=0`), `n_paths=1, mu=0.9`, `n_paths=16`; the missing
 measurement is `np16-mu0` on every problem plus the blr panel's three arms at
 `mu=0`.
+
+**Note added in v6:** the blr panel is retired, so the second half of that
+missing measurement no longer exists. The paragraph's own reading of the
+`mu=0.63` traces still stands.
 
 Why the window moves back, in one line: memory damps the scaled spectrum and
 shrinks direction noise, and both are landscape properties the preconditioner

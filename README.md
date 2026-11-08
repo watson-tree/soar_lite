@@ -127,17 +127,11 @@ nothing retuned: the per-coordinate secant overlaps, while a single global
 learning rate separates because the effective step rescales with the unit. 20
 seeds x 3000 batches.
 
-[![Rastrigin under uniform sample re-draws against two fitted restart models](docs/figures/blr-restarts-points.png)](docs/figures/blr-restarts-points.png)
-
-**The restart seam, measured.** Rastrigin with `n_paths = 16` on every arm -
-uniform sample re-draws against two fitted restart models - at its own budget
-of 20 seeds x 1000 batches.
-
 The panels not shown here (`smooth`, `multimodal`, the Adam lr sweep), the
 medians behind every curve and the caveats that qualify them are in
 [`experiments/RESULTS.md`](experiments/RESULTS.md); what the comparison measures
 is in [`experiments/DESIGN.md`](experiments/DESIGN.md). The commands that redraw
-these three panels are in [`docs/figures/README.md`](docs/figures/README.md).
+these two panels are in [`docs/figures/README.md`](docs/figures/README.md).
 
 ## Development
 

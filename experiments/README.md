@@ -59,14 +59,6 @@ points served" axis, so both billing notions come from one execution.
 Run one panel to save time, e.g. `--groups smooth`; any subset works, and each
 panel writes its files as it finishes.
 
-The restart-model panel is run separately and on purpose, at its own budget:
-`--groups blr --max-steps 1000` draws rastrigin alone (all arms `n_paths=16`) —
-`Sample` vs `BLR identity` vs `BLR sphere` — as its own single-subplot figure;
-the committed traces hold this panel at 1000 batches, so the default 3000 is
-refused by the budget guard rather than overwriting them. It is left out of the
-default list because a fitted BLR restart walks an acquisition descent on every
-redraw, so it is the most expensive panel per batch.
-
 ## The Adam learning-rate grid
 
 Adam pays a per-problem lr chosen by an offline sweep
@@ -108,7 +100,7 @@ figure is always re-derivable and a trace never is. The unit is one
   present **on that axis**, so all curves end together: an `n_paths=16` arm
   serves 16 points per batch, so here it shows only the first ~187 of its 3000
   batches. That is what the axis is for, not a clipped result.
-- `figures/invariance/invariance.png` — panel 5, one physics in two unit systems,
+- `figures/invariance/invariance.png` — panel 4, one physics in two unit systems,
   zero re-tune.
 - `figures/lr_sweep/lr_sweep.png` — the Adam grid sweep.
 - `results/smoke/`, `figures/smoke/` — where `--quick` writes, one smoke run
@@ -119,7 +111,7 @@ figure is always re-derivable and a trace never is. The unit is one
   below the log axis).
 
 The arm key is the file name and spells out the arm's whole configuration
-(`soar-sample-np1-mu0-restart-on`, `adam-lr0.01`, `lbfgs`), so a changed
+(`soar-sample-np1-mu0-restart-off`, `adam-lr0.01`, `lbfgs`), so a changed
 default or a changed lr is a new key and a new file: the old trace stays as a
 record of the old configuration instead of being silently overwritten.
 
@@ -154,7 +146,7 @@ Re-measuring one arm is a filter on that same identity:
 # rewrite exactly one file, leave the rest of the panel alone
 uv run --group exp python -m experiments.compare_baselines \
     --groups smooth --problems diag_quad_d100_cond10000 \
-    --arms soar-sample-np1-mu0-restart-on --seeds 20 --max-steps 3000
+    --arms soar-sample-np1-mu0-restart-off --seeds 20 --max-steps 3000
 
 # rebuild every figure from the files, no re-run
 uv run --group exp python -m experiments.compare_baselines --plot-only
@@ -190,9 +182,10 @@ happen. `--plot-only` and `--lr-sweep` measure no arm at all, so they refuse
   `value_and_grad` path — no `eval_f` (value-only) seam — so every batch the
   axis counts is a full value+gradient batch. The only attributes stepped are
   `n_paths` (1 → 16) and `mu` (0 → 0.9); `restart_stalled`
-  stays at its engine default (on) in every arm, and the blr panel injects its
-  restart model through the public `model=` factory (`BLRGlobalModel`; the other
-  arms use the default `SampleGlobalModel`).
+  is **off** in every arm, so a converged chain stops like the baselines do
+  instead of re-drawing. The restart model stays reachable through the public
+  `model=` factory (`BLRGlobalModel`, the default `SampleGlobalModel` when
+  unset), but no panel arms it as a step.
 - **Canvas only in-repo**: `experiments/DESIGN.md` is the design and the
   story; figures are drawn from the trace files, never hand-tuned.
 
