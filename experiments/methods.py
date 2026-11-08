@@ -262,5 +262,16 @@ def run_lbfgs(problem: Problem, *, max_batches: int, seed: int) -> Trace:
         bounds=list(zip(lo, hi, strict=True)),
         options={"maxfun": max_batches, "maxiter": max_batches},
     )
+    # scipy stops only once it has already served the call that went over
+    # `maxfun` ("TOTAL NO. OF F,G EVALUATIONS EXCEEDS LIMIT"), so a budget of N
+    # pays N + 1. The extra call was paid, but the record's axis means "best
+    # after N batches": every other arm stops exactly at N, so counting it
+    # would give this one arm a batch the comparison did not hand it. Cutting
+    # later is also what keeps this correct if scipy ever stops at N exactly.
+    if len(trace.points) > max_batches:
+        del trace.points[max_batches:]
+        del trace.batches[max_batches:]
+        del trace.best[max_batches:]
+        best = trace.best[-1] if trace.best else math.inf
     trace.fun = float(best) if math.isfinite(best) else float(result.fun)
     return trace
