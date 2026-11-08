@@ -9,7 +9,6 @@ invariance of the steady-state step. No engine wiring. Run with:
 
 import math
 from collections.abc import Callable
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -20,6 +19,7 @@ from soar_lite.engine import (
     n_path_schedule,
 )
 from soar_lite.local_solver import DiagonalPreconditioner
+from tests.flock import flock_kwargs
 
 jax.config.update("jax_enable_x64", val=True)
 
@@ -31,28 +31,6 @@ def close(
 ) -> bool:
     """Return True iff all elements of a and b agree within tol."""
     return bool(jnp.max(jnp.abs(a - b)) < tol)
-
-
-def flock_kwargs(
-    x0: jnp.ndarray,
-    domain: Domain,
-    *,
-    key: jnp.ndarray | None = None,
-) -> dict[str, Any]:
-    """Return the entry's flock kwargs: width, starts and the box they live in.
-
-    The engine takes its width as `n_paths`, every point a path starts from as
-    the entry's `x0`, and the one box the run searches as `domain` - so a test
-    that chooses its flock says all three here. `key` seeds the default model's
-    restarts, so it is passed on as the entry's own knob rather than through a
-    model.
-    """
-    return {
-        "n_paths": int(x0.shape[0]),
-        "domain": domain,
-        "x0": x0,
-        "key": jax.random.PRNGKey(0) if key is None else key,
-    }
 
 
 # --- DiagonalPreconditioner ---

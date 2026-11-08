@@ -14,7 +14,6 @@ Run with:
 
 import math
 from collections.abc import Callable
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -27,46 +26,9 @@ from soar_lite.engine import (
     n_path_schedule,
 )
 from soar_lite.global_model import SampleGlobalModel
+from tests.flock import flock, flock_kwargs, unit_domain
 
 jax.config.update("jax_enable_x64", val=True)
-
-
-def unit_bounds(d: int = 1) -> jnp.ndarray:
-    """Return the engine's box in working coords: x ∈ [0,1]^d."""
-    return jnp.stack([jnp.zeros(d), jnp.ones(d)], axis=1)
-
-
-def unit_domain(d: int = 1) -> Domain:
-    """Return the engine's box in working coords as the `Domain` it is."""
-    return Domain(unit_bounds(d))
-
-
-def flock(n_paths: int, d: int = 1) -> jnp.ndarray:
-    """Return n_paths starts spread over the box's interior, one row each."""
-    row = jnp.linspace(0.0, 1.0, n_paths + 2)[1:-1]
-    return jnp.repeat(row[:, None], d, axis=1)
-
-
-def flock_kwargs(
-    x0: jnp.ndarray,
-    domain: Domain,
-    *,
-    key: jnp.ndarray | None = None,
-) -> dict[str, Any]:
-    """Return the entry's flock kwargs: width, starts and the box they live in.
-
-    The engine takes its width as `n_paths`, every point a path starts from as
-    the entry's `x0`, and the one box the run searches as `domain` - so a test
-    that chooses its flock says all three here. `key` seeds the default model's
-    restarts, so it is passed on as the entry's own knob rather than through a
-    model.
-    """
-    return {
-        "n_paths": int(x0.shape[0]),
-        "domain": domain,
-        "x0": x0,
-        "key": jax.random.PRNGKey(0) if key is None else key,
-    }
 
 
 def pointwise(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:

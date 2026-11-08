@@ -33,53 +33,20 @@ site has to keep every other site's rows true.
 # is the intended read, not a boundary crossing.
 
 import math
-from typing import Any
 
 import jax
 import jax.numpy as jnp
 import pytest
 
-from soar_lite.domain import Domain
 from soar_lite.engine import (
     _argmin_finite,
     _Best,
     _OptimumReached,
     n_path_schedule,
 )
+from tests.flock import flock_kwargs, unit_domain
 
 jax.config.update("jax_enable_x64", val=True)
-
-
-def unit_bounds(d: int = 1) -> jnp.ndarray:
-    """Return the engine's box in working coords: x ∈ [0,1]^d."""
-    return jnp.stack([jnp.zeros(d), jnp.ones(d)], axis=1)
-
-
-def unit_domain(d: int = 1) -> Domain:
-    """Return the engine's box in working coords as the `Domain` it is."""
-    return Domain(unit_bounds(d))
-
-
-def flock_kwargs(
-    x0: jnp.ndarray,
-    domain: Domain,
-    *,
-    key: jnp.ndarray | None = None,
-) -> dict[str, Any]:
-    """Return the entry's flock kwargs: width, starts and the box they live in.
-
-    The engine takes its width as `n_paths`, every point a path starts from as
-    the entry's `x0`, and the one box the run searches as `domain` - so a test
-    that chooses its flock says all three here. `key` seeds the default model's
-    restarts, so it is passed on as the entry's own knob rather than through a
-    model.
-    """
-    return {
-        "n_paths": int(x0.shape[0]),
-        "domain": domain,
-        "x0": x0,
-        "key": jax.random.PRNGKey(0) if key is None else key,
-    }
 
 
 @pytest.mark.parametrize(
