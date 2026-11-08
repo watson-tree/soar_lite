@@ -387,7 +387,7 @@ winners, so a restart start never buys a gradient batch of its own. With the
 value-only seam connected the merge is even tighter: the restart start's value
 is deferred and bought once in the same fused batch. An unusable start (`f` or `g`
 not finite) does not land, and the path stays `stalled` to be redrawn next round
-— it never becomes `points[i]`, the path's stored point, so "where this path
+— it never becomes the point the path holds, so "where this path
 stands" cannot be polluted by a degenerate point.
 
 ## The engine
@@ -398,8 +398,8 @@ A round first puts the paths in path-index order, then serves its batches in
 that order — one fused `settle` batch (step 5), preceded by the trial batches
 its judged steps spend, up to `n_alpha` each (see Cost):
 
-1. **Redraw set**: paths with no point (the iteration-0 placeholder) or that are
-   `stalled` with `restart_stalled` on.
+1. **Redraw set**: paths that hold no point (iteration 0's whole flock) or that
+   are `stalled` with `restart_stalled` on.
 2. **Queue**: the remaining paths. A path that is `stalled` and not being
    redrawn stays here — it proposes nothing this round and yields no winner, but
    its last usable point stays in the run's best.
@@ -506,16 +506,16 @@ is told about is never taken back.
 `restart_stalled`'s separate decision, one layer up. The flag is written in two
 places: by the verdict channel — in either of its two exits, `give_up` or
 `accept` with no finite sample ever served — and by the commit gate, which
-refuses a non-finite start or winner. A refused start **does not** become
-`points[i]`, the slot that always means "where this path stands" — so an
-unusable start stays `stalled` and is redrawn next round instead of being
+refuses a non-finite start or winner. A refused start **does not** become the
+point the path holds, the slot that always means "where this path stands" — so
+an unusable start stays `stalled` and is redrawn next round instead of being
 clipped or forced into a degenerate point.
 
 `stalled` and "has no point" are two different things, and only the latter is
-outside `restart_stalled`'s control. The placeholder's all-nan `x` is the engine's
-starting state (iteration 0 uses it to make every path go through one redraw), so
-it is always redrawn. A refused point is a stall, and `restart_stalled` decides
-whether that path is redrawn.
+outside `restart_stalled`'s control. A path starts with no point at all, holding
+nothing to be read (iteration 0 uses it to make every path go through one
+redraw), so it is always redrawn. A refused point is a stall, and
+`restart_stalled` decides whether that path is redrawn.
 
 ### All stalled: redraw, or end
 

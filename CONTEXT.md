@@ -100,9 +100,9 @@ Stalled is not dead: unless the run turned `restart_stalled` off, the path is
 re-drawn by the global model on the next iteration; with the knob off it stays
 parked — still counted, still readable for `best` — but never moved again. A
 turn of the loop with every path parked that way is `all_stalled`: no path can
-move and none is owed a start, so the run stops. A path with no point at all (an
-empty `x`) is a redraw that ignores `restart_stalled`: it is the machine's own
-initial state, not a stall.
+move and none is owed a start, so the run stops. A path with no point at all is
+a redraw that ignores `restart_stalled`: it is the machine's own initial state,
+not a stall.
 _Avoid_: paused, idle, dead
 
 ### Evaluation

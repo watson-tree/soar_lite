@@ -334,10 +334,16 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         budget.tick()  # counted after the body: only finished iterations
 
     # Each path's point as the run ended, and its value. A path that never held
-    # a usable point still carries an all-nan `x` - that is what the placeholder
-    # is - so it reports `nan` on both halves with no branch here.
-    flock_x = jnp.stack([p.x for p in paths.points])
-    flock_fun = jnp.asarray([p.f for p in paths.points])
+    # a usable point has no point to report: it reads `nan` on both halves.
+    flock_x = jnp.stack(
+        [
+            jnp.full(domain.d, math.nan) if slot.point is None else slot.point.x
+            for slot in paths.flock
+        ]
+    )
+    flock_fun = jnp.asarray(
+        [math.nan if slot.point is None else slot.point.f for slot in paths.flock]
+    )
 
     return NPathResult(
         x=best.x,
@@ -671,6 +677,24 @@ class _Evaluator:
         return f_vals
 
 
+@dataclass
+class _Slot:
+    """One path's state: the point it holds and whether it stalled there.
+
+    `point is None` is "no point yet" - a path the run has not placed. That is
+    the machine's own state, not a stall: such a path is re-drawn whatever
+    `restart_stalled` says, which is how iteration 0 places the flock and how a
+    refused start is eventually re-drawn. `_place` is the one writer that clears
+    `stalled`, so a re-drawn path cannot stay stalled.
+
+    `x` is not gated on finiteness - `usable` asks f and g only - so a point
+    whose coordinates are `nan` is still a point the path holds.
+    """
+
+    point: PathPoint | None = None
+    stalled: bool = False
+
+
 class _Paths:
     """The n-path state machine: one point and one stall flag per path.
 
@@ -692,12 +716,11 @@ class _Paths:
       method's own state stands still.
     - A start or a winner is committed only when it is `usable` - finite in both
       halves - one gate defined once on the point type.
-    - A path holds a point or it does not. "No point" (an all-nan `x`, which only
-      the placeholder has) is the machine's own state, not a stall: such a path
-      restarts without consulting `restart_stalled`, which is how iteration 0
-      places the flock and how a refused start is eventually re-drawn. A refused
-      point is the other case: the path keeps the point it holds and is marked
-      stalled, so `restart_stalled` decides whether it is re-drawn.
+    - A path holds a point or it does not. "No point" is a slot with no point
+      on it, and a refused point is the other case: the path keeps the point it
+      holds and is marked stalled, so `restart_stalled` decides whether it is
+      re-drawn. Both live on one `_Slot` per path, so the two facts cannot drift
+      apart.
     """
 
     def __init__(  # noqa: PLR0913 - the run's collaborators, built once
@@ -731,29 +754,11 @@ class _Paths:
         # `stalled` below, so the only thing left to decide is whether the
         # engine acts on it at all.
         self.restart_stalled = restart_stalled
-        # A path's point is one object, not three parallel lists: it is what
-        # every seam call takes, and a step commits one path at a time (so a
-        # list, whose item assignment is the commit, beats a stacked array). The
-        # placeholder says "no point has arrived" with an all-nan `x`: an `x` is
-        # always `domain.d` wide, so "has no point" is a value on that shape, not
-        # a second shape - the same placeholder `_Best` uses for "no answer". A
-        # usable restart start replaces it, an unusable one never becomes a
-        # point, and a stalled path never serves or compares it.
-        self.points = [
-            PathPoint(
-                jnp.full(self.domain.d, jnp.nan),
-                math.nan,
-                jnp.full(self.domain.d, jnp.nan),
-            )
-            for _ in range(self.n_paths)
-        ]
-        # Nothing has arrived yet, and a path that has not arrived is not
-        # stalled: iteration 0 restarts it rather than reading it as a stall.
-        # This is the run's one restart bit, and `_place` is its only writer of
-        # `False`: a path is stalled until it is placed on a usable point, so a
-        # path that is re-drawn cannot stay stalled (which a second copy of the
-        # bit, owned elsewhere, could not guarantee).
-        self.stalled: list[bool] = [False] * self.n_paths
+        # One record per path, not a list per field: a path's point and its
+        # stall bit are one path's state, read together by every restart
+        # decision, and a step commits one path at a time (so a list, whose item
+        # assignment is the commit, beats a stacked array).
+        self.flock: list[_Slot] = [_Slot() for _ in range(self.n_paths)]
 
     def move(self) -> None:
         """Take one iteration's move for every path, then settle what it deferred.
@@ -780,18 +785,10 @@ class _Paths:
         path restarts and every path is stalled, `_AllStalled` is raised before
         any batch is asked for.
         """
-        # "No point" is the machine's own state, never a stall to weigh, and it
-        # is marked by an all-nan `x` rather than by a shape: `x` is always
-        # `domain.d` wide, so the placeholder is a value on that shape (the same
-        # one `_Best` uses for "no answer"). Only the placeholder has it, and
-        # only a path that holds a point can be read as stalled: a held point is
-        # committed through `usable`, so its `x` is clipped into the box and its
-        # f is finite.
         restarted = [
             i
-            for i in range(self.n_paths)
-            if bool(jnp.all(jnp.isnan(self.points[i].x)))
-            or (self.restart_stalled and self.stalled[i])
+            for i, slot in enumerate(self.flock)
+            if slot.point is None or (self.restart_stalled and slot.stalled)
         ]
         # Nothing is going to move again: no path restarts, and every path is
         # stalled. `_place` is the only writer that clears a stall bit and it
@@ -799,7 +796,7 @@ class _Paths:
         # fully stalled flock is terminal - the iteration would serve nothing.
         # Only reachable with `restart_stalled=False`; the run ends here rather
         # than idling out the horizon.
-        if not restarted and all(self.stalled):
+        if not restarted and all(slot.stalled for slot in self.flock):
             raise _AllStalled
         # Every path that did not restart. A stalled path is in here only when
         # the run never restarts: it proposes nothing, but it still holds its
@@ -919,11 +916,11 @@ class _Paths:
                     still_rejecting.append(i)
                 elif verdict == "accept":
                     if i not in best:  # no finite sample served: nothing to win
-                        self.stalled[i] = True
+                        self.flock[i].stalled = True
                     else:
                         won[i] = best[i]
                 else:  # "give_up": the method's own convergence test fired
-                    self.stalled[i] = True
+                    self.flock[i].stalled = True
             rejecting = still_rejecting
         return won
 
@@ -936,7 +933,7 @@ class _Paths:
         unjudged: list[int] = []
         judged: list[int] = []
         for i in cohort:
-            if self.stalled[i]:
+            if self.flock[i].stalled:
                 continue
             ruled = self.local_solver.needs_verdict(i)
             (judged if ruled else unjudged).append(i)
@@ -959,15 +956,16 @@ class _Paths:
         The method's per-path state resets to cold start. A start the engine
         cannot use is refused on the same `usable` gate `_advance` applies to a
         winner: it is not placed, the local solver is not seeded from it, and
-        the path stays stalled until it is re-drawn - which keeps `points[i]`
+        the path stays stalled until it is re-drawn - which keeps `flock[i].point`
         meaning "where the path stands". The start is this iteration's move for
         every restarted path, usable or not, so none of them also steps.
         """
         for i, point in placed.items():
-            self.stalled[i] = not point.usable
-            if self.stalled[i]:
+            slot = self.flock[i]
+            slot.stalled = not point.usable
+            if slot.stalled:
                 continue  # unusable: no point, no seed (see `usable`)
-            self.points[i] = point
+            slot.point = point
             self.local_solver.restart(i, point)
 
     def _advance(self, won: dict[int, PathPoint]) -> None:
@@ -980,14 +978,15 @@ class _Paths:
         it was placed or last folded.
         """
         for i, best in won.items():
+            slot = self.flock[i]
             if not best.usable:
                 # A judged winner was ruled usable before it was kept, so this
                 # gate only ever bites the unjudged lane, whose value is first
                 # seen in the batch that bought its gradient. Same gate as
                 # `_place`: an unusable point never becomes a path's point.
-                self.stalled[i] = True
+                slot.stalled = True
                 continue
-            self.points[i] = best
+            slot.point = best
             self.local_solver.fold(i, best)
 
 

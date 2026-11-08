@@ -196,6 +196,13 @@ def paths(
     return started, budget
 
 
+def held(run: _Paths, i: int = 0) -> PathPoint:
+    """Return path `i`'s point, failing here if it holds none."""
+    point = run.flock[i].point
+    assert point is not None
+    return point
+
+
 def placed(solver: LocalSolver) -> tuple[_Paths, _Budget, float]:
     """Return a run one `move` in: the flock planted at 0.6, nothing served yet."""
     start = jnp.asarray([[0.6]])
@@ -208,15 +215,15 @@ def test_a_retry_then_an_accept_commits_the_steps_argmin() -> None:
     """The commit is the lowest finite trial served, not the last one served."""
     solver = Script([0.2, 0.4], ["retry", "accept"])
     run, budget, start = placed(solver)
-    assert float(run.points[0].x[0]) == pytest.approx(start)
+    assert float(held(run).x[0]) == pytest.approx(start)
 
     run.move()
 
     # 0.4 was served last and is worse than 0.2, so a commit of the last served
     # point would land on the wrong side of the bowl's centre.
-    assert float(run.points[0].x[0]) == pytest.approx(0.2)
-    assert not run.stalled[0]
-    assert solver.got[-1] is run.points[0]
+    assert float(held(run).x[0]) == pytest.approx(0.2)
+    assert not run.flock[0].stalled
+    assert solver.got[-1] is held(run)
     # Two value-only turns, one served point each, then one fused batch buying
     # the winner's gradient: an iteration costs one gradient pass, not one per
     # trial.
@@ -247,11 +254,11 @@ def test_a_step_with_nothing_to_win_stalls_without_buying_a_gradient(
 
     run.move()  # the step, which finds nothing to win
 
-    assert run.stalled[0]
+    assert run.flock[0].stalled
     # Where the path stood when its step failed is still where it stands: a
     # stalled path is not moved, and it is not re-drawn either.
-    assert float(run.points[0].x[0]) == pytest.approx(start)
-    assert solver.got == [run.points[0]]  # seeded once, never folded
+    assert float(held(run).x[0]) == pytest.approx(start)
+    assert solver.got == [held(run)]  # seeded once, never folded
     # The stall bought nothing: the only fused batch was the one that placed the
     # flock, and the trial's value came from the value-only seam.
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 1)
@@ -265,9 +272,9 @@ def test_the_unjudged_lane_commits_its_proposal_unread() -> None:
 
     run.move()
 
-    assert float(run.points[0].x[0]) == pytest.approx(0.2)
-    assert not run.stalled[0]
-    assert solver.got[-1] is run.points[0]
+    assert float(held(run).x[0]) == pytest.approx(0.2)
+    assert not run.flock[0].stalled
+    assert solver.got[-1] is held(run)
     # Nothing was served for its value alone: the value came with the gradient.
     assert (budget.n_f_batches, budget.n_f_points) == (0, 0)
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 2)
@@ -282,7 +289,7 @@ def test_the_engine_clips_every_served_coordinate() -> None:
 
     served_x, _ = solver.judged[0]
     assert float(served_x[0]) == pytest.approx(0.0)  # the box's lower wall
-    assert float(run.points[0].x[0]) == pytest.approx(0.0)
+    assert float(held(run).x[0]) == pytest.approx(0.0)
 
 
 def test_an_unusable_start_is_refused_rather_than_placed() -> None:
@@ -292,8 +299,8 @@ def test_an_unusable_start_is_refused_rather_than_placed() -> None:
 
     run.move()
 
-    assert run.stalled[0]
-    assert all(math.isnan(float(v)) for v in run.points[0].x)
+    assert run.flock[0].stalled
+    assert run.flock[0].point is None
     # Refused before the method was told anything: it holds no point either.
     assert solver.got == []
     # The batch was still served and charged - a refusal is about the point, not
@@ -306,7 +313,7 @@ def test_a_flock_with_nothing_left_to_do_ends_the_run() -> None:
     solver = Script([0.2], ["give_up"])
     run, _, _ = placed(solver)
     run.move()
-    assert run.stalled[0]
+    assert run.flock[0].stalled
 
     with pytest.raises(_AllStalled):
         run.move()
@@ -321,7 +328,7 @@ def test_the_caller_flock_is_placed_in_one_batch() -> None:
     run.move()
 
     for i in range(3):
-        assert float(run.points[i].x[0]) == pytest.approx(float(starts[i][0]))
-    assert run.stalled == [False, False, False]
+        assert float(held(run, i).x[0]) == pytest.approx(float(starts[i][0]))
+    assert [slot.stalled for slot in run.flock] == [False] * 3
     assert [point.x[0] for point in solver.got] == pytest.approx(list(starts[:, 0]))
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 3)
