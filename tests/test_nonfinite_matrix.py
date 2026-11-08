@@ -38,12 +38,8 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from soar_lite.engine import (
-    _argmin_finite,
-    _Best,
-    _OptimumReached,
-    n_path_schedule,
-)
+from soar_lite.engine import n_path_schedule
+from soar_lite.engine.schedule import _argmin_finite, _Best, _OptimumReached
 from tests.flock import flock_kwargs, unit_domain
 
 jax.config.update("jax_enable_x64", val=True)

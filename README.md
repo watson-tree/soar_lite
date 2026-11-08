@@ -25,7 +25,7 @@ wall-clock speedup.
 ## What's inside
 
 Two plugin seams and the engine that joins them, a few modules
-(`soar_lite/engine.py`, `soar_lite/local_solver.py`, `soar_lite/domain.py`,
+(`soar_lite/engine/`, `soar_lite/local_solver.py`, `soar_lite/domain.py`,
 `soar_lite/global_model/`), no dependencies beyond JAX and the standard library:
 
 - **`n_path_schedule`** — the engine. Runs `n_paths` paths in lockstep: an

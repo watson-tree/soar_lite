@@ -43,13 +43,8 @@ import jax.numpy as jnp
 import pytest
 
 from soar_lite.domain import Domain
-from soar_lite.engine import (
-    NPathResult,
-    PathPoint,
-    Verdict,
-    _argmin_finite,
-    n_path_schedule,
-)
+from soar_lite.engine import NPathResult, PathPoint, Verdict, n_path_schedule
+from soar_lite.engine.schedule import _argmin_finite
 from soar_lite.global_model import SampleGlobalModel
 from soar_lite.local_solver import DiagonalPreconditioner
 from tests.flock import flock, flock_kwargs, unit_bounds, unit_domain
