@@ -59,10 +59,8 @@ from soar_lite import (
 )
 
 HERE = Path(__file__).parent
-_BASE_RESULTS = HERE / "results"  # traces only: one file per (problem, arm)
-_BASE_FIGURES = HERE / "figures"  # one directory per panel
-RESULTS = _BASE_RESULTS  # rebound by _use_roots
-FIGURES = _BASE_FIGURES
+_RECORD_RESULTS = HERE / "results"  # traces only: one file per (problem, arm)
+_RECORD_FIGURES = HERE / "figures"  # one directory per panel
 Runner: TypeAlias = Callable[..., Trace]
 
 
@@ -287,12 +285,30 @@ class Loaded:
     max_steps: int
 
 
-def trace_path(problem_name: str, arm_key: str) -> Path:
-    """Where one arm's trace lives: per problem, one file per arm."""
-    return RESULTS / problem_name / f"{arm_key}.json"
+@dataclass(frozen=True)
+class Roots:
+    """Where one run reads and writes: the record, or a namespace inside it.
+
+    The arm key and the file name encode no budget, so a 2-seed smoke trace
+    carries exactly the names a full run does and would replace it. A namespace
+    is how a smoke check or a notebook demo gets roots of its own; `_roots_for`
+    builds one, and nothing outside `main` decides where a run writes.
+    """
+
+    results: Path  # one file per (problem, arm)
+    figures: Path  # one directory per panel
+
+    def trace(self, problem_name: str, arm_key: str) -> Path:
+        """Where one arm's trace lives: per problem, one file per arm."""
+        return self.results / problem_name / f"{arm_key}.json"
+
+    def panel_dir(self, panel: str) -> Path:
+        """Where one panel's figures go."""
+        return self.figures / panel
 
 
-def save_arm(
+def save_arm(  # noqa: PLR0913 - one parameter per fact the file records
+    roots: Roots,
     prob: problems.Problem,
     arm: Arm,
     traces: list[Trace],
@@ -301,7 +317,7 @@ def save_arm(
     max_steps: int,
 ) -> Path:
     """Write one arm's raw per-seed traces (no resampling: that is plotting's)."""
-    path = trace_path(prob.name, arm.key)
+    path = roots.trace(prob.name, arm.key)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "meta": {
@@ -328,10 +344,10 @@ def save_arm(
     return path
 
 
-def load_arm(problem_name: str, arm_key: str) -> Loaded | None:
+def load_arm(roots: Roots, problem_name: str, arm_key: str) -> Loaded | None:
     """Read an arm's traces, or None when nothing has measured it at this key."""
     try:
-        payload = json.loads(trace_path(problem_name, arm_key).read_text())
+        payload = json.loads(roots.trace(problem_name, arm_key).read_text())
     except (OSError, ValueError):
         return None
     meta = payload["meta"]
@@ -351,6 +367,7 @@ def load_arm(problem_name: str, arm_key: str) -> Loaded | None:
 
 
 def refuse_budget_change(
+    roots: Roots,
     problem_name: str,
     arm_key: str,
     *,
@@ -366,6 +383,7 @@ def refuse_budget_change(
     be a deliberate delete rather than a side effect of typing the wrong flag.
 
     Args:
+        roots: The namespace to read the existing trace from.
         problem_name: The problem half of the file's identity.
         arm_key: The arm half of the file's identity.
         n_seeds: Seeds this run will measure.
@@ -376,7 +394,7 @@ def refuse_budget_change(
             Nothing has been computed when this fires.
 
     """
-    path = trace_path(problem_name, arm_key)
+    path = roots.trace(problem_name, arm_key)
     try:
         meta = json.loads(path.read_text())["meta"]
         on_disk = (int(meta["seeds"]), int(meta["max_steps"]))
@@ -417,7 +435,8 @@ def _selection(
     ]
 
 
-def run_panel(
+def run_panel(  # noqa: PLR0913 - roots, panel, budget and two filters
+    roots: Roots,
     panel: str,
     n_seeds: int,
     max_steps: int,
@@ -434,13 +453,21 @@ def run_panel(
     """
     for prob, arm in _selection(panel, problems_filter, arms_filter):
         refuse_budget_change(
+            roots,
             prob.name,
             arm.key,
             n_seeds=n_seeds,
             max_steps=max_steps,
         )
         traces = [arm.runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)]
-        path = save_arm(prob, arm, traces, n_seeds=n_seeds, max_steps=max_steps)
+        path = save_arm(
+            roots,
+            prob,
+            arm,
+            traces,
+            n_seeds=n_seeds,
+            max_steps=max_steps,
+        )
         fins = [t.fun for t in traces]
         print(
             f"  {prob.name:26s} {arm.key:44s} "
@@ -458,9 +485,10 @@ comparisons below still read it at run time, since `--groups` never reaches here
 """
 
 
-def plot_panel(panel: str, out_dir: Path) -> None:
+def plot_panel(roots: Roots, panel: str) -> None:
     """Draw a panel from whatever arm files exist; a missing arm is skipped."""
     probs = problems.build(panel)
+    out_dir = roots.panel_dir(panel)
     out_dir.mkdir(parents=True, exist_ok=True)
     for axis in ("points", "batches"):
         fig, axes = plt.subplots(
@@ -470,7 +498,7 @@ def plot_panel(panel: str, out_dir: Path) -> None:
             squeeze=False,
         )
         for ax, prob in zip(axes[0], probs, strict=True):
-            drawn = _draw_problem(ax, panel, prob, axis)
+            drawn = _draw_problem(ax, roots, panel, prob, axis)
             title = prob.description if drawn else "no trace files yet"
             ax.set_title(f"{prob.name}\n{title}", fontsize=9)
         fig.suptitle(
@@ -485,12 +513,15 @@ def plot_panel(panel: str, out_dir: Path) -> None:
 
 def _draw_problem(
     ax: Axes,
+    roots: Roots,
     panel: str,
     prob: problems.Problem,
     axis: Axis,
 ) -> bool:
     """Draw one subplot; False when the arm files it needs are all absent."""
-    entries = [(arm, load_arm(prob.name, arm.key)) for arm in PANELS[panel](prob)]
+    entries = [
+        (arm, load_arm(roots, prob.name, arm.key)) for arm in PANELS[panel](prob)
+    ]
     present = [(arm, loaded) for arm, loaded in entries if loaded is not None]
     missing = [arm.key for arm, loaded in entries if loaded is None]
     if missing:
@@ -630,7 +661,7 @@ def _up_to(trace: Trace, axis: Axis, max_x: float) -> Trace:
 # --- appendix panels --------------------------------------------------------
 
 
-def run_lr_sweep(n_seeds: int, max_steps: int) -> None:
+def run_lr_sweep(roots: Roots, n_seeds: int, max_steps: int) -> None:
     """Plot best-so-far vs Adam lr, one curve per problem (appendix panel).
 
     Shows the optimal lr drifting across problems and a wrong lr costing many
@@ -693,14 +724,14 @@ def run_lr_sweep(n_seeds: int, max_steps: int) -> None:
         "interior optimum; rastrigin flat < 2e-1",
     )
     fig.tight_layout()
-    out = FIGURES / "lr_sweep" / "lr_sweep.png"
+    out = roots.panel_dir("lr_sweep") / "lr_sweep.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150)
     plt.close(fig)
     print(f"wrote {out.relative_to(HERE)}")
 
 
-def run_invariance(n_seeds: int, max_steps: int) -> None:
+def run_invariance(roots: Roots, n_seeds: int, max_steps: int) -> None:
     """Draw panel 5: one physics in two unit systems, zero retune.
 
     soar-lite's per-coordinate secant should overlap (outcome-level), Adam's
@@ -748,7 +779,7 @@ def run_invariance(n_seeds: int, max_steps: int) -> None:
     ax.grid(alpha=0.25, which="both")
     fig.suptitle("panel 5 - unit-rescaling consistency")
     fig.tight_layout()
-    out = FIGURES / "invariance" / "invariance.png"
+    out = roots.panel_dir("invariance") / "invariance.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150)
     plt.close(fig)
@@ -948,73 +979,68 @@ def _budget(args: argparse.Namespace) -> tuple[int, int]:
     return (2, 300) if args.quick else (args.seeds, args.max_steps)
 
 
-def _use_roots(prefix: str) -> None:
-    """Put both output roots under ``prefix``, before anything writes.
+def _roots_for(namespace: str) -> Roots:
+    """Return the two roots ``namespace`` names; ``""`` is the record itself.
 
     Neither the arm key nor the file name encodes the budget, so a 2-seed,
     300-batch trace carries exactly the names a full run does and would replace
-    it. A prefix is how a smoke check or a notebook demo gets roots of its own.
+    it. A namespace is how a smoke check or a notebook demo gets roots of its
+    own.
 
-    The roots are read from the module by the trace and figure writers, so this
-    rebinds script state. It assigns from the base rather than appending to
-    where it already points: a second call in one process - a notebook cell
-    re-run - has to land where the first did, not inside it.
+    Both roots are derived from `_RECORD_*` rather than from wherever a previous
+    run pointed, so a second call in one process - a notebook cell re-run -
+    lands where the first did, not inside it.
 
     Args:
-        prefix: One path component, used as a subdirectory of both roots.
+        namespace: One path component, used as a subdirectory of both roots.
+
+    Returns:
+        The roots this run reads and writes.
 
     Raises:
-        SystemExit: ``prefix`` is not a single component, or is dot-named.
+        SystemExit: ``namespace`` is not a single component, or is dot-named.
             Nothing has been written when this fires.
 
     """
-    if Path(prefix).name != prefix or prefix in {".", ".."}:
+    if not namespace:
+        return Roots(_RECORD_RESULTS, _RECORD_FIGURES)
+    if Path(namespace).name != namespace or namespace in {".", ".."}:
         msg = (
-            f"--out takes one directory name, not a path: got {prefix!r}. "
-            f"Both roots get it as a subdirectory (results/{prefix}, "
-            f"figures/{prefix})."
+            f"--out takes one directory name, not a path: got {namespace!r}. "
+            f"Both roots get it as a subdirectory (results/{namespace}, "
+            f"figures/{namespace})."
         )
         raise SystemExit(msg)
-    global RESULTS, FIGURES  # noqa: PLW0603 - the output roots are script state
-    RESULTS = _BASE_RESULTS / prefix  # pyright: ignore[reportConstantRedefinition]
-    FIGURES = _BASE_FIGURES / prefix  # pyright: ignore[reportConstantRedefinition]
+    return Roots(_RECORD_RESULTS / namespace, _RECORD_FIGURES / namespace)
 
 
-def _namespace(args: argparse.Namespace) -> None:
-    """Send this run to the roots its flags name.
+def _validate(
+    args: argparse.Namespace,
+    groups: list[str],
+    problems_filter: frozenset[str] | None,
+    arms_filter: frozenset[str] | None,
+) -> None:
+    """Refuse the command lines that would measure or write the wrong thing.
 
-    Called once the argv refusals are done and before the first write, so that
-    no branch can write into the record by accident: a smoke check or a demo
-    has to say so. Two flags naming two namespaces is refused rather than
-    resolved in some order.
+    Called before any branch writes, so that no refusal can leave half a run
+    behind: a smoke check or a demo has to say where it writes, and two flags
+    naming two namespaces are refused rather than resolved in some order.
 
     Args:
         args: The parsed command line.
+        groups: The panel groups this run names.
+        problems_filter: ``--problems`` as a set, or None when not given.
+        arms_filter: ``--arms`` as a set, or None when not given.
 
     Raises:
-        SystemExit: ``--quick`` and ``--out`` were both given.
+        SystemExit: the first refusal that applies, with its reason.
 
     """
+    _refuse_undrawable_groups(groups)
+    _refuse_untuned_problems()
     if args.quick and args.out:
         msg = "--quick writes to the smoke roots and --out names another: pick one."
         raise SystemExit(msg)
-    if args.quick:
-        _use_roots("smoke")
-    elif args.out:
-        _use_roots(args.out)
-
-
-def main(argv: list[str] | None = None) -> None:
-    """Parse args, run the selected arms, write a trace file each, then draw."""
-    args = _parser().parse_args(argv)
-
-    groups = ["smooth"] if args.quick else args.groups.split(",")
-    n_seeds, max_steps = _budget(args)
-    problems_filter = _comma_set(args.problems)
-    arms_filter = _comma_set(args.arms)
-    _refuse_undrawable_groups(groups)
-    _refuse_untuned_problems()
-
     if (problems_filter or arms_filter) and (args.plot_only or args.lr_sweep):
         flag = "--plot-only" if args.plot_only else "--lr-sweep"
         msg = (
@@ -1024,36 +1050,59 @@ def main(argv: list[str] | None = None) -> None:
         )
         raise SystemExit(msg)
 
-    # Below this line every branch writes, so the namespace is decided here.
-    _namespace(args)
+
+def main(argv: list[str] | None = None) -> Roots:
+    """Parse args, run the selected arms, write a trace file each, then draw.
+
+    Returns:
+        The roots this run wrote into. A caller in the same process (the
+        notebook) displays a figure from them rather than re-deriving the
+        namespace the flags named.
+
+    """
+    args = _parser().parse_args(argv)
+
+    groups = ["smooth"] if args.quick else args.groups.split(",")
+    n_seeds, max_steps = _budget(args)
+    problems_filter = _comma_set(args.problems)
+    arms_filter = _comma_set(args.arms)
+    _validate(args, groups, problems_filter, arms_filter)
+
+    # The namespace is decided once, before the first write.
+    roots = _roots_for("smoke" if args.quick else args.out)
 
     if args.lr_sweep:
-        run_lr_sweep(n_seeds, max_steps)
-        return
+        run_lr_sweep(roots, n_seeds, max_steps)
+        return roots
 
     if args.plot_only:
         for group in groups:
             if group in TRACELESS:
-                print(f"{group} writes no trace files; rerun --groups {group} (fast)")
+                print(
+                    f"{group} writes no trace files: "
+                    f"run --groups {group} without --plot-only",
+                )
                 continue
-            plot_panel(group, FIGURES / group)
-        return
+            plot_panel(roots, group)
+        return roots
 
     _refuse_empty_selection(groups, problems_filter, arms_filter)
 
     for group in groups:
         if group == "invariance":
-            run_invariance(n_seeds, max_steps)
+            run_invariance(roots, n_seeds, max_steps)
             continue
         print(f"[{group}] seeds={n_seeds} max_steps={max_steps}")
         run_panel(
+            roots,
             group,
             n_seeds,
             max_steps,
             problems_filter=problems_filter,
             arms_filter=arms_filter,
         )
-        plot_panel(group, FIGURES / group)
+        plot_panel(roots, group)
+    return roots
 
 
 if __name__ == "__main__":

@@ -24,6 +24,12 @@ ARM = "some-arm"
 RECORD = {"seeds": 20, "max_steps": 3000}
 
 
+@pytest.fixture
+def roots(tmp_path: Path) -> harness.Roots:
+    """Stand a temp dir in for the record both roots name."""
+    return harness.Roots(results=tmp_path, figures=tmp_path)
+
+
 def _seed_record(root: Path, *, seeds: int, max_steps: int) -> Path:
     """Write a trace file whose meta claims the given budget, and return it."""
     path = root / PROBLEM / f"{ARM}.json"
@@ -35,15 +41,14 @@ def _seed_record(root: Path, *, seeds: int, max_steps: int) -> Path:
 
 def test_a_run_at_another_budget_is_refused_and_writes_nothing(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    roots: harness.Roots,
 ) -> None:
     """The whole point: 2 x 300 does not get to replace 20 x 3000."""
-    monkeypatch.setattr(harness, "RESULTS", tmp_path)
     path = _seed_record(tmp_path, **RECORD)
     before = path.read_text()
 
     with pytest.raises(SystemExit) as caught:
-        harness.refuse_budget_change(PROBLEM, ARM, n_seeds=2, max_steps=300)
+        harness.refuse_budget_change(roots, PROBLEM, ARM, n_seeds=2, max_steps=300)
 
     message = str(caught.value)
     assert "20 seeds x 3000 batches" in message
@@ -53,24 +58,22 @@ def test_a_run_at_another_budget_is_refused_and_writes_nothing(
 
 def test_the_same_budget_is_allowed(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    roots: harness.Roots,
 ) -> None:
     """Re-measuring an arm at its own budget is the documented rerun."""
-    monkeypatch.setattr(harness, "RESULTS", tmp_path)
     _seed_record(tmp_path, **RECORD)
 
-    harness.refuse_budget_change(PROBLEM, ARM, n_seeds=20, max_steps=3000)
+    harness.refuse_budget_change(roots, PROBLEM, ARM, n_seeds=20, max_steps=3000)
 
 
 def test_nothing_readable_on_disk_is_allowed(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    roots: harness.Roots,
 ) -> None:
     """No record, or one this code cannot read, means there is nothing to guard."""
-    monkeypatch.setattr(harness, "RESULTS", tmp_path)
-    harness.refuse_budget_change(PROBLEM, ARM, n_seeds=2, max_steps=300)
+    harness.refuse_budget_change(roots, PROBLEM, ARM, n_seeds=2, max_steps=300)
 
     path = tmp_path / PROBLEM / f"{ARM}.json"
     path.parent.mkdir(parents=True)
     path.write_text("{not json")
-    harness.refuse_budget_change(PROBLEM, ARM, n_seeds=2, max_steps=300)
+    harness.refuse_budget_change(roots, PROBLEM, ARM, n_seeds=2, max_steps=300)

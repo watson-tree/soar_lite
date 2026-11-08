@@ -30,11 +30,9 @@ def _isolated_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep the root rebind from leaking, or writing, into the rest of the session."""
-    monkeypatch.setattr(harness, "_BASE_RESULTS", tmp_path / "results")
-    monkeypatch.setattr(harness, "_BASE_FIGURES", tmp_path / "figures")
-    monkeypatch.setattr(harness, "RESULTS", tmp_path / "results")
-    monkeypatch.setattr(harness, "FIGURES", tmp_path / "figures")
+    """Keep the record's roots out of the repo, and out of the rest of the session."""
+    monkeypatch.setattr(harness, "_RECORD_RESULTS", tmp_path / "results")
+    monkeypatch.setattr(harness, "_RECORD_FIGURES", tmp_path / "figures")
 
 
 @pytest.mark.parametrize(
@@ -55,7 +53,7 @@ def test_quick_decides_the_budget_the_sweep_measures_at(
     """Whatever the mode, one budget: what `--quick` promises or what was asked."""
     handed: dict[str, int] = {}
 
-    def _record(n_seeds: int, max_steps: int) -> None:
+    def _record(_roots: harness.Roots, n_seeds: int, max_steps: int) -> None:
         handed.update(seeds=n_seeds, max_steps=max_steps)
 
     monkeypatch.setattr(harness, "run_lr_sweep", _record)
@@ -63,7 +61,11 @@ def test_quick_decides_the_budget_the_sweep_measures_at(
     monkeypatch.setattr(
         harness,
         "run_panel",
-        lambda _group, n_seeds, max_steps, **_rest: _record(n_seeds, max_steps),
+        lambda _roots, _group, n_seeds, max_steps, **_rest: _record(
+            _roots,
+            n_seeds,
+            max_steps,
+        ),
     )
     monkeypatch.setattr(harness, "plot_panel", lambda *_args: None)
 
@@ -79,12 +81,18 @@ def test_out_moves_both_roots_and_survives_a_second_call(
     """Both roots follow the name, and a re-run cell lands in the same place."""
     drawn: list[Path] = []
     monkeypatch.setattr(harness, "run_panel", lambda *_args, **_rest: None)
-    monkeypatch.setattr(harness, "plot_panel", lambda _panel, out: drawn.append(out))
+    monkeypatch.setattr(
+        harness,
+        "plot_panel",
+        lambda roots, panel: drawn.append(roots.panel_dir(panel)),
+    )
 
-    for _ in range(2):
-        harness.main(["--groups", "smooth", "--out", "demo"])
+    runs = [harness.main(["--groups", "smooth", "--out", "demo"]) for _ in range(2)]
 
-    assert tmp_path / "results" / "demo" == harness.RESULTS
+    assert runs[0] == runs[1] == harness.Roots(
+        results=tmp_path / "results" / "demo",
+        figures=tmp_path / "figures" / "demo",
+    )
     assert [tmp_path / "figures" / "demo" / "smooth"] * 2 == drawn
 
 
@@ -100,7 +108,7 @@ def test_out_refuses_a_path(
     with pytest.raises(SystemExit, match="one directory name"):
         harness.main(["--groups", "smooth", "--out", out])
 
-    assert tmp_path / "results" == harness.RESULTS
+    assert not (tmp_path / "results").exists()
 
 
 def test_quick_and_out_are_two_answers_to_one_question(
@@ -114,4 +122,4 @@ def test_quick_and_out_are_two_answers_to_one_question(
     with pytest.raises(SystemExit, match="pick one"):
         harness.main(["--quick", "--out", "demo"])
 
-    assert tmp_path / "results" == harness.RESULTS
+    assert not (tmp_path / "results").exists()

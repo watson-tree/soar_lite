@@ -35,8 +35,8 @@ def _isolated_roots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Point both output trees at a temp dir so a refusal writes nothing anywhere."""
-    monkeypatch.setattr(harness, "RESULTS", tmp_path / "results")
-    monkeypatch.setattr(harness, "FIGURES", tmp_path / "figures")
+    monkeypatch.setattr(harness, "_RECORD_RESULTS", tmp_path / "results")
+    monkeypatch.setattr(harness, "_RECORD_FIGURES", tmp_path / "figures")
 
 
 def _run(*argv: str) -> str:
