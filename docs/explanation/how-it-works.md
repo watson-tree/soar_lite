@@ -355,9 +355,10 @@ the two alternatives.
 ### Two arms
 
 **The sampling arm (default).** `SampleGlobalModel` fits nothing: `observe` is a
-no-op, and `propose` just returns draws from `Domain.draw` — uniform on a
-bounded side, `N(0, scale²)` on an unbounded side, truncated normal on a
-half-bounded side, and the caller's injected per-dimension sampler when one was
+no-op, and `propose` just returns draws from `Domain.draw` — uniform on a bounded
+dimension, `N(0, scale²)` on a free one (both sides infinite), truncated normal
+on a half-bounded one (exactly one finite side), and the caller's injected
+per-dimension sampler when one was
 supplied. It does not own the flock: iteration 0's starts are the caller's `x0`
 when one was handed in (one initial point per path) — placed as handed, since
 the entry validates and refuses an `x0` outside the box rather than clipping it

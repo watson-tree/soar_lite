@@ -70,10 +70,11 @@ print(result.fun)  # fun ≈ 3e-5
 ```
 
 `x` is the best point the run evaluated, shape `(d,)` — the argmin over the
-feasible points with finite `f` that were served — and `fun` is its value. Do not
-read it as a row of `flock_x`: the flock is the points the paths hold at one
-moment, one per path, so `flock_x` is the flock as the run ended, and the best
-point may be one a path has left behind. Field names follow scipy's
+feasible points that were served, a feasible `-inf` naming itself — and `fun` is
+its value. Do not read it as a row of `flock_x`: the flock is the points the
+paths hold at one moment, one per path, so `flock_x` is the flock as the run
+ended, and the best point may be one a path has left behind. Field names follow
+scipy's
 `OptimizeResult` (`x` the minimizer, `fun` the minimum); the extra fields are the
 flock pair, four work counts (points and batches, with and without a gradient)
 and a `status`.

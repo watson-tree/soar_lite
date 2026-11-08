@@ -193,7 +193,7 @@ correspond:
 
 | Field | Meaning |
 | --- | --- |
-| `x` | argmin over the served points that were feasible and had finite `f`, in the coordinates you handed the engine |
+| `x` | argmin over the served points that were feasible — a feasible `-inf` names itself — in the coordinates you handed the engine |
 | `fun` | its value: the best over feasible points, `nan` if none, `-inf` if the objective has no floor |
 | `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path holds no usable point (a refused start leaves the row empty) |
 | `flock_fun` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |

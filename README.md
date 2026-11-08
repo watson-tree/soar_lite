@@ -17,10 +17,10 @@ this library's seam), or the dimension is low — with few coordinates several
 restarts collapse into the same basin, and a plain multistart local solve is the
 cheaper call.
 
-`n_paths` paths advance in lockstep, one fused batch per iteration, which is a
-GPU pattern: a batch's wall-clock barely grows as it widens. On a CPU the same
-run works, but it buys a best-of-n variance reduction per point rather than a
-wall-clock speedup.
+`n_paths` paths advance in lockstep: with the default `n_alpha = 1` an iteration
+is one fused batch, which is a GPU pattern — a batch's wall-clock barely grows
+as it widens. On a CPU the same run works, but it buys a best-of-n variance
+reduction per point rather than a wall-clock speedup.
 
 ## What's inside
 
