@@ -186,7 +186,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             takes its gradient in the same fused pass; supplying it lets a
             judged step (one whose ``needs_verdict`` answered True) serve its
             trials for their values alone and buy the winners' gradients
-            afterwards, together in one fused batch.
+            afterwards, together in one fused batch. That same final batch also
+            buys the value and gradient of an unjudged winner and of a redraw
+            start: both are committed without reading a value, so neither is
+            served before it.
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).

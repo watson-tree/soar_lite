@@ -6,7 +6,7 @@ mode, √(Δx²/Δy²) in ``rms`` mode), smoothed over the path's history. With
 ``mu > 0`` the direction ``m`` is the current momentum, an unprojected blend of
 the gradient and its own history; at ``mu = 0`` it is the bare gradient ``g``.
 It implements the engine's `LocalSolver` contract and owns only direction, step
-size and acceptance - no curvature model, no Hessian.
+size and acceptance - no full curvature model and no Hessian.
 """
 
 from dataclasses import dataclass, replace

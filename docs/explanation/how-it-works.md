@@ -35,7 +35,7 @@ and gradient in one pass. A second, value-only seam (`eval_f`) can be connected
 beside it for steps that judge candidates one at a time; it is an optional half
 of the same evaluation, never a gradient-free entry, and
 [Cost](#cost-two-evaluation-seams-two-rulers) says what each buys. There is no
-full Hessian and no curvature model. A full Hessian is quadratic in the
+full Hessian and no full curvature model. A full Hessian is quadratic in the
 dimension, and with `n_paths` paths you would need one per path — far too
 expensive in the medium-to-high dimension this method targets. So the only
 second-order information is the coordinate-wise secant ratio estimated from the
@@ -363,8 +363,9 @@ supplied. It does not own the flock: iteration 0's starts are the caller's `x0`
 when one was handed in (one initial point per path) — placed as handed, since
 the entry validates and refuses an `x0` outside the box rather than clipping it
 — and otherwise the model draws them. Every later restart asks the model. So the
-marginal cost of a restart is one point, one row in the next batch, independent
-of the dimension.
+marginal cost of a restart is one point — one row in the next batch, with no
+model fit behind it. A higher dimension makes that row longer, not the batch
+bigger; the surrogate arm below is what pays for a fit.
 
 **The surrogate arm.** `BLRGlobalModel` fits a Bayesian linear posterior on the
 samples already served (features given by an injected `Projection`), and
@@ -661,7 +662,8 @@ reads the same counters off a worked result.
   typically under-stepping, more stable and slower, though the terms can also
   cancel). That is "safe" traded for "potentially fast".
 - The restart rate is decided jointly by `restart_stalled` and the local method's
-  stopping test (`β`, `μ`, `θ`, `τ_rel`); this page gives the structure, not
+  stopping test (`τ_rel`), together with its step, curvature and momentum
+  parameters (`β`, `μ`, `θ`); this page gives the structure, not
   recommended values for a class of problems — those follow from the objective.
 - **Not for low dimension.** With few coordinates several of the `n_paths`
   restarts collapse into the same basin, so the flock pays for paths that
@@ -710,7 +712,7 @@ starts come from a `GlobalModel`. The details differ:
   dimension.
 - The default local method is the coordinate-wise secant-ratio preconditioner,
   first-order: the caller supplies the value and the gradient together, with no
-  full Hessian, no curvature model, and no direct solve of second-order
+  full Hessian, no full curvature model, and no direct solve of second-order
   information. A zero-order objective does not fit either — every point on a
   path must carry a finite gradient, and value-plus-gradient is the entry
   contract. A derivative-free fallback (a finite-difference gradient, say) would
