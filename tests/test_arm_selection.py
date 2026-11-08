@@ -50,10 +50,10 @@ def test_a_misspelled_problem_name_is_refused_before_anything_runs(
     tmp_path: Path,
 ) -> None:
     """The typo is named, and so is the name it probably meant."""
-    message = _run("--problems", "ackley_100")
+    message = _run("--problems", "rastrigin_100")
 
-    assert "no such problem: ackley_100" in message
-    assert "ackley_d100" in message
+    assert "no such problem: rastrigin_100" in message
+    assert "rastrigin_d100" in message
     assert not (tmp_path / "results").exists()
 
 

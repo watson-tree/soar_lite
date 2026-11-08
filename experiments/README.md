@@ -72,7 +72,7 @@ uv run --group exp python -m experiments.compare_baselines --lr-sweep --max-step
 The C0 diamond marks the lr the panels actually use (`ADAM_LR`). It coincides
 with the sweep's lowest point on the rotated quadratic, the oscillator and
 rastrigin, but it is not a strict argmin everywhere: on the diagonal quadratic
-and Ackley every grid point from `1e-2` up sits on the same floor or plateau,
+every grid point from `1e-2` up sits on the same floor or plateau,
 so the pick is one point of that tie (`lr=1e-4` costs 52 orders of magnitude on
 the diagonal quadratic against it). On the rotated quadratic and the oscillator
 the curve is still falling at the right edge — `lr=2.0` — so there the diamond

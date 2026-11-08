@@ -155,8 +155,8 @@ def soar_arm(  # noqa: PLR0913 - one keyword per attribute the key must name
 # objective points served, and it is manual, not adaptive; soar-lite has no
 # learning rate at all. Two optima sit at the sweep grid's right edge (the
 # rotated quadratic and the oscillator keep improving to lr=2.0). On the
-# diagonal quadratic and Ackley every grid point from 1e-2 up is a floor or a
-# plateau, so those two picks are one point of a tie, not a strict argmin; on
+# diagonal quadratic every grid point from 1e-2 up is a floor or a plateau, so
+# that pick is one point of a tie, not a strict argmin; on
 # rastrigin the floor is flat over 1e-3..2e-1 and 0.5 sits ~5% below it. The
 # compartment chain is the one strict interior argmin: its curve falls from
 # 5.0 at lr=1e-2 to 1.1e-3 at 1e-1 and back up to 2.8e-2 at 2e-1, so there the
@@ -166,7 +166,6 @@ ADAM_LR: dict[str, float] = {
     "pk_chain_n21_d61": 1e-1,
     "diag_quad_d100_cond10000": 1e-2,
     "rot_quad_d100_cond1e+06": 2.0,
-    "ackley_d100": 1e-2,
     "rastrigin_d100": 0.5,
 }
 
@@ -587,7 +586,7 @@ def run_lr_sweep(n_seeds: int, max_steps: int) -> None:
     orders of magnitude. The C0 diamond marks the lr actually used in the
     panels (``ADAM_LR``). It agrees with the sweep's argmin on the rotated
     quadratic, the oscillator, the compartment chain and rastrigin; on the
-    diagonal quadratic and Ackley every grid point sits at the same floor or
+    diagonal quadratic every grid point sits at the same floor or
     plateau, so the pick is one point of that tie rather than a strict argmin.
     On the rotated quadratic and the oscillator the curve is still falling at
     the grid edge (lr=2.0 is the best *sampled* point, not an interior
@@ -637,8 +636,8 @@ def run_lr_sweep(n_seeds: int, max_steps: int) -> None:
         ax.set_title(prob.name, fontsize=9)
         ax.grid(alpha=0.25, which="both")
     fig.suptitle(
-        "Adam lr sensitivity - C0 diamond = the lr the panels use; on diag and "
-        "Ackley it is one point of a floor/plateau tie, not a strict argmin; "
+        "Adam lr sensitivity - C0 diamond = the lr the panels use; on diag "
+        "it is one point of a floor/plateau tie, not a strict argmin; "
         "rot & oscillator still falling at lr=2.0 (edge); pk_chain is a sharp "
         "interior optimum; rastrigin flat < 2e-1",
     )

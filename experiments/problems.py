@@ -126,31 +126,7 @@ def rotated_quadratic(d: int = 100, cond: float = 1e6, seed: int = 1) -> Problem
     )
 
 
-# --- the multimodal panel: momentum drift on a funnel / a lattice -------------
-
-
-def ackley(d: int = 100) -> Problem:
-    """Ackley: one broad funnel plus an exponential number of local minima."""
-    a, b, c = 20.0, 0.2, 2.0 * math.pi
-    e = math.e
-
-    def fn(x: jnp.ndarray) -> jnp.ndarray:
-        # The 1e-16 keeps sqrt differentiable at the exact origin, where the
-        # plain form is 0/0 and reports a NaN gradient right on the minimum.
-        # It shifts f(0) by ~4e-8, far below the comparison's resolution.
-        s2 = jnp.sum(x**2) / d + 1e-16
-        sc = jnp.sum(jnp.cos(c * x)) / d
-        return -a * jnp.exp(-b * jnp.sqrt(s2)) - jnp.exp(sc) + e + a
-
-    return Problem(
-        name=f"ackley_d{d}",
-        d=d,
-        bounds=_box(d, -32.768, 32.768),
-        eval_f_g=_jit_pointwise(fn),
-        f_star=0.0,
-        description="Ackley funnel with many local minima",
-        x_star=jnp.zeros(d),
-    )
+# --- the multimodal panel: momentum on a lattice of local minima ---------------
 
 
 def rastrigin(d: int = 100) -> Problem:
@@ -423,7 +399,7 @@ def build(group: str) -> list[Problem]:
     groups = {
         "headline": lambda: [oscillator_chain(), pk_chain()],
         "smooth": lambda: [diag_quadratic(), rotated_quadratic()],
-        "multimodal": lambda: [ackley(), rastrigin()],
+        "multimodal": lambda: [rastrigin()],
     }
     if group == "all":
         return [p for g in groups.values() for p in g()]

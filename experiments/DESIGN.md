@@ -50,7 +50,7 @@ criterion, while a stalled soar path that keeps re-drawing keeps spending
 budget. Off, a converged chain also just stops, so stopping is symmetric. A
 probe showed stalls fire only where a method converges into a basin — the
 diagonal quadratic (~step 4) and rastrigin (~batch 700) — never on the rotated
-quadratic, Ackley or the oscillator, and on rastrigin a uniform re-draw
+quadratic or the oscillator, and on rastrigin a uniform re-draw
 provably never improves the best, so nothing is lost by turning it off. The
 engine keeps the restart capability, and the harness keeps its public `model=`
 factory (`BLRGlobalModel`), for a future problem where a fitted restart pays;
@@ -110,10 +110,12 @@ Three run groups plus two appendix panels, one role each:
      ~1e6. Dense `H` breaks the diagonal assumption; shows the *cost* of the
      diagonal approximation. This is where direction momentum is asked whether
      it can buy any of the dropped coupling back.
-3. **Multimodal — Ackley / Rastrigin**, d=100 (drop to 50 if cost bites). A
-   funnel / lattice of local minima, and the pair where progress is piecewise:
-   flat plateaus on Ackley, cos oscillation on Rastrigin. The panel reads the
-   descent rate there, not where a chain stops.
+3. **Multimodal — Rastrigin**, d=100 (drop to 50 if cost bites). A regular
+   lattice of local minima where progress is piecewise, since the cos
+   oscillation keeps turning the gradient: the panel reads the descent rate
+   there, not where a chain stops. One problem, not a sample of two — Ackley
+   was retired from this group because no arm on it ever took a step (see
+   `DEPRECATED.md`).
 
 Two appendix panels, property demos rather than races:
 
@@ -154,8 +156,13 @@ The dividing line is **structure, not "scientific vs toy"**:
   approximately right at all. That gap is structural, not a missing knob: the
   quantity soar's preconditioner normalizes is a secant ratio, which rotation
   biases, while Adam's normalizes a squared gradient, which it does not.
-- **neither** — gradient-free multimodal relief (Ackley), where the gradient
-  says nothing about where to move next.
+
+A third side used to close that line: gradient-free multimodal relief (Ackley),
+where the gradient says nothing about where to move next and neither method
+moves. It is no longer a panel — every arm froze at the same plateau, so it
+discriminated nothing (see `DEPRECATED.md`). The conclusion it demonstrated is
+stated here rather than drawn: from a regular start, no first-order method
+reaches the funnel.
 
 The `mu=0.9` column opens a second axis in the same panels, and its verdict is
 not uniform: a longer momentum window is a trade, and on the two real problems
@@ -214,7 +221,7 @@ reference* — how close soar-lite's diagonal secant gets to a full-memory
 second-order method on smooth, convex landscape. That role does not exist on
 the multimodal panel: the question there is the descent *rate* where progress is
 piecewise, and a full-memory method answers a different one. L-BFGS-B is
-second-order and restart-free — on Ackley/Rastrigin it would dive
+second-order and restart-free — on Rastrigin it would dive
 deterministically into the nearest local minimum and set there at
 second-order precision, so its curve could only show "a second-order method
 also gets stuck", which says nothing about how a first-order memory shapes the
@@ -238,10 +245,10 @@ own criterion, so a floor at machine precision is a statement about the stopping
 rule rather than about the algorithm.
 
 Adam learning rate is **per-problem grid-tuned**: the picks span over two
-orders of magnitude (diag and Ackley 1e-2 → rotated quadratic and oscillator
+orders of magnitude (diag 1e-2 → rotated quadratic and oscillator
 2.0), and on diag `lr=1e-4` costs 52 orders of magnitude against the pick
-(`6.6e3` against `8.8e-49`). On diag and Ackley every grid point from 1e-2 up
-sits on the same floor or plateau, so those two picks are one point of that tie
+(`6.6e3` against `8.8e-49`). On diag every grid point from 1e-2 up
+sits on the same floor or plateau, so that pick is one point of that tie
 rather than a strict argmin — the figure's diamond marks the pick, not a
 minimum. The grid and picks live in `ADAM_LR` / `--lr-sweep` in
 `compare_baselines.py`, which prints the table it draws; soar-lite has no
@@ -400,8 +407,8 @@ window is a knob with a measurable effect.
 
 The headline problems' "multimodality" is resonance/interference-type
 non-convexity plus, in the compartment case, coupled near-flat directions where
-several rates move together; **not** the funnel type that Ackley/Rastrigin
-provide. The two complement each other; the headline must not be counted as
+several rates move together; **not** the funnel type that Rastrigin
+provides. The two complement each other; the headline must not be counted as
 covering the funnel slot. The banded-coupling question — whether the diagonal
 approximation's "approximately right, not exact" band lands the discriminator
 on soar-lite's side — is now measured on both headline problems, and the answer
@@ -416,7 +423,10 @@ The funnel slot has a known blind spot, and it is deliberate: no
 saddle/vanishing-gradient handling is built in. A Zhang-Li power iteration
 triggered on a small gradient norm was considered and rejected — multi-path
 sampling already covers that regime, and the engine keeps a restart knob for it,
-so the extra complexity would buy nothing. Ackley is where that shows; `RESULTS.md` holds the numbers.
+so the extra complexity would buy nothing. That blind spot was demonstrated on
+Ackley, where every arm froze at its starting plateau — which is why it is
+retired (`DEPRECATED.md`); rastrigin is the multimodal problem that remains,
+and `RESULTS.md` holds its numbers.
 
 ## Readings live elsewhere
 

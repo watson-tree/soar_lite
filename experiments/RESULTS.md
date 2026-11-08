@@ -31,7 +31,7 @@ either.
 way Adam and L-BFGS-B stop instead of re-drawing inside the same budget. Where
 a stall fires — the diagonal quadratic (~step 4) and rastrigin (~batch 700) —
 a v1–v5 trace is a `restart-on` record and no longer describes what the harness
-does. Where it never fired (the rotated quadratic, Ackley, the oscillator) the
+does. Where it never fired (the rotated quadratic and the oscillator) the
 run is the same either way; `pk_chain` has not been checked on that point.
 
 **The restart-model panel is retired**: `blr-identity`, `blr-sphere` and the
@@ -51,6 +51,19 @@ wired for a problem where a fitted restart pays.
 The blr readings below stay exactly as measured, as the record of a retired
 panel. They are not reproducible from this harness — their arms no longer
 exist, so redrawing them takes the code at their own commit.
+
+**Ackley is retired** from the multimodal group, which is now rastrigin alone:
+no cell discriminated. Every arm spent its whole budget — one point per batch
+through batch 2999 — yet the best-so-far stopped improving early: the last
+strict improvement lands at median batch 63 (max 81) for `n_paths=1, mu=0`,
+median 343 (max 429) for Adam, and the final medians are 19.57 (Adam),
+19.71 / 19.71 / 19.79 (`n_paths=1` at `mu` 0 / 0.63 / 0.9), 19.55
+(`n_paths=16`), against `f* = 0`. **This corrects the v3 entry below**, which
+reads the identical `mu` arms as "no step taken": the traces serve a point on
+every batch, so steps were taken, and the freeze is in the best-so-far — set
+where the plunge landed, never beaten afterwards. `problems.ackley` is gone,
+`--groups multimodal` returns one problem, and the ackley readings below stay
+as the record of a retired problem. The reasoning is in `DEPRECATED.md`.
 
 ## 2026-11-07 — lineup v5 (`mu` default back to 0) — SUPERSEDED by the v6 entry, which no run has measured yet
 
