@@ -9,8 +9,10 @@ site/
 # Local scratch / working notes (never committed)
 .scratch/
 
-# Virtual environments
-.venv/
+# Virtual environments. `.venv*/` also covers a side env built on another
+# backend (e.g. `.venv-cuda/`). uv writes its own `*` .gitignore inside a venv,
+# but that file is disposable, so the top-level rule is what we rely on.
+.venv*/
 venv/
 
 # Tooling caches
