@@ -7,6 +7,11 @@ which other arms are present. A panel is a *roster over those files*, so
 re-measuring one arm rewrites exactly one file and every panel listing that arm
 picks the new numbers up.
 
+One run flows as ``argv`` -> ``_budget`` plus the ``--problems``/``--arms``
+filters -> ``_selection`` flattens the groups into (problem, arm) pairs ->
+``run_panel`` runs each pair and writes one trace -> ``plot_panel`` reads the
+traces back and draws the group.
+
 The arm key spells out the arm's whole configuration
 (`soar-sample-np1-mu0-restart-off`), never a path through a default it could
 have inherited. An engine default moving therefore changes the key and the file
@@ -262,6 +267,11 @@ PANELS: dict[str, Callable[[problems.Problem], list[Arm]]] = {
     "multimodal": _drift_arms,
 }
 
+# A panel that is not a roster over arms: it compares two problems, so it has no
+# (problem, arm) pairs to store and `main` runs it directly.
+TRACELESS: frozenset[str] = frozenset({"invariance"})
+GROUPS: tuple[str, ...] = (*PANELS, *sorted(TRACELESS))
+
 INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
 
 
@@ -507,30 +517,15 @@ def _draw_problem(
         arm.key: [_up_to(t, axis, xmax) for t in loaded.traces]
         for arm, loaded in present
     }
-    # Log-spaced: the descent these panels are about happens in the first
-    # decade of served cost, and a linear grid would compress it into the left
-    # edge of the axis.
-    grid = np.logspace(0.0, np.log10(xmax), 120)
-    grid[-1] = xmax  # logspace rounds the last sample past its own end
     for arm, _ in present:
         traces = shown[arm.key]
         # A run can stop before the cut this axis shares - the diag control
         # converges within a handful of batches - and then it served nothing at
-        # or below `xmax` here. Named, not drawn: an empty curve would fail
-        # deeper in the resample anyway.
+        # or below `xmax` here. Named, not drawn: an empty cohort has no extent.
         if not any(len(t.points) > 0 for t in traces):
             print(f"  cut before first point: {prob.name}: {arm.key}")
             continue
-        med, q1, q3 = _summary(_resample(traces, grid, axis))
-        ax.plot(grid, np.maximum(med, 1e-16), label=arm.label, **arm.style)
-        ax.fill_between(
-            grid,
-            np.maximum(q1, 1e-16),
-            np.maximum(q3, 1e-16),
-            color=arm.style["color"],
-            alpha=0.15,
-            lw=0,
-        )
+        _plot_cohort(ax, traces, axis, label=arm.label, style=arm.style, xmax=xmax)
     ax.set_yscale("log")
     ax.set_xscale("log")
     ax.set_xlabel("objective points served" if axis == "points" else "batches served")
@@ -538,6 +533,52 @@ def _draw_problem(
     ax.legend(fontsize=7)
     ax.grid(alpha=0.25)
     return True
+
+
+def _plot_cohort(  # noqa: PLR0913 - one parameter per fact the call site decides
+    ax: Axes,
+    traces: list[Trace],
+    axis: Axis,
+    *,
+    label: str,
+    style: dict[str, Any],
+    xmax: float | None = None,
+) -> None:
+    """Draw one cohort's median best-so-far with its [Q1, Q3] band.
+
+    At least one trace must carry a point.
+
+    Args:
+        ax: The subplot to draw into.
+        traces: One trace per seed, all on the same run.
+        axis: The cost unit this subplot's x-axis carries.
+        label: Legend text for this cohort.
+        style: Passed to `Axes.plot`, and must carry ``color`` for the band.
+        xmax: The x extent to resample over; ``None`` takes the cohort's own,
+            which is what a caller with one cohort wants. `_draw_problem`
+            passes the cut it shares across arms instead, so every curve on a
+            subplot is sampled at the same positions.
+
+    """
+    if xmax is None:
+        live = [t for t in traces if len(t.points) > 0]
+        xmax = max(
+            float(t.as_arrays()[0 if axis == "points" else 1].max()) for t in live
+        )
+    # Log-spaced: the descent these panels are about happens in the first decade
+    # of served cost, and a linear grid would compress it into the left edge.
+    grid = np.logspace(0.0, np.log10(xmax), 120)
+    grid[-1] = xmax  # logspace rounds the last sample past its own end
+    med, q1, q3 = _summary(_resample(traces, grid, axis))
+    ax.plot(grid, np.maximum(med, 1e-16), label=label, **style)
+    ax.fill_between(
+        grid,
+        np.maximum(q1, 1e-16),
+        np.maximum(q3, 1e-16),
+        color=style["color"],
+        alpha=0.15,
+        lw=0,
+    )
 
 
 def _resample(traces: list[Trace], grid: np.ndarray, axis: Axis) -> np.ndarray:
@@ -687,29 +728,14 @@ def run_invariance(n_seeds: int, max_steps: int) -> None:
         for prob, ls, tag in ((base, "-", "base"), (scaled, "--", "x10")):
             traces = [runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)]
             # Seeds stop at different point counts (diag converges in tens of
-            # points), so raw trace arrays ragged -- resample onto one
-            # log-spaced grid, exactly as the other panels do.
-            xmax = max(
-                float(t.as_arrays()[0].max()) for t in traces if len(t.points) > 0
-            )
-            grid = np.logspace(0.0, np.log10(xmax), 120)
-            grid[-1] = xmax
-            med, q1, q3 = _summary(_resample(traces, grid, "points"))
-            ax.plot(
-                grid,
-                np.maximum(med, 1e-16),
-                color=color,
-                ls=ls,
-                lw=1.5,
+            # points), so the raw trace arrays are ragged: _plot_cohort resamples
+            # them onto one log-spaced grid, exactly as the other panels do.
+            _plot_cohort(
+                ax,
+                traces,
+                "points",
                 label=f"{label} [{tag}]",
-            )
-            ax.fill_between(
-                grid,
-                np.maximum(q1, 1e-16),
-                np.maximum(q3, 1e-16),
-                color=color,
-                alpha=0.12,
-                lw=0,
+                style={"color": color, "ls": ls, "lw": 1.5},
             )
     ax.set_xscale("log")
     ax.set_yscale("log")
@@ -783,9 +809,9 @@ def _refuse_undrawable_groups(groups: list[str]) -> None:
     ``problems.build`` knows one group this does not: ``all``, which is the union
     a sweep iterates, not a panel anyone can draw.
     """
-    choices = ", ".join([*PANELS, "invariance"])
+    choices = ", ".join(GROUPS)
     for group in groups:
-        if group != "invariance" and group not in PANELS:
+        if group not in GROUPS:
             msg = f"no group {group!r}; pick one of {choices}"
             raise SystemExit(msg)
 
@@ -801,16 +827,26 @@ def _refuse_empty_selection(
     arm run at all - the one failure a re-measurement cannot show. The check
     costs no batches: it reads the panels, never the objective. An unknown group
     name surfaces here too, from `problems.build`.
+
+    A group that stores no per-arm traces (`TRACELESS`) selects nothing whatever
+    the filter says, so naming only those is refused on that ground rather than
+    as a mismatch.
     """
     if not (problems_filter or arms_filter):
         return
-    chosen = [group for group in groups if group != "invariance"]
+    chosen = [group for group in groups if group not in TRACELESS]
+    if not chosen:
+        msg = (
+            f"{'/'.join(groups)} writes no per-arm traces, so --problems and "
+            f"--arms select nothing. Drop them, or name a panel group."
+        )
+        raise SystemExit(msg)
     if any(_selection(group, problems_filter, arms_filter) for group in chosen):
         return
-    raise SystemExit(_empty_selection_msg(groups, problems_filter, arms_filter))
+    raise SystemExit(_filter_mismatch_msg(chosen, problems_filter, arms_filter))
 
 
-def _empty_selection_msg(
+def _filter_mismatch_msg(
     groups: list[str],
     problems_filter: frozenset[str] | None,
     arms_filter: frozenset[str] | None,
@@ -820,14 +856,7 @@ def _empty_selection_msg(
     The names it offers are read off the panels themselves, so the list cannot
     drift from the arms the harness has.
     """
-    pairs = [
-        pair for group in groups if group != "invariance" for pair in _selection(group)
-    ]
-    if not pairs:
-        return (
-            f"{'/'.join(groups)} writes no per-arm traces, so --problems and "
-            f"--arms select nothing. Drop them, or name a panel group."
-        )
+    pairs = [pair for group in groups for pair in _selection(group)]
     known = {
         "problem": sorted({prob.name for prob, _ in pairs}),
         "arm": sorted({arm.key for _, arm in pairs}),
@@ -879,8 +908,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--groups",
-        default="headline,smooth,multimodal,invariance",
-        help=f"panels to draw: {', '.join([*PANELS, 'invariance'])}",
+        default=",".join(GROUPS),
+        help=f"panels to draw: {', '.join(GROUPS)}",
     )
     parser.add_argument(
         "--problems",
@@ -1004,7 +1033,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.plot_only:
         for group in groups:
-            if group == "invariance":
+            if group in TRACELESS:
                 print(f"{group} writes no trace files; rerun --groups {group} (fast)")
                 continue
             plot_panel(group, FIGURES / group)
