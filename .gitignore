@@ -29,6 +29,9 @@ venv/
 # Byte-compiled / native
 *.so
 
+# Jupyter Notebooks. The notebook is source; the checkpoints beside it are not.
+.ipynb_checkpoints/
+
 # Experiment run artifacts (regenerated, not source)
 experiments/results/
 experiments/figures/
