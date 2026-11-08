@@ -54,8 +54,10 @@ from soar_lite import (
 )
 
 HERE = Path(__file__).parent
-RESULTS = HERE / "results"  # traces only: one file per (problem, arm)
-FIGURES = HERE / "figures"  # one directory per panel
+_BASE_RESULTS = HERE / "results"  # traces only: one file per (problem, arm)
+_BASE_FIGURES = HERE / "figures"  # one directory per panel
+RESULTS = _BASE_RESULTS  # rebound by _use_roots
+FIGURES = _BASE_FIGURES
 Runner: TypeAlias = Callable[..., Trace]
 
 
@@ -511,7 +513,15 @@ def _draw_problem(
     grid = np.logspace(0.0, np.log10(xmax), 120)
     grid[-1] = xmax  # logspace rounds the last sample past its own end
     for arm, _ in present:
-        med, q1, q3 = _summary(_resample(shown[arm.key], grid, axis))
+        traces = shown[arm.key]
+        # A run can stop before the cut this axis shares - the diag control
+        # converges within a handful of batches - and then it served nothing at
+        # or below `xmax` here. Named, not drawn: an empty curve would fail
+        # deeper in the resample anyway.
+        if not any(len(t.points) > 0 for t in traces):
+            print(f"  cut before first point: {prob.name}: {arm.key}")
+            continue
+        med, q1, q3 = _summary(_resample(traces, grid, axis))
         ax.plot(grid, np.maximum(med, 1e-16), label=arm.label, **arm.style)
         ax.fill_between(
             grid,
@@ -892,6 +902,15 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="rebuild figures from the trace files (no re-run)",
     )
+    parser.add_argument(
+        "--out",
+        default="",
+        metavar="NAME",
+        help=(
+            "write to results/NAME and figures/NAME instead of the record's "
+            "roots; --quick already writes to 'smoke'"
+        ),
+    )
     return parser
 
 
@@ -900,15 +919,60 @@ def _budget(args: argparse.Namespace) -> tuple[int, int]:
     return (2, 300) if args.quick else (args.seeds, args.max_steps)
 
 
-def _use_smoke_roots() -> None:
-    """Point both output roots under ``smoke/``, before anything writes.
+def _use_roots(prefix: str) -> None:
+    """Put both output roots under ``prefix``, before anything writes.
 
-    The arm key does not encode the budget, so a 2-seed, 300-batch trace carries
-    exactly the file name a full run's does and would replace it.
+    Neither the arm key nor the file name encodes the budget, so a 2-seed,
+    300-batch trace carries exactly the names a full run does and would replace
+    it. A prefix is how a smoke check or a notebook demo gets roots of its own.
+
+    The roots are read from the module by the trace and figure writers, so this
+    rebinds script state. It assigns from the base rather than appending to
+    where it already points: a second call in one process - a notebook cell
+    re-run - has to land where the first did, not inside it.
+
+    Args:
+        prefix: One path component, used as a subdirectory of both roots.
+
+    Raises:
+        SystemExit: ``prefix`` is not a single component, or is dot-named.
+            Nothing has been written when this fires.
+
     """
+    if Path(prefix).name != prefix or prefix in {".", ".."}:
+        msg = (
+            f"--out takes one directory name, not a path: got {prefix!r}. "
+            f"Both roots get it as a subdirectory (results/{prefix}, "
+            f"figures/{prefix})."
+        )
+        raise SystemExit(msg)
     global RESULTS, FIGURES  # noqa: PLW0603 - the output roots are script state
-    RESULTS = RESULTS / "smoke"  # pyright: ignore[reportConstantRedefinition]
-    FIGURES = FIGURES / "smoke"  # pyright: ignore[reportConstantRedefinition]
+    RESULTS = _BASE_RESULTS / prefix  # pyright: ignore[reportConstantRedefinition]
+    FIGURES = _BASE_FIGURES / prefix  # pyright: ignore[reportConstantRedefinition]
+
+
+def _namespace(args: argparse.Namespace) -> None:
+    """Send this run to the roots its flags name.
+
+    Called once the argv refusals are done and before the first write, so that
+    no branch can write into the record by accident: a smoke check or a demo
+    has to say so. Two flags naming two namespaces is refused rather than
+    resolved in some order.
+
+    Args:
+        args: The parsed command line.
+
+    Raises:
+        SystemExit: ``--quick`` and ``--out`` were both given.
+
+    """
+    if args.quick and args.out:
+        msg = "--quick writes to the smoke roots and --out names another: pick one."
+        raise SystemExit(msg)
+    if args.quick:
+        _use_roots("smoke")
+    elif args.out:
+        _use_roots(args.out)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -931,12 +995,11 @@ def main(argv: list[str] | None = None) -> None:
         )
         raise SystemExit(msg)
 
-    # Below this line every branch writes, so a smoke check rebinds the roots here.
-    if args.quick:
-        _use_smoke_roots()
+    # Below this line every branch writes, so the namespace is decided here.
+    _namespace(args)
 
     if args.lr_sweep:
-        run_lr_sweep(n_seeds=2, max_steps=max_steps)
+        run_lr_sweep(n_seeds, max_steps)
         return
 
     if args.plot_only:

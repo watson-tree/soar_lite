@@ -76,6 +76,9 @@ ignore = [
 "tests/**" = ["S101", "T201"]
 # the docs build hook is not part of the distribution; no package boundary to hang it on
 "docs/**" = ["INP001"]
+# notebook cells are glue a reader runs, not library code: they print their own
+# output, shell out to git/pip by bare name, and import IPython's `display`
+"notebooks/**" = ["T201", "S603", "S607", "A004"]
 
 [tool.pyright]
 venvPath = "."

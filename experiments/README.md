@@ -66,8 +66,12 @@ Adam pays a per-problem lr chosen by an offline sweep
 Reproduce the sweep figure with:
 
 ```bash
-uv run --group exp python -m experiments.compare_baselines --lr-sweep --max-steps 3000
+uv run --group exp python -m experiments.compare_baselines --lr-sweep --seeds 2 --max-steps 3000
 ```
+
+The sweep is eight learning rates x five problems, so it keeps its own 2 seeds;
+`--seeds` reaches it like it reaches every other mode, and raising it there is
+rarely worth the compute.
 
 The C0 diamond marks the lr the panels actually use (`ADAM_LR`). It coincides
 with the sweep's lowest point on the rotated quadratic, the oscillator and
@@ -106,6 +110,8 @@ figure is always re-derivable and a trace never is. The unit is one
 - `results/smoke/`, `figures/smoke/` — where `--quick` writes, one smoke run
   per panel. Same names as the record on purpose (it exercises the same code)
   in roots of its own, so checking the environment cannot overwrite it.
+- `results/<name>/`, `figures/<name>/` — where `--out <name>` writes, for any
+  run that must not touch the record.
 - Every curve plots the **median** best-so-far with the **[Q1, Q3] interquartile
   band** (not mean ± std — a skewed spread would read as symmetric and dip
   below the log axis).
@@ -138,7 +144,9 @@ rm experiments/results/<problem>/<arm-key>.json
 Deleting is the deliberate act; a flag to approve the overwrite would be a
 second way to say yes and would get typed without reading. `--quick` needs no
 exemption because it writes to its own roots: the smoke check cannot overwrite
-the record it is checking.
+the record it is checking. `--out <name>` is the general form — it puts both
+roots under `results/<name>` and `figures/<name>`, so a demo or a check at
+another budget writes without touching the record.
 
 Re-measuring one arm is a filter on that same identity:
 
@@ -189,9 +197,14 @@ happen. `--plot-only` and `--lr-sweep` measure no arm at all, so they refuse
 - **Canvas only in-repo**: `experiments/DESIGN.md` is the design and the
   story; figures are drawn from the trace files, never hand-tuned.
 
-## Open-source-time follow-ups (blocked on a public repo URL)
+## The notebook
 
-- A Colab wrapper that installs this repo and runs the canonical command —
-  runtime only, never a second codebase. Blocked: needs the published URL to
-  install from.
-- The README "Open in Colab" badge. Blocked on the same URL.
+`notebooks/run_panels.ipynb` is what the README's "Open in Colab" badge opens,
+and it is the cockpit rather than a second implementation: one section per
+panel, each calling `main` from this harness and then showing the figure that
+run wrote. Nothing is measured outside the command line above.
+
+It carries a `MODE` switch. `"record"` runs the canonical budget into the
+record's own roots — the committed images came from that run. `"demo"` runs
+4 seeds x 600 batches under `--out demo`, so a cheap pass cannot overwrite the
+record.

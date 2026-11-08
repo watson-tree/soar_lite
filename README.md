@@ -1,7 +1,7 @@
 # soar-lite
 
 [![CI](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml/badge.svg)](https://github.com/watson-tree/soar_lite/actions/workflows/ci.yml)
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/watson-tree/soar_lite/blob/main/notebooks/quickstart.ipynb)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/watson-tree/soar_lite/blob/main/notebooks/run_panels.ipynb)
 
 A JAX optimizer for objectives that are differentiable but expensive: the number
 of evaluations, not wall-clock, is the binding constraint. The caller hands in
@@ -134,6 +134,10 @@ medians behind every curve and the caveats that qualify them are in
 [`experiments/RESULTS.md`](experiments/RESULTS.md); what the comparison measures
 is in [`experiments/DESIGN.md`](experiments/DESIGN.md). The commands that redraw
 these two panels are in [`docs/figures/README.md`](docs/figures/README.md).
+
+To run any panel yourself, open
+[`notebooks/run_panels.ipynb`](notebooks/run_panels.ipynb) (what the Colab badge
+above opens): one section per panel, with the figure each run writes.
 
 ## Development
 
