@@ -10,11 +10,69 @@ size and acceptance - no curvature model, no Hessian.
 """
 
 import math
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import jax.numpy as jnp
 
 from soar_lite.engine import LocalSolver, PathPoint, Verdict
+
+
+@dataclass(frozen=True, eq=False)
+class _PathState:
+    """One path's secant estimate, momentum history, and current step.
+
+    Three lifetimes share the record, which is why the fields are grouped by
+    them:
+
+    - the curvature estimate and the stopping test's anchor are re-seeded by
+      every restart and otherwise persist for the whole run;
+    - ``m``, the direction's history, is seeded by the first committed step and
+      is the one field a restart keeps;
+    - the step's ``alpha`` progress is re-armed after every commit and every
+      restart.
+
+    Frozen so that both resets are one named construction (`restarted`,
+    `armed`) rather than an assignment order a later edit can break: a field
+    only one of them names cannot be cleared by the other's accident.
+    ``eq=False`` keeps a stray ``==`` off a field-wise array comparison.
+    """
+
+    # the curvature estimate: seeded by `restart`, blended once per committed step
+    has_secant: bool
+    s_ema: jnp.ndarray
+    y_ema: jnp.ndarray
+    # the stopping test's anchor: the gradient at the path's cold start
+    g0: jnp.ndarray
+    # the direction's history: past step-start gradients, re-seeded at every
+    # restart to that start's own gradient, so the history never crosses one
+    m: jnp.ndarray
+    # this step's progress: re-armed after every commit and every restart
+    alpha: float
+    alpha_sample: int
+    saw_finite: bool
+
+    @classmethod
+    def restarted(cls, g0: jnp.ndarray, alpha0: float) -> "_PathState":
+        """Return the state a path cold-starts at: no secant, nothing folded yet."""
+        return cls(
+            has_secant=False,
+            s_ema=jnp.zeros_like(g0),
+            y_ema=jnp.zeros_like(g0),
+            g0=g0,
+            m=g0,
+            alpha=alpha0,
+            alpha_sample=0,
+            saw_finite=False,
+        )
+
+    def armed(self, alpha0: float) -> "_PathState":
+        """Return this path's state armed for a fresh step, estimate and history kept.
+
+        ``alpha0`` is a scalar multiplier, not a step length in x: the warm-up
+        direction ``-g`` carries the coordinate scale itself.
+        """
+        return replace(self, alpha=alpha0, alpha_sample=0, saw_finite=False)
 
 
 class DiagonalPreconditioner(LocalSolver):
@@ -161,32 +219,20 @@ class DiagonalPreconditioner(LocalSolver):
 
         self.tau_rel = tau_rel
 
-        self.has_secant: dict[int, bool] = {}  # per path: first pair in hand?
-        self.s_ema: dict[int, jnp.ndarray] = {}  # per path: S₁ ("abs") or S₂ ("rms")
-        self.y_ema: dict[int, jnp.ndarray] = {}  # per path: Y₁ ("abs") or Y₂ ("rms")
-        self.m: dict[int, jnp.ndarray] = {}  # per path: past-gradient EMA (mu > 0 only)
-
-        self.alpha: dict[int, float] = {}  # per path: current step multiplier
-        self.alpha_sample: dict[int, int] = {}  # per path: samples served this step
-        self.saw_finite: dict[int, bool] = {}  # per path: any finite sample this step?
-
-        self.g0: dict[int, jnp.ndarray] = {}  # per path: the stopping test's anchor
+        # One record per path, seeded by `restart`.
+        self._state: dict[int, _PathState] = {}
 
     def restart(self, i: int, p: PathPoint) -> None:
         """Seed path i at p: warm-up armed at alpha0, g0 kept, no estimate yet.
 
         The engine's only cold start, so this runs at initialization and after
-        every restart - the secant history never carries across one.
+        every restart - the secant history never carries across one. The
+        momentum history is re-seeded at this start's own gradient for the same
+        reason: a restart is where a path's history begins again.
         """
         # alpha0 is a scalar multiplier; the warm-up direction -g carries the
         # coordinate scale itself
-        self.g0[i] = p.g
-        self.has_secant[i] = False
-        self.s_ema[i] = jnp.zeros_like(p.g)
-        self.y_ema[i] = jnp.zeros_like(p.g)
-        # m is left alone: `has_secant` is False again, so the next fold seeds
-        # it from this start's gradient - the history never crosses a restart
-        self._reset_step(i)
+        self._state[i] = _PathState.restarted(p.g, self.alpha0)
 
     def needs_verdict(self, i: int, p: PathPoint) -> bool:
         """Answer True when the grid rules per candidate, or the stopping test holds.
@@ -211,11 +257,12 @@ class DiagonalPreconditioner(LocalSolver):
         `m` is the bare gradient `g` at ``mu = 0``, and the current momentum
         ``(1 - mu)·g + mu·m_prev`` otherwise.
         """
-        if not self.has_secant[i]:
-            return p.x + self.alpha[i] * (-p.g)
+        state = self._state[i]
+        if not state.has_secant:
+            return p.x + state.alpha * (-p.g)
         diag = self._diag(i, p.g)
         m = p.g if self.mu == 0.0 else self._blend_momentum(i, p.g)
-        return p.x - self.alpha[i] * (diag * m)
+        return p.x - state.alpha * (diag * m)
 
     def verdict(
         self,
@@ -264,22 +311,27 @@ class DiagonalPreconditioner(LocalSolver):
         is re-armed: a ruling the engine did not commit (a winner whose gradient
         it refused) leaves the method untouched rather than half-reset.
         """
-        first = not self.has_secant[i]
-        self._fold(i, best.x - p.x, best.g - p.g, first=first)
-        self.has_secant[i] = True
+        state = self._state[i]
+        first = not state.has_secant
+        s_ema, y_ema = self._fold_ema(state, best.x - p.x, best.g - p.g, first=first)
+        momentum = state.m
         if self.mu > 0.0:
             # The step's start gradient, folded only now that the step has
             # committed, so the momentum the next propose reads is history and
-            # never the gradient that propose is about to use. `first` seeds the
-            # EMA outright, exactly as it seeds S and Y.
-            self.m[i] = p.g if first else self.mu * self.m[i] + (1.0 - self.mu) * p.g
-        self._reset_step(i)
+            # never the gradient that propose is about to use. The first fold
+            # seeds the EMA outright, exactly as it seeds S and Y.
+            momentum = p.g if first else self.mu * state.m + (1.0 - self.mu) * p.g
+        self._state[i] = replace(
+            state,
+            has_secant=True,
+            s_ema=s_ema,
+            y_ema=y_ema,
+            m=momentum,
+        ).armed(self.alpha0)
 
     def _reset_step(self, i: int) -> None:
         """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
-        self.alpha[i] = self.alpha0
-        self.alpha_sample[i] = 0
-        self.saw_finite[i] = False
+        self._state[i] = self._state[i].armed(self.alpha0)
 
     def _diag(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
         """Return the per-coordinate inverse curvature d_i for path i at gradient g."""
@@ -288,24 +340,25 @@ class DiagonalPreconditioner(LocalSolver):
         # floor (max), not an addend: where Y ≥ λ the estimate is the faithful
         # S/Y ratio, and λ only caps d below that.
         floor = self.theta * (jnp.abs(g) if self.moment == "abs" else jnp.square(g))
-        den = jnp.maximum(self.y_ema[i], floor)
+        state = self._state[i]
+        den = jnp.maximum(state.y_ema, floor)
         # den_i == 0 means y_i = 0 *and* g_i = 0: no curvature information and
         # already stationary in i, so step nowhere there rather than NaN. One
         # guard is enough - `where` is a total select and d is never
         # differentiated, so an inf/nan in the unselected lane cannot leak
         # anywhere; a derivative of this line would see it, so revisit then.
-        d = jnp.where(den > 0.0, self.s_ema[i] / den, 0.0)
+        d = jnp.where(den > 0.0, state.s_ema / den, 0.0)
         return jnp.sqrt(d) if self.moment == "rms" else d
 
     def _blend_momentum(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
         """Return path i's current momentum: (1 - mu)·g + mu·m_prev.
 
-        ``m_prev`` (``self.m[i]``) is history only - the past step-start
+        ``m_prev`` (``state.m``) is history only - the past step-start
         gradients, folded by `fold` once each step has committed - so this
         step's own gradient enters fresh, at weight ``1 - mu``. With ``mu = 0``
         this is ``g`` exactly, which is why `propose` skips the call then.
         """
-        return (1.0 - self.mu) * g + self.mu * self.m[i]
+        return (1.0 - self.mu) * g + self.mu * self._state[i].m
 
     def _stationary(self, i: int, p: PathPoint) -> bool:
         """Return whether path i's gradient has hit its floor: ‖g‖ ≤ τ_rel·‖g_0‖.
@@ -316,7 +369,9 @@ class DiagonalPreconditioner(LocalSolver):
         ``verdict`` also reads - so the ask in ``needs_verdict`` and the ruling
         in ``verdict`` can never disagree.
         """
-        return bool(jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self.g0[i]))
+        return bool(
+            jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self._state[i].g0),
+        )
 
     def _step_verdict(self, i: int, f: float) -> Verdict:
         """Judge one alpha-grid sample on its value; never fold here.
@@ -336,18 +391,31 @@ class DiagonalPreconditioner(LocalSolver):
         a real line search probing past a NaN - and a grid with no finite sample
         at all gives up.
         """
-        if math.isfinite(f):
-            self.saw_finite[i] = True
-        self.alpha_sample[i] += 1
-        if self.alpha_sample[i] < self.n_alpha:
-            self.alpha[i] *= self.backtrack
+        state = self._state[i]
+        saw_finite = state.saw_finite or math.isfinite(f)
+        n_served = state.alpha_sample + 1
+        if n_served < self.n_alpha:
+            self._state[i] = replace(
+                state,
+                saw_finite=saw_finite,
+                alpha_sample=n_served,
+                alpha=state.alpha * self.backtrack,
+            )
             return "retry"
-        if not self.saw_finite[i]:  # every sample this step was non-finite
+        self._state[i] = replace(state, saw_finite=saw_finite, alpha_sample=n_served)
+        if not saw_finite:  # every sample this step was non-finite
             return "give_up"
         return "accept"
 
-    def _fold(self, i: int, s: jnp.ndarray, y: jnp.ndarray, *, first: bool) -> None:
-        """Fold one accepted secant (s, y) into path i's per-coordinate magnitude EMAs.
+    def _fold_ema(
+        self,
+        state: _PathState,
+        s: jnp.ndarray,
+        y: jnp.ndarray,
+        *,
+        first: bool,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """Fold one accepted secant (s, y) into the path's magnitude EMAs.
 
         The warm-up pair seeds the EMA outright (weight 1, no β-mixing against a
         zero); later pairs blend at β. Signed quantities are reduced to
@@ -355,11 +423,12 @@ class DiagonalPreconditioner(LocalSolver):
         ratio positive and cancels the sign cancellation `E[s]/E[y]` suffers.
         """
         if self.moment == "abs":
-            s_ema, y_ema = jnp.abs(s), jnp.abs(y)
+            s_mag, y_mag = jnp.abs(s), jnp.abs(y)
         else:
-            s_ema, y_ema = jnp.square(s), jnp.square(y)
+            s_mag, y_mag = jnp.square(s), jnp.square(y)
         if first:
-            self.s_ema[i], self.y_ema[i] = s_ema, y_ema
-        else:
-            self.s_ema[i] = self.beta * self.s_ema[i] + (1.0 - self.beta) * s_ema
-            self.y_ema[i] = self.beta * self.y_ema[i] + (1.0 - self.beta) * y_ema
+            return s_mag, y_mag
+        return (
+            self.beta * state.s_ema + (1.0 - self.beta) * s_mag,
+            self.beta * state.y_ema + (1.0 - self.beta) * y_mag,
+        )
