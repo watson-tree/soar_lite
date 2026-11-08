@@ -51,7 +51,7 @@ class Trace:
     points: list[int] = field(default_factory=list)
     batches: list[int] = field(default_factory=list)
     best: list[float] = field(default_factory=list)
-    fun: float = math.inf  # final best
+    fun: float = math.nan  # final best; nan until a run has one to report
 
     def as_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return (points, batches, best) as float arrays for aggregation."""
@@ -102,7 +102,7 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
     trace = Trace()
     n_points = 0
     n_batches = 0
-    best = math.inf
+    best = math.nan  # no answer yet
 
     def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         nonlocal n_points, n_batches, best
@@ -110,7 +110,9 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
         n_batches += 1
         n_points += int(x.shape[0])
         for v in f.tolist():
-            if math.isfinite(v) and v < best:
+            # `v < nan` is False, so "no answer yet" needs naming: a nan-seeded
+            # best would otherwise stay nan for a run that is doing fine.
+            if math.isfinite(v) and (math.isnan(best) or v < best):
                 best = v
         trace.points.append(n_points)
         trace.batches.append(n_batches)
@@ -206,13 +208,15 @@ def run_adam(problem: Problem, *, max_batches: int, seed: int, lr: float) -> Tra
         f, g, _ = problem.eval_f_g(x[None, :])
         updates, opt_state = opt.update(g[0], opt_state)
         x = jnp.clip(jnp.asarray(optax.apply_updates(x, updates)), lo, hi)
-        fval = jnp.where(jnp.isfinite(f[0]), f[0], jnp.inf)
-        best = jnp.minimum(best, fval)
+        fval = jnp.where(jnp.isfinite(f[0]), f[0], jnp.nan)
+        # fmin drops a nan operand, so a non-finite value cannot poison the
+        # carry; `minimum` would return the nan and the rest of the run with it.
+        best = jnp.fmin(best, fval)
         return (x, opt_state, best), best
 
     _, bests = jax.lax.scan(
         body,
-        (x0, state, jnp.asarray(jnp.inf)),
+        (x0, state, jnp.asarray(jnp.nan)),
         jnp.arange(1, max_batches + 1),
     )
     values = np.asarray(bests.tolist(), dtype=float)
@@ -240,14 +244,14 @@ def run_lbfgs(problem: Problem, *, max_batches: int, seed: int) -> Trace:
     x0 = rng.uniform(lo, hi)
     trace = Trace()
     n_points = 0
-    best = math.inf
+    best = math.nan  # no answer yet
 
     def fun(x: np.ndarray) -> tuple[float, np.ndarray]:
         nonlocal n_points, best
         f, g, _ = problem.eval_f_g(jnp.asarray(x)[None, :])
         fval = float(f[0])
         n_points += 1
-        if math.isfinite(fval) and fval < best:
+        if math.isfinite(fval) and (math.isnan(best) or fval < best):
             best = fval
         trace.points.append(n_points)
         trace.batches.append(n_points)
@@ -272,6 +276,6 @@ def run_lbfgs(problem: Problem, *, max_batches: int, seed: int) -> Trace:
         del trace.points[max_batches:]
         del trace.batches[max_batches:]
         del trace.best[max_batches:]
-        best = trace.best[-1] if trace.best else math.inf
+        best = trace.best[-1] if trace.best else math.nan
     trace.fun = float(best) if math.isfinite(best) else float(result.fun)
     return trace
