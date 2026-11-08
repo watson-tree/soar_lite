@@ -386,9 +386,9 @@ owes its `f` and `g`, and handed to `settle` together with the iteration's step
 winners, so a restart start never buys a gradient batch of its own. With the
 value-only seam connected the merge is even tighter: the restart start's value
 is deferred and bought once in the same fused batch. An unusable start (`f` or `g`
-not finite) does not land, and the path stays `stalled` to be redrawn next iteration
-— it never becomes the point the path holds, so "where this path
-stands" cannot be polluted by a degenerate point.
+not finite) does not land, and the path stays `stalled` to be redrawn next
+iteration when `restart_stalled` is on — it never becomes the point the path
+holds, so "where this path stands" cannot be polluted by a degenerate point.
 
 ## The engine
 
@@ -398,13 +398,15 @@ An iteration first puts the paths in path-index order, then serves its batches i
 that order — one fused `settle` batch (step 5), preceded by the trial batches
 its judged steps spend, up to `n_alpha` each (see Cost):
 
-1. **Redraw set**: paths that hold no point (iteration 0's whole flock) or that
-   are `stalled` with `restart_stalled` on.
+1. **Redraw set**: paths that hold no point (iteration 0's whole flock when no
+   `x0` was handed in) or that are `stalled` with `restart_stalled` on.
 2. **Cohort**: the remaining paths. A path that is `stalled` and not being
    redrawn stays here — it proposes nothing this iteration and yields no winner, but
    its last usable point stays in the run's best.
 3. **Starts**: the redraw set asks `global_model.propose(len(restarted), domain)`
-   for a batch of starts. The engine checks the shape and clips into the domain;
+   for a batch of starts — except on iteration 0 with an `x0`, which the engine
+   places as given and never asks a model for. The engine checks the shape and
+   clips into the domain;
    a wrong shape is a `ValueError` at once — the width belongs to the engine, and
    a model returning a different width fails at the batch boundary instead of
    deep inside a broadcast.
@@ -415,11 +417,19 @@ its judged steps spend, up to `n_alpha` each (see Cost):
    order; the **same** batch buys the halves still owed — a judged winner's
    gradient, an unjudged winner's or redraw start's value and gradient.
 6. **Landing**: a start goes through `_place` (unusable leaves it `stalled`,
-   redrawn next iteration) and a winner through `_advance` (unusable is `stalled`, no
-   `fold`).
+   redrawn next iteration when `restart_stalled` is on) and a winner through
+   `_advance` (unusable is `stalled`, no `fold`).
 
 The redraw set and the cohort are disjoint, so "decide everything, then buy
 together" and "decide one at a time, then buy" are the same schedule.
+
+Every batch either channel spends goes through `global_model.observe` on the way
+back — the trial batches and the `settle` batch alike, in the order they are
+served — because the model is the run's evidence sink. It sees a batch before
+the engine decides anything on it, and it sees the batches the run never decides
+on too (a trial that lost its step, the batch that ended an unbounded run),
+because the work was served. A point can arrive twice: a step's trial comes for
+its value, and again for its gradient if it wins.
 
 ### Verdict and no-verdict channels
 
@@ -508,8 +518,8 @@ places: by the verdict channel — in either of its two exits, `give_up` or
 `accept` with no finite sample ever served — and by the commit gate, which
 refuses a non-finite start or winner. A refused start **does not** become the
 point the path holds, the slot that always means "where this path stands" — so
-an unusable start stays `stalled` and is redrawn next iteration instead of being
-clipped or forced into a degenerate point.
+an unusable start stays `stalled` — redrawn next iteration when `restart_stalled`
+is on — rather than being clipped or forced into a degenerate point.
 
 `stalled` and "has no point" are two different things, and only the latter is
 outside `restart_stalled`'s control. A path starts with no point at all, holding
@@ -542,7 +552,8 @@ raises `ValueError`.
 `budget_check` is the extra gate for budgets the engine cannot see (points,
 money, an external early stop).
 
-The budget therefore carries two jobs: stop decisions and work reporting.
+The budget object therefore holds two separate things: the three stop predicates
+and the four work counts.
 **Both pairs of counts are recorded** (fused and value-only; see
 [Cost](#cost-two-evaluation-seams-two-rulers)), but **the
 counts never decide a stop**: `stop` reads only three predicates (horizon, wall
@@ -613,8 +624,11 @@ value-only seam connected. The counts report and do not budget: the budget's
   most `n_alpha` value-only batches plus one fused batch — fewer if `verdict`
   accepts early.
 - **Without `eval_f`**: the fused batch is the only way to read a value, so
-  **each trial is itself a fused batch** and the winner needs no `settle` pass.
-  An `n_alpha`-candidate step spends at most `n_alpha` fused batches, one per
+  **each judged trial is itself a fused batch** — its value and gradient arrive
+  together — and a judged winner needs no `settle` pass. An unjudged winner and
+  a redraw start still go through it: the no-verdict channel commits a proposal
+  without reading a value, and a restart start owes both halves. An
+  `n_alpha`-candidate step spends at most `n_alpha` fused batches, one per
   candidate, until the method `accept`s. Nothing is served for value alone, so
   the `f` pair stays at zero.
 
@@ -683,12 +697,14 @@ starts come from a `GlobalModel`. The details differ:
   the `Domain` with a plain per-dimension sampler, uniform on a bounded side and
   `N(0, scale²)` on a free one, independent points rather than a low-discrepancy
   sequence because the mid-to-high regime is the target. The surrogate arm
-  `BLRGlobalModel` fits a Bayesian linear posterior on inverse-stereographically
-  projected coordinates (a fixed-hyperparameter port of Doumont et al. 2026),
-  which cures the corner-seeking pathology a Euclidean RBF Gaussian-process
-  posterior falls into in high dimension, and proposes the local minimum of
-  `−log EI`. EI carries no acquisition hyperparameters of its own and is strong
-  in practice, but choosing it as the default acquisition is a personal prior,
+  `BLRGlobalModel` fits a Bayesian linear posterior on projected coordinates —
+  inverse-stereographic by default (`SphereProjection`), `IdentityProjection` the
+  injectable alternate for a task whose optimum sits on a boundary — and that
+  geometry cures the corner-seeking pathology a Euclidean RBF Gaussian-process
+  posterior falls into in high dimension; `propose` returns the local minimum of
+  `−log EI`. It is a fixed-hyperparameter port of Doumont et al. 2026. EI carries
+  no acquisition hyperparameters of its own and is strong in practice, but
+  choosing it as the default acquisition is a personal prior,
   not something the skeleton requires. SOAR's own default surrogate is that
   Gaussian process, the part of its design least suited to medium-to-high
   dimension.

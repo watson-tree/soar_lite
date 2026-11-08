@@ -166,17 +166,22 @@ class DiagonalPreconditioner(LocalSolver):
         beta: float = 0.63,  # EMA decay; the window is ≈ 1/(1-β) ≈ e steps
         mu: float = 0.0,  # gradient-EMA decay for the direction; 0 = bare g, default
         theta: float = 1e-3,  # gradient-norm floor: λ = θ·|g_i| or θ·g_i²
-        alpha0: float = 1.0,  # the full step's length, in units of the natural step
+        alpha0: float = 1.0,  # direction multiplier; a step fraction in steady state
         n_alpha: int = 1,  # alpha samples per step; 1 = no line search
         backtrack: float = 0.5,  # alpha *= backtrack per retry; grid spacing too
         tau_rel: float = 1e-6,  # gradient-norm stopping test vs ‖g_0‖
     ) -> None:
         """Store the knobs; per-path state is seeded by restart.
 
-        ``alpha0`` is the step length every path is armed at, in units of the
-        natural step: -g in the warm-up, -d⊙m after, and the full step of both
-        phases under the default ``n_alpha=1``. It never grows
-        back on its own: the alpha grid only samples down from it.
+        ``alpha0`` multiplies the step's direction, and the two phases give that
+        multiplier different units. In the steady state ``-d⊙m`` is already a
+        displacement, so ``alpha0`` reads as a fraction of the natural step. In
+        the warm-up the direction is ``-g``, a gradient-like ``[f]/[x]``
+        quantity, so ``alpha0`` carries ``[x]²/[f]`` there and no unit
+        invariance holds - at the default ``alpha0 = 1`` the warm-up step is
+        literally ``x - g``. One knob covers both phases. It never grows back on
+        its own: the alpha grid only samples down from it, so under the default
+        ``n_alpha=1`` it is the whole step in either phase.
         ``backtrack`` is that grid's spacing (``n_alpha >= 2``), one constant for
         both phases. A numeric knob outside its range raises ValueError here, once
         per object; nothing downstream re-checks it. ``moment`` is the one knob
@@ -195,8 +200,8 @@ class DiagonalPreconditioner(LocalSolver):
                 gradient, in [0, 1).
             theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
                 ``θ·g_i²`` for "rms"), >= 0.
-            alpha0: step length every path is armed at; the full step's
-                length, > 0.
+            alpha0: direction multiplier every path is armed at, > 0; the two
+                phases read it in different units (see above).
             n_alpha: alpha samples per step along the step's direction; 1 means
                 no line search, >= 1.
             backtrack: the alpha-grid spacing, in (0, 1).
@@ -283,9 +288,10 @@ class DiagonalPreconditioner(LocalSolver):
         Only consulted for a path that answered True to ``needs_verdict``, and
         the phase does not enter: ``n_alpha > 1`` rules a warm-up grid and a
         steady grid alike, while a single-sample step is committed without a
-        ruling. `x` and `f` are in the protocol's signature for methods that
-        judge geometry or value, so both are dropped here: this method's ruling
-        is the count alone.
+        ruling - unless the stopping test is what answered True, since that one
+        ruling is the contract's only channel for ``give_up``. `x` and `f` are in
+        the protocol's signature for methods that judge geometry or value, so
+        both are dropped here: this method's ruling is the count alone.
 
         The grid's rule is a count, not a comparison: every sample but the last
         answers "retry", shrinking alpha one spacing down as it does, and the
