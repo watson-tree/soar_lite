@@ -600,30 +600,31 @@ class _Evaluator:
             for pos in range(len(f_vals))
         ]
 
-    def settle(self, decided: list[_Pending]) -> list[PathPoint]:
+    def settle(self, decided: dict[int, _Pending]) -> dict[int, PathPoint]:
         """Buy whatever gradient the iteration's points still owe, in one batch.
 
         Everything the value-only seam left pending goes out as a single batch, so an
         iteration costs one gradient pass however many moves it deferred - its
         restart starts plus its step winners - instead of one pass per trial. A
         point that already carries its gradient is promoted as it stands, so a
-        run that owes nothing buys nothing and the counters do not move. Returns
-        the same points, in the same order, all graded.
+        run that owes nothing buys nothing and the counters do not move. Keyed by
+        path on both sides, so a caller's halves come back keyed rather than
+        re-paired by position.
         """
-        pending_idxs = [k for k, point in enumerate(decided) if point.g is None]
-        settled: dict[int, PathPoint] = {}
-        if pending_idxs:
+        owed = [i for i, point in decided.items() if point.g is None]
+        bought: dict[int, PathPoint] = {}
+        if owed:
             f_vals, g_batch = self._serve_f_g(
-                jnp.stack([decided[k].x for k in pending_idxs]),
+                jnp.stack([decided[i].x for i in owed]),
             )
-            settled = {
-                k: PathPoint(decided[k].x, f_vals[pos], g_batch[pos])
-                for pos, k in enumerate(pending_idxs)
+            bought = {
+                i: PathPoint(decided[i].x, f_vals[pos], g_batch[pos])
+                for pos, i in enumerate(owed)
             }
-        return [
-            settled[k] if point.g is None else point.graded()
-            for k, point in enumerate(decided)
-        ]
+        return {
+            i: bought[i] if point.g is None else point.graded()
+            for i, point in decided.items()
+        }
 
     def _serve_f_g(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
         """Serve one fused batch, or raise `_BudgetExhausted` if it is unaffordable.
@@ -802,22 +803,19 @@ class _Paths:
         # the run never restarts: it proposes nothing, but it still holds its
         # place in the cohort so its point stays readable.
         cohort = [i for i in range(self.n_paths) if i not in restarted]
-        starts = self._restart_starts(len(restarted)) if restarted else []
+        starts = self._restart_starts(restarted)
         won = self._decide(cohort)
-        # One batch: restart starts first, then the winners in path order. A
-        # refusal (`_BudgetExhausted`) cuts the iteration short with nothing
-        # placed - this is the only batch it serves. A point that arrived
+        # One batch over both halves, keyed by path so neither is re-paired by
+        # position. A refusal (`_BudgetExhausted`) cuts the iteration short with
+        # nothing placed - this is the only batch it serves. A point that arrived
         # already graded (a run without the seam) passes straight through
         # `settle` without being served again.
-        order = sorted(won)
-        settled = self.evaluator.settle([*starts, *(won[i] for i in order)])
-        restarts = dict(zip(restarted, settled[: len(starts)], strict=True))
-        wins = dict(zip(order, settled[len(starts) :], strict=True))
-        self._place(restarts)
-        self._advance(wins)
+        settled = self.evaluator.settle({**starts, **won})
+        self._place({i: settled[i] for i in restarted})
+        self._advance({i: settled[i] for i in won})
 
-    def _restart_starts(self, n_points: int) -> list[_Pending]:
-        """Ask for n_points fresh starts, clipped into the run's box.
+    def _restart_starts(self, restarted: list[int]) -> dict[int, _Pending]:
+        """Ask for one fresh start per restarted path, clipped into the run's box.
 
         The caller's flock, if it handed one, answers the run's first call and
         only that one: iteration 0 is the one move where every path holds no
@@ -833,7 +831,10 @@ class _Paths:
         nothing to be judged on - so `settle` buys them in the same batch as the
         step winners, and a restart costs no gradient pass of its own.
         """
+        if not restarted:
+            return {}
         d = self.domain.d
+        n_points = len(restarted)
         if self._x0 is not None:
             proposed, self._x0 = self._x0, None
         else:
@@ -845,7 +846,7 @@ class _Paths:
             )
             raise ValueError(msg)
         x_cand = jnp.clip(proposed, self.domain.lo, self.domain.hi)
-        return self.evaluator.pending_unread(x_cand)
+        return dict(zip(restarted, self.evaluator.pending_unread(x_cand), strict=True))
 
     def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
         """Run the cohort's trials: the method judges, the engine records winners.
