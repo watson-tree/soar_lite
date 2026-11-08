@@ -89,9 +89,13 @@ def test_out_moves_both_roots_and_survives_a_second_call(
 
     runs = [harness.main(["--groups", "smooth", "--out", "demo"]) for _ in range(2)]
 
-    assert runs[0] == runs[1] == harness.Roots(
-        results=tmp_path / "results" / "demo",
-        figures=tmp_path / "figures" / "demo",
+    assert (
+        runs[0]
+        == runs[1]
+        == harness.Roots(
+            results=tmp_path / "results" / "demo",
+            figures=tmp_path / "figures" / "demo",
+        )
     )
     assert [tmp_path / "figures" / "demo" / "smooth"] * 2 == drawn
 

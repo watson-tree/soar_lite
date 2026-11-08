@@ -47,7 +47,14 @@ build-backend = "hatchling.build"
 # configuration, the lockfile, experiment scripts and notebooks are ours alone,
 # and a lock's source URLs must never ride along with a release.
 [tool.hatch.build.targets.sdist]
-exclude = [".github", "uv.lock", "experiments", "notebooks", "mkdocs.yml"]
+exclude = [
+  ".github",
+  ".editorconfig",
+  "uv.lock",
+  "experiments",
+  "notebooks",
+  "mkdocs.yml",
+]
 
 [dependency-groups]
 dev = ["ruff", "pyright", "pytest"]
@@ -68,6 +75,7 @@ ignore = [
   "CPY001",               # a copyright header is ceremony; the LICENSE covers it
   "D203", "D213",         # mutually exclusive with D211/D212, and names which yields
   "PLR2004",              # shape and tolerance comparisons; a named constant adds noise
+  "COM812",               # the formatter drops the trailing comma this rule demands
 ]
 
 [tool.ruff.lint.per-file-ignores]

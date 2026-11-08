@@ -40,17 +40,17 @@ def surrogate_minimize(acquisition, bounds, n_points, key):
     # the acquisition is two slots; the seam wants three, the last one None
     def fused_seam(x_batch):
         f, g = acquisition(x_batch)
-        return f, g, None     # finite everywhere: no feasibility to mask
+        return f, g, None  # finite everywhere: no feasibility to mask
 
     result = n_path_schedule(
         fused_seam,
         domain=inner_domain,
-        n_paths=n_points,     # one path per minimizer: one batch, not n runs
+        n_paths=n_points,  # one path per minimizer: one batch, not n runs
         max_iters=INNER_ITERS,
         restart_stalled=False,  # a pure descent, no restarting inside it
         key=key,
     )
-    return result.flock_x    # one row per path; a refused path is a nan row
+    return result.flock_x  # one row per path; a refused path is a nan row
 
 
 global_model = BLRGlobalModel(

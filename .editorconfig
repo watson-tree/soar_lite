@@ -1,0 +1,20 @@
+# Editor-side defaults, so a foreign editor saves the shape the rest of the repo
+# already has. Nothing here is enforced: CI reads none of it, and ruff owns the
+# Python formatting it can see.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,md}]
+indent_size = 2
+
+[*.md]
+# Two trailing spaces are Markdown's hard line break; trimming them would change
+# the rendered page silently.
+trim_trailing_whitespace = false

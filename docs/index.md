@@ -65,7 +65,7 @@ result = n_path_schedule(
     n_paths=4,
     max_iters=30,
 )
-print(result.x)    # x ≈ [3. 3]
+print(result.x)  # x ≈ [3. 3]
 print(result.fun)  # fun ≈ 3e-5
 ```
 
