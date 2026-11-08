@@ -15,7 +15,7 @@ The canonical run draws both (and `smooth`, `multimodal`):
 
 ```bash
 uv run --group exp python -m experiments.compare_baselines \
-    --seeds 20 --groups headline,smooth,multimodal,invariance --max-steps 3000
+    --seeds 20 --groups headline,smooth,multimodal,invariance --max-batches 3000
 ```
 
 ## Updating one

@@ -23,7 +23,7 @@ from experiments.record import HERE, Roots
 INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
 
 
-def run_lr_sweep(roots: Roots, n_seeds: int, max_steps: int) -> None:
+def run_lr_sweep(roots: Roots, n_seeds: int, max_batches: int) -> None:
     """Plot best-so-far vs Adam lr, one curve per problem (appendix panel).
 
     Shows the optimal lr drifting across problems and a wrong lr costing many
@@ -51,7 +51,7 @@ def run_lr_sweep(roots: Roots, n_seeds: int, max_steps: int) -> None:
             float(
                 np.mean(
                     [
-                        run_adam(prob, max_steps=max_steps, seed=s, lr=lr).fun
+                        run_adam(prob, max_batches=max_batches, seed=s, lr=lr).fun
                         for s in range(n_seeds)
                     ],
                 ),
@@ -93,7 +93,7 @@ def run_lr_sweep(roots: Roots, n_seeds: int, max_steps: int) -> None:
     print(f"wrote {out.relative_to(HERE)}")
 
 
-def run_invariance(roots: Roots, n_seeds: int, max_steps: int) -> None:
+def run_invariance(roots: Roots, n_seeds: int, max_batches: int) -> None:
     """Draw panel 5: one physics in two unit systems, zero retune.
 
     soar-lite's per-coordinate secant should overlap (outcome-level), Adam's
@@ -119,7 +119,9 @@ def run_invariance(roots: Roots, n_seeds: int, max_steps: int) -> None:
     fig, ax = plt.subplots(figsize=(6.4, 4.6))
     for label, color, runner in methods:
         for prob, ls, tag in ((base, "-", "base"), (scaled, "--", "x10")):
-            traces = [runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)]
+            traces = [
+                runner(prob, max_batches=max_batches, seed=s) for s in range(n_seeds)
+            ]
             # Seeds stop at different point counts (diag converges in tens of
             # points), so the raw trace arrays are ragged: plot_cohort resamples
             # them onto one log-spaced grid, exactly as the other panels do.

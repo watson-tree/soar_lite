@@ -85,7 +85,7 @@ def _draw_problem(
         )
         for _, loaded in present
     )
-    if len({loaded.max_steps for _, loaded in present}) > 1:
+    if len({loaded.max_batches for _, loaded in present}) > 1:
         print(f"  mixed budgets: {prob.name}: cutting all arms at {xmax:g} {axis}")
     shown = {
         arm.key: [_up_to(t, axis, xmax) for t in loaded.traces]

@@ -179,7 +179,8 @@ No trace was re-measured; every number in this file stands. What changed is wher
 the curves stop.
 
 **The points axis used to cut in batches.** That fixed an earlier unit error (the
-cut value was `max_steps`, a batch count, applied as a point count) but left the
+cut value was `max_steps` — the flag is now `--max-batches`, same quantity — a
+batch count, applied as a point count) but left the
 symptom it was meant to fix: an `n_paths=16` arm serves 16 points per batch, so
 on the points axis it ran to 48000 while every single chain ended at 3000, and
 its curve trailed alone past the last x where any other arm had data. Each axis
@@ -297,7 +298,8 @@ arm had. v3 carries its own momentum contrast (`n_paths=1, mu=0`); cross-entry
 differences would confound the default change with the measurement.
 
 **The points axis now truncates in batches, at the shortest budget present.**
-It used to cut every arm at `max_steps` *points* — a unit error that stopped an
+It used to cut every arm at `max_steps` *points* (that flag is now
+`--max-batches`, same quantity) — a unit error that stopped an
 `n_paths=16` arm after ~187 batches and flattened all three `blr` arms onto
 their initial value, so the figure showed one line inside a narrow y band. The
 cut is now at the panel's own budget in batches, and a panel whose arms

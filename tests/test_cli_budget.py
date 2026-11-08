@@ -1,6 +1,6 @@
 """Where the harness measures, and how much: `--quick`, `--out`, `--seeds`.
 
-The sweep used to read `args.max_steps` directly, so `--quick --lr-sweep` ran
+The sweep used to read `args.max_batches` directly, so `--quick --lr-sweep` ran
 the full grid at 3000 batches while the flag promised a smoke check; it also
 hard-coded 2 seeds, so `--seeds` moved every number except the sweep's. The
 seam is `_budget`, and `main` is asked what it hands the sweep.
@@ -43,7 +43,7 @@ def _isolated_roots(
         (["--lr-sweep"], (20, 3000)),
         (["--lr-sweep", "--seeds", "2"], (2, 3000)),
         (["--quick"], (2, 300)),
-        (["--seeds", "3", "--max-steps", "50"], (3, 50)),
+        (["--seeds", "3", "--max-batches", "50"], (3, 50)),
     ],
 )
 def test_quick_decides_the_budget_the_sweep_measures_at(
@@ -54,25 +54,25 @@ def test_quick_decides_the_budget_the_sweep_measures_at(
     """Whatever the mode, one budget: what `--quick` promises or what was asked."""
     handed: dict[str, int] = {}
 
-    def _record(_roots: harness.Roots, n_seeds: int, max_steps: int) -> None:
-        handed.update(seeds=n_seeds, max_steps=max_steps)
+    def _record(_roots: harness.Roots, n_seeds: int, max_batches: int) -> None:
+        handed.update(seeds=n_seeds, max_batches=max_batches)
 
     monkeypatch.setattr(appendix, "run_lr_sweep", _record)
     monkeypatch.setattr(appendix, "run_invariance", _record)
     monkeypatch.setattr(
         panels,
         "run_panel",
-        lambda _roots, _group, n_seeds, max_steps, **_rest: _record(
+        lambda _roots, _group, n_seeds, max_batches, **_rest: _record(
             _roots,
             n_seeds,
-            max_steps,
+            max_batches,
         ),
     )
     monkeypatch.setattr(figures, "plot_panel", lambda *_args: None)
 
     harness.main(argv)
 
-    assert (handed["seeds"], handed["max_steps"]) == expected
+    assert (handed["seeds"], handed["max_batches"]) == expected
 
 
 def test_out_moves_both_roots_and_survives_a_second_call(

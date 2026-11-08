@@ -69,7 +69,7 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
     problem: Problem,
     *,
     n_paths: int,
-    max_steps: int,
+    max_batches: int,
     seed: int,
     restart_stalled: bool = True,
     mu: float = 0.0,
@@ -77,7 +77,7 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
 ) -> Trace:
     """Drive the n-path engine, recording best-so-far after every batch.
 
-    The budget is ``max_steps`` **batches** - one eval of parallel evaluations,
+    The budget is ``max_batches`` **batches** - one eval of parallel evaluations,
     the axis a single chain pays one point per step on. The engine's own stop
     counts iterations, not batches, so the ceiling is held by a batch gate
     (``budget_check``): a probe or a rejected trial batch costs one each, and
@@ -130,8 +130,8 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
         n_paths=n_paths,
         domain=domain,
         x0=x0,
-        max_iters=max_steps,
-        budget_check=lambda: n_batches < max_steps,
+        max_iters=max_batches,
+        budget_check=lambda: n_batches < max_batches,
         local_solver=DiagonalPreconditioner(mu=mu),
         restart_stalled=restart_stalled,
         global_model=None if model is None else model(key),
@@ -193,7 +193,7 @@ def surrogate_minimize(
 # --- Adam: one compiled scan per run --------------------------------
 
 
-def run_adam(problem: Problem, *, max_steps: int, seed: int, lr: float) -> Trace:
+def run_adam(problem: Problem, *, max_batches: int, seed: int, lr: float) -> Trace:
     """Plain Adam, one evaluation per step, the whole loop in one compiled scan."""
     lo, hi = problem.bounds[:, 0], problem.bounds[:, 1]
     _, sub = jax.random.split(jax.random.PRNGKey(seed))
@@ -213,10 +213,10 @@ def run_adam(problem: Problem, *, max_steps: int, seed: int, lr: float) -> Trace
     _, bests = jax.lax.scan(
         body,
         (x0, state, jnp.asarray(jnp.inf)),
-        jnp.arange(1, max_steps + 1),
+        jnp.arange(1, max_batches + 1),
     )
     values = np.asarray(bests.tolist(), dtype=float)
-    grid = np.arange(1, max_steps + 1)
+    grid = np.arange(1, max_batches + 1)
     return Trace(
         points=grid.tolist(),
         batches=grid.tolist(),
@@ -228,7 +228,7 @@ def run_adam(problem: Problem, *, max_steps: int, seed: int, lr: float) -> Trace
 # --- L-BFGS-B: the smooth-panel ceiling reference ----------------------------
 
 
-def run_lbfgs(problem: Problem, *, max_steps: int, seed: int) -> Trace:
+def run_lbfgs(problem: Problem, *, max_batches: int, seed: int) -> Trace:
     """Scipy L-BFGS-B with jac=True; the serial full-memory reference.
 
     Not a head-to-head baseline: it is full-memory (not per-coordinate) and
@@ -260,7 +260,7 @@ def run_lbfgs(problem: Problem, *, max_steps: int, seed: int) -> Trace:
         jac=True,
         method="L-BFGS-B",
         bounds=list(zip(lo, hi, strict=True)),
-        options={"maxfun": max_steps, "maxiter": max_steps},
+        options={"maxfun": max_batches, "maxiter": max_batches},
     )
     trace.fun = float(best) if math.isfinite(best) else float(result.fun)
     return trace

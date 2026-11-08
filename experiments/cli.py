@@ -136,7 +136,7 @@ def _parser() -> argparse.ArgumentParser:
         help="seeds per arm",
     )
     parser.add_argument(
-        "--max-steps",
+        "--max-batches",
         type=int,
         default=3000,
         help="batches per method",
@@ -179,8 +179,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _budget(args: argparse.Namespace) -> tuple[int, int]:
-    """Return this run's ``(seeds, max_steps)``; ``--quick`` means 2 x 300."""
-    return (2, 300) if args.quick else (args.seeds, args.max_steps)
+    """Return this run's ``(seeds, max_batches)``; ``--quick`` means 2 x 300."""
+    return (2, 300) if args.quick else (args.seeds, args.max_batches)
 
 
 def _validate(
@@ -232,7 +232,7 @@ def main(argv: list[str] | None = None) -> Roots:
     args = _parser().parse_args(argv)
 
     groups = ["smooth"] if args.quick else args.groups.split(",")
-    n_seeds, max_steps = _budget(args)
+    n_seeds, max_batches = _budget(args)
     problems_filter = _comma_set(args.problems)
     arms_filter = _comma_set(args.arms)
     _validate(args, groups, problems_filter, arms_filter)
@@ -241,7 +241,7 @@ def main(argv: list[str] | None = None) -> Roots:
     roots = record.roots_for("smoke" if args.quick else args.out)
 
     if args.lr_sweep:
-        appendix.run_lr_sweep(roots, n_seeds, max_steps)
+        appendix.run_lr_sweep(roots, n_seeds, max_batches)
         return roots
 
     if args.plot_only:
@@ -259,14 +259,14 @@ def main(argv: list[str] | None = None) -> Roots:
 
     for group in groups:
         if group == "invariance":
-            appendix.run_invariance(roots, n_seeds, max_steps)
+            appendix.run_invariance(roots, n_seeds, max_batches)
             continue
-        print(f"[{group}] seeds={n_seeds} max_steps={max_steps}")
+        print(f"[{group}] seeds={n_seeds} max_batches={max_batches}")
         panels.run_panel(
             roots,
             group,
             n_seeds,
-            max_steps,
+            max_batches,
             problems_filter=problems_filter,
             arms_filter=arms_filter,
         )

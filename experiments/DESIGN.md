@@ -248,7 +248,7 @@ settled against: the residual error is in the step's *direction*, not its length
 
 ## Budget, statistics, outputs
 
-- Every method gets the same number of **batches**: `--max-steps 3000` (one
+- Every method gets the same number of **batches**: `--max-batches 3000` (one
   batch = one pass of parallel evaluations; a single chain spends one point per
   batch). The engine charges every batch it serves against that budget, redraws
   included, so the ceiling is exact — a restart draws fresh starts inside the

@@ -90,7 +90,7 @@ def run_panel(  # noqa: PLR0913 - roots, panel, budget and two filters
     roots: Roots,
     panel: str,
     n_seeds: int,
-    max_steps: int,
+    max_batches: int,
     *,
     problems_filter: frozenset[str] | None = None,
     arms_filter: frozenset[str] | None = None,
@@ -108,16 +108,18 @@ def run_panel(  # noqa: PLR0913 - roots, panel, budget and two filters
             prob.name,
             arm.key,
             n_seeds=n_seeds,
-            max_steps=max_steps,
+            max_batches=max_batches,
         )
-        traces = [arm.runner(prob, max_steps=max_steps, seed=s) for s in range(n_seeds)]
+        traces = [
+            arm.runner(prob, max_batches=max_batches, seed=s) for s in range(n_seeds)
+        ]
         path = save_arm(
             roots,
             prob,
             arm,
             traces,
             n_seeds=n_seeds,
-            max_steps=max_steps,
+            max_batches=max_batches,
         )
         fins = [t.fun for t in traces]
         print(

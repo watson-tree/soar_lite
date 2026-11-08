@@ -40,7 +40,7 @@ uv run --group exp python -m experiments.compare_baselines --quick
 ```
 
 The quick gate runs only the `smooth` panel — the diag control and the rotated
-quadratic — with 2 seeds and `--max-steps 300` per method, so it writes just
+quadratic — with 2 seeds and `--max-batches 300` per method, so it writes just
 that panel's figures (seconds, not minutes). It writes them under
 `results/smoke/` and `figures/smoke/`, not into the record: a smoke check
 produces exactly the file names a full run does, and those files are the
@@ -53,10 +53,10 @@ before committing to the full schedule.
 uv run --group exp python -m experiments.compare_baselines \
     --seeds 20 \
     --groups headline,smooth,multimodal,invariance \
-    --max-steps 3000
+    --max-batches 3000
 ```
 
-`--max-steps` is **batches
+`--max-batches` is **batches
 per method**; the per-point chart re-reads the same runs on the "objective
 points served" axis, so both billing notions come from one execution.
 
@@ -70,7 +70,7 @@ Adam pays a per-problem lr chosen by an offline sweep
 Reproduce the sweep figure with:
 
 ```bash
-uv run --group exp python -m experiments.compare_baselines --lr-sweep --seeds 2 --max-steps 3000
+uv run --group exp python -m experiments.compare_baselines --lr-sweep --seeds 2 --max-batches 3000
 ```
 
 The sweep is eight learning rates x five problems, so it keeps its own 2 seeds;
@@ -98,7 +98,7 @@ figure is always re-derivable and a trace never is. The unit is one
 **(problem, arm)** pair, so a rerun touches one file:
 
 - `results/<problem>/<arm-key>.json` — that arm's raw per-seed trace on that
-  problem: points, batches, best-so-far per step, final value, and a `meta`
+  problem: points, batches, best-so-far per batch, final value, and a `meta`
   block naming the problem, the arm key, the seed count and the budget. Raw, not
   resampled: the grid is a plotting decision that depends on which other arms
   are present.
@@ -126,7 +126,7 @@ default or a changed lr is a new key and a new file: the old trace stays as a
 record of the old configuration instead of being silently overwritten.
 
 Every knob is in the key, and the budget is not one: `--seeds` and
-`--max-steps` say how the arm was *measured*, not which arm it is. That left one
+`--max-batches` say how the arm was *measured*, not which arm it is. That left one
 way to replace a record, and it was the easiest to type by accident — so the
 harness refuses to write over a file whose `meta` names a different budget, and
 it refuses before the first batch. The message names the file, both budgets and
@@ -135,11 +135,11 @@ the two legitimate exits:
 ```bash
 # refused: holds 20 seeds x 3000 batches, this run asks for 2 x 300
 uv run --group exp python -m experiments.compare_baselines \
-    --groups smooth --seeds 2 --max-steps 300
+    --groups smooth --seeds 2 --max-batches 300
 
 # same numbers as the record: this is the documented rerun
 uv run --group exp python -m experiments.compare_baselines \
-    --groups smooth --seeds 20 --max-steps 3000
+    --groups smooth --seeds 20 --max-batches 3000
 
 # changing the budget on purpose starts by deleting the file
 rm experiments/results/<problem>/<arm-key>.json
@@ -158,7 +158,7 @@ Re-measuring one arm is a filter on that same identity:
 # rewrite exactly one file, leave the rest of the panel alone
 uv run --group exp python -m experiments.compare_baselines \
     --groups smooth --problems diag_quad_d100_cond10000 \
-    --arms soar-sample-np1-mu0-restart-off --seeds 20 --max-steps 3000
+    --arms soar-sample-np1-mu0-restart-off --seeds 20 --max-batches 3000
 
 # rebuild every figure from the files, no re-run
 uv run --group exp python -m experiments.compare_baselines --plot-only

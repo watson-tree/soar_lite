@@ -68,11 +68,11 @@ def soar_arm(  # noqa: PLR0913 - one keyword per attribute the key must name
         f"-restart-{'on' if restart_stalled else 'off'}"
     )
 
-    def runner(prob: problems.Problem, *, max_steps: int, seed: int) -> Trace:
+    def runner(prob: problems.Problem, *, max_batches: int, seed: int) -> Trace:
         return run_soar_lite(
             prob,
             n_paths=n_paths,
-            max_steps=max_steps,
+            max_batches=max_batches,
             seed=seed,
             restart_stalled=restart_stalled,
             mu=mu,
@@ -120,8 +120,8 @@ def adam_arm(prob: problems.Problem) -> Arm:
     lr = adam_lr(prob)
     key = f"adam-lr{lr:g}"
 
-    def runner(p: problems.Problem, *, max_steps: int, seed: int) -> Trace:
-        return run_adam(p, lr=lr, max_steps=max_steps, seed=seed)
+    def runner(p: problems.Problem, *, max_batches: int, seed: int) -> Trace:
+        return run_adam(p, lr=lr, max_batches=max_batches, seed=seed)
 
     return Arm(
         key=key,
