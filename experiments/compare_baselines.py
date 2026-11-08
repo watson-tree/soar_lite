@@ -270,8 +270,6 @@ PANELS: dict[str, Callable[[problems.Problem], list[Arm]]] = {
 TRACELESS: frozenset[str] = frozenset({"invariance"})
 GROUPS: tuple[str, ...] = (*PANELS, *sorted(TRACELESS))
 
-INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
-
 
 # --- storage: one file per (problem, arm) -----------------------------------
 
@@ -413,28 +411,6 @@ def refuse_budget_change(
     raise SystemExit(msg)
 
 
-def _selection(
-    panel: str,
-    problems_filter: frozenset[str] | None = None,
-    arms_filter: frozenset[str] | None = None,
-) -> list[tuple[problems.Problem, Arm]]:
-    """Select the ``(problem, arm)`` pairs of ``panel`` that both filters leave.
-
-    A filter matches by name and nothing more: a name the panel does not carry
-    selects nothing here rather than raising, so the caller compares the result
-    with the filters it passed and can refuse the run when it comes back empty.
-    """
-    arms = PANELS[panel]
-    probs = problems.build(panel)
-    return [
-        (prob, arm)
-        for prob in probs
-        if not problems_filter or prob.name in problems_filter
-        for arm in arms(prob)
-        if not arms_filter or arm.key in arms_filter
-    ]
-
-
 def run_panel(  # noqa: PLR0913 - roots, panel, budget and two filters
     roots: Roots,
     panel: str,
@@ -473,6 +449,28 @@ def run_panel(  # noqa: PLR0913 - roots, panel, budget and two filters
             f"  {prob.name:26s} {arm.key:44s} "
             f"final mean best = {np.mean(fins):.4e}  -> {path.relative_to(HERE)}",
         )
+
+
+def _selection(
+    panel: str,
+    problems_filter: frozenset[str] | None = None,
+    arms_filter: frozenset[str] | None = None,
+) -> list[tuple[problems.Problem, Arm]]:
+    """Select the ``(problem, arm)`` pairs of ``panel`` that both filters leave.
+
+    A filter matches by name and nothing more: a name the panel does not carry
+    selects nothing here rather than raising, so the caller compares the result
+    with the filters it passed and can refuse the run when it comes back empty.
+    """
+    arms = PANELS[panel]
+    probs = problems.build(panel)
+    return [
+        (prob, arm)
+        for prob in probs
+        if not problems_filter or prob.name in problems_filter
+        for arm in arms(prob)
+        if not arms_filter or arm.key in arms_filter
+    ]
 
 
 # --- plotting ---------------------------------------------------------------
@@ -661,6 +659,9 @@ def _up_to(trace: Trace, axis: Axis, max_x: float) -> Trace:
 # --- appendix panels --------------------------------------------------------
 
 
+INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
+
+
 def run_lr_sweep(roots: Roots, n_seeds: int, max_steps: int) -> None:
     """Plot best-so-far vs Adam lr, one curve per problem (appendix panel).
 
@@ -809,6 +810,9 @@ def _rescale(prob: problems.Problem, scale: float) -> problems.Problem:
         description=f"{prob.description} (x' = {scale:g} x)",
         x_star=x_star,
     )
+
+
+# --- command line: flags, refusals, and the run -----------------------------
 
 
 def _comma_set(text: str) -> frozenset[str] | None:
