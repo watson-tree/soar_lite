@@ -347,7 +347,7 @@ class DiagonalPreconditioner(LocalSolver):
         # Folded only now that the step has committed, and folded from the point
         # it committed to: the gradient this step started from was already spent
         # on this step's direction, so the arriving one is the news. `restart`
-        # seeds the chain with the start's own gradient, which is why every fold
+        # seeds the descent with the start's own gradient, which is why every fold
         # after it blends rather than seeding; at mu = 0 the blend keeps only the
         # arriving gradient, which is the default's bare direction.
         m = self.mu * state.m + (1.0 - self.mu) * p.g

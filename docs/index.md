@@ -20,7 +20,7 @@ A run moves `n_paths` paths in lockstep, each following its own descent.
 Iteration 0 is the exception on the schedule — it places them, serving one batch
 of starts before any step is taken (the engine's move logic itself needs no
 special case: a path with no point simply restarts). After that, with the default
-`n_alpha = 1` a round is usually one fused pass — a single call returning value
+`n_alpha = 1` an iteration is usually one fused pass — a single call returning value
 and gradient for every served point — while a judged step (`n_alpha > 1`) serves
 trial batches first, and a path whose stopping test already holds asks for one
 ruling instead (see [How it works](explanation/how-it-works.md)). On a

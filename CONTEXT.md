@@ -17,7 +17,7 @@ new code.
 ### Engine
 
 **path**:
-One independent descent chain: a current point plus that chain's own solver
+One independent descent: a current point plus that descent's own solver
 state. The engine runs `n_paths` of them in lockstep. A restart replaces its
 current point with a fresh draw, so the points one path holds across a run are
 continuous in identity, not in space — which is why `best`, the reported answer,

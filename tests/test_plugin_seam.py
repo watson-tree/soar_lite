@@ -203,7 +203,8 @@ def test_give_up_stalls_a_path() -> None:
     )
     assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
     # Nothing to commit: every batch this run serves is a trial, and a trial
-    # without the value-only seam is fused, so the count is one flock plus one round.
+    # without the value-only seam is fused, so the count is one flock plus one
+    # iteration.
     assert res.n_f_g_points == sum(w for w, _d in shapes) == 2 * k
     assert res.status == "max_iters"
 
@@ -509,7 +510,7 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
     """A retrying step pays one gradient pass in total, not one per trial.
 
     The ruled-on quantity is f, so each trial is served for its value alone and
-    only the winner is graded. Two trial rounds therefore cost two value-only calls
+    only the winner is graded. Two trials therefore cost two value-only calls
     and one fused batch - the same single fused batch a no-line-search step
     costs, which is what makes a value-only seam cost-matched across the sides.
     """
@@ -522,14 +523,14 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
         def __init__(self) -> None:
             """Start with no verdict served."""
             super().__init__()
-            self.rounds = 0
+            self.trials = 0
 
         def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
-            """Reject the first trial, accept the second (no reason but the round)."""
+            """Reject the first trial, accept the second (no reason but the trial)."""
             del x, f
             self.verdicts.append(i)
-            self.rounds += 1
-            return "retry" if self.rounds == 1 else "accept"
+            self.trials += 1
+            return "retry" if self.trials == 1 else "accept"
 
     def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         f_vals, grads = jax.vmap(pointwise)(x)
@@ -548,7 +549,7 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
         max_iters=2,  # the flock, then this one step
         local_solver=solver,
     )
-    # The step's two trial rounds, value-only. The flock travels to `settle`
+    # The step's two trials, value-only. The flock travels to `settle`
     # unread, so it spends no f of its own.
     assert f_calls == [k, k], f_calls
     assert solver.verdicts == [0, 0], solver.verdicts

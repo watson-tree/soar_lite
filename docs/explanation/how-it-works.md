@@ -4,8 +4,8 @@
 stalls. This page explains the method: what each piece computes, why it is built
 that way, and which trade-offs it accepts.
 
-A short vocabulary runs through everything below: a **path** is one descent
-chain — one current point plus its solver state; the **flock** is the `n_paths`
+A short vocabulary runs through everything below: a **path** is one descent —
+one current point plus its solver state; the **flock** is the `n_paths`
 current points taken together as the run's state at one moment (one point per
 path); a
 **batch** is the `(M, d)` points one call serves, and a **point** is one row of
@@ -342,7 +342,7 @@ keeps them in three different places, none answering for another:
 - **Whether**: `restart_stalled`, a boolean knob, default `True`. While it is
   off, a stopped path stays stopped — `stalled` is still recorded, it still
   occupies its slot, and its last usable point stays in the run's best — only
-  the path itself stops moving; while it is on, it is redrawn on the next round.
+  the path itself stops moving; while it is on, it is redrawn on the next iteration.
 - **Where**: `global_model.propose(n_points, domain)`, the engine's second
   plugin point.
 
@@ -376,18 +376,17 @@ domain's own draw, never calling `minimize` — see
 acquisition function** (Jones et al. 1998), answering "where does the surrogate
 think is still worth trying" — it hands back a start and makes no comparison.
 The descent on `−log EI` uses the caller's injected `MinimizeFn` (usually this
-package's own n-path engine), so
-this arm trades one inner search for a smarter start, at the cost of that inner
-round's evaluations.
+package's own n-path engine), so this arm trades one inner search for a smarter
+start, at the cost of that inner search's evaluations.
 
 ### A restart costs no extra gradient batch
 
 `propose`'s answer is clipped into the domain, wrapped as a point that still
-owes its `f` and `g`, and handed to `settle` together with the round's step
+owes its `f` and `g`, and handed to `settle` together with the iteration's step
 winners, so a restart start never buys a gradient batch of its own. With the
 value-only seam connected the merge is even tighter: the restart start's value
 is deferred and bought once in the same fused batch. An unusable start (`f` or `g`
-not finite) does not land, and the path stays `stalled` to be redrawn next round
+not finite) does not land, and the path stays `stalled` to be redrawn next iteration
 — it never becomes the point the path holds, so "where this path
 stands" cannot be polluted by a degenerate point.
 
@@ -395,31 +394,31 @@ stands" cannot be polluted by a degenerate point.
 
 ### One iteration
 
-A round first puts the paths in path-index order, then serves its batches in
+An iteration first puts the paths in path-index order, then serves its batches in
 that order — one fused `settle` batch (step 5), preceded by the trial batches
 its judged steps spend, up to `n_alpha` each (see Cost):
 
 1. **Redraw set**: paths that hold no point (iteration 0's whole flock) or that
    are `stalled` with `restart_stalled` on.
-2. **Queue**: the remaining paths. A path that is `stalled` and not being
-   redrawn stays here — it proposes nothing this round and yields no winner, but
+2. **Cohort**: the remaining paths. A path that is `stalled` and not being
+   redrawn stays here — it proposes nothing this iteration and yields no winner, but
    its last usable point stays in the run's best.
 3. **Starts**: the redraw set asks `global_model.propose(len(restarted), domain)`
    for a batch of starts. The engine checks the shape and clips into the domain;
    a wrong shape is a `ValueError` at once — the width belongs to the engine, and
    a model returning a different width fails at the batch boundary instead of
    deep inside a broadcast.
-4. **Steps**: each non-stalled path in the queue takes one step through one of
+4. **Steps**: each non-stalled path in the cohort takes one step through one of
    two channels by `needs_verdict`, producing the winner of that step; the
    stalled-and-not-redrawn ones propose nothing (step 2).
 5. **One `settle` batch**: redraw starts first, then the step winners in path
    order; the **same** batch buys the halves still owed — a judged winner's
    gradient, an unjudged winner's or redraw start's value and gradient.
 6. **Landing**: a start goes through `_place` (unusable leaves it `stalled`,
-   redrawn next round) and a winner through `_advance` (unusable is `stalled`, no
+   redrawn next iteration) and a winner through `_advance` (unusable is `stalled`, no
    `fold`).
 
-The redraw set and the queue are disjoint, so "decide everything, then buy
+The redraw set and the cohort are disjoint, so "decide everything, then buy
 together" and "decide one at a time, then buy" are the same schedule.
 
 ### Verdict and no-verdict channels
@@ -503,13 +502,13 @@ is told about is never taken back.
 
 ### stalled is the only path state
 
-`stalled` means the path took no step this round; redrawing a stalled path is
+`stalled` means the path took no step this iteration; redrawing a stalled path is
 `restart_stalled`'s separate decision, one layer up. The flag is written in two
 places: by the verdict channel — in either of its two exits, `give_up` or
 `accept` with no finite sample ever served — and by the commit gate, which
 refuses a non-finite start or winner. A refused start **does not** become the
 point the path holds, the slot that always means "where this path stands" — so
-an unusable start stays `stalled` and is redrawn next round instead of being
+an unusable start stays `stalled` and is redrawn next iteration instead of being
 clipped or forced into a degenerate point.
 
 `stalled` and "has no point" are two different things, and only the latter is
@@ -520,25 +519,25 @@ redraw), so it is always redrawn. A refused point is a stall, and
 
 ### All stalled: redraw, or end
 
-When every path is `stalled`, the round has neither steps nor owed starts, and
+When every path is `stalled`, the iteration has neither steps nor owed starts, and
 only two outcomes remain, decided by one bit, `restart_stalled`:
 
-- **On (default)**: stalled paths enter the redraw set on the next round, so every
-  round has a batch to serve — the flock cycles between stalling and restarting,
+- **On (default)**: stalled paths enter the redraw set on the next iteration, so every
+  iteration has a batch to serve — the flock cycles between stalling and restarting,
   with the interval set by how quickly the local method stops.
 - **Off**: stopped paths never revive themselves and the flock deadlocks; the
   engine recognizes the deadlock and ends the run with `status = all_stalled`.
-  That round serves no batch at all, so it is not counted in `n_iters` — the same
+  That iteration serves no batch at all, so it is not counted in `n_iters` — the same
   rule that keeps a refused batch's half-iteration out of the count.
 
 ### The stop gates
 
 `max_iters` is the engine's own horizon, counted in **iterations** (iteration 0 is
-the round that places the flock). It is a deterministic stop, not a cost proxy:
-how many batches a round serves is decided by the method and the evaluation
+the iteration that places the flock). It is a deterministic stop, not a cost proxy:
+how many batches an iteration serves is decided by the method and the evaluation
 seam, from the batch that redraws starts to the method's trial batches.
 `time_limit` is the wall-clock version of the same thing, for callers who cannot
-say how expensive a round is. At least one of them must be given, or the entry
+say how expensive an iteration is. At least one of them must be given, or the entry
 raises `ValueError`.
 `budget_check` is the extra gate for budgets the engine cannot see (points,
 money, an external early stop).
@@ -548,14 +547,14 @@ The budget therefore carries two jobs: stop decisions and work reporting.
 [Cost](#cost-two-evaluation-seams-two-rulers)), but **the
 counts never decide a stop**: `stop` reads only three predicates (horizon, wall
 clock, the caller's gate). `charge` only records, `tick` records one iteration
-after a completed round, and `stop` is the only stop query. The refusal is **not**
+after a completed iteration, and `stop` is the only stop query. The refusal is **not**
 stored as state: a cached flag could drift from the counts that justify it.
 (`charge`, `tick`, `stop` are internal to the budget object, not public API.)
 
 The same `stop` is also the loop head's condition: a completed iteration may have
-just reached the horizon, so it is asked once before a new round opens. A
+just reached the horizon, so it is asked once before a new iteration opens. A
 mid-iteration refusal raises at the point of the request and ends the run, with
-that round not counted in `n_iters` — so the engine's loop never checks a return
+that iteration not counted in `n_iters` — so the engine's loop never checks a return
 value and never passes a flag up or down. **The gate is asked before every batch,
 fused or value-only**: a verdict channel's `while` can spin many turns without
 returning to the loop head, and without that question a step crossing the deadline
@@ -569,7 +568,7 @@ recognition:
   lower bound there, no later trial can beat it and no step can move it, so that
   point becomes the answer (`fun = -inf`, `x` is it) and the run ends. It still
   reads the feasibility mask: an infeasible `-inf` changes nothing. The batch that
-  found it is served and recorded, but the round did not finish, so it is not
+  found it is served and recorded, but the iteration did not finish, so it is not
   counted in `n_iters` — the same rule as a refused batch.
 - `all_stalled`: with restarts off the flock deadlocks, with no path able to move
   and no path owing a start. It likewise does not count in `n_iters`.
@@ -605,9 +604,9 @@ otherwise the serial ruler would erase `f`'s cost entirely in a run with the
 value-only seam connected. The counts report and do not budget: the budget's
 `stop` query never reads them.
 
-**How many batches a round spends is decided by the evaluation seam**:
+**How many batches an iteration spends is decided by the evaluation seam**:
 
-- **With `eval_f` connected**: each judged trial serves `f` only, and the round's
+- **With `eval_f` connected**: each judged trial serves `f` only, and the iteration's
   one fused batch (`settle`) buys everything still owed — each accepted trial's
   gradient, and every unjudged winner's and redraw start's value and gradient,
   since both of those defer both halves. So an `n_alpha`-candidate step spends at

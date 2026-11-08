@@ -125,7 +125,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     so a run never spells it twice. Iteration 0 needs no special case in the move
     loop: no path holds a point yet, and a path without a point restarts, so the
     first move places the whole flock as one fused batch - which is why the run's
-    schedule sees iteration 0 as the placement round. It is `x0` where one was
+    schedule sees iteration 0 as the flock's placement. It is `x0` where one was
     handed
     in, and otherwise one start per path from the global model. A start whose
     served value or gradient comes back non-finite stalls its path on arrival;
@@ -173,7 +173,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             optional feasibility mask. A mask holds 0/1 (or
             booleans) and nothing else: 0 marks a point infeasible, 1 marks it
             feasible, and any other value is refused rather than read.
-        n_paths: how many paths to drive; one point per path per iteration.
+        n_paths: how many paths to drive, one current point each.
         domain: the run's box, a `Domain`.
         x0: the caller's flock: one start per path, shape ``(n_paths, d)``,
             placed by iteration 0 exactly where given and never used again.
