@@ -42,9 +42,9 @@ class _PathState:
     # the curvature estimate: seeded by `restart`, blended once per committed step
     s_ema: jnp.ndarray
     y_ema: jnp.ndarray
-    # the direction's history: past step-start gradients, maintained at every
-    # `mu` (0 only leaves it out of the direction), re-seeded at every restart
-    # to that start's own gradient, so the history never crosses one
+    # the direction's history: the gradient at each committed point, EMA'd at
+    # `mu` (0 only leaves it out of the direction), re-seeded at every restart to
+    # that start's own gradient, so the history never crosses one
     m: jnp.ndarray
     # the stopping test's anchor: the gradient at the path's cold start
     g0: jnp.ndarray
@@ -253,14 +253,16 @@ class DiagonalPreconditioner(LocalSolver):
     def propose(self, i: int, p: PathPoint) -> jnp.ndarray:
         """Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x - alpha·d⊙m.
 
-        `m` is the bare gradient `g` at ``mu = 0``, and the current momentum
-        ``(1 - mu)·g + mu·m_prev`` otherwise.
+        ``m`` is the history ``fold`` left behind: the EMA over the gradients at
+        committed points, which includes the gradient of the point this step
+        starts from. At ``mu = 0`` the last fold stored that gradient outright,
+        so the direction is the bare gradient.
         """
         state = self._state[i]
         if state.warm_up:
             return p.x + state.alpha * (-p.g)
         diag = self._diag(i, p.g)
-        return p.x - state.alpha * (diag * self._blended_momentum(state, p.g))
+        return p.x - state.alpha * (diag * state.m)
 
     def verdict(
         self,
@@ -320,22 +322,24 @@ class DiagonalPreconditioner(LocalSolver):
         Only the winner is folded, never an intermediate grid sample: an
         intermediate secant is a step the path never took, and folding it would
         smear the magnitude EMAs. The engine calls this with the exact point it
-        just committed, so the folded secant is the accepted step. The first
-        call after a restart is the warm-up pair and seeds the EMAs outright;
-        later calls blend at beta - the record's ``warm_up`` is that same
-        first-fold marker, cleared here rather than in ``verdict``. This is also
-        where a step is re-armed: a ruling the engine did not commit (a winner
-        whose gradient it refused) leaves the method untouched rather than
-        half-reset.
+        just committed, so both folds see what the step observed: the pair
+        (Δx, Δg) for the curvature, and the gradient at the point arrived at for
+        the momentum. The first call after a restart is the warm-up pair and
+        seeds the secant EMAs outright; later calls blend at beta - the record's
+        ``warm_up`` is that same first-fold marker, cleared here rather than in
+        ``verdict``. This is also where a step is re-armed: a ruling the engine
+        did not commit (a winner whose gradient it refused) leaves the method
+        untouched rather than half-reset.
         """
         state = self._state[i]
         s_ema, y_ema = self._blended_secant(state, best.x - p.x, best.g - p.g)
-        # The step's start gradient, folded only now that the step has committed,
-        # so the momentum the next propose reads is history and never the
-        # gradient that propose is about to use. The first fold after a restart
-        # seeds it outright, for the same reason that fold seeds the EMAs
-        # outright: there is no history yet to blend against.
-        m = self._blended_momentum(state, p.g)
+        # Folded only now that the step has committed, and folded from the point
+        # it committed to: the gradient this step started from was already spent
+        # on this step's direction, so the arriving one is the news. `restart`
+        # seeds the chain with the start's own gradient, which is why every fold
+        # after it blends rather than seeding; at mu = 0 the blend keeps only the
+        # arriving gradient, which is the default's bare direction.
+        m = self.mu * state.m + (1.0 - self.mu) * best.g
         self._state[i] = replace(
             state,
             warm_up=False,
@@ -373,21 +377,6 @@ class DiagonalPreconditioner(LocalSolver):
         # anywhere; a derivative of this line would see it, so revisit then.
         d = jnp.where(den > 0.0, state.s_ema / den, 0.0)
         return jnp.sqrt(d) if self.moment == "rms" else d
-
-    def _blended_momentum(self, state: _PathState, g: jnp.ndarray) -> jnp.ndarray:
-        """Return the momentum to blend into the direction: mu·m_prev + (1 - mu)·g.
-
-        ``m_prev`` (``state.m``) is history only - the past step-start
-        gradients, folded by `fold` once each step has committed - so this
-        step's own gradient enters fresh, at weight ``1 - mu``. With ``mu = 0``
-        this is ``g`` exactly, whatever the history holds: the blend carries no
-        memory of it, which is the default's bare gradient.
-
-        A warm-up record seeds outright instead of blending, the way
-        ``_blended_secant`` seeds its EMAs: at a cold start ``m`` and ``g`` are
-        one gradient, so blending would only add a rounding step.
-        """
-        return g if state.warm_up else self.mu * state.m + (1.0 - self.mu) * g
 
     def _blended_secant(
         self, state: _PathState, s: jnp.ndarray, y: jnp.ndarray

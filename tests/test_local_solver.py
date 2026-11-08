@@ -335,9 +335,10 @@ def _solver_with_secant(
 
     The step start's gradient is ``g - y``, so the committed point's gradient is
     exactly ``g``: the same secant the engine would have folded after a step of
-    ``s``. That first fold also seeds the momentum EMA with the step start's
-    gradient, so ``m_prev = g - y`` here - history only; the ``g`` the next
-    ``propose`` mixes in at weight ``1 - mu`` is the live one.
+    ``s``. ``restart`` seeds the momentum chain with the step start's gradient and
+    that first fold blends the committed ``g`` into it, so the record is left
+    holding ``mu·(g - y) + (1 - mu)·g`` - history only; the next ``propose``
+    reads it as is.
     """
     solver = DiagonalPreconditioner(mu=mu, theta=0.0, n_alpha=n_alpha)
     start = PathPoint(x=jnp.zeros_like(g), f=1.0, g=g - y)
@@ -352,13 +353,13 @@ def _direction(solver: DiagonalPreconditioner, p: PathPoint) -> jnp.ndarray:
     return (p.x - solver.propose(0, p)) / solver._state[0].alpha
 
 
-def test_diag_momentum_is_the_current_gradient_blend() -> None:
+def test_diag_momentum_is_the_committed_gradient_blend() -> None:
     """The direction is -d⊙m with m = (1-mu)·g + mu·m_prev, unprojected.
 
     No projection means the descent gain on g is *not* pinned to the plain
     step's: the blend adds ``mu·m_prev`` wherever the history helps or opposes
-    g. What the step must reproduce exactly is the weighted average of the live
-    gradient and the seeded history, through the same d.
+    g. What the step must reproduce exactly is the weighted average of the
+    committed point's gradient and the history the commit folded it into.
     """
     g = jnp.array([0.5, -1.5])
     mu = 0.5
@@ -367,7 +368,7 @@ def test_diag_momentum_is_the_current_gradient_blend() -> None:
     d_plain = _direction(plain, at_plain)  # d⊙g, alpha divided out
     d_mom = _direction(mom, at_mom)
     d = d_plain / g  # per-coordinate d; both solvers fold the same secant
-    m_prev = g - Y_MOM  # the fold seeded m with the step start's gradient
+    m_prev = g - Y_MOM  # restart seeded m with the step start's gradient
     assert close(d_mom, d * ((1.0 - mu) * g + mu * m_prev), 1e-12)
     assert not close(d_mom, d_plain, 1e-9)  # the momentum really was blended in
     # Unprojected: the gain is free to move off the plain step's value.
@@ -384,9 +385,8 @@ def test_diag_momentum_folds_only_at_the_commit_not_in_propose() -> None:
     g = jnp.array([0.5, -1.5])
     solver, at = _solver_with_secant(0.5, g, n_alpha=2)
     m_before = solver._state[0].m
-    # The history is the folded pair's step start, (g - y) - not the g of the
-    # step this propose is about to take.
-    assert close(m_before, at.g - Y_MOM, 1e-12)
+    # The fold already blended the committed g into the seeded (g - y).
+    assert close(m_before, 0.5 * (at.g - Y_MOM) + 0.5 * at.g, 1e-12)
     first = solver.propose(0, at)
     assert jnp.array_equal(solver._state[0].m, m_before)  # propose wrote nothing
     assert solver.verdict(0, at, first, 1.0) == "retry"  # alpha *= backtrack
@@ -397,31 +397,38 @@ def test_diag_momentum_folds_only_at_the_commit_not_in_propose() -> None:
 
 
 def test_diag_restart_drops_the_momentum_history() -> None:
-    """A restart re-seeds the momentum EMA from the new start's gradient."""
+    """A restart re-seeds the momentum chain from the new start's gradient.
+
+    The seed is the restart's own write, not a later fold's: the fold that
+    follows only blends one gradient into it, so what the old path had
+    accumulated cannot survive at any weight - the same reason S and Y are
+    re-seeded outright rather than blended against.
+    """
     g = jnp.array([0.5, -1.5])
     solver, at = _solver_with_secant(0.5, g)
-    assert close(solver._state[0].m, at.g - Y_MOM, 1e-12)  # history is the step start
+    assert close(solver._state[0].m, 0.5 * (at.g - Y_MOM) + 0.5 * at.g, 1e-12)
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
     solver.restart(0, fresh)
-    # `restart` only disarms the secant; the re-seed is the next fold's, exactly
-    # as S and Y are re-seeded by the warm-up pair rather than by restart.
+    assert close(solver._state[0].m, fresh.g, 1e-12)  # nothing crossed the restart
     landed = PathPoint(x=fresh.x + S_MOM, f=0.5, g=fresh.g + Y_MOM)
     solver.fold(0, fresh, landed)
-    assert close(solver._state[0].m, fresh.g, 1e-12)  # nothing crossed the restart
+    assert close(solver._state[0].m, 0.5 * fresh.g + 0.5 * landed.g, 1e-12)
 
 
-def test_diag_mu_zero_reads_no_history() -> None:
-    """The default keeps no memory in the direction: a weight of 0 spends none.
+def test_diag_mu_zero_leaves_no_history_behind() -> None:
+    """The default keeps no memory in the direction: a weight of 0 stores none.
 
     The record still folds a history at every ``mu`` - it costs one vector and
     is there for the moment the knob is turned up - so the property worth
-    pinning is that scrambling it moves no bit of the direction.
+    pinning is that the fold at ``mu = 0`` writes the arriving gradient outright,
+    whatever the history held.
     """
     g = jnp.array([0.5, -1.5])
     solver, at = _solver_with_secant(0.0, g)
-    before = _direction(solver, at)
     solver._state[0] = replace(solver._state[0], m=jnp.array([1e6, -1e6]))
-    assert jnp.array_equal(_direction(solver, at), before)
+    landed = PathPoint(x=at.x + S_MOM, f=0.25, g=jnp.array([1.0, 2.0]))
+    solver.fold(0, at, landed)
+    assert jnp.array_equal(solver._state[0].m, landed.g)
 
 
 def test_diag_momentum_moves_only_where_d_has_support() -> None:
@@ -438,8 +445,8 @@ def test_diag_momentum_moves_only_where_d_has_support() -> None:
     solver.restart(0, start)
     # y = [-1, 0] against s = [1, 0] leaves d = [1, 0]; g lives on coordinate 1.
     at = PathPoint(x=start.x + jnp.array([1.0, 0.0]), f=0.5, g=jnp.array([0.0, 0.5]))
-    solver.fold(0, start, at)  # seeds m = start.g, nonzero on coordinate 0
-    assert close(solver._state[0].m, start.g, 1e-12)
+    solver.fold(0, start, at)  # m = ½·start.g + ½·at.g, live on coordinate 0
+    assert close(solver._state[0].m, 0.5 * start.g + 0.5 * at.g, 1e-12)
     step = at.x - solver.propose(0, at)
     assert close(step[1], 0.0, 1e-12)  # d = 0 there: no step, history or not
     assert not close(step[0], 0.0, 1e-12)  # d > 0 and history live: it moves
