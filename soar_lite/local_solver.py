@@ -260,7 +260,7 @@ class DiagonalPreconditioner(LocalSolver):
         if state.warm_up:
             return p.x + state.alpha * (-p.g)
         diag = self._diag(i, p.g)
-        return p.x - state.alpha * (diag * self._blended_momentum(i, p.g))
+        return p.x - state.alpha * (diag * self._blended_momentum(state, p.g))
 
     def verdict(
         self,
@@ -269,7 +269,7 @@ class DiagonalPreconditioner(LocalSolver):
         x: jnp.ndarray,
         f: float,
     ) -> Verdict:
-        """Give up at a stationary point; otherwise count one alpha-grid sample.
+        """Give up at a stationary point, else count one alpha-grid sample.
 
         Only consulted for a path that answered True to ``needs_verdict``, and
         the phase does not enter: ``n_alpha > 1`` rules a warm-up grid and a
@@ -278,13 +278,23 @@ class DiagonalPreconditioner(LocalSolver):
         judge geometry or value, so both are dropped here: this method's ruling
         is the count alone.
 
-        Which sample won is the engine's per-step argmin, and it takes only
-        finite ones, so finiteness is not ruled on here as well - a step whose
-        samples were all non-finite leaves the engine no winner to commit, and
-        the path stalls there (`Verdict` says as much for "accept" with no
-        finite trial). The stopping test reads ``p``, the step's start, whose
-        gradient a path always has - a trial's own gradient is not read, since
-        the engine may buy it only for the step's winner.
+        The grid's rule is a count, not a comparison: every sample but the last
+        answers "retry", shrinking alpha one spacing down as it does, and the
+        last answers "accept", handing the engine its per-step argmin. Which
+        sample won is that argmin's choice, and it takes only finite ones, so
+        finiteness is not ruled on here as well - a step whose samples were all
+        non-finite leaves the engine no winner to commit, and the path stalls
+        there (`Verdict` says as much for "accept" with no finite trial).
+
+        Two rulings in one call, so this is a command wearing a query's
+        signature: the shrink is bookkeeping the next ``propose`` reads, and it
+        stays here because the contract gives the ruling and the grid a single
+        call site - no later call exists to defer it to, and splitting them
+        would let a caller rule twice on one sample.
+
+        The stopping test reads ``p``, the step's start, whose gradient a path
+        always has; a trial's own gradient is not read, since the engine may buy
+        it only for the step's winner.
         """
         del x, f
 
@@ -295,7 +305,14 @@ class DiagonalPreconditioner(LocalSolver):
         # true only for a zero-gradient start.
         if self._stationary(i, p):
             return "give_up"
-        return self._step_verdict(i)
+        state = self._state[i]
+        n_served = state.alpha_sample + 1
+        if n_served < self.n_alpha:
+            self._state[i] = replace(
+                state, alpha_sample=n_served, alpha=state.alpha * self.backtrack
+            )
+            return "retry"
+        return "accept"
 
     def fold(self, i: int, p: PathPoint, best: PathPoint) -> None:
         """Fold the engine's committed argmin for path i (the step that won).
@@ -312,15 +329,13 @@ class DiagonalPreconditioner(LocalSolver):
         half-reset.
         """
         state = self._state[i]
-        s_ema, y_ema = self._blended_secant(
-            state, best.x - p.x, best.g - p.g, seed=state.warm_up
-        )
+        s_ema, y_ema = self._blended_secant(state, best.x - p.x, best.g - p.g)
         # The step's start gradient, folded only now that the step has committed,
         # so the momentum the next propose reads is history and never the
         # gradient that propose is about to use. The first fold after a restart
         # seeds it outright, for the same reason that fold seeds the EMAs
         # outright: there is no history yet to blend against.
-        m = p.g if state.warm_up else self.mu * state.m + (1.0 - self.mu) * p.g
+        m = self._blended_momentum(state, p.g)
         self._state[i] = replace(
             state,
             warm_up=False,
@@ -332,6 +347,19 @@ class DiagonalPreconditioner(LocalSolver):
     def _reset_step(self, i: int) -> None:
         """Arm path i for a fresh step: full step, no alpha-grid sample served yet."""
         self._state[i] = self._state[i].armed(self.alpha0)
+
+    def _stationary(self, i: int, p: PathPoint) -> bool:
+        """Return whether path i's gradient has hit its floor: ‖g‖ ≤ τ_rel·‖g_0‖.
+
+        The anchor is ``g_0``, the gradient at the path's cold start, so the test
+        at the start itself reads ‖g_0‖ ≤ τ·‖g_0‖ and holds only for a
+        zero-gradient one. Read off the step's starting point ``p`` - the point
+        ``verdict`` also reads - so the ask in ``needs_verdict`` and the ruling
+        in ``verdict`` can never disagree.
+        """
+        return bool(
+            jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self._state[i].g0),
+        )
 
     def _diag(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
         """Return the per-coordinate inverse curvature d_i for path i at gradient g."""
@@ -350,76 +378,27 @@ class DiagonalPreconditioner(LocalSolver):
         d = jnp.where(den > 0.0, state.s_ema / den, 0.0)
         return jnp.sqrt(d) if self.moment == "rms" else d
 
-    def _blended_momentum(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
-        """Return path i's current momentum: (1 - mu)·g + mu·m_prev.
+    def _blended_momentum(self, state: _PathState, g: jnp.ndarray) -> jnp.ndarray:
+        """Return the momentum to blend into the direction: mu·m_prev + (1 - mu)·g.
 
         ``m_prev`` (``state.m``) is history only - the past step-start
         gradients, folded by `fold` once each step has committed - so this
         step's own gradient enters fresh, at weight ``1 - mu``. With ``mu = 0``
         this is ``g`` exactly, whatever the history holds: the blend carries no
         memory of it, which is the default's bare gradient.
+
+        A warm-up record seeds outright instead of blending, the way
+        ``_blended_secant`` seeds its EMAs: at a cold start ``m`` and ``g`` are
+        one gradient, so blending would only add a rounding step.
         """
-        return (1.0 - self.mu) * g + self.mu * self._state[i].m
-
-    def _stationary(self, i: int, p: PathPoint) -> bool:
-        """Return whether path i's gradient has hit its floor: ‖g‖ ≤ τ_rel·‖g_0‖.
-
-        The anchor is ``g_0``, the gradient at the path's cold start, so the test
-        at the start itself reads ‖g_0‖ ≤ τ·‖g_0‖ and holds only for a
-        zero-gradient one. Read off the step's starting point ``p`` - the point
-        ``verdict`` also reads - so the ask in ``needs_verdict`` and the ruling
-        in ``verdict`` can never disagree.
-        """
-        return bool(
-            jnp.linalg.norm(p.g) <= self.tau_rel * jnp.linalg.norm(self._state[i].g0),
-        )
-
-    def _step_verdict(self, i: int) -> Verdict:
-        """Count one alpha-grid sample; never fold here.
-
-        Reached by the engine only with ``n_alpha >= 2``, in either phase: a
-        single-sample step answers False to ``needs_verdict`` and is committed
-        unruled, and a path at its stopping test gives up in ``verdict`` before
-        reaching here. One grid of ``n_alpha`` samples along the current step
-        direction, shrinking alpha by the grid's spacing each retry; the last
-        sample closes the step with "accept", handing the engine its per-step
-        argmin, which ``fold`` receives only once it passes the engine's finite
-        gate.
-
-        Nothing non-finite may reach ``fold``: one inf folded into Y leaves
-        den = inf forever, and that coordinate never steps again. That gate is
-        the engine's, not this method's: a non-finite sample drops out of the
-        candidate set - the sweep keeps shrinking alpha, a real line search
-        probing past a NaN - and a grid whose samples were all non-finite leaves
-        the engine no winner to commit, so the path stalls there.
-
-        This is a command wearing a query's signature: besides the ruling it
-        moves alpha one grid spacing down, which the next ``propose`` reads. The
-        two stay in one call because the contract gives the ruling and the grid
-        a single call site - there is no later call to defer the bookkeeping to -
-        and splitting the ruling from the grid it counts would let a caller rule
-        twice on one sample.
-        """
-        state = self._state[i]
-        n_served = state.alpha_sample + 1
-        if n_served < self.n_alpha:
-            self._state[i] = replace(
-                state, alpha_sample=n_served, alpha=state.alpha * self.backtrack
-            )
-            return "retry"
-        return "accept"
+        return g if state.warm_up else self.mu * state.m + (1.0 - self.mu) * g
 
     def _blended_secant(
-        self,
-        state: _PathState,
-        s: jnp.ndarray,
-        y: jnp.ndarray,
-        *,
-        seed: bool,
+        self, state: _PathState, s: jnp.ndarray, y: jnp.ndarray
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Return the magnitude EMAs of the secant pair (s, y), blended in.
 
-        A ``seed`` fold (the warm-up pair) replaces the EMA outright (weight 1,
+        A warm-up record (no pair in hand yet) seeds the EMA outright (weight 1,
         no β-mixing against a zero); later pairs blend at β. Signed quantities
         are reduced to magnitudes first (|·| for "abs", squaring for "rms"),
         which is what makes the ratio positive and cancels the sign cancellation
@@ -429,7 +408,7 @@ class DiagonalPreconditioner(LocalSolver):
             s_mag, y_mag = jnp.abs(s), jnp.abs(y)
         else:
             s_mag, y_mag = jnp.square(s), jnp.square(y)
-        if seed:
+        if state.warm_up:
             return s_mag, y_mag
         return (
             self.beta * state.s_ema + (1.0 - self.beta) * s_mag,
