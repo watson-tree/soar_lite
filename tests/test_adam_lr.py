@@ -20,7 +20,7 @@ pytest.importorskip("matplotlib")
 pytest.importorskip("optax")
 
 from experiments import compare_baselines as harness
-from experiments import problems
+from experiments import problems, record
 
 
 @pytest.fixture(autouse=True)
@@ -29,8 +29,8 @@ def _isolated_roots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Keep the refusal away from the real results and figures trees."""
-    monkeypatch.setattr(harness, "_RECORD_RESULTS", tmp_path / "results")
-    monkeypatch.setattr(harness, "_RECORD_FIGURES", tmp_path / "figures")
+    monkeypatch.setattr(record, "RECORD_RESULTS", tmp_path / "results")
+    monkeypatch.setattr(record, "RECORD_FIGURES", tmp_path / "figures")
 
 
 def test_every_problem_the_harness_builds_has_a_tuned_lr() -> None:

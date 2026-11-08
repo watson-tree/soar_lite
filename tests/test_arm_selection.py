@@ -9,13 +9,9 @@ old one, at the old budget, and nothing says so.
 Needs the ``exp`` dependency group (the harness imports matplotlib and optax), so
 a plain ``dev`` test run skips this file instead of failing it.
 
-The seam under test is private on purpose: ``main`` is the public entry, but a
-legal selection makes it measure, so only ``_selection`` can be asked what it
-picks without running an arm.
+`selection` is what a filter is asked of: `main` measures, so asking it what a
+filter picks would run an arm to learn a set of names.
 """
-
-# ruff: noqa: SLF001
-# pyright: reportPrivateUsage=false
 
 import os
 from pathlib import Path
@@ -27,6 +23,7 @@ pytest.importorskip("matplotlib")
 pytest.importorskip("optax")
 
 from experiments import compare_baselines as harness
+from experiments import record
 
 
 @pytest.fixture(autouse=True)
@@ -35,8 +32,8 @@ def _isolated_roots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Point both output trees at a temp dir so a refusal writes nothing anywhere."""
-    monkeypatch.setattr(harness, "_RECORD_RESULTS", tmp_path / "results")
-    monkeypatch.setattr(harness, "_RECORD_FIGURES", tmp_path / "figures")
+    monkeypatch.setattr(record, "RECORD_RESULTS", tmp_path / "results")
+    monkeypatch.setattr(record, "RECORD_FIGURES", tmp_path / "figures")
 
 
 def _run(*argv: str) -> str:
@@ -73,7 +70,7 @@ def test_names_that_never_meet_in_one_arm_are_refused() -> None:
 
 def test_a_legal_filter_selects_exactly_the_pair_it_names() -> None:
     """Naming the arm the problem actually has leaves one pair, and only that one."""
-    selected = harness._selection(
+    selected = harness.selection(
         "smooth",
         frozenset({"diag_quad_d100_cond10000"}),
         frozenset({"adam-lr0.01"}),

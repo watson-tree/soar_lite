@@ -22,6 +22,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 pytest.importorskip("matplotlib")
 pytest.importorskip("optax")
 
+from experiments import appendix, figures, panels, record
 from experiments import compare_baselines as harness
 
 
@@ -31,8 +32,8 @@ def _isolated_roots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Keep the record's roots out of the repo, and out of the rest of the session."""
-    monkeypatch.setattr(harness, "_RECORD_RESULTS", tmp_path / "results")
-    monkeypatch.setattr(harness, "_RECORD_FIGURES", tmp_path / "figures")
+    monkeypatch.setattr(record, "RECORD_RESULTS", tmp_path / "results")
+    monkeypatch.setattr(record, "RECORD_FIGURES", tmp_path / "figures")
 
 
 @pytest.mark.parametrize(
@@ -56,10 +57,10 @@ def test_quick_decides_the_budget_the_sweep_measures_at(
     def _record(_roots: harness.Roots, n_seeds: int, max_steps: int) -> None:
         handed.update(seeds=n_seeds, max_steps=max_steps)
 
-    monkeypatch.setattr(harness, "run_lr_sweep", _record)
-    monkeypatch.setattr(harness, "run_invariance", _record)
+    monkeypatch.setattr(appendix, "run_lr_sweep", _record)
+    monkeypatch.setattr(appendix, "run_invariance", _record)
     monkeypatch.setattr(
-        harness,
+        panels,
         "run_panel",
         lambda _roots, _group, n_seeds, max_steps, **_rest: _record(
             _roots,
@@ -67,7 +68,7 @@ def test_quick_decides_the_budget_the_sweep_measures_at(
             max_steps,
         ),
     )
-    monkeypatch.setattr(harness, "plot_panel", lambda *_args: None)
+    monkeypatch.setattr(figures, "plot_panel", lambda *_args: None)
 
     harness.main(argv)
 
@@ -80,9 +81,9 @@ def test_out_moves_both_roots_and_survives_a_second_call(
 ) -> None:
     """Both roots follow the name, and a re-run cell lands in the same place."""
     drawn: list[Path] = []
-    monkeypatch.setattr(harness, "run_panel", lambda *_args, **_rest: None)
+    monkeypatch.setattr(panels, "run_panel", lambda *_args, **_rest: None)
     monkeypatch.setattr(
-        harness,
+        figures,
         "plot_panel",
         lambda roots, panel: drawn.append(roots.panel_dir(panel)),
     )
@@ -107,7 +108,7 @@ def test_out_refuses_a_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A prefix is one directory name; anything else would escape both roots."""
-    monkeypatch.setattr(harness, "plot_panel", lambda *_args: None)
+    monkeypatch.setattr(figures, "plot_panel", lambda *_args: None)
 
     with pytest.raises(SystemExit, match="one directory name"):
         harness.main(["--groups", "smooth", "--out", out])
@@ -120,8 +121,8 @@ def test_quick_and_out_are_two_answers_to_one_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Two namespaces for one run is refused, not silently resolved."""
-    monkeypatch.setattr(harness, "run_panel", lambda *_args, **_rest: None)
-    monkeypatch.setattr(harness, "plot_panel", lambda *_args: None)
+    monkeypatch.setattr(panels, "run_panel", lambda *_args, **_rest: None)
+    monkeypatch.setattr(figures, "plot_panel", lambda *_args: None)
 
     with pytest.raises(SystemExit, match="pick one"):
         harness.main(["--quick", "--out", "demo"])
