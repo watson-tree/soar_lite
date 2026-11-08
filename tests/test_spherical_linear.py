@@ -26,7 +26,7 @@ from soar_lite import (
     Projection,
     SphereProjection,
 )
-from soar_lite.global_model.spherical_linear import _log_h
+from soar_lite.global_model.blr import _log_h
 
 
 def _grid_minimize(
