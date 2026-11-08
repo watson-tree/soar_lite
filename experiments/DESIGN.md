@@ -86,7 +86,7 @@ Three run groups plus two appendix panels, one role each:
      response onto the target, never whether it finds the design. `pk_chain`
      is where recovery is the question, and it was built so that its rates are
      identifiable.
-     Landscape: non-convex via resonance/interference — *not* a funnel (see Risk).
+     Landscape: non-convex via resonance/interference — *not* a funnel (see Risks).
    - **Compartment kinetics** (time domain). A bidirectional chain of `n`
      compartments exchanging first-order transfer rates `f_i` / `b_i` and
      eliminating at `gamma_i`, each in its own unit (1/h) and spanning four
@@ -171,31 +171,16 @@ there while dropping real coupling is what that panel measures, not something
 asserted up front.
 
 A third side used to close that line: gradient-free multimodal relief (Ackley),
-where the gradient says nothing about where to move next and neither method
-moves. It is no longer a panel — every arm froze at the same plateau, so it
-discriminated nothing (see `DEPRECATED.md`). The conclusion it demonstrated is
-stated here rather than drawn: from a regular start, no first-order method
-reaches the funnel.
+where the gradient says nothing about where to move next. It is no longer a
+panel — it discriminated nothing (see Risks, and `DEPRECATED.md` for the
+readings). The conclusion it demonstrated is stated here rather than drawn: from
+a regular start, no first-order method reaches the funnel.
 
 The `mu=0.9` column opens a second axis in the same panels, and its verdict is
 not uniform: a longer momentum window is a trade, and on the two real problems
 it lands on opposite sides of even. Neither real problem is on the rotated side
 of that dividing line, so the panel does not measure it — that gap is recorded
 in `RESULTS.md`, not papered over.
-
-## dfbench (Learn2Design-2026) relationship
-
-- **Not in the main figures.** Independent-repo decision: dfbench is final
-  real-world validation only.
-- What we borrowed is the **recipe** (from its `Problems.md`), three separable
-  ingredients: (1) heterogeneous-unit physical parameters; (2) log-scale
-  frequency-response mismatch loss over a log-spaced grid; (3) physical
-  constraints as squashed-ReLU penalties with a separate feas flag. Plus a
-  synthetic reference target so `f*` stays known.
-- If the optional final panel is added later: `dfbench` + `VoyagerProblem(
-  n_frequencies=20)` as a dependency-group opt-in; wrap its `value_and_grad` +
-  `is_feasible` into our `(f, ∇f, feas)` oracle seam. `dataset.h5` (72 MB) is
-  only a sampling prior and is **not** needed.
 
 ## Methods × panels
 
@@ -225,13 +210,12 @@ step moves exactly one knob (`n_paths` or `mu`); restart is off in every arm:
 
 The width step (`n_paths` 1 → 16) and the momentum step (`mu` default → 0.9)
 are the single-attribute moves; a single `n_paths=16` curve that also flipped
-restart would charge the whole gap to "parallelism". Restart is not a step the
-panels take, and it is off everywhere (see Goal): that is what makes
-soar-lite's stopping rule symmetric with Adam's and L-BFGS-B's.
+restart would charge the whole gap to "parallelism".
 
 L-BFGS-B appears only on the smooth and headline panels. Its role there is the *ceiling
 reference* — how close soar-lite's diagonal secant gets to a full-memory
-second-order method on smooth, convex landscape. That role does not exist on
+second-order method on smooth, convex landscape (on the compartment problem it is
+not even that; see Risks). That role does not exist on
 the multimodal panel: the question there is the descent *rate* where progress is
 piecewise, and a full-memory method answers a different one. L-BFGS-B is
 second-order and restart-free — on Rastrigin it would dive
@@ -241,13 +225,12 @@ also gets stuck", which says nothing about how a first-order memory shapes the
 way down. It is also serial (not the batched cost axis; see Budget) and its
 line search is fragile on Rastrigin's cos oscillation.
 
-Two rules keep the momentum arm from being over-read. A `mu > 0` is a
-**trade, not a uniform win**: it costs where the choice of basin dominates and
-pays where off-diagonal coupling does, and the lattice landscape that pays the
-cost is not the headline. And on a landscape where every method converges, the
-number to read is the **rate**, not the floor reached — each method stops on its
-own criterion, so a floor at machine precision is a statement about the stopping
-rule rather than about the algorithm.
+A `mu > 0` is read as a trade (Goal): it costs where the choice of basin
+dominates and pays where off-diagonal coupling does. And on a landscape where
+every method converges, the number to read is the **rate**, not the floor
+reached — each method stops on its own criterion, so a floor at machine
+precision is a statement about the stopping rule rather than about the
+algorithm.
 
 Adam learning rate is **per-problem grid-tuned**: the picks span over two
 orders of magnitude (diag 1e-2 → rotated quadratic and oscillator
@@ -341,8 +324,8 @@ settled against: the residual error is in the step's *direction*, not its length
 2. `experiments/problems.py` — the three groups (`headline`, `smooth`,
    `multimodal`) + the invariance and `all` builders, each problem
    exposing the soar-lite seam `x_batch → (loss, grad, feas)`.
-3. `experiments/methods.py` — drivers: soar-lite n_paths=1 / 16 at default `mu`,
-   plus the `mu=0.9` arm, Adam, L-BFGS-B. The restart-model factory
+3. `experiments/methods.py` — one driver per arm (the rosters are in
+   `Methods × panels`). The restart-model factory
    (`surrogate_minimize` + the identity / sphere projections) stays wired, but
    no panel arms it.
 4. `experiments/compare_baselines.py` — harness over `N=20` seeds, one raw trace
@@ -358,30 +341,46 @@ settled against: the residual error is in the step's *direction*, not its length
 - Switch notebook install source git → PyPI; add Open-in-Colab badge after
   publication.
 
-## Risk to remember
+## Risks and known limitations
 
-The headline problems' "multimodality" is resonance/interference-type
-non-convexity plus, in the compartment case, coupled near-flat directions where
-several rates move together; **not** the funnel type that Rastrigin
-provides. The two complement each other; the headline must not be counted as
-covering the funnel slot. The banded-coupling question — whether the diagonal
-approximation's "approximately right, not exact" band lands the discriminator
-on soar-lite's side — is now measured on both headline problems, and the answer
-is yes at equal budget; `RESULTS.md` holds the numbers and the caveats,
-including that Adam was still descending when the budget ran out. Note also
-that L-BFGS-B is *not* a ceiling on the compartment problem: its median loses to
-the serial arm and it fails outright on a good fraction of seeds, because a
-full-memory serial line search with no per-coordinate scaling walks into a bad
-basin. Expecting the smooth panel's ceiling to transfer here would be wrong.
+- **The headline is not the funnel.** The headline problems' "multimodality" is
+  resonance/interference-type non-convexity plus, in the compartment case,
+  coupled near-flat directions where several rates move together; **not** the
+  funnel type that Rastrigin provides. The two complement each other; the
+  headline must not be counted as covering the funnel slot.
+- **L-BFGS-B is not a ceiling on the compartment problem.** Its median loses to
+  the serial arm and it fails outright on a good fraction of seeds, because a
+  full-memory serial line search with no per-coordinate scaling walks into a bad
+  basin. Expecting the smooth panel's ceiling to transfer here would be wrong.
+- **The funnel slot has a deliberate blind spot.** No saddle/vanishing-gradient
+  handling is built in: a Zhang-Li power iteration triggered on a small gradient
+  norm was considered and rejected, because multi-path sampling already covers
+  that regime and the engine keeps a restart knob for it, so the extra
+  complexity would buy nothing. That blind spot was demonstrated on Ackley,
+  where every arm froze at its starting plateau — which is why it is retired
+  (`DEPRECATED.md`); rastrigin is the multimodal problem that remains, and
+  `RESULTS.md` holds its numbers.
 
-The funnel slot has a known blind spot, and it is deliberate: no
-saddle/vanishing-gradient handling is built in. A Zhang-Li power iteration
-triggered on a small gradient norm was considered and rejected — multi-path
-sampling already covers that regime, and the engine keeps a restart knob for it,
-so the extra complexity would buy nothing. That blind spot was demonstrated on
-Ackley, where every arm froze at its starting plateau — which is why it is
-retired (`DEPRECATED.md`); rastrigin is the multimodal problem that remains,
-and `RESULTS.md` holds its numbers.
+The banded-coupling question — whether the diagonal approximation's
+"approximately right, not exact" band lands the discriminator on soar-lite's
+side — is now measured on both headline problems, and the answer is yes at equal
+budget; `RESULTS.md` holds the numbers and the caveats, including that Adam was
+still descending when the budget ran out. That is a finding, not a caveat, which
+is why it sits outside the list.
+
+## Appendix: dfbench (Learn2Design-2026) relationship
+
+- **Not in the main figures.** Independent-repo decision: dfbench is final
+  real-world validation only.
+- What we borrowed is the **recipe** (from its `Problems.md`), three separable
+  ingredients: (1) heterogeneous-unit physical parameters; (2) log-scale
+  frequency-response mismatch loss over a log-spaced grid; (3) physical
+  constraints as squashed-ReLU penalties with a separate feas flag. Plus a
+  synthetic reference target so `f*` stays known.
+- If the optional final panel is added later: `dfbench` + `VoyagerProblem(
+  n_frequencies=20)` as a dependency-group opt-in; wrap its `value_and_grad` +
+  `is_feasible` into our `(f, ∇f, feas)` oracle seam. `dataset.h5` (72 MB) is
+  only a sampling prior and is **not** needed.
 
 ## Readings live elsewhere
 
