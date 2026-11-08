@@ -12,8 +12,8 @@ path); a
 it; a path's **warm-up** is its first step (no secant pair yet) and **steady
 state** is every step after one exists.
 
-Two interfaces supply the method names used below: `propose(n, domain)` and
-`observe` belong to `GlobalModel`, while `propose(i)`, `needs_verdict(i)`,
+Two interfaces supply the method names used below: `propose(n_points, domain)`
+and `observe` belong to `GlobalModel`, while `propose(i)`, `needs_verdict(i)`,
 `verdict` and `fold` belong to `LocalSolver` — two different `propose` methods,
 each called with its own arguments. The engine's own internals — `settle`,
 `_place`, `_advance` — are ordinary steps, explained where they run, and not
@@ -208,6 +208,10 @@ pair yet, so `d` cannot be estimated and the direction is `−g₀`; once the fi
 `μ = 0` (see [Momentum](#momentum)). Everything except
 the direction (`alpha0`, `backtrack`, `n_alpha`) is shared between them.
 
+The grid is **per step**, not a carried step length: `alpha` shrinks as `verdict`
+retries inside one step's enumeration, and the commit re-arms it at `alpha0` — as
+a restart does — so a step never inherits the previous one's cheaper position.
+
 With the default `n_alpha = 1`, both phases take **one unguarded whole step**:
 warm-up commits `x − α0·g₀` and steady state commits `x − α0·d⊙m`. Neither reads
 a value, runs a line search, or compares against its start. `needs_verdict` is
@@ -339,7 +343,8 @@ keeps them in three different places, none answering for another:
   off, a stopped path stays stopped — `stalled` is still recorded, it still
   occupies its slot, and its last usable point stays in the run's best — only
   the path itself stops moving; while it is on, it is redrawn on the next round.
-- **Where**: `global_model.propose(n, domain)`, the engine's second plugin point.
+- **Where**: `global_model.propose(n_points, domain)`, the engine's second
+  plugin point.
 
 The split is deliberate: *when* is already stated by the method's stopping test,
 *whether* is a policy bit, and only *where* needs a real implementation, so only
@@ -610,7 +615,8 @@ value-only seam connected. The counts report and do not budget: the budget's
 - **Without `eval_f`**: the fused batch is the only way to read a value, so
   **each trial is itself a fused batch** and the winner needs no `settle` pass.
   An `n_alpha`-candidate step spends at most `n_alpha` fused batches, one per
-  candidate, until the method `accept`s.
+  candidate, until the method `accept`s. Nothing is served for value alone, so
+  the `f` pair stays at zero.
 
 Both rulers must be reported: on the serial axis a flock of `n_paths` paths
 spreads the same point budget across the paths, so each gets about `1/n_paths`

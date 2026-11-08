@@ -233,7 +233,7 @@ restarted afterwards.
 | `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` freezes the flock, and the run ends on `all_stalled` once every path parks |
 | `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
 | `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
-| `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic |
+| `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic; ignored when `global_model` is supplied, since that model owns its key |
 
 Four gotchas worth knowing up front:
 
