@@ -13,12 +13,12 @@ mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from experiments import problems
-from experiments.arms import DEFAULT_MU, adam_lr, soar_arm
-from experiments.figures import plot_cohort
-from experiments.methods import run_adam
-from experiments.panels import LABEL_SERIAL, STYLE_SERIAL
-from experiments.record import HERE, Roots
+from experiments.harness import problems
+from experiments.harness.arms import DEFAULT_MU, adam_lr, soar_arm
+from experiments.harness.figures import plot_cohort
+from experiments.harness.methods import run_adam
+from experiments.harness.panels import LABEL_SERIAL, STYLE_SERIAL
+from experiments.harness.record import HERE, Roots
 
 INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
 

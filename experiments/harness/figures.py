@@ -15,10 +15,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 
-from experiments import problems
-from experiments.methods import Trace
-from experiments.panels import PANELS
-from experiments.record import HERE, Roots, load_arm
+from experiments.harness import problems
+from experiments.harness.methods import Trace
+from experiments.harness.panels import PANELS
+from experiments.harness.record import HERE, Roots, load_arm
 
 Axis: TypeAlias = Literal["points", "batches"]
 """The two cost units a panel can be drawn against.

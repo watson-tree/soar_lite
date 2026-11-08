@@ -2,10 +2,12 @@
 
 The panels in `DESIGN.md` come from one canonical entry point,
 `experiments/compare_baselines.py` — no notebooks, no hidden code path. It is a
-thin shell over `record` (the per-arm files), `arms` (what to run),
-`panels` (rosters over arms, and the run that fills one), `figures` (drawing
-from the record), `appendix` (the panels that measure as they draw) and `cli`
-(flags and the run); nothing else measures anything.
+thin shell over the harness in `harness/`: `record` (the per-arm files), `arms`
+(what to run), `panels` (rosters over arms, and the run that fills one),
+`figures` (drawing from the record), `appendix` (the panels that measure as they
+draw) and `cli` (flags and the run); nothing else measures anything.
+That is the whole directory: code in `harness/`, and beside it the three
+documents plus the two output trees `results/` and `figures/`.
 This file is the run-book; `RESULTS.md` is the ledger of what past runs measured.
 
 ## Prerequisites
@@ -66,7 +68,7 @@ panel writes its files as it finishes.
 ## The Adam learning-rate grid
 
 Adam pays a per-problem lr chosen by an offline sweep
-(`ADAM_LR` in `experiments/arms.py`); the figure below draws that sweep.
+(`ADAM_LR` in `experiments/harness/arms.py`); the figure below draws that sweep.
 Reproduce the sweep figure with:
 
 ```bash

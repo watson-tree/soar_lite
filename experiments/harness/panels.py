@@ -11,9 +11,9 @@ from typing import Any
 
 import numpy as np
 
-from experiments import problems
-from experiments.arms import DEFAULT_MU, LBFGS_ARM, Arm, adam_arm, soar_arm
-from experiments.record import HERE, Roots, refuse_budget_change, save_arm
+from experiments.harness import problems
+from experiments.harness.arms import DEFAULT_MU, LBFGS_ARM, Arm, adam_arm, soar_arm
+from experiments.harness.record import HERE, Roots, refuse_budget_change, save_arm
 
 LABEL_SERIAL = f"soar-lite n_paths=1, mu={DEFAULT_MU:g} (default)"
 LABEL_PARALLEL = f"soar-lite n_paths=16, mu={DEFAULT_MU:g}"

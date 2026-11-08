@@ -26,7 +26,7 @@ import numpy as np
 import optax
 from scipy.optimize import minimize
 
-from experiments.problems import Problem
+from experiments.harness.problems import Problem
 from soar_lite import (
     AcquisitionFn,
     Bounds,

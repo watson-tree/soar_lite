@@ -12,8 +12,8 @@ from typing import Any, TypeAlias
 
 import jax.numpy as jnp
 
-from experiments import problems
-from experiments.methods import (
+from experiments.harness import problems
+from experiments.harness.methods import (
     Trace,
     run_adam,
     run_lbfgs,

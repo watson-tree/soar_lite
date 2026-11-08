@@ -23,7 +23,7 @@ pytest.importorskip("matplotlib")
 pytest.importorskip("optax")
 
 from experiments import compare_baselines as harness
-from experiments import record
+from experiments.harness import record
 
 
 @pytest.fixture(autouse=True)

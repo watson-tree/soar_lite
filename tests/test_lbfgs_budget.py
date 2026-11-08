@@ -18,8 +18,8 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 pytest.importorskip("matplotlib")
 pytest.importorskip("optax")
 
-from experiments import problems
-from experiments.methods import run_lbfgs
+from experiments.harness import problems
+from experiments.harness.methods import run_lbfgs
 
 # Ill-conditioned enough that it hits the limit instead of converging first, so
 # the over-budget call really happens on the way to this assertion.

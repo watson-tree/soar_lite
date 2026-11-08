@@ -18,11 +18,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from experiments import problems
-from experiments.arms import Arm
-from experiments.methods import Trace
+from experiments.harness import problems
+from experiments.harness.arms import Arm
+from experiments.harness.methods import Trace
 
-HERE = Path(__file__).parent
+# The data roots sit beside the code, not in it: `harness/` is importable, the
+# traces and figures are this experiment project's output.
+HERE = Path(__file__).resolve().parents[1]
 RECORD_RESULTS = HERE / "results"  # traces only: one file per (problem, arm)
 RECORD_FIGURES = HERE / "figures"  # one directory per panel
 

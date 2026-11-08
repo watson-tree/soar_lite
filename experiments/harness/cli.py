@@ -9,10 +9,10 @@ back and draws the group.
 import argparse
 import textwrap
 
-from experiments import appendix, figures, panels, problems, record
-from experiments.arms import ADAM_LR
-from experiments.panels import GROUPS, TRACELESS, selection
-from experiments.record import Roots
+from experiments.harness import appendix, figures, panels, problems, record
+from experiments.harness.arms import ADAM_LR
+from experiments.harness.panels import GROUPS, TRACELESS, selection
+from experiments.harness.record import Roots
 
 
 def _comma_set(text: str) -> frozenset[str] | None:

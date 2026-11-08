@@ -22,8 +22,8 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 pytest.importorskip("matplotlib")
 pytest.importorskip("optax")
 
-from experiments import appendix, figures, panels, record
 from experiments import compare_baselines as harness
+from experiments.harness import appendix, figures, panels, record
 
 
 @pytest.fixture(autouse=True)

@@ -321,10 +321,10 @@ settled against: the residual error is in the step's *direction*, not its length
 
 0. **Wait for explicit go-ahead before heavy coding.**
 1. Add experiment deps via a dependency group (`optax`, `matplotlib`).
-2. `experiments/problems.py` — the three groups (`headline`, `smooth`,
+2. `experiments/harness/problems.py` — the three groups (`headline`, `smooth`,
    `multimodal`) + the invariance and `all` builders, each problem
    exposing the soar-lite seam `x_batch → (loss, grad, feas)`.
-3. `experiments/methods.py` — one driver per arm (the rosters are in
+3. `experiments/harness/methods.py` — one driver per arm (the rosters are in
    `Methods × panels`). The restart-model factory
    (`surrogate_minimize` + the identity / sphere projections) stays wired, but
    no panel arms it.

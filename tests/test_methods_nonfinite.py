@@ -24,8 +24,8 @@ pytest.importorskip("optax")
 
 from matplotlib import pyplot as plt
 
-from experiments import figures, problems
-from experiments.methods import Trace, run_adam, run_lbfgs, run_soar_lite
+from experiments.harness import figures, problems
+from experiments.harness.methods import Trace, run_adam, run_lbfgs, run_soar_lite
 
 BUDGET = 4
 
