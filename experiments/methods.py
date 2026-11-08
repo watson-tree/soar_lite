@@ -1,10 +1,10 @@
 """Method drivers: soar-lite, Adam, L-BFGS-B, all on one trace format.
 
-Every driver returns a :class:`Trace` - best-so-far against both cost axes:
+Every driver returns a `Trace` - best-so-far against both cost axes:
 
-* ``points`` - objective points served (one per served coordinate vector), the
+* `points` - objective points served (one per served coordinate vector), the
   fair information unit shared by an n-path method and a single chain;
-* ``batches`` - sequential batched calls, the budget unit: for soar-lite one
+* `batches` - sequential batched calls, the budget unit: for soar-lite one
   served batch (n_paths points at once), for a single-chain method one point.
   This is the wall-clock axis of a batched/GPU setting, where an n-path batch
   costs one sequential unit - the parallel claim lives here, but a batch is not
@@ -77,20 +77,20 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
 ) -> Trace:
     """Drive the n-path engine, recording best-so-far after every batch.
 
-    The budget is ``max_batches`` **batches** - one eval of parallel evaluations,
+    The budget is `max_batches` **batches** - one eval of parallel evaluations,
     the axis a single chain pays one point per step on. The engine's own stop
     counts iterations, not batches, so the ceiling is held by a batch gate
-    (``budget_check``): a probe or a rejected trial batch costs one each, and
-    the run stops within one batch of it. ``max_iters`` is the horizon the
+    (`budget_check`): a probe or a rejected trial batch costs one each, and
+    the run stops within one batch of it. `max_iters` is the horizon the
     engine requires - deliberately non-binding, so it never ends the run first.
 
-    ``restart_stalled`` is whether a path the engine marks stalled is re-drawn.
+    `restart_stalled` is whether a path the engine marks stalled is re-drawn.
     The default mirrors the engine's (on), but every panel arm passes `False`:
     a re-drawing chain would spend budget the baselines do not, and off keeps
-    stopping symmetric. ``mu`` is the direction-momentum coefficient handed to
+    stopping symmetric. `mu` is the direction-momentum coefficient handed to
     the built preconditioner (the analog of Adam's first moment decay: the
     panels run it at the class default and at 0.9, Adam's own window), and
-    ``model`` builds the restart model from the run's key - how a BLR arm swaps
+    `model` builds the restart model from the run's key - how a BLR arm swaps
     the uniform draw for a fitted posterior.
 
     The flock is drawn here, uniformly over the box, so the experiment's
@@ -162,16 +162,16 @@ def surrogate_minimize(
     iteration rather than by one run per start.
 
     Args:
-        objective: the acquisition to descend, ``(M, d) -> ((M,), (M, d))``:
+        objective: the acquisition to descend, `(M, d) -> ((M,), (M, d))`:
             values and their per-row gradients, the engine's `EvalFG` shape
             without the feasibility column.
-        bounds: the search box, the engine's `Bounds` (a ``(d, 2)`` array or
+        bounds: the search box, the engine's `Bounds` (a `(d, 2)` array or
             scipy-style pairs).
         n_points: how many local minimizers to return, one per row.
         key: the PRNG key the starts are drawn from.
 
     Returns:
-        A ``(n_points, d)`` array, one minimizer per row.
+        A `(n_points, d)` array, one minimizer per row.
 
     """
     domain = Domain(bounds)
