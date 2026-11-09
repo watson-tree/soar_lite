@@ -721,7 +721,7 @@ starts come from a `GlobalModel`. The details differ:
   This package folds the surrogate and the acquisition into the one `GlobalModel`
   contract (`observe` plus `propose`), so the acquisition is half of a plugin
   seam, not a third part on its own — "where is still worth trying", never a
-  restart verdict — and two plugin seams remain: the global model and the local
+  restart decision — and two plugin seams remain: the global model and the local
   solver, both chosen for the medium-to-high dimension this library targets. The
   fold is what permits the default arm: once surrogate and acquisition share one
   contract, an arm that fits nothing and simply draws satisfies it too, with no

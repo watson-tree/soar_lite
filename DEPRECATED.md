@@ -580,3 +580,73 @@ current benchmarks; a stale number does not retract an architectural conclusion.
 The defaults are not a claim that the knobs are useless elsewhere — they are a
 contract on the benchmark, which `README.md`'s reproducibility contract states in
 full.
+
+## Public knob renames (pre-0.1.0)
+
+**Status: superseded names — dead as public keywords.** The current spellings
+are the contract; no retired name is accepted as a Python keyword. Archived
+traces are the one place an old spelling still lives: a record written under
+`max_steps` is read by that key (`experiments/harness/record.py`) so it keeps
+stating the budget it measured, and the next save writes the new name.
+
+### What it was
+
+An earlier keyword vocabulary, renamed in place during 0.1.0's build-up:
+
+- the horizon: `max_steps` → `max_evals` → `max_iters`;
+- the probe: `n_probe_rounds` → `n_probe_evals` → `n_draws`, then the probe
+  itself was removed (no `n_draws`, no `per_round_evals`);
+- the cost report: a two-field pair became four — `nfev` → the two seams × two
+  rulers of `CONTEXT.md` §Evaluation.
+
+### Why the names were retired
+
+Each old name let one word do double duty: "round" named both a probe round and
+an engine round, "step" both a solver step and a loop iteration, "eval" both one
+objective point and one served batch. One concept, one name — on the axis it
+actually counts on (iterations, points, batches, seams) — is what replaced the
+lineage above; the retired spellings survive only in the `_Avoid_:` lines of
+`CONTEXT.md`'s glossary, as names not to reintroduce.
+
+## Engine-committed alpha grid (`n_alpha`, `backtrack`)
+
+**Status: removed — `n_alpha`, `backtrack` and `alpha_sample` no longer exist.**
+`DiagonalPreconditioner` reads six knobs (`moment`, `beta`, `mu`, `theta`,
+`alpha0`, `tau_rel`) and its step is one full proposal at `alpha0`; nothing
+samples an alpha grid. The entries above still name `backtrack` and `n_alpha`
+among the separate aggressiveness knobs beside `alpha0`; that described the code
+as it stood then, and `alpha0` is now the only step-aggressiveness knob left.
+
+### What it was
+
+Two keyword arguments and one state field:
+
+- `n_alpha: int = 1` — alpha samples per step; `1` meant no line search;
+- `backtrack: float = 0.5` — the grid's spacing (`alpha *= backtrack` per
+  retry), one constant for both phases;
+- `alpha_sample: int` on the per-path record — how many alphas of the current
+  step had already been served, re-armed after every commit and every restart,
+  so each `verdict` call knew whether the grid had a sample left to try
+  (`"retry"`, `alpha *= backtrack`) or the step was done (`"accept"`).
+
+With `n_alpha >= 2` a step served the grid `{alpha0, alpha0·backtrack,
+alpha0·backtrack², …}` along its own direction, and the **engine** committed the
+grid's `argmin` in `f`. At the default `n_alpha = 1` the grid collapsed to the
+one full step, which is what shipped.
+
+### Why it was removed, and what took its place
+
+Two changes, in that order. The measurement in *Scalar step rescaling* above had
+already closed the length question — larger grids came back monotone worse, and
+the reason is structural: the error is in the step's direction, not its length.
+Then the step channel was redesigned so the **solver** names its own winner
+instead of the engine committing an `argmin` over whatever the method served.
+With the argmin gone from the engine, "how many alphas the engine will consider"
+had no owner left: it described a decision the engine no longer makes.
+
+The capability is not lost, only relocated. A method that wants a grid now runs
+it inside its own `propose`, serving candidates through `serve_trials` and
+naming the one it wants; the engine clips the start, buys the winner's owed
+halves in one fused batch (`settle`), and folds the winner back.
+`DiagonalPreconditioner` takes the single full step the sweeps said was right,
+and reads no trial at all.

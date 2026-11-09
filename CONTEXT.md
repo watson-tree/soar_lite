@@ -5,14 +5,7 @@ the caller; `n_paths` independent descent paths advance in lockstep under one sh
 budget, each re-drawn from a global model once its own stopping test stalls it
 (the `restart_stalled` knob, on by default).
 
-## Language
-
-Public knob history (pre-0.1.0 renames): `max_steps` → `max_evals` →
-`max_iters`, `n_probe_rounds` → `n_probe_evals` → `n_draws`, then the probe
-itself was removed (no `n_draws`, no `per_round_evals`), and the two-field
-cost pair became four (`nfev` → the two seams × two rulers of §Evaluation).
-The old names let "round"/"step"/"eval" each do double duty; they are dead in
-new code.
+## Glossary
 
 ### Engine
 
@@ -33,10 +26,10 @@ The paths' current points as one `(n_paths, d)` array: exactly one point per pat
 so a flock is the run's state at one moment, not the set of paths. Every path
 keeps its row whether or not it holds a usable point (`flock_fun` is `nan` there),
 so a flock always has `n_paths` of them. A *batch* is a set of points too and is
-deliberately a different one: it is the work a single pass serves — the redraw
-starts plus the active paths' trials — so it holds no point for an idle path and
-is not the state. Iteration 0 places the flock from `x0`; the engine's copy is
-the flock as the run ended.
+deliberately a different one: it is the work a single pass serves — a step's
+trials, or the settle set of redraw starts plus winners — so it holds no point
+for an idle path and is not the state. Iteration 0 places the flock from `x0`;
+the engine's copy is the flock as the run ended.
 _Avoid_: the set of paths, population, ensemble, all the paths
 
 **iteration**:
@@ -44,8 +37,9 @@ One pass of the engine's main loop, counted in `n_iters`. Per iteration the engi
 splits the paths into a redraw set (no point yet, or stalled with
 `restart_stalled` on) and a cohort that steps: a path either redraws or steps
 this iteration, never both. The parallel wall-clock unit; an iteration serves
-one or more batches (the redraw starts plus the steppers' trials, and the settle
-batch that grades what they kept). A flock with nothing left to do ends the run
+one or more batches (the steppers' trials as the method reads them, and the one
+settle batch that buys whatever the iteration kept still owes). A flock with
+nothing left to do ends the run
 on `all_stalled` instead of entering a batchless iteration.
 Iteration 0 is the flock's placement: an empty `x` redraws unconditionally,
 so starting the flock is the same operation as any later redraw. `n_iters`
@@ -55,30 +49,20 @@ step `n_iters = 1`.
 _Avoid_: round (retired), epoch, iterations (as a name for the count)
 
 **step**:
-One move along a single path: propose → (trial)× → commit, or give_up. Each
-path takes at most one move per iteration — a step, or a redraw start; a
+One move along a single path: propose → (trial)× → a winner, or none (`None`).
+Each path takes at most one move per iteration — a step, or a redraw start; a
 step consumes zero or more trials.
 _Avoid_: update, move
 
 **trial**:
-One served proposal within a step — one row of a batch that the method judges
-via `verdict`. The method is handed its coords and value, never its gradient:
+One served proposal within a step — one row of a batch the method reads through
+`serve_trials`. The method is handed its coords and value, never its gradient:
 only the winner's gradient is bought (see *settle*), so a method that needs one
-to rule is out of this engine's reach. There is no engine-side cap: the
-method's own stopping test (or its own trial budget) ends the enumeration, so
-`verdict` cannot keep answering `retry` — it must at some point return `accept`
-or `give_up`. A step that needs no verdict (see *needs verdict*) serves none
-at all.
+to rule is out of this engine's reach. There is no engine-side cap: the method's
+own stopping test (or its own trial budget) ends the enumeration, one batch per
+`serve_trials` call. A step that reads no trial — a single full proposal, like
+the shipped method's — serves none at all.
 _Avoid_: line-search round (retired)
-
-**needs verdict**:
-The method's declaration that its next step is decided candidate by candidate.
-True is the enumerated step: each *trial*'s value decides the next move. False
-is the committed step: the one proposal is taken as made, so the engine serves
-no value for it and the winner arrives with both halves owed (see *settle*),
-where the engine's own finiteness gate is the whole of its acceptance. Asked
-once per path per iteration.
-_Avoid_: max rounds, is non verdict
 
 **best**:
 The run's running best, a single `fun`/`x`: the best *feasible* point — the
@@ -93,9 +77,9 @@ _Avoid_: incumbent (retired), best-so-far, current optimum
 
 **stall / stalled**:
 A path that moved nowhere this iteration — it neither redrew nor committed a
-step: its local method signaled `give_up` (its own stopping test fired), it
-accepted with no finite sample to win, or the sample it did win had a
-non-finite value or gradient.
+step: its local method answered no winner (`None` — its own stopping test
+fired), or the winner it named was refused as not usable: a non-finite value or
+gradient.
 Stalled is not dead: unless the run turned `restart_stalled` off, the path is
 re-drawn by the global model on the next iteration; with the knob off it stays
 parked — still counted, still readable for `best` — but never moved again. A
@@ -109,8 +93,9 @@ _Avoid_: paused, idle, dead
 
 **batch** (noun):
 The `(M, d)` points served by one pass — fused (`eval_f_g`) or value-only
-(`eval_f`). The engine composes each batch from the next candidates of the
-active paths and the redraw starts.
+(`eval_f`). The engine composes each batch from either the next candidates a step serves
+through `serve_trials`, or the settle set — the redraw starts and the winners
+still owing a half.
 _Avoid_: group, lot, chunk
 
 **point** (noun):
@@ -144,9 +129,9 @@ _Avoid_: oracle, evaluator, black box
 
 **eval_f** (type `EvalF`):
 The optional value-only sibling: points in, `(f, feas?)` out, no gradient.
-It exists so a judged step's trials and the redraw starts can be read by value
-first and their winners' gradients bought once at *settle*, instead of once per
-trial. Without it every trial is itself a fused batch.
+It exists so a step's trials are read by value alone and only the winner's
+gradient is bought once at *settle*, instead of once per trial. Without it
+every trial is itself a fused batch.
 _Avoid_: value oracle, cheap evaluator
 
 **feasibility mask**:
@@ -179,16 +164,11 @@ secant denominator vanishes (a flat but unconverged coordinate).
 _Avoid_: epsilon, addend, regularizer
 
 **warmup**:
-A path's first step, before any secant pair exists: one sample of the alpha grid
-along `-g₀`, committed as proposed under the default `n_alpha = 1`. It carries
-no acceptance guard of its own — the phase enters only the direction, never the
-ruling (see *needs verdict*).
+A path's first step, before any secant pair exists: one full proposal along
+`-g₀` at `alpha0`, committed as proposed. It carries no value guard of its own —
+the phase enters only the direction; like the steady step, it is read by no
+value and compared against no start.
 _Avoid_: initialization step
-
-**give_up**:
-A local method's own signal that its convergence test passed (or it has nothing
-finite to try): the path stops spending budget this iteration.
-_Avoid_: converge, stop, terminate
 
 ### Restart
 
@@ -200,7 +180,7 @@ from the `domain`. The run's first flock is not its business — the entry's `x0
 states it directly. `BLRGlobalModel`
 fits a Bayesian linear posterior and proposes the local minimum of `-log EI` —
 EI there is an acquisition function deciding *where is worth trying*, not a
-restart verdict.
+restart decision.
 _Avoid_: restart rule, sampler (the sampler is a per-dimension draw inside the
 domain)
 
@@ -216,21 +196,25 @@ from the initial flock.
 _Avoid_: restart check, reset decision
 
 **fold**:
-The handoff by which the engine tells a method which of its served trials won,
-so the method commits the matching state. The engine is the only owner of
-"who won", and the fold is the only commit: a winner whose gradient turns out
-unusable is refused before the method is told anything.
+The handoff by which the engine commits a path's chosen winner: it hands back
+the graded `PathPoint` `(x, f, g)` the path now stands at, so the method moves
+the matching state forward. The **method** named the winner in `propose`; the
+engine bought its owed halves in *settle* and commits here, so `fold` is the
+only commit and the only place a method may advance its model — a secant pair
+is a step that was taken, and only `fold` knows one was. It is never called for
+a winner the engine refused (not usable) or for a path whose stopping test
+held.
 _Avoid_: accept, commit (as the name of this handoff)
 
 **settle**:
-The iteration's one g batch on a run with the value-only seam, and the only place a
-produced point becomes a graded one. Everything left unread or ungraded — the
-redraw starts, an unjudged step's proposal, a judged step's winners — is bought
-here, after both halves have decided on values and before anything is placed. A
-point that already arrived with its gradient (a redraw start's fused pass) is
-promoted as it stands: a pass that served both halves is never served twice. A
-judged step without the seam therefore serves nothing extra here; an unjudged
-step is pending in every run, and is served here exactly once.
+The iteration's one fused batch that buys whatever a kept point still owes, and
+the only place a produced `Pending` becomes a graded `PathPoint`. A redraw start
+and a winner the method never read owe both halves and take f and g from this
+one pass; a winner read through `serve_trials` owes only its gradient; a winner
+that already carries both — a run without the `eval_f` seam, where the hook
+served the fused pair — passes through as it stands, never served twice.
+Everything is bought before anything is placed, so nothing commits before it is
+graded.
 _Avoid_: commit batch, gradient round
 
 ### Cost model
@@ -238,8 +222,9 @@ _Avoid_: commit batch, gradient round
 **horizon (`max_iters`)**:
 The engine's own stop, counted in iterations: every completed iteration costs
 one, and iteration 0 places the flock. A deterministic bound, not a cost
-proxy — one iteration serves the redraw starts plus however many trials the
-method's own search serves, while a flock with nothing left to do stops the run
+proxy — one iteration serves however many trial batches the method's own search
+reads, plus the one settle batch that buys what it kept still owing, while a
+flock with nothing left to do stops the run
 (`all_stalled`) instead of billing a batchless iteration — so the four counters
 report what a run actually billed. At least one of `max_iters`/`time_limit` must
 be given, validated once at entry: `stop` asks the caller's gate like the other
