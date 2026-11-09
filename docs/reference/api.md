@@ -2,7 +2,7 @@
 
 Generated from the docstrings in `soar_lite/`. The public surface is
 `soar_lite.__all__`, grouped here in seven: the entry point, the results, the
-domain, the type aliases, the local solvers, the global models, and the
+domain, the evaluation seams, the local solvers, the global models, and the
 projections.
 
 Starting out? [The tutorial](../tutorial/getting-started.md) builds a run end to
@@ -39,32 +39,35 @@ being committed. An **arm** is one variant of a plugin, and an **ask** is one
 
 ## Results
 
-One run's end state, and the two point types the plugins exchange: a `PathPoint`
-is a committed point, a `Pending` is one still owed a half.
+One run's end state — the result, and the status that names why it ended — and
+the two point types the plugins exchange: a `PathPoint` is a committed point, a
+`Pending` is one still owed a half.
 
 ::: soar_lite.NPathResult
+::: soar_lite.NPathStatus
 ::: soar_lite.PathPoint
 ::: soar_lite.Pending
 
 ## The domain
 
 The box, its per-dimension scales and its draws: everything a restart model may
-read, and the object a projection is built on.
+read, and the object a projection is built on. `Bounds` is the box in scipy's
+spelling, which `Domain` normalizes; `DrawFn` is one dimension's draw, the
+sampler a caller injects.
 
 ::: soar_lite.Domain
-
-## Type aliases
-
-The shapes a caller writes down when it plugs something in.
-
-::: soar_lite.NPathStatus
-::: soar_lite.ServeTrials
 ::: soar_lite.Bounds
 ::: soar_lite.DrawFn
+
+## Evaluation seams
+
+The objective at the seam, in three shapes: the fused pass a run uses by
+default, the value-only half a caller may add, and the trial hook the engine
+hands a step in place of the caller's own function.
+
 ::: soar_lite.EvalFG
 ::: soar_lite.EvalF
-::: soar_lite.AcquisitionFn
-::: soar_lite.MinimizeFn
+::: soar_lite.ServeTrials
 
 ## Local solvers
 
@@ -79,11 +82,15 @@ names no other.
 
 `GlobalModel` is the engine's restart seam, called by the engine and never
 calling back. `SampleGlobalModel` draws from the domain; `BLRGlobalModel` fits a
-posterior over the features its `Projection` hands it.
+posterior over the features its `Projection` hands it. `AcquisitionFn` and
+`MinimizeFn` are the pair its inner minimizer works in: what it minimizes, and
+the callable it injects to minimize it.
 
 ::: soar_lite.GlobalModel
 ::: soar_lite.SampleGlobalModel
 ::: soar_lite.BLRGlobalModel
+::: soar_lite.AcquisitionFn
+::: soar_lite.MinimizeFn
 
 ## Projections
 
