@@ -236,11 +236,30 @@ the direction's units differ.
 
 ### Stopping
 
-A path stops when `‖g‖ ≤ τ_rel·‖g₀‖`, where `τ_rel` is unitless and defaults to
-`1e-6`, and `g₀` is the gradient at the path's current start, reset at each
-restart. It then names no winner — `propose` answers `None` for it — stops
-spending evaluations, and leaves the decision "start again or not?" to the
-restart rule.
+A path stops when `‖P g‖ ≤ τ_rel·‖g₀‖`, where `P` drops the components whose
+descent step would leave the box, `τ_rel` is unitless and defaults to `1e-6`, and
+`g₀` is the gradient at the path's current start, reset at each restart, and it
+is **not** projected: the test is relative to the start's overall scale rather
+than to each component's own, so the start's wall reaction stays in the
+denominator. Dropping it would make the bar depend on which coordinates happened
+to be stuck, and can push it below what those coordinates can resolve. It then
+names no winner — `propose` answers `None` for it — stops spending evaluations,
+and leaves the decision "start again or not?" to the restart rule.
+
+The projection is what makes a wall a reachable stopping point. A constrained
+minimum can sit on a wall carrying a perfectly large gradient — positive against
+the lower wall, where the descent direction points below the box, negative
+against the upper one — and the raw norm would never fall there, so the path
+would spend the whole horizon proposing steps the clip pins back onto the same
+point. Only components with a feasible descent direction left count, which is
+the residual a projected-gradient method steps along.
+
+The test reads `g`, not the direction's momentum `m`. A stop is a claim about the
+objective, so making it depend on the solver's history would let the same `(x,
+g)` stop or run depending on how the path arrived: momentum that lags a gradient
+which has already turned inward would declare a point done while a descent step
+is still available. At the default `mu = 0` the two vectors coincide and the
+distinction is invisible.
 
 The norm is used rather than a per-coordinate `|gᵢ| ≤ τ_rel·|g₀,ᵢ|`: that test
 asks every coordinate to clear its own threshold, so it either never fires for a
