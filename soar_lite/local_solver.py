@@ -144,8 +144,9 @@ class DiagonalPreconditioner(LocalSolver):
     off its stationary point.
 
     The stopping test is a projected-gradient test, ‖P g‖ ≤ τ_rel·‖g_0‖: at a
-    wall the components whose descent step would leave the box are dropped (a
-    constrained minimum sits on a wall with a nonzero gradient), and the rest is
+    wall the components whose descent direction points out of the box are
+    dropped (a constrained minimum sits on a wall with a nonzero gradient), and
+    the rest is
     tested. That is how a path reports that it is done. The norm rather than a
     per-coordinate test keeps one flat coordinate from pinning a path alive (or
     one huge-start coordinate from declaring it dead), and keeps τ_rel
@@ -316,13 +317,13 @@ class DiagonalPreconditioner(LocalSolver):
     def _stationary(self, i: int, domain: Domain) -> bool:
         """Return whether path i's projected gradient has hit its floor.
 
-        The test is ``‖P g‖ ≤ τ_rel·‖g_0‖``: the components whose descent step
-        would leave the box are dropped from ``g`` before the norm, because a
-        constrained minimum can sit on a wall with a large gradient - positive
-        against the lower wall, negative against the upper one - and the raw norm
-        would never fall there. What is left is the residual a projected-gradient
-        method steps along, so the test reads the descent the path can still take
-        rather than the one the box forbids.
+        The test is ``‖P g‖ ≤ τ_rel·‖g_0‖``: a component on a bound whose
+        descent direction points out of the box is dropped from ``g`` before the
+        norm, because a constrained minimum can sit on a wall with a large
+        gradient - positive against the lower wall, negative against the upper
+        one - and the raw norm would never fall there. What is left is the
+        residual a projected-gradient method steps along, so the test reads the
+        descent the path can still take rather than the one the box forbids.
 
         The projection reads ``g`` and not the direction's momentum ``m``: a stop
         is a claim about the objective, so it must not depend on the path's
