@@ -13,10 +13,12 @@ it; a path's **warm-up** is its first step (no secant pair yet) and **steady
 state** is every step after one exists.
 
 Two interfaces supply the method names used below: `propose(n_points, domain)`
-and `observe` belong to `GlobalModel`, while `propose(i)`, `needs_verdict(i)`,
-`verdict` and `fold` belong to `LocalSolver` — two different `propose` methods,
-each called with its own arguments. The engine's own internals — `settle`,
-`_place`, `_advance` — are ordinary steps, explained where they run, and not
+and `observe` belong to `GlobalModel`, while `restart`, `propose(idxs, domain,
+serve_trials)` and `fold` belong to `LocalSolver` — two different `propose`
+methods, each called with its own arguments. One name is neither: `settle` is the
+fused batch that closes an iteration, where every half the iteration's steps and
+restarts still owe is bought together; `_place` and `_advance` are the engine's
+own landing steps. Those three are internal, explained where they run, and not
 callable from outside.
 
 ## The contract: one objective, value and gradient
@@ -32,7 +34,7 @@ final answer.
 
 That is the whole entry contract: one fused seam, `eval_f_g`, returning value
 and gradient in one pass. A second, value-only seam (`eval_f`) can be connected
-beside it for steps that judge candidates one at a time; it is an optional half
+beside it for steps that read their trials one at a time; it is an optional half
 of the same evaluation, never a gradient-free entry, and
 [Cost](#cost-two-evaluation-seams-two-rulers) says what each buys. There is no
 full Hessian and no full curvature model. A full Hessian is quadratic in the
@@ -193,34 +195,34 @@ direction of `−sign(g)`. The `g` inside the floor cancels the `g` it is
 multiplied by, which is why anchoring to `g` cannot make the step explode as
 `g → 0`. The floor is a **guard**: it only touches `d` where `Y < λ`; everywhere
 else `d = S/Y` stands, and how aggressive the step should be stays with the
-separate knobs `alpha0` (whole-step damping, default `1`), `backtrack` (grid
-spacing, used when `n_alpha > 1`) and `n_alpha` (grid size, default `1`) — `DiagonalPreconditioner` parameters, not schedule ones — see
-[The warm-up step](#the-warm-up-step).
+separate knob `alpha0` (whole-step damping, default `1`) — a
+`DiagonalPreconditioner` parameter, not a schedule one — see
+[The warm-up step](#the-warm-up-step). A line search is not a knob either: a
+method that wants one enumerates trials itself and names the winner (see
+[the step channel](#the-step-channel-trials-a-winner-or-no-winner)).
 
 ### The warm-up step
 
-Warm-up and steady state share the **same step mechanism**: sample the `alpha`
-grid `{alpha0, alpha0·backtrack, alpha0·backtrack², …}` along the current
-direction, let the engine's step-wise argmin pick the winner, and let `fold`
-record it. The two phases differ only in the **direction**: warm-up has no secant
-pair yet, so `d` cannot be estimated and the direction is `−g₀`; once the first
-`(s, y)` exists it becomes `−d⊙m` — the momentum, equal to `g` at the default
-`μ = 0` (see [Momentum](#momentum)). Everything except
-the direction (`alpha0`, `backtrack`, `n_alpha`) is shared between them.
+Warm-up and steady state share the **same step mechanism**: take the full
+proposal along the current direction, and let `fold` record the committed step.
+The two phases differ only in the **direction**: warm-up has no secant pair yet,
+so `d` cannot be estimated and the direction is `−g₀`; once the first `(s, y)`
+exists it becomes `−d⊙m` — the momentum, equal to `g` at the default `μ = 0` (see
+[Momentum](#momentum)). `alpha0` is the one knob either phase reads.
 
-The grid is **per step**, not a carried step length: `alpha` shrinks as `verdict`
-retries inside one step's enumeration, and the commit re-arms it at `alpha0` — as
-a restart does — so a step never inherits the previous one's cheaper position.
+`DiagonalPreconditioner` reads no value at all: both phases take **one unguarded
+whole step** — warm-up commits `x − α0·g₀` and steady state commits `x − α0·d⊙m`
+— so neither runs a line search nor compares against its start. Its `propose`
+serves no trial and names its proposal as the winner, and the iteration's one
+fused `settle` batch is the whole price of the step.
 
-With the default `n_alpha = 1`, both phases take **one unguarded whole step**:
-warm-up commits `x − α0·g₀` and steady state commits `x − α0·d⊙m`. Neither reads
-a value, runs a line search, or compares against its start. `needs_verdict` is
-therefore **independent of the phase**: it answers True when `n_alpha > 1` — the
-grid has candidates to compare — and False otherwise, because the engine commits
-exactly what the method proposed. Its one other reason to answer True is not
-about the step's shape at all: a path whose stopping test already holds asks for
-the single ruling that can say `give_up` (see
-[Verdict and no-verdict channels](#verdict-and-no-verdict-channels)).
+A method that does want to compare takes the same seam further and pays for it
+itself: it calls `serve_trials` for as many candidates as its own rule needs, per
+step, and names the one that won (see
+[the step channel](#the-step-channel-trials-a-winner-or-no-winner)). A step
+length that shrinks across those candidates is the method's own state, re-armed
+at `alpha0` when the step commits — so a step never inherits the previous one's
+cheaper position.
 
 One exception to unit invariance: the warm-up step is **not** unit-invariant.
 `alpha0` is a bare number, but its effective units depend on the phase. In
@@ -229,15 +231,16 @@ fraction of the natural step. In the warm-up `−g₀` is a gradient-like quanti
 (`x̃ = c·x` gives `g̃ = g/c`, so magnifying a coordinate shrinks its gradient),
 so here `alpha0` effectively carries `[x]²/[f]` — at the default `alpha0 = 1`
 the warm-up step is literally `x − g₀`, a gradient quantity where a
-displacement belongs. It stays one knob, not two: the grid is shared, and only
+displacement belongs. It stays one knob, not two: both phases read it, and only
 the direction's units differ.
 
 ### Stopping
 
 A path stops when `‖g‖ ≤ τ_rel·‖g₀‖`, where `τ_rel` is unitless and defaults to
 `1e-6`, and `g₀` is the gradient at the path's current start, reset at each
-restart. It then gives up, stops spending evaluations, and leaves the decision
-"start again or not?" to the restart rule.
+restart. It then names no winner — `propose` answers `None` for it — stops
+spending evaluations, and leaves the decision "start again or not?" to the
+restart rule.
 
 The norm is used rather than a per-coordinate `|gᵢ| ≤ τ_rel·|g₀,ᵢ|`: that test
 asks every coordinate to clear its own threshold, so it either never fires for a
@@ -337,8 +340,8 @@ A restart is assembled from three distinct decisions, and this implementation
 keeps them in three different places, none answering for another:
 
 - **When**: a path stopping is the local method's own judgment (the `τ_rel`
-  stopping test, or a verdict with no finite sample to win). The engine adds no
-  second stopping rule and does not guess "how far off we are".
+  stopping test, or a step that read every trial it served as non-finite). The
+  engine adds no second stopping rule and does not guess "how far off we are".
 - **Whether**: `restart_stalled`, a boolean knob, default `True`. While it is
   off, a stopped path stays stopped — `stalled` is still recorded, it still
   occupies its slot, and its last usable point stays in the run's best — only
@@ -396,14 +399,15 @@ holds, so "where this path stands" cannot be polluted by a degenerate point.
 ### One iteration
 
 An iteration first puts the paths in path-index order, then serves its batches in
-that order — one fused `settle` batch (step 5), preceded by the trial batches
-its judged steps spend, up to `n_alpha` each (see Cost):
+that order — one fused `settle` batch (step 5), preceded by whatever trial
+batches its steps serve out of `serve_trials` (see Cost):
 
 1. **Redraw set**: paths that hold no point (iteration 0's whole flock when no
    `x0` was handed in) or that are `stalled` with `restart_stalled` on.
-2. **Cohort**: the remaining paths. A path that is `stalled` and not being
-   redrawn stays here — it proposes nothing this iteration and yields no winner, but
-   its last usable point stays in the run's best.
+2. **Cohort**: the paths that are neither redrawn nor `stalled`. A stopped path
+   is asked nothing — not even a step that would answer `None` — so a method
+   cannot un-stall a path the engine has already stopped; its last usable point
+   stays in the run's best.
 3. **Starts**: the redraw set asks `global_model.propose(len(restarted), domain)`
    for a batch of starts — except on iteration 0 with an `x0`, which the engine
    places as given and never asks a model for. The engine checks the shape and
@@ -411,12 +415,12 @@ its judged steps spend, up to `n_alpha` each (see Cost):
    a wrong shape is a `ValueError` at once — the width belongs to the engine, and
    a model returning a different width fails at the batch boundary instead of
    deep inside a broadcast.
-4. **Steps**: each non-stalled path in the cohort takes one step through one of
-   two channels by `needs_verdict`, producing the winner of that step; the
-   stalled-and-not-redrawn ones propose nothing (step 2).
+4. **Steps**: the cohort asks `local_solver.propose(idxs, domain,
+   serve_trials)` once, for the whole cohort, producing each path's winner or
+   `None`.
 5. **One `settle` batch**: redraw starts first, then the step winners in path
-   order; the **same** batch buys the halves still owed — a judged winner's
-   gradient, an unjudged winner's or redraw start's value and gradient.
+   order; the **same** batch buys the halves still owed — a read winner's
+   gradient, and both halves of anything named unread.
 6. **Landing**: a start goes through `_place` (unusable leaves it `stalled`,
    redrawn next iteration when `restart_stalled` is on) and a winner through
    `_advance` (unusable is `stalled`, no `fold`).
@@ -424,43 +428,51 @@ its judged steps spend, up to `n_alpha` each (see Cost):
 The redraw set and the cohort are disjoint, so "decide everything, then buy
 together" and "decide one at a time, then buy" are the same schedule.
 
-Every batch either channel spends goes through `global_model.observe` on the way
-back — the trial batches and the `settle` batch alike, in the order they are
-served — because the model is the run's evidence sink. It sees a batch before
-the engine decides anything on it, and it sees the batches the run never decides
-on too (a trial that lost its step, the batch that ended an unbounded run),
-because the work was served. A point can arrive twice: a step's trial comes for
-its value, and again for its gradient if it wins.
+Every batch the run spends goes through `global_model.observe` on the way back
+— the trial batches and the `settle` batch alike, in the order they are served —
+because the model is the run's evidence sink. It sees a batch before the run
+decides anything on it, and it sees the batches the run never decides on too (a
+trial that lost its step, the batch that ended an unbounded run), because the
+work was served. A point can arrive twice: a step's trial comes for its value,
+and again for its gradient if it wins.
 
-### Verdict and no-verdict channels
+### The step channel: trials, a winner, or no winner
 
-`needs_verdict(i)` (`i` the path index) asks "does this path need
-per-candidate verdicts for its next step?". With the
-default `n_alpha = 1` it normally answers False for the whole step: the method
-commits as proposed, the engine takes its single proposal as the
-winner of this step **without reading a value first**, and the value and
-gradient are bought once in `settle`'s fused batch. The exception is a path
-whose stopping test already holds: no grid, but `verdict` is the contract's only
-channel for `give_up`, so it asks for that one ruling rather than be committed
-unjudged and step off a stationary point. An `n_alpha > 1` step grid answers
-True for the other reason: the method proposes candidate by candidate, the
-engine clips and serves each, and the method's `verdict` returns `retry` (ask
-for the next candidate in the same step), `accept`, or `give_up`.
+`propose` is one call for the whole cohort and answers one of two things per
+path: a **winner**, or `None` to stop that path where it stands. That answer is
+the whole of the protocol — the engine has no second question to ask, and
+`propose` cannot answer one path at a time.
 
-A failure in the verdict channel has only two exits, both named by the method:
-`give_up` (its convergence test fired) sets `stalled`, and so does `accept`
-returned although every trial it was shown had a non-finite value. The engine
-sets no trial limit: how long the enumeration runs is the method's business,
-and a limit would give an already-decided judgment a second, invisible
-stopping rule. The price is one
-contract: `verdict` must eventually return `accept` or `give_up`, so an
-enumeration that never terminates blocks the process rather than running slowly.
+A winner is a `Pending` point, and what it carries says what the step read. A
+**read** winner carries `x` and `f`: the method served it as a trial through
+`serve_trials` and ruled on the value itself, so its gradient is still owed and
+`settle` buys it in the iteration's fused batch. An **unread** winner carries `x`
+alone: the method named its proposal without reading anything — one unguarded
+whole step, exactly what `DiagonalPreconditioner` does — so both halves are owed
+and both arrive in that same batch.
 
-With the value-only seam connected, each trial in the verdict channel serves `f`
-only (the verdict listens to values only) and the winner's gradient waits for
-`settle`; without it, each trial is itself a fused batch, so `n_alpha`
-candidates multiply directly into the fused batch count (see
-[Cost](#cost-two-evaluation-seams-two-rulers)).
+Which of the two a method sends is its own business. The engine stocks
+`serve_trials`, calls `propose` once, and grades whatever comes back, so the
+number of trials a step reads, the order it reads them in, and the rule that
+picks among them are all inside the method: a line search, a grid, an early
+exit, and the case of no comparison at all are one code path from where the
+engine stands.
+
+Two exits set `stalled`, and both are the method's: `None` (its stopping test
+fired), and a step whose every trial it read was non-finite. The engine sets no
+trial limit — how long a step enumerates is the method's business, and a limit
+would give an already-decided step a second, invisible stopping rule — so a
+method whose enumeration never terminates blocks the process rather than
+running slowly.
+
+`serve_trials` takes the batch of candidate points and returns one `Pending` per
+row. When `eval_f` is connected a trial costs its value alone; when it is not,
+the same call serves the fused pair and the returned `Pending` carries both, so
+the same step code costs `m` value-only batches on one seam and `m` fused ones on
+the other (see [Cost](#cost-two-evaluation-seams-two-rulers)). A trial is served
+for its value, not its fate: every call is reported to the run's best and to the
+global model before the method decides anything, including the trials it goes on
+to reject.
 
 For a start to be usable in the optimization, **both halves must be finite**: a
 start with finite `f` but a non-finite gradient would look usable on the value
@@ -475,52 +487,49 @@ A method that steps from a point has to know where the path stands, and the
 contract hands that point over in exactly two places: `restart(i, p)` places it
 and `fold(i, p)` moves it. Both are the engine's own commit points, so a method
 that keeps the point it was handed holds the same one the engine holds.
-`propose(i)`, `needs_verdict(i)` and `verdict(i, x, f)` pass only the path index;
-each reads the point out of the method's own state. The engine commits a point
-only on `accept`, so the point cannot move under a step's enumeration, and the
-start a step works from is whichever point the last `restart` or `fold` left.
+`propose` receives the cohort's indices, the run's `domain` and the trial seam —
+never the points; each method reads those out of its own state. The engine
+commits only through `fold`, so the point cannot move under a step's enumeration,
+and the start a step works from is whichever point the last `restart` or `fold`
+left.
 
 Keeping the point is the least a stepping method keeps, not the whole of what it
-may keep: the abstract contract asks only that `propose(i)` and the two questions
-after it can be answered, so a method whose step needs no history keeps no
-history. `DiagonalPreconditioner` keeps more, and that extra is the concrete
-method's requirement rather than the contract's — its secant pair `(s, y)` is
-read off the point it stepped from together with the point it landed on, so it is
-the default, not the interface, that needs the previous point as well as the
-current one.
+may keep: the abstract contract asks only that `propose` can be answered from the
+indices it was handed, so a method whose step needs no history keeps no history.
+`DiagonalPreconditioner` keeps more, and that extra is the concrete method's
+requirement rather than the contract's — its secant pair `(s, y)` is read off the
+point it stepped from together with the point it landed on, so it is the default,
+not the interface, that needs the previous point as well as the current one.
 
-### One argmin owner and one commit point
+### The method owns who won; `fold` owns the commit
 
-In a verdict step the engine commits **the lowest `f` among all served trials**,
-not the last one. **The engine owns "who won" uniquely**: the method learns the
-landing point only through `fold(i, p)`, with `p` the point the engine committed,
-and keeps no second argmin of its own, so the bookkeeping of restarts and folds
-cannot drift from the method's internal state.
+Which candidate a step keeps is decided inside the step: the method reads
+whatever trials its own rule needs and names the winner, so a step that compares
+six candidates and one that compares none are the same call from where the
+engine stands. What the engine owns is the **price**: it batches every path's
+gradient into one fused pass, applies the finite gate, and clips nothing that a
+method already placed. The method learns the landing point only through
+`fold(i, p)`, with `p` the point the engine committed, and keeps no second copy
+of what the engine bought.
 
-A verdict receives only the **coordinate and the value**: `verdict(i, x, f)`,
-where `x` is the point actually served after clipping and `f` its value. A
-trial's gradient is deliberately not in the contract — the engine buys `g` for
-the winner only, and a method that needs another trial's gradient to judge is not
-something this engine can drive. Whether the value is *used* is the method's
-business: `DiagonalPreconditioner` rules on the count alone (the winner is the
-engine's argmin, so it has nothing to add about values), while a method running a
-sufficient-decrease test needs exactly the `f` handed here. Correspondingly the winner's gradient is **first
-seen at the commit point** (`f` decided first, `g` bought with it), and in a
-no-verdict step even `f` is first seen here. So the commit gate checks **both
-halves**: if either `f` or `g` is non-finite, nothing is committed and the path is
-`stalled`. That makes `fold` the single commit point: a landing point the method
-is told about is never taken back.
+A trial carries its **coordinate and its value**, because a value is what a
+selection rule reads; the topmost candidate rarely needs a gradient, so the seam
+does not buy one. What the engine buys is the winner's gradient, at the commit
+point — and for an unread winner, `f` is first seen there too. So the commit gate
+checks **both halves**: if either `f` or `g` is non-finite, nothing is committed
+and the path is `stalled`. That makes `fold` the single commit point: a landing
+point the method is told about is never taken back.
 
 ### stalled is the only path state
 
 `stalled` means the path took no step this iteration; redrawing a stalled path is
 `restart_stalled`'s separate decision, one layer up. The flag is written in two
-places: by the verdict channel — in either of its two exits, `give_up` or
-`accept` with no finite sample ever served — and by the commit gate, which
-refuses a non-finite start or winner. A refused start **does not** become the
-point the path holds, the slot that always means "where this path stands" — so
-an unusable start stays `stalled` — redrawn next iteration when `restart_stalled`
-is on — rather than being clipped or forced into a degenerate point.
+places: inside the step — `propose` answering `None` — and by the commit gate,
+which refuses a non-finite start or winner. A refused start **does not** become
+the point the path holds, the slot that always means "where this path stands" —
+so an unusable start stays `stalled` — redrawn next iteration when
+`restart_stalled` is on — rather than being clipped or forced into a degenerate
+point.
 
 `stalled` and "has no point" are two different things, and only the latter is
 outside `restart_stalled`'s control. A path starts with no point at all, holding
@@ -568,9 +577,9 @@ just reached the horizon, so it is asked once before a new iteration opens. A
 mid-iteration refusal raises at the point of the request and ends the run, with
 that iteration not counted in `n_iters` — so the engine's loop never checks a return
 value and never passes a flag up or down. **The gate is asked before every batch,
-fused or value-only**: a verdict channel's `while` can spin many turns without
-returning to the loop head, and without that question a step crossing the deadline
-would run to completion.
+fused or value-only**: a step's enumeration can spin many turns without
+returning to the loop head, and without that question a step crossing the
+deadline would run to completion.
 
 `status` reports the first gate that holds, in the order `max_iters` →
 `time_limit` → `budget_exhausted`. Two other stops are the engine's own
@@ -587,14 +596,14 @@ recognition:
 
 Those two are the whole of the engine's own initiative; every remaining stop is
 one of the caller's gates. No plugin can bypass those gates and the schedule
-itself is bounded — but a plugin method that never returns (a `verdict`
-enumeration that runs forever, say) still blocks the process indefinitely.
+itself is bounded — but a plugin method that never returns (a `propose` whose
+enumeration never terminates, say) still blocks the process indefinitely.
 
 ## Cost: two evaluation seams, two rulers
 
 One evaluation serves a batch of `(M, d)` points, so the same run has two rulers,
 answering different questions. They agree only while every batch carries exactly
-one point — `n_paths = 1` with nothing to judge — and diverge the moment a batch
+one point — `n_paths = 1` with nothing to read — and diverge the moment a batch
 holds more:
 
 | Ruler | Counts | Answers |
@@ -616,22 +625,21 @@ otherwise the serial ruler would erase `f`'s cost entirely in a run with the
 value-only seam connected. The counts report and do not budget: the budget's
 `stop` query never reads them.
 
-**How many batches an iteration spends is decided by the evaluation seam**:
+**How many batches an iteration spends is decided by the step and by the
+evaluation seam**:
 
-- **With `eval_f` connected**: each judged trial serves `f` only, and the iteration's
-  one fused batch (`settle`) buys everything still owed — each accepted trial's
-  gradient, and every unjudged winner's and redraw start's value and gradient,
-  since both of those defer both halves. So an `n_alpha`-candidate step spends at
-  most `n_alpha` value-only batches plus one fused batch — fewer if `verdict`
-  accepts early.
-- **Without `eval_f`**: the fused batch is the only way to read a value, so
-  **each judged trial is itself a fused batch** — its value and gradient arrive
-  together — and a judged winner needs no `settle` pass. An unjudged winner and
-  a redraw start still go through it: the no-verdict channel commits a proposal
-  without reading a value, and a restart start owes both halves. An
-  `n_alpha`-candidate step spends at most `n_alpha` fused batches, one per
-  candidate, until the method `accept`s. Nothing is served for value alone, so
-  the `f` pair stays at zero.
+- **With `eval_f` connected**: each trial a step reads serves `f` only, and the
+  iteration's one fused batch (`settle`) buys everything still owed — each read
+  winner's gradient, and both halves of every unread winner and redraw start. A
+  step that reads `m` trials therefore spends `m` value-only batches plus the
+  iteration's one fused batch, whatever `m` is: reading more candidates costs
+  serial work, never another gradient pass.
+- **Without `eval_f`**: the fused pass is the only way to read a value, so
+  **each trial is itself a fused batch** — its value and gradient arrive
+  together, and `settle` has nothing left to buy for it. An unread winner and a
+  redraw start still go through `settle`, since both owe both halves. The same
+  step that cost `m` value-only batches costs `m` fused batches here, and
+  nothing is served for value alone: the `f` pair stays at zero.
 
 Both rulers must be reported: on the serial axis a flock of `n_paths` paths
 spreads the same point budget across the paths, so each gets about `1/n_paths`

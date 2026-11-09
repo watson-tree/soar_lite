@@ -19,15 +19,18 @@ current point, so the sequence is continuous in identity, not in space. The
 function the engine calls through, named by what it carries: the two
 **evaluation seams** are `eval_f_g` (the fused pass) and `eval_f` (value only),
 and the two **plugin seams** are `LocalSolver` and `GlobalModel`. A **fused
-pass** is one call that returns value and gradient together. A **judged step**
-has the engine serve each candidate for its value alone - when `eval_f` is
-connected - and lets `LocalSolver.verdict` rule it, buying the winner's gradient
-in one final fused batch; without `eval_f` every trial is itself a fused pass
-and carries its gradient. A judged step whose trials were all non-finite, or
-whose winner fails the engine's finite check, stalls the path rather than
-committing it. An **unjudged** one serves its single proposal as a fused
-value-and-gradient pass and commits it after the engine's finite check alone. An
-**arm** is one variant of a plugin, and an **ask** is one `propose` call.
+pass** is one call that returns value and gradient together. A **trial** is one
+point a step looks at, served through `serve_trials`: when `eval_f` is
+connected a trial costs its value alone, and without it every trial is itself a
+fused pass. A **step** is one `LocalSolver.propose` call for one cohort: the
+method reads as many trials as it wants and returns a **winner** per path, or
+`None` to stop that path where it stands. A winner that was read travels as a
+`Pending` with its gradient still **owed**, and whatever the step owes is bought
+in one fused batch over the whole iteration (`settle`) — so an iteration costs
+one fused pass however many trials it read. A winner that does not survive that
+batch's finite check, or that was read as non-finite, stalls the path rather than
+being committed. An **arm** is one variant of a plugin, and an **ask** is one
+`propose` call.
 
 ## Entry point
 
@@ -36,10 +39,12 @@ value-and-gradient pass and commits it after the engine's finite check alone. An
 
 ## Results
 
-One run's end state, and the point type the plugins exchange.
+One run's end state, and the two point types the plugins exchange: a `PathPoint`
+is a committed point, a `Pending` is one still owed a half.
 
 ::: soar_lite.NPathResult
 ::: soar_lite.PathPoint
+::: soar_lite.Pending
 
 ## The domain
 
@@ -53,7 +58,7 @@ read, and the object a projection is built on.
 The shapes a caller writes down when it plugs something in.
 
 ::: soar_lite.NPathStatus
-::: soar_lite.Verdict
+::: soar_lite.ServeTrials
 ::: soar_lite.Bounds
 ::: soar_lite.DrawFn
 ::: soar_lite.EvalFG

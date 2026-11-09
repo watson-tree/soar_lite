@@ -19,11 +19,11 @@ the reasoning.
 A run moves `n_paths` paths in lockstep, each following its own descent.
 Iteration 0 is the exception on the schedule — it places them, serving one batch
 of starts before any step is taken (the engine's move logic itself needs no
-special case: a path with no point simply restarts). After that, with the default
-`n_alpha = 1` an iteration is usually one fused pass — a single call returning value
-and gradient for every served point — while a judged step (`n_alpha > 1`) serves
-trial batches first, and a path whose stopping test already holds asks for one
-ruling instead (see [How it works](explanation/how-it-works.md)). On a
+special case: a path with no point simply restarts). After that an iteration is
+usually one fused pass — a single call returning value and gradient for every
+served point — unless the method enumerates candidates, which spends trial
+batches of its own first and one fused batch grading the winner (see
+[How it works](explanation/how-it-works.md)). On a
 GPU a wider batch barely costs more wall-clock than a narrow one, which is why
 the engine is built around batched evaluations; on a CPU the same run works,
 just without that saving.
@@ -56,7 +56,7 @@ def squares(x):  # one point (d,) in, one scalar out
 
 # pointwise returns two functions: eval_f_g for value and gradient in one pass,
 # and eval_f for the value alone. This run needs only the first; `eval_f` is the
-# value-only seam for judged trials (`n_alpha > 1`), not a gradient-free entry.
+# value-only seam for a step's trials, not a gradient-free entry.
 eval_f_g, _ = pointwise(squares)
 
 result = n_path_schedule(
@@ -90,9 +90,9 @@ schedules the work, and nothing beyond JAX and the standard library.
   `restart_stalled` on — from a fresh point.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
-  from successive gradients, no matrix and no scalar learning rate to tune. On a
-  judged step the engine commits the served trial with the lowest value; with the
-  default `n_alpha = 1` it commits the proposal as proposed.
+  from successive gradients, no matrix and no scalar learning rate to tune. It
+  takes one unguarded whole step and reads no value; a method that does enumerate
+  candidates names its own winner, and the engine grades that winner alone.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
   the record of everything evaluated so far. `SampleGlobalModel` draws from the
   domain; `BLRGlobalModel` is a Bayesian surrogate for the same contract.

@@ -42,8 +42,8 @@ engine calls, once per batch — and the plain forward pass for the optional
 value-only seam (the second return value), so the only function you write is the
 per-point scalar. Hand-writing `∂f/∂x` is safe for a sum of squares, but
 elsewhere it is an easy way to introduce a sign or a scale error. That second
-return is the seam §4 uses: pass it as `eval_f=eval_f` to serve judged trials for
-their value alone. Without `feasible`, the third slot is still there, as `None`
+return is the seam §4 uses: pass it as `eval_f=eval_f` to serve a step's trials
+for their value alone. Without `feasible`, the third slot is still there, as `None`
 — the same `None` the hand-written seam in §1.3 returns.
 
 ### 1.2 Constraints
@@ -153,9 +153,9 @@ the horizon `max_iters` or the deadline `time_limit`. Each missing required
 argument is refused by `ValueError` rather than guessed.
 
 `eval_f` is optional: hand it in when the method enumerates trials for their
-values alone; §4 says when that saves budget. The default solver proposes one
-trial per step, so this run never calls it — nothing is read from it unless a
-step is judged. It is passed here only to show where it goes.
+values alone; §4 says when that saves budget. The default solver reads no trial
+at all — it takes one unguarded whole step — so this run never calls it. It is
+passed here only to show where it goes.
 
 ```python
 from soar_lite import n_path_schedule
@@ -241,12 +241,11 @@ Four gotchas worth knowing up front:
   `N(0, scale²)`, a half-side draws the same normal truncated, and any side can
   take its own injected sampler. There is no uniform prior over an infinite
   side, so the engine never invents one — it falls back to those draws.
-- **`eval_f` serves a judged step's trials value-only and buys one fused pass
-  for the winner.** A step is judged when the solver asks for a verdict
-  phase rather than taking its first proposal (§6). The method reads each
-  trial's f cheaply, then buys the single winner's gradient once. Without
-  `eval_f` every trial is itself a fused batch, so the count lands on the `f_g`
-  pair instead of the `f` pair.
+- **`eval_f` serves a step's trials value-only and buys one fused pass for the
+  winner.** A method that reads its candidates (§6) gets each trial's f cheaply
+  and pays one gradient pass for the winner, inside the iteration's single
+  `settle` batch. Without `eval_f` every trial is itself a fused batch, so the
+  count lands on the `f_g` pair instead of the `f` pair.
 - **`n_paths = 1` is the single-path baseline.** Same code, one path — and with
   one path the parallelism is gone while the default restart bit still fires:
   every stop becomes a random redraw, which on a unimodal problem is a restart
@@ -301,23 +300,23 @@ result = n_path_schedule(
     domain=Domain([(-5.0, 5.0), (-5.0, 5.0)]),
     n_paths=4,
     max_iters=30,
-    # 4 trial values of the step multiplier alpha along the scaled direction,
-    # each 0.5x the previous; the per-coordinate scaling lives in the step
-    # direction, not in these trials
-    local_solver=DiagonalPreconditioner(n_alpha=4, backtrack=0.5),
+    # a shorter whole step: `alpha0` damps the scaled direction
+    local_solver=DiagonalPreconditioner(alpha0=0.5),
     restart_stalled=True,
 )
 ```
 
 To replace one outright, implement its protocol and pass the instance:
 
-- **`LocalSolver`** — the search method: `restart`, `needs_verdict`, `propose`,
-  `verdict`, `fold`. `needs_verdict` says whether the solver wants a verdict
-  phase at all. You own direction, step size and acceptance; the engine owns
-  projection, the horizon and the per-step argmin. `verdict` is handed a
-  trial's coords and value, not its gradient — the engine buys gradients only
-  for the points it keeps, and `fold` is where a step lands. `restart` is the
-  only cold-start call, so it runs at initialization and after every restart.
+- **`LocalSolver`** — the search method: `restart`, `propose`, `fold`. You own
+  direction, step size, acceptance and how many candidates a step looks at; the
+  engine owns the clip, the horizon, the finite gate and the one fused batch
+  that grades what a step keeps. `propose` gets the cohort's indices, the run's
+  `domain` and `serve_trials`, and answers a winner (a `Pending` point, read or
+  unread) or `None` to stop that path. Trials are read for their value alone,
+  never for their gradient. `restart` is the only cold-start call, so it runs at
+  initialization and after every restart; `fold` is the only place a landed step
+  is announced.
 - **`GlobalModel`** — the restart-point source and evidence sink: `observe`,
   `propose`. The shipped pair is `SampleGlobalModel` (draws starts from the
   domain, fits nothing — the default) and `BLRGlobalModel` (fits a Bayesian
