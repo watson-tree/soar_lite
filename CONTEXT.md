@@ -51,8 +51,15 @@ _Avoid_: round (retired), epoch, iterations (as a name for the count)
 **step**:
 One move along a single path: propose → (trial)× → a winner, or none (`None`).
 Each path takes at most one move per iteration — a step, or a redraw start; a
-step consumes zero or more trials.
-_Avoid_: update, move
+step consumes zero or more trials. The method lands it through `step(i, p)`: the
+engine hands back the graded `PathPoint` `(x, f, g)` the path now stands at, so
+the method moves the matching state forward. The **method** named the winner in
+`propose`; the engine bought its owed halves in *settle* and commits here, so
+`step` is the only commit and the only place a method may advance its model — a
+secant pair is a move that was taken, and only this callback is told one was. It
+is never called for a winner the engine refused (not usable) or for a path whose
+stopping test held.
+_Avoid_: update, move; accept, commit (as names for this handoff)
 
 **trial**:
 One served proposal within a step — one row of a batch the method reads through
@@ -194,17 +201,6 @@ never restarts needs no model:
 `restart_stalled=False` with the default `SampleGlobalModel` is pure descent
 from the initial flock.
 _Avoid_: restart check, reset decision
-
-**fold**:
-The handoff by which the engine commits a path's chosen winner: it hands back
-the graded `PathPoint` `(x, f, g)` the path now stands at, so the method moves
-the matching state forward. The **method** named the winner in `propose`; the
-engine bought its owed halves in *settle* and commits here, so `fold` is the
-only commit and the only place a method may advance its model — a secant pair
-is a step that was taken, and only `fold` knows one was. It is never called for
-a winner the engine refused (not usable) or for a path whose stopping test
-held.
-_Avoid_: accept, commit (as the name of this handoff)
 
 **settle**:
 The iteration's one fused batch that buys whatever a kept point still owes, and

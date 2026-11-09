@@ -14,12 +14,12 @@ state** is every step after one exists.
 
 Two interfaces supply the method names used below: `propose(n_points, domain)`
 and `observe` belong to `GlobalModel`, while `restart`, `propose(idxs, domain,
-serve_trials)` and `fold` belong to `LocalSolver` — two different `propose`
+serve_trials)` and `step` belong to `LocalSolver` — two different `propose`
 methods, each called with its own arguments. One name is neither: `settle` is the
 fused batch that closes an iteration, where every half the iteration's steps and
-restarts still owe is bought together; `_place` and `_advance` are the engine's
-own landing steps. Those three are internal, explained where they run, and not
-callable from outside.
+restarts still owe is bought together; `_restart` and `_step` are the engine's
+own landing halves, and `_step` is what calls the method's `step(i, p)`. Those
+three are internal, explained where they run, and not callable from outside.
 
 ## The contract: one objective, value and gradient
 
@@ -204,7 +204,7 @@ method that wants one enumerates trials itself and names the winner (see
 ### The warm-up step
 
 Warm-up and steady state share the **same step mechanism**: take the full
-proposal along the current direction, and let `fold` record the committed step.
+proposal along the current direction, and let `step` record the committed step.
 The two phases differ only in the **direction**: warm-up has no secant pair yet,
 so `d` cannot be estimated and the direction is `−g₀`; once the first `(s, y)`
 exists it becomes `−d⊙m` — the momentum, equal to `g` at the default `μ = 0` (see
@@ -445,9 +445,9 @@ batches its steps serve out of `serve_trials` (see Cost):
 5. **One `settle` batch**: redraw starts first, then the step winners in path
    order; the **same** batch buys the halves still owed — a read winner's
    gradient, and both halves of anything named unread.
-6. **Landing**: a start goes through `_place` (unusable leaves it `stalled`,
+6. **Landing**: a start goes through `_restart` (unusable leaves it `stalled`,
    redrawn next iteration when `restart_stalled` is on) and a winner through
-   `_advance` (unusable is `stalled`, no `fold`).
+   `_step` (unusable is `stalled`, no `step`).
 
 The redraw set and the cohort are disjoint, so "decide everything, then buy
 together" and "decide one at a time, then buy" are the same schedule.
@@ -509,12 +509,12 @@ redraw it.
 
 A method that steps from a point has to know where the path stands, and the
 contract hands that point over in exactly two places: `restart(i, p)` places it
-and `fold(i, p)` moves it. Both are the engine's own commit points, so a method
+and `step(i, p)` moves it. Both are the engine's own commit points, so a method
 that keeps the point it was handed holds the same one the engine holds.
 `propose` receives the cohort's indices, the run's `domain` and the trial seam —
 never the points; each method reads those out of its own state. The engine
-commits only through `fold`, so the point cannot move under a step's enumeration,
-and the start a step works from is whichever point the last `restart` or `fold`
+commits only through `step`, so the point cannot move under a step's enumeration,
+and the start a step works from is whichever point the last `restart` or `step`
 left.
 
 Keeping the point is the least a stepping method keeps, not the whole of what it
@@ -525,7 +525,7 @@ requirement rather than the contract's — its secant pair `(s, y)` is read off 
 point it stepped from together with the point it landed on, so it is the default,
 not the interface, that needs the previous point as well as the current one.
 
-### The method owns who won; `fold` owns the commit
+### The method owns who won; `step` owns the commit
 
 Which candidate a step keeps is decided inside the step: the method reads
 whatever trials its own rule needs and names the winner, so a step that compares
@@ -533,7 +533,7 @@ six candidates and one that compares none are the same call from where the
 engine stands. What the engine owns is the **price**: it batches every path's
 gradient into one fused pass, applies the finite gate, and clips nothing that a
 method already placed. The method learns the landing point only through
-`fold(i, p)`, with `p` the point the engine committed, and keeps no second copy
+`step(i, p)`, with `p` the point the engine committed, and keeps no second copy
 of what the engine bought.
 
 A trial carries its **coordinate and its value**, because a value is what a
@@ -541,7 +541,7 @@ selection rule reads; the topmost candidate rarely needs a gradient, so the seam
 does not buy one. What the engine buys is the winner's gradient, at the commit
 point — and for an unread winner, `f` is first seen there too. So the commit gate
 checks **both halves**: if either `f` or `g` is non-finite, nothing is committed
-and the path is `stalled`. That makes `fold` the single commit point: a landing
+and the path is `stalled`. That makes `step` the single commit point: a landing
 point the method is told about is never taken back.
 
 ### stalled is the only path state

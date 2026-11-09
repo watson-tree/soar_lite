@@ -105,7 +105,8 @@ points — so a `nan` or `+inf` value never becomes `best`, but a finite value w
 gradient has a `nan` somewhere still can become `best`: the run reports that point
 even though no path ever stands on it. A path commits more strictly: a point is
 `usable` only when its value *and* every gradient component are finite, because the
-next step is proposed from `-g` and folded on gradient differences. A point that is
+next step is proposed from `-g` and the secant is built from gradient differences.
+A point that is
 not `usable` stalls its path in place — re-drawn by default, parked under
 `restart_stalled=False` (see §2). The run carries on.
 
@@ -309,14 +310,14 @@ result = n_path_schedule(
 
 To replace one outright, implement its protocol and pass the instance:
 
-- **`LocalSolver`** — the search method: `restart`, `propose`, `fold`. You own
+- **`LocalSolver`** — the search method: `restart`, `propose`, `step`. You own
   direction, step size, acceptance and how many candidates a step looks at; the
   engine owns the clip, the horizon, the finite gate and the one fused batch
   that grades what a step keeps. `propose` gets the cohort's indices, the run's
   `domain` and `serve_trials`, and answers a winner (a `Pending` point, read or
   unread) or `None` to stop that path. Trials are read for their value alone,
   never for their gradient. `restart` is the only cold-start call, so it runs at
-  initialization and after every restart; `fold` is the only place a landed step
+  initialization and after every restart; `step` is the only place a landed step
   is announced.
 - **`GlobalModel`** — the restart-point source and evidence sink: `observe`,
   `propose`. The shipped pair is `SampleGlobalModel` (draws starts from the
