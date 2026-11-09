@@ -90,22 +90,23 @@ gradient.
 Stalled is not dead: unless the run turned `restart_stalled` off, the path is
 re-drawn by the global model on the next iteration; with the knob off it stays
 parked — still counted, still readable for `best` — but never moved again. A
-turn of the loop with every path parked that way is `all_stalled`: no path can
-move and none is owed a start, so the run stops. A path with no point at all is
-a redraw that ignores `restart_stalled`: it is the machine's own initial state,
-not a stall.
+turn of the loop with every path parked that way is `all_stalled` — reachable
+only when `restart_stalled` is off, since with it on a stalled path is re-drawn
+rather than parked: no path can move and none is owed a start, so the run stops.
+A path with no point at all is a redraw that ignores `restart_stalled`: it is
+the machine's own initial state, not a stall.
 _Avoid_: paused, idle, dead
 
 ### Evaluation
 
-**batch** (noun):
+**batch**:
 The `(M, d)` points served by one pass — fused (`eval_f_g`) or value-only
 (`eval_f`). The engine composes each batch from either the next candidates a step serves
 through `serve_trials`, or the settle set — the redraw starts and the winners
 still owing a half.
 _Avoid_: group, lot, chunk
 
-**point** (noun):
+**point**:
 One candidate — one row of a batch. The four counters (below) count the billed
 ones. Its graded form is `PathPoint`: the `x`/`f`/`g` triple a path commits,
 assembled only once both halves exist (see *settle*), so a point that arrived
@@ -134,8 +135,9 @@ The caller's per-batch callable (type `EvalFG`): points in,
 gradients; the engine is blind to it otherwise.
 _Avoid_: oracle, evaluator, black box
 
-**eval_f** (type `EvalF`):
-The optional value-only sibling: points in, `(f, feas?)` out, no gradient.
+**eval_f**:
+The optional value-only sibling (type `EvalF`): points in, `(f, feas?)` out,
+no gradient.
 It exists so a step's trials are read by value alone and only the winner's
 gradient is bought once at *settle*, instead of once per trial. Without it
 every trial is itself a fused batch.
@@ -206,11 +208,11 @@ _Avoid_: restart check, reset decision
 The iteration's one fused batch that buys whatever a kept point still owes, and
 the only place a produced `Pending` becomes a graded `PathPoint`. A redraw start
 and a winner the method never read owe both halves and take f and g from this
-one pass; a winner read through `serve_trials` owes only its gradient; a winner
-that already carries both — a run without the `eval_f` seam, where the hook
-served the fused pair — passes through as it stands, never served twice.
-Everything is bought before anything is placed, so nothing commits before it is
-graded.
+one pass; a winner the method read through `serve_trials` owes only its gradient
+when the `eval_f` seam served it value-only — with no such seam the same call
+served the fused pair, so the winner already carries both and passes through as
+it stands, never served twice. Everything is bought before anything is placed,
+so nothing commits before it is graded.
 _Avoid_: commit batch, gradient round
 
 ### Cost model
