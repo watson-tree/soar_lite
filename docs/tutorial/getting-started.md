@@ -154,8 +154,8 @@ argument is refused by `ValueError` rather than guessed.
 
 `eval_f` is optional: hand it in when the method enumerates trials for their
 values alone; §4 says when that saves budget. The default solver reads no trial
-at all — it takes one unguarded whole step — so this run never calls it. It is
-passed here only to show where it goes.
+at all — it takes one whole step and reads no value — so this run never calls it.
+It is passed here only to show where it goes.
 
 ```python
 from soar_lite import n_path_schedule
@@ -241,11 +241,12 @@ Four gotchas worth knowing up front:
   `N(0, scale²)`, a half-side draws the same normal truncated, and any side can
   take its own injected sampler. There is no uniform prior over an infinite
   side, so the engine never invents one — it falls back to those draws.
-- **`eval_f` serves a step's trials value-only and buys one fused pass for the
-  winner.** A method that reads its candidates (§6) gets each trial's f cheaply
-  and pays one gradient pass for the winner, inside the iteration's single
-  `settle` batch. Without `eval_f` every trial is itself a fused batch, so the
-  count lands on the `f_g` pair instead of the `f` pair.
+- **`eval_f` serves a step's trials value-only; the winner's gradient is still
+  the iteration's one fused `settle` batch.** A method that reads its candidates
+  (§6) gets each trial's f cheaply and pays one gradient pass for the winner —
+  the same batch, with or without `eval_f`. Without `eval_f` every trial is
+  itself a fused batch, so the count lands on the `f_g` pair instead of the `f`
+  pair.
 - **`n_paths = 1` is the single-path baseline.** Same code, one path — and with
   one path the parallelism is gone while the default restart bit still fires:
   every stop becomes a random redraw, which on a unimodal problem is a restart

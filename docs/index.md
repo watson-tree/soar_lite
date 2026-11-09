@@ -91,7 +91,7 @@ schedules the work, and nothing beyond JAX and the standard library.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
   from successive gradients, no matrix and no scalar learning rate to tune. It
-  takes one unguarded whole step and reads no value; a method that does enumerate
+  takes one whole step, read by no value; a method that does enumerate
   candidates names its own winner, and the engine grades that winner alone.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
   the record of everything evaluated so far. `SampleGlobalModel` draws from the

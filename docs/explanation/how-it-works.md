@@ -210,11 +210,11 @@ so `d` cannot be estimated and the direction is `−g₀`; once the first `(s, y
 exists it becomes `−d⊙m` — the momentum, equal to `g` at the default `μ = 0` (see
 [Momentum](#momentum)). `alpha0` is the one knob either phase reads.
 
-`DiagonalPreconditioner` reads no value at all: both phases take **one unguarded
-whole step** — warm-up commits `x − α0·g₀` and steady state commits `x − α0·d⊙m`
-— so neither runs a line search nor compares against its start. Its `propose`
-serves no trial and names its proposal as the winner, and the iteration's one
-fused `settle` batch is the whole price of the step.
+`DiagonalPreconditioner` reads no value at all: both phases take **one whole
+step, read by no value** — warm-up commits `x − α0·g₀` and steady state commits
+`x − α0·d⊙m` — so neither runs a line search nor compares against its start. Its
+`propose` serves no trial and names its proposal as the winner, and the
+iteration's one fused `settle` batch is the whole price of the step.
 
 A method that does want to compare takes the same seam further and pays for it
 itself: it calls `serve_trials` for as many candidates as its own rule needs, per
@@ -236,8 +236,9 @@ the direction's units differ.
 
 ### Stopping
 
-A path stops when `‖P g‖ ≤ τ_rel·‖g₀‖`, where `P` drops the components whose
-descent step would leave the box, `τ_rel` is unitless and defaults to `1e-6`, and
+A path stops when `‖P g‖ ≤ τ_rel·‖g₀‖`, where `P` drops the components on a
+bound whose descent direction points out of the box, `τ_rel` is unitless and
+defaults to `1e-6`, and
 `g₀` is the gradient at the path's current start, reset at each restart, and it
 is **not** projected: the test is relative to the start's overall scale rather
 than to each component's own, so the start's wall reaction stays in the
@@ -252,7 +253,10 @@ the lower wall, where the descent direction points below the box, negative
 against the upper one — and the raw norm would never fall there, so the path
 would spend the whole horizon proposing steps the clip pins back onto the same
 point. Only components with a feasible descent direction left count, which is
-the residual a projected-gradient method steps along.
+the residual a projected-gradient method steps along. The drop needs both
+halves: the component must sit on a bound and its descent direction must point
+out of the box. A component still inside the box is never dropped, whatever its
+sign; a step that merely overshoots a boundary is clipped, not pinned.
 
 The test reads `g`, not the direction's momentum `m`. A stop is a claim about the
 objective, so making it depend on the solver's history would let the same `(x,
@@ -325,10 +329,11 @@ and that component is exactly what damps zigzag, cancels overshoot, and
 accumulates progress in flat regions.
 The invariant also buys nothing where no line search runs: a descent direction
 only promises that a small enough step decreases `f`, while this method takes one
-unguarded whole step, read by no value and compared against no start. Convergence
-rests on best-so-far accounting plus restarts and stalls, not on every step
-descending; a caller who wants the guarantee can leave `μ` at its default,
-shrink `alpha0`, or run a line search outside the engine.
+whole step, read by no value, compared against no start, and clipped to the box
+as its only correction. Convergence rests on best-so-far accounting plus restarts
+and stalls, not on every step descending; a caller who wants the guarantee can
+leave `μ` at its default, shrink `alpha0`, or run a line search outside the
+engine.
 
 **The cost is real.** Near an optimum `g → 0` while `m` decays on the `1/(1−μ)`
 window, so `μ·m_{k−1}` can outweigh `g_k` and the direction is carried off by old
@@ -466,9 +471,9 @@ A winner is a `Pending` point, and what it carries says what the step read. A
 **read** winner carries `x` and `f`: the method served it as a trial through
 `serve_trials` and ruled on the value itself, so its gradient is still owed and
 `settle` buys it in the iteration's fused batch. An **unread** winner carries `x`
-alone: the method named its proposal without reading anything — one unguarded
-whole step, exactly what `DiagonalPreconditioner` does — so both halves are owed
-and both arrive in that same batch.
+alone: the method named its proposal without reading anything — one whole step,
+read by no value — exactly what `DiagonalPreconditioner` does — so both halves
+are owed and both arrive in that same batch.
 
 Which of the two a method sends is its own business. The engine stocks
 `serve_trials`, calls `propose` once, and grades whatever comes back, so the
