@@ -40,16 +40,16 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     *,
     # The run's width: how many paths the engine drives.
     n_paths: int,
-    # The run's box, a `Domain`: every proposal is clipped into it - the
-    # global model's fresh starts and the local method's steps alike - and it
-    # is the one statement of the dimension (`domain.d`) and of each
-    # coordinate's prior `scale`.
+    # The run's box, a `Domain`: every point served lies inside it - the engine
+    # clips the starts it draws, and a method clips its own step - and it is the
+    # one statement of the dimension (`domain.d`) and of each coordinate's prior
+    # `scale`.
     domain: Domain,
     # The caller's flock: one start per path, ``(n_paths, domain.d)``, placed
     # by iteration 0 exactly where the caller asked rather than drawn.
     x0: jnp.ndarray | None = None,
     eval_f: EvalF | None = None,
-    # The run's horizon, counted in iterations: one move per path, not one eval.
+    # The run's horizon, in iterations: one pass of the loop, not one eval.
     max_iters: int | None = None,
     # A wall-clock deadline in seconds. A run needs a horizon: at least one of
     # max_iters / time_limit must be given.
@@ -109,7 +109,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
     The run's own stop is the horizon: at most `max_iters` iterations, or the
     wall-clock deadline when `time_limit` is given. Iterations are the unit on
-    purpose - one iteration is one move per path, so the same iteration count
+    purpose - one iteration is one pass of the loop, so the same iteration count
     reproduces the same run on any machine - but it is not a cost bound: one
     iteration serves one or more batches, so migrating a batch budget to
     `max_iters` can multiply the work done. `budget_check` is the caller's extra
@@ -159,7 +159,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             committed without anyone reading a value, so neither is served
             before it.
         max_iters: the run's horizon in iterations (``None`` leaves it to
-            ``time_limit``); a run needs at least one of the two.
+            ``time_limit``); a run needs at least one of the two. ``0`` is
+            legal: the loop's first stop query holds, so nothing is placed,
+            ``n_iters`` is ``0`` and every ``flock_x`` row is ``nan``.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
         budget_check: an extra gate for a budget the engine cannot see, asked at
             the loop head every iteration and again before each served batch.
@@ -735,7 +737,7 @@ class _Paths:
         `propose` call, and the method makes the decision there - on values
         alone when the value-only seam is present, reading whatever trials it
         wants. The gradients those decisions need are then bought together in one
-        batch (`settle`), so an iteration costs one gradient pass however many
+        batch (`settle`), so an iteration adds one gradient pass however many
         moves it deferred. A run without the seam serves everything fused and
         reaches `settle` already graded.
 

@@ -94,6 +94,12 @@ class Pending:
 
 
 ServeTrials: TypeAlias = Callable[[jnp.ndarray], list[Pending]]
+"""The trial hook a step is handed: a batch of points in, one `Pending` per row.
+
+What each row carries follows the run's seams - the value alone when ``eval_f``
+is connected, both halves when it is not. It is what `LocalSolver.propose`
+receives in place of the caller's own function.
+"""
 
 
 class GlobalModel(Protocol):
@@ -189,11 +195,13 @@ class LocalSolver(Protocol):
 
     The split between the two evaluation halves is the method's cost lever. A
     step's *value* is what its enumeration compares, so the method reads it:
-    ``serve_trials`` serves a batch of candidate points for their values alone
-    and may be called as often as the enumeration needs. A step's *gradient* is
-    wanted only for the winner, so the engine buys it afterwards - one fused
-    batch per iteration, covering every winner and every restart start - and
-    hands it back through ``step``. A `Pending` therefore leaves ``propose``
+    ``serve_trials`` serves a batch of candidate points for their values alone -
+    or the fused pair, when the caller connected no ``eval_f`` - and may be
+    called as often as the enumeration needs. A step's *gradient* is wanted only
+    for the winner, so the engine buys it afterwards, in the iteration's one
+    fused batch (``settle``): whatever is still owed, which is every read
+    winner's gradient and both halves of every unread winner and restart start.
+    ``step`` then hands the result back. A `Pending` therefore leaves ``propose``
     with whatever halves the method already holds: both owed when it never read
     the point, the value alone when it read it through ``serve_trials``, and both
     when the caller supplied no ``eval_f`` seam and the hook served the pair.
@@ -346,17 +354,18 @@ class NPathResult:
     """The argmin in the coordinates the engine was handed, shape ``(d,)``.
 
     Not necessarily a row of `flock_x`: the best point may come from a path that
-    was restarted afterwards. All ``nan`` when nothing feasible was ever served,
-    the ``nan`` reading of ``fun``. A feasible ``-inf`` names its point instead:
-    ``x`` is that point and ``fun`` is ``-inf``, so ``x`` is ``nan`` only when no
-    feasible point was served at all.
+    was restarted afterwards. All ``nan`` when no feasible point with a *finite*
+    value was ever served - the ``nan`` reading of ``fun``. A feasible ``-inf``
+    names its point instead: ``x`` is that point and ``fun`` is ``-inf``. So
+    ``x`` is ``nan`` only when no feasible point carried a finite value and none
+    priced the objective at ``-inf``.
     """
 
     fun: float
     """`x`'s objective value, the minimum over finite feasible recorded evals.
 
-    ``nan`` when nothing feasible was ever served, ``-inf`` when a feasible
-    point evaluated to it.
+    ``nan`` when no feasible point carried a finite value and none evaluated to
+    ``-inf``; ``-inf`` when a feasible point evaluated to it.
     """
 
     flock_x: jnp.ndarray
