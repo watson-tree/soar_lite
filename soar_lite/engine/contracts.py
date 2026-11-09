@@ -1,7 +1,7 @@
 """The plugin contracts, the data they exchange, and the evaluation seams.
 
 `LocalSolver` and `GlobalModel` are the two seams a caller plugs into;
-`PathPoint`, `Verdict` and the evaluation-seam aliases are what crosses them; and
+`PathPoint`, `Pending` and the evaluation-seam aliases are what crosses them; and
 `NPathResult` with `NPathStatus` is the other half of the same exchange, what the
 caller reads back. `pointwise` builds both evaluation seams from one per-point
 objective.
@@ -21,18 +21,6 @@ import jax
 import jax.numpy as jnp
 
 from soar_lite.domain import Domain
-
-Verdict: TypeAlias = Literal["retry", "accept", "give_up"]
-"""How a judged step rules one served candidate.
-
-``"retry"`` spends another trial, ``"accept"`` ends the enumeration and commits
-the step's argmin - the lowest-value finite trial among all the step has served
-so far, the candidate just served for a single-sample step - and ``"give_up"``
-abandons the path's enumeration outright, so the path stalls. ``"accept"``
-commits nothing when the step served no finite trial or the winner fails the
-engine's finite check: the path stalls instead. See `LocalSolver.verdict`, which
-returns it.
-"""
 
 
 @dataclass(frozen=True)
@@ -68,6 +56,44 @@ class PathPoint:
         first, so a dead value skips g's finite scan.
         """
         return math.isfinite(self.f) and bool(jnp.all(jnp.isfinite(self.g)))
+
+
+@dataclass(frozen=True)
+class Pending:
+    """A produced point that `settle` has not promoted to a `PathPoint` yet.
+
+    Producing a point is one decision and grading it is one batch, so a point
+    travels between them as this: each half is either served or still owed.
+    Everything produced goes through here, and one batch promotes it, which keeps
+    "does it still need g" a question about the point rather than about which
+    producer made it.
+
+    `g is not None` implies `f is not None`: a fused pass serves both, and only
+    a value-only trial arrives with `f` alone, its gradient waiting for
+    `settle`.
+    """
+
+    x: jnp.ndarray
+    f: float | None
+    g: jnp.ndarray | None
+
+    def value(self) -> float:
+        """Return the served value, or raise if this point was never read."""
+        if self.f is None:
+            msg = "Pending is missing its f"
+            raise RuntimeError(msg)
+        return self.f
+
+    def graded(self) -> PathPoint:
+        """Return this point as a `PathPoint`, or raise if either half is owed."""
+        if self.f is None or self.g is None:
+            missing = "f" if self.f is None else "g"
+            msg = f"Pending is missing its {missing}"
+            raise RuntimeError(msg)
+        return PathPoint(self.x, self.f, self.g)
+
+
+ServeTrials: TypeAlias = Callable[[jnp.ndarray], list[Pending]]
 
 
 class GlobalModel(Protocol):
@@ -143,47 +169,43 @@ class LocalSolver(Protocol):
 
     The engine owns the schedule - batch composition, the clip into `domain`,
     the shared horizon, the n-path state machine (restart/step/stall), the best
-    `f⋆` - and the method owns the search: direction, step size, acceptance,
-    **and how long a step's enumeration may run**. The engine keeps asking a
-    step for proposals while ``verdict`` answers "retry", and ``verdict`` must
-    eventually reach "accept" or "give_up" on its own; an enumerator with no
-    bound of its own is a hang, not a slow run. Runs end on the caller's horizon,
-    not on the method.
-    ``needs_verdict(i)`` picks the step's shape: a method that rules on each
-    candidate says True, one whose step always commits its single proposal says
-    False. All state is per path, lives inside the instance, and is opaque to the
-    engine - implementers index it by path i.
+    `f⋆`, and the gradient purchase - and the method owns the search: direction,
+    step size, acceptance, **and how many points a step looks at**. A step is one
+    ``propose`` call, so a method that wants a trial grid or a line search runs
+    it inside that call: the engine hands ``propose`` the run's value-only seam
+    (``serve_trials``) and serves whatever the method asks for. Runs end on the
+    caller's horizon, not on the method. All state is per path, lives inside the
+    instance, and is opaque to the engine - implementers index it by path ``i``.
 
     A path's point reaches the method in exactly two places: ``restart(i, p)``,
     which places it, and ``fold(i, p)``, which moves it. Both are the engine's
     own commit points, so a method that keeps the point it was handed holds the
     one the engine holds. A method that steps from a point must keep it, because
-    no later call hands it back: ``propose(i)`` reads the current point off the
-    method's own state and answers from it, repeatedly for one step - the engine
-    commits a point only on "accept", so nothing moves under a step's
-    enumeration. The candidate the engine serves is the clipped one, so a method
-    judges the point it is handed, not its own proposal. verdict(i, x, f) is
-    then called once per served candidate, with (x, f) the served point's coords
-    and value - never its gradient: with `eval_f` connected the engine serves a
-    candidate's value alone and buys the gradient only for the step's winner, so
-    a ruling rests on f and on the method's own point, whose gradient a start
-    always has. "accept" commits the lowest-f finite trial served this step - the
-    engine's per-step argmin - and calls ``fold(i, p)`` with the committed
-    winner, which is the method's
-    only place to fold an accepted step into its model (the engine owns the
-    argmin, so a method that tracked its own copy would drift from it). A step
-    that served no finite trial, or whose winner fails the engine's finite
-    check, stalls the path instead and ``fold`` is never called. "retry"
-    spends another trial, "give_up" stalls the path at once.
+    no later call hands it back: ``propose`` reads the current point off the
+    method's own state and answers from it. ``fold`` is the only place a landed
+    point is announced, so it is also the only place the method may advance its
+    model - a secant is a step that was taken, and only ``fold`` knows one was.
 
-    Arbitration is split: ``verdict`` rules the enumeration and may only mutate
-    enumeration-local state (a step length, a trial counter), while ``fold``
-    alone mutates the model, so a method folds exactly once per committed step.
+    The split between the two evaluation halves is the method's cost lever. A
+    step's *value* is what its enumeration compares, so the method reads it:
+    ``serve_trials`` serves a batch of candidate points for their values alone
+    and may be called as often as the enumeration needs. A step's *gradient* is
+    wanted only for the winner, so the engine buys it afterwards - one fused
+    batch per iteration, covering every winner and every restart start - and
+    hands it back through ``fold``. A `Pending` therefore leaves ``propose``
+    with whatever halves the method already holds: both owed when it never read
+    the point, the value alone when it read it through ``serve_trials``, and both
+    when the caller supplied no ``eval_f`` seam and the hook served the pair.
+
+    ``domain`` is handed to ``propose`` rather than stored, because the solver
+    carries no search space of its own; a start is placed by ``restart``. The
+    method clips its own step into that box - the engine clips only the restart
+    starts it draws, and never silently relocates a step.
 
     These methods are called by the engine on its own schedule - `restart` on
-    every placement, `needs_verdict` once per path per iteration, `fold` once
-    per committed step, `propose` and `verdict` once per trial - so they trust
-    their arguments: this Protocol is the whole contract.
+    every placement, `propose` once per iteration for the paths that step, `fold`
+    once per committed step - so they trust their arguments: this Protocol is the
+    whole contract.
     """
 
     def restart(self, i: int, p: PathPoint) -> None:
@@ -198,79 +220,45 @@ class LocalSolver(Protocol):
         """
         ...
 
-    def needs_verdict(self, i: int) -> bool:
-        """Report whether path i's next step is ruled candidate by candidate.
+    def propose(
+        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Pending | None]:
+        """Answer one step for each path in ``idxs``: its winner, or ``None``.
 
-        Asked once per path per iteration, before ``propose``, so the point it
-        can see is the one the method holds - its current point, whose gradient
-        a path always has. A method with a stopping test also speaks here:
-        answering True is how it gets the one ``verdict`` call that can carry
-        "give_up", since a step it did not ask to rule is committed as
-        proposed. That is why a converged path answers True even when its step
-        has a single candidate and no grid to compare.
+        One call covers every path that steps this iteration, so a method that
+        wants a trial grid proposes the whole flock's samples in one batch
+        rather than once per path. The answer is keyed by the indices asked, and
+        ``None`` means the path's own stopping test holds: the engine stalls it
+        where it stands, serving nothing and folding nothing.
 
-        ``True`` is the enumerated kind: the engine asks ``verdict`` what to do
-        with each served trial - served for its value alone when `eval_f` is
-        connected, fused with its gradient otherwise. ``False`` promises
-        the step commits its one proposal unjudged: the engine serves that
-        proposal's value together with its gradient, in one fused batch, and
-        gates the winner itself - a value or gradient that is not finite stalls
-        the path instead of being committed. Nothing here grades the proposal;
-        the gate is the whole of its acceptance.
+        A non-``None`` entry is the step's winner, held as a `Pending`. The
+        engine promotes it by buying the halves still owed, then commits it as
+        the path's next point and calls ``fold`` - unless it is not `usable`, in
+        which case the path stalls and ``fold`` is never called.
 
-        ``True`` costs a gradient *per trial* where ``False`` costs one per step,
-        unless the caller handed an `eval_f` seam, whose trials are served by
-        value and whose winners' gradients ride one fused batch per iteration.
-        How many trials a step runs is the method's business, so that billing is
-        its choice too.
-        """
-        ...
+        ``serve_trials`` is the run's value-only evaluation hook. Every call
+        serves one batch and reports it to the run's best and to the global
+        model, exactly as a fused batch is reported, so a method may call it as
+        freely as its enumeration needs. With no ``eval_f`` seam the same call
+        serves the fused pair, and the returned `Pending` carries both halves.
 
-    def propose(self, i: int) -> jnp.ndarray:
-        """Return path i's raw next candidate, shape ``(d,)``, from its point.
-
-        The point is the method's own: ``restart`` placed it and ``fold`` moved
-        it, and no call re-passes it, so a method that steps from a point keeps
-        it. Raw: the engine clips it into `domain` before serving, so a method
-        needs no box of its own and never reconciles two of them.
-        """
-        ...
-
-    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
-        """Rule the step's enumeration from the served trial's coords and value.
-
-        `x` is the served (clipped) point and `f` its value - a Python float,
-        not a JAX scalar, because every served batch is pulled to the host once.
-        The trial's own gradient is deliberately absent, because the engine may
-        have served the value alone and left the gradient to be bought for the
-        winner; the point the step starts from is the method's own, and it no
-        longer has to be passed. Only asked for a path that answered True to
-        ``needs_verdict``, so a step that commits its one proposal unjudged
-        never reaches here.
-
-        The return is an enumeration decision, not a verdict on the trial's
-        quality: "retry" asks for another candidate (the method typically
-        shrinks a step length or bumps a trial counter first); "accept" ends the
-        enumeration and commits the engine's per-step argmin (this trial, for a
-        single-sample method), which is then folded through ``fold`` - unless no
-        trial of the step was finite, or the winner fails the engine's finite
-        check, in which case the path stalls and nothing is folded;
-        "give_up" aborts the path's enumeration outright. The engine keeps
-        enumerating while this says "retry", so one of the two terminal answers
-        is the method's responsibility - there is no engine-side trial cap.
+        The winner must already lie inside ``domain``: the method is handed the
+        box and clips into it, because the engine will not. A restart start is
+        the only point that arrives clipped.
         """
         ...
 
     def fold(self, i: int, p: PathPoint) -> None:
         """Fold the step the engine just committed into the model: the path is at p.
 
-        The engine's only call site is the "accept" commit, with p = the
-        per-step argmin it committed, so the folded secant is always the
-        accepted step and can never disagree with it. It is never called for a
-        step the engine did not commit. `p` means what it means in ``restart``:
-        the point the path now stands at. The point it stepped from is the
-        method's own record, not an argument - the same rule that makes
-        ``propose`` read its point instead of being handed it.
+        The engine's only call site is the commit of a usable winner, with ``p``
+        the graded point it committed, so the folded secant is always a step
+        that was taken and can never disagree with the path. It is never called
+        for a point the engine refused (not `usable`) or for a path whose
+        stopping test held. ``p`` means what it means in ``restart``: the point
+        the path now stands at. The point it stepped from is the method's own
+        record, not an argument - the same rule that makes ``propose`` read its
+        point instead of being handed it.
         """
         ...
 
@@ -297,9 +285,9 @@ EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | Non
 
 Same ``x`` rows in, ``(f: (M,), feas: (M,) | None)`` out. Feasibility is
 included because it decides the value the run reports and whether a ``-inf``
-ends the run, neither of which ``f`` alone can tell. Opting in lets a judged
-step serve its trials for their values alone and buy the winners' gradients
-afterwards, together in one fused batch.
+ends the run, neither of which ``f`` alone can tell. Opting in lets a step that
+enumerates serve its trials for their values alone and buy the winners'
+gradients afterwards, together in one fused batch.
 """
 
 # The two halves of a `GlobalModel`, as the components that call them see them.

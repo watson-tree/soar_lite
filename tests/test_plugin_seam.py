@@ -4,8 +4,14 @@ The seams' contract is only proven by injection: a stub `LocalSolver` and a stub
 `GlobalModel` are plugged into the engine, which must drive them instead of its
 defaults, and a foreign box (a `Domain`) plus the caller's own x->θ map
 composed into `eval_f_g` must be honored too. These also pin the documented
-zero-caller hook — a method returning `"give_up"` — and the run with no extra
-gate (`budget_check=None` -> `status == "max_iters"`).
+zero-caller hook — a method naming no winner — and the run with no extra gate
+(`budget_check=None` -> `status == "max_iters"`).
+
+The two answers a method can give are the whole of its contract here: a `Pending`
+winner, which `settle` grades in one batch, or `None`, which stops that path
+where it stands. Whether it read its trial first is the method's business, and
+this suite pins both lanes against the same counters - a read trial spends `f`
+today and its gradient tomorrow, an unread one spends both at `settle`.
 
 Run with:
 
@@ -22,7 +28,8 @@ from soar_lite.domain import Domain
 from soar_lite.engine import (
     NPathResult,
     PathPoint,
-    Verdict,
+    Pending,
+    ServeTrials,
     n_path_schedule,
 )
 from soar_lite.global_model import SampleGlobalModel
@@ -52,17 +59,24 @@ def evaluator() -> tuple[
 
 
 class StubSolver:
-    """Accepts every trial on its first verdict, or gives up instead.
+    """Reads each step's one trial and accepts it, or names no winner.
 
-    Records the calls the engine makes, so the test can prove the engine drove
-    the injected method rather than its default `DiagonalPreconditioner`.
+    The engine hands a method a seam and takes back a winner or `None`; what
+    counts as a winner is the method's own ruling, so this stub spells the ruling
+    out here and records every call the engine makes, so a test can prove the
+    engine drove the injected method rather than its default
+    `DiagonalPreconditioner`.
+
+    The cohort is served as one batch and answered in one call: a method that
+    looped per path would serialize the engine's only seam, which is the thing
+    the batch counters below measure.
     """
 
     def __init__(self, *, give_up: bool = False) -> None:
-        """Store the verdict policy; give_up stalls on the first verdict."""
+        """Store the policy; give_up reads its trial and then names no winner."""
         self.give_up = give_up
         self.inited: list[int] = []
-        self.verdicts: list[int] = []
+        self.trials: list[int] = []
         self.folds: list[int] = []
         self.points: dict[int, PathPoint] = {}
 
@@ -71,70 +85,86 @@ class StubSolver:
         self.points[i] = p
         self.inited.append(i)
 
-    def propose(self, i: int) -> jnp.ndarray:
-        """Return a halved steepest-descent step from the point held for i."""
-        return self.points[i].x - 0.5 * self.points[i].g
-
-    def needs_verdict(self, i: int) -> bool:
-        """Rule every trial: this stub's `give_up` policy needs a ruling to fire."""
-        del i
-        return True
-
-    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
-        """Record the verdict: accept, or give up on the first trial."""
-        del x, f
-        self.verdicts.append(i)
-        return "give_up" if self.give_up else "accept"
-
     def fold(self, i: int, p: PathPoint) -> None:
         """Record the folded committed step and stand on it; nothing else is kept."""
         self.points[i] = p
         self.folds.append(i)
 
+    def _trial(self, idxs: list[int], domain: Domain) -> jnp.ndarray:
+        """Return the cohort's halved steepest-descent steps, clipped."""
+        held = [self.points[i] for i in idxs]
+        return jnp.clip(
+            jnp.stack([p.x for p in held]) - 0.5 * jnp.stack([p.g for p in held]),
+            domain.lo,
+            domain.hi,
+        )
+
+    def propose(
+        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Pending | None]:
+        """Serve one trial per path, then name the winners (or none of them)."""
+        self.trials.extend(idxs)
+        rows = serve_trials(self._trial(idxs, domain))
+        return {
+            i: (None if self.give_up else row)
+            for i, row in zip(idxs, rows, strict=True)
+        }
+
 
 class UnjudgedSolver(StubSolver):
-    """A method whose step commits its one proposal unread: no verdict needed."""
+    """A method whose step names its proposal unread: it serves no trial."""
 
-    def needs_verdict(self, i: int) -> bool:
-        """Never rule: every step is taken as proposed."""
-        del i
-        return False
+    def propose(
+        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Pending | None]:
+        """Hand the steps back owed, so `settle` grades them in one batch."""
+        del serve_trials
+        self.trials.extend(idxs)
+        batch = self._trial(idxs, domain)
+        return {i: Pending(batch[k], None, None) for k, i in enumerate(idxs)}
 
 
 class RetryingSolver(StubSolver):
     """Reject a fixed number of trials per step before accepting one.
 
-    The engine has no trial cap of its own: how long a step enumerates is the
-    method's business, so a method that retries stretches one iteration over many
-    value-only batches - which is what puts the gate's per-batch ask under test.
+    A line search discovers trial k+1 only after ruling trial k, so its trials go
+    out one at a time, one batch each - which is what puts the gate's per-serve
+    ask under test. The engine has no trial cap of its own: how long a step
+    enumerates is the method's business, so a method that retries stretches one
+    iteration over many value-only batches.
     """
 
     def __init__(self, retries: int) -> None:
         """Store how many trials each path rejects before it accepts."""
         super().__init__()
         self.retries = retries
-        self.rejected: dict[int, int] = {}
 
-    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
-        """Retry the first `retries` trials for a path, then accept."""
-        del x, f
-        self.verdicts.append(i)
-        n = self.rejected.get(i, 0)
-        self.rejected[i] = n + 1
-        return "retry" if n < self.retries else "accept"
+    def propose(
+        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Pending | None]:
+        """Serve trials one at a time and name the last one, read."""
+        out: dict[int, Pending | None] = {}
+        for i in idxs:
+            row: Pending | None = None
+            for _attempt in range(self.retries + 1):
+                self.trials.append(i)
+                (row,) = serve_trials(self._trial([i], domain))
+            out[i] = row
+        return out
 
 
 class PushTo(UnjudgedSolver):
-    """Propose one fixed point, unruled, to place a chosen value under the gate."""
+    """Name one fixed point, unread, to place a chosen value under the gate."""
 
     def __init__(self, x_star: float) -> None:
         """Store the point every path proposes."""
         super().__init__()
         self.x_star = x_star
 
-    def propose(self, i: int) -> jnp.ndarray:
+    def _trial(self, idxs: list[int], domain: Domain) -> jnp.ndarray:
         """Return the stored point, whatever the start."""
-        return jnp.full_like(self.points[i].x, self.x_star)
+        del domain
+        return jnp.full((len(idxs), self.points[idxs[0]].x.size), self.x_star)
 
 
 class RecordingModel:
@@ -182,7 +212,7 @@ def test_injected_solver_is_driven() -> None:
         local_solver=solver,
     )
     assert solver.inited == [0, 1, 2], solver.inited
-    assert solver.verdicts == [0, 1, 2], solver.verdicts  # one trial, then accept
+    assert solver.trials == [0, 1, 2], solver.trials  # one trial, then accept
     # The flock's one fused batch, then the accepted winners' one: two batches,
     # k points each.
     assert res.n_f_g_points == sum(w for w, _d in shapes) == 2 * k
@@ -201,7 +231,7 @@ def test_give_up_stalls_a_path() -> None:
         max_iters=2,  # the flock, then the single stalled iteration
         local_solver=solver,
     )
-    assert solver.verdicts == [0, 1, 2]  # one verdict each, then stalled
+    assert solver.trials == [0, 1, 2]  # one trial each, then named no winner
     # Nothing to commit: every batch this run serves is a trial, and a trial
     # without the value-only seam is fused, so the count is one flock plus one
     # iteration.
@@ -509,28 +539,13 @@ def test_a_flocks_start_is_served_once_fused() -> None:
 def test_a_rejected_trial_is_bought_no_gradient() -> None:
     """A retrying step pays one gradient pass in total, not one per trial.
 
-    The ruled-on quantity is f, so each trial is served for its value alone and
-    only the winner is graded. Two trials therefore cost two value-only calls
-    and one fused batch - the same single fused batch a no-line-search step
-    costs, which is what makes a value-only seam cost-matched across the sides.
+    The read quantity is f, so each trial is served for its value alone and only
+    the winner is graded. Two trials therefore cost two value-only calls and one
+    fused batch - the same single fused batch a no-line-search step costs, which
+    is what makes a value-only seam cost-matched across the sides.
     """
     k = 1
     f_calls: list[int] = []
-
-    class OneRetry(StubSolver):
-        """Retry the first trial, then accept - the shortest line search."""
-
-        def __init__(self) -> None:
-            """Start with no verdict served."""
-            super().__init__()
-            self.trials = 0
-
-        def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
-            """Reject the first trial, accept the second (no reason but the trial)."""
-            del x, f
-            self.verdicts.append(i)
-            self.trials += 1
-            return "retry" if self.trials == 1 else "accept"
 
     def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         f_vals, grads = jax.vmap(pointwise)(x)
@@ -541,7 +556,7 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
         f_vals, _grads = jax.vmap(pointwise)(x)
         return f_vals, None
 
-    solver = OneRetry()
+    solver = RetryingSolver(retries=1)  # the shortest line search
     res = n_path_schedule(
         eval_f_g,
         eval_f=eval_f,
@@ -549,10 +564,10 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
         max_iters=2,  # the flock, then this one step
         local_solver=solver,
     )
-    # The step's two trials, value-only. The flock travels to `settle`
-    # unread, so it spends no f of its own.
+    # The step's two trials, value-only and one batch each. The flock travels to
+    # `settle` unread, so it spends no f of its own.
     assert f_calls == [k, k], f_calls
-    assert solver.verdicts == [0, 0], solver.verdicts
+    assert solver.trials == [0, 0], solver.trials
     assert solver.folds == [0], solver.folds  # one winner, one fold
     # Two batches for the whole run: the flock's, then the winner's.
     assert res.n_f_g_batches == 2, res
@@ -705,7 +720,7 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
         max_iters=2,  # the flock, then this one step
         local_solver=solver,
     )
-    assert solver.verdicts == [0], solver.verdicts  # the trial was judged
+    assert solver.trials == [0], solver.trials  # the trial was read
     assert solver.folds == [], solver.folds  # but never committed
     assert res.status == "max_iters", res
 
@@ -730,8 +745,8 @@ def test_a_non_finite_gradient_start_arrives_stalled() -> None:
         max_iters=2,
         local_solver=solver,
     )
-    # No path was ever live, so nothing stepped and nothing was judged.
-    assert solver.verdicts == [], solver.verdicts
+    # No path was ever live, so nothing stepped and nothing was read.
+    assert solver.trials == [], solver.trials
     assert solver.folds == [], solver.folds
     assert res.status == "max_iters", res
 

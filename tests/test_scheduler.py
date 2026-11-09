@@ -4,6 +4,7 @@ Seam (settled): the engine consumes its width, the callables, and the domain it
 searches
 
     eval_f_g(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
+    eval_f(x (M,d)) -> (f_vals (M,), feas (M,)|None)      # optional
     budget_check() -> bool
     domain -> the run's box as a `Domain`, required: every proposal is clipped
         into it, and its `d` is the run's dimension
@@ -16,7 +17,18 @@ The caller composes x->θ and the chain rule grad_x = grad_θ * dθ_dx(x) into
 eval_f_g; the engine owns clip-to-domain, and the starts are the model's - and
 the two plugins are spelled `global_model`, `local_solver`
 in that order wherever the engine names them. Whether a stall is re-drawn is
-the `restart_stalled` knob, not a plugin. With
+the `restart_stalled` knob, not a plugin.
+
+The two seams are one objective cut in half: `eval_f` prices a point's value,
+`eval_f_g` prices a batch's values and gradients together. A method's step is
+its own enumeration - it reads any number of trials through `serve_trials`,
+which serves `eval_f` when the run was handed one and `eval_f_g` otherwise, so a
+run without the seam is unchanged - and it names the winner it wants, or `None`
+for "stop this path where it stands". Whatever its enumeration read for its
+value alone, the engine buys the gradient of in one batch over the whole cohort
+(`settle`), so an iteration costs one gradient pass, not one per move. That
+split is why this suite can pin the engine's batch accounting at all: with no
+`eval_f`, every trial is a fused point and the counters are one counter. With
 `global_model=None` the engine falls back to a `SampleGlobalModel` drawing what
 `domain` admits - uniform inside a bounded dimension, its own
 `N(0, scale_i^2)` inside a free one, that normal truncated inside a
@@ -43,7 +55,14 @@ import jax.numpy as jnp
 import pytest
 
 from soar_lite.domain import Domain
-from soar_lite.engine import NPathResult, PathPoint, Verdict, n_path_schedule
+from soar_lite.engine import (
+    LocalSolver,
+    NPathResult,
+    PathPoint,
+    Pending,
+    ServeTrials,
+    n_path_schedule,
+)
 from soar_lite.engine.schedule import _argmin_finite
 from soar_lite.global_model import SampleGlobalModel
 from soar_lite.local_solver import DiagonalPreconditioner
@@ -97,48 +116,48 @@ class HalfStep:
     """A deterministic local method: half a steepest-descent step, strict decrease.
 
     These tests are the engine's, so they must not depend on which local method
-    is plugged in - the engine owns the paths, the box, the shared budget and the
-    EI cadence, and the method owns only direction, step size, acceptance and
-    how long its own enumeration runs. This one is deliberately naive: it
-    proposes `x - 0.5*g` and accepts only a strict decrease, giving up after
-    `trial_cap` rejects, so a path stalls for an engine reason (a rejected trial,
-    typically one pinned at the box wall) and never because a curvature model
-    went quiet. What the real method does is `test_local_solver.py`'s
-    subject.
+    is plugged in - the engine owns the paths, the box, the shared budget, the
+    restart cadence and the batch that grades a cohort's winners, and the method
+    owns direction, step size, acceptance and how long its own enumeration runs.
+    This one is deliberately naive: one trial per step, `x - 0.5*g` clipped into
+    the run's box, read through the seam the engine hands it, accepted only on a
+    strict decrease and named as the winner only then. A rejected trial is no
+    winner, so the path stalls for an engine reason - a step pinned at the box
+    wall - and never because a curvature model went quiet. What the real method
+    does is `test_local_solver.py`'s subject.
+
+    The cohort is answered in one call and its trials are served as one batch:
+    a method that looped per path would serialize the engine's only seam, which
+    is the thing these tests measure.
     """
 
-    def __init__(self, trial_cap: int = 20) -> None:
-        """Bound one step's enumeration at `trial_cap` rejects (the method's own)."""
-        self.trial_cap = trial_cap
-        self.n_rejects: dict[int, int] = {}
+    def __init__(self) -> None:
+        """Start with no points: `restart` places them."""
         self.points: dict[int, PathPoint] = {}
 
     def restart(self, i: int, p: PathPoint) -> None:
-        """Keep the start and reset the reject counter, which restarts."""
+        """Take the start the engine placed."""
         self.points[i] = p
-        self.n_rejects[i] = 0
-
-    def propose(self, i: int) -> jnp.ndarray:
-        """Return half a steepest-descent step from the point held for i."""
-        return self.points[i].x - 0.5 * self.points[i].g
-
-    def needs_verdict(self, i: int) -> bool:
-        """Rule every trial: the strict-decrease test is this method's acceptance."""
-        del i
-        return True
-
-    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
-        """Accept a strict decrease; give up once the trial cap is spent."""
-        del x
-        if f < self.points[i].f:
-            self.n_rejects[i] = 0  # the cap is per step, like an enumeration
-            return "accept"
-        self.n_rejects[i] = self.n_rejects.get(i, 0) + 1
-        return "retry" if self.n_rejects[i] < self.trial_cap else "give_up"
 
     def fold(self, i: int, p: PathPoint) -> None:
         """Stand on the committed point; this method keeps no model."""
         self.points[i] = p
+
+    def propose(
+        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Pending | None]:
+        """Return half a step for each path that strictly decreases, else none."""
+        held = [self.points[i] for i in idxs]
+        trial = jnp.clip(
+            jnp.stack([p.x for p in held]) - 0.5 * jnp.stack([p.g for p in held]),
+            domain.lo,
+            domain.hi,
+        )
+        rows = serve_trials(trial)
+        return {
+            i: (row if row.value() < p.f else None)
+            for i, row, p in zip(idxs, rows, held, strict=True)
+        }
 
 
 class Recorder:
@@ -148,7 +167,8 @@ class Recorder:
         """Map a single point θ (d,) to (f, grad_θ (d,))."""
         self.pointwise = pointwise
         self.all_f_vals: list[float] = []  # every f value ever returned, per point
-        self.batch_shapes: list[tuple[int, int]] = []  # shape of each seam call
+        self.batch_shapes: list[tuple[int, int]] = []  # shape of each fused call
+        self.f_only_shapes: list[tuple[int, int]] = []  # shape of each value-only call
         self.evals = 0
 
     def __call__(self, theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
@@ -159,6 +179,14 @@ class Recorder:
         self.all_f_vals.extend(float(v) for v in f_vals)
         self.evals += int(theta.shape[0])
         return f_vals, grads, None
+
+    def values(self, theta: jnp.ndarray) -> tuple[jnp.ndarray, None]:
+        """Serve values alone: the seam a method's own enumeration reads."""
+        assert theta.ndim == 2, f"eval_f expects (M,d) batch, got {theta.shape}"
+        self.f_only_shapes.append((int(theta.shape[0]), int(theta.shape[1])))
+        f_vals = jax.vmap(lambda row: self.pointwise(row)[0])(theta)
+        self.all_f_vals.extend(float(v) for v in f_vals)
+        return f_vals, None
 
     def limit_check(self, limit: int) -> Callable[[], bool]:
         """Return a batch-level budget_check() False once `limit` evals served.
@@ -201,7 +229,7 @@ def test_batch_shape_and_point_counting() -> None:
     assert res.n_f_g_points == rec.evals, (res.n_f_g_points, rec.evals)
     assert res.n_f_g_points <= 500
     # n_iters counts engine iterations, not the trials inside them (the method's
-    # own trial cap bounds one iteration), so it stays far below the eval
+    # own enumeration bounds one iteration), so it stays far below the eval
     # count and never passes the horizon.
     assert 0 < res.n_iters <= 50
     # Every batch serves at least one point and never more than one point per
@@ -737,43 +765,50 @@ def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
     assert math.isfinite(run(restart_stalled=True).fun)
 
 
-def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
+def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
     """The engine has no trial cap: the enumeration's length is the method's.
 
-    A method that wants 30 rejects before its first acceptance must get all 31
-    trials in one iteration. An engine-side cap would have stalled the path
-    mid-errand, turning a converging step into a stall that only a restart could
-    undo - a stopping rule the method never asked for.
-    """
-    n_rejects = 30
+    A method that wants 30 uphill trials before its descent trial must get all
+    31 inside its one `propose` call, and one iteration must serve them: an
+    engine-side cap would have stalled the path mid-errand, turning a converging
+    step into a stall that only a restart could undo - a stopping rule the method
+    never asked for.
 
-    class Patient:
-        """Propose uphill until the 30th reject, then the descent step."""
+    The counts are what the value/gradient split buys. The 31 trials are one
+    value-only batch and owe no gradient at all; the winner's gradient is bought
+    once, afterwards, beside the iteration's other deferred work - so a long
+    enumeration costs a long enumeration's values and exactly one gradient.
+    """
+    n_uphill = 30
+
+    class Patient(LocalSolver):
+        """Read n_uphill uphill trials, then the descent trial that wins."""
 
         def __init__(self) -> None:
-            self.calls: dict[int, int] = {}
+            """Start with no point: `restart` places the first one."""
             self.points: dict[int, PathPoint] = {}
 
         def restart(self, i: int, p: PathPoint) -> None:
+            """Take the start the engine placed."""
             self.points[i] = p
-            self.calls[i] = 0
-
-        def propose(self, i: int) -> jnp.ndarray:
-            self.calls[i] = self.calls.get(i, 0) + 1
-            p = self.points[i]
-            return p.x + p.g if self.calls[i] <= n_rejects else p.x - p.g
-
-        def needs_verdict(self, i: int) -> bool:
-            """Rule every trial: this stub's whole point is a long enumeration."""
-            del i
-            return True
-
-        def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
-            del x
-            return "accept" if f < self.points[i].f else "retry"
 
         def fold(self, i: int, p: PathPoint) -> None:
+            """Take the point the engine committed."""
             self.points[i] = p
+
+        def propose(
+            self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        ) -> dict[int, Pending | None]:
+            """Read the whole errand in one batch and name the winner."""
+            out: dict[int, Pending | None] = {}
+            for i in idxs:  # one path in this run: the count stays exact
+                p = self.points[i]
+                errand = [p.x + (k + 1) * 0.1 * p.g for k in range(n_uphill)]
+                errand.append(p.x - p.g)
+                batch = jnp.stack([jnp.clip(x, domain.lo, domain.hi) for x in errand])
+                rows = serve_trials(batch)
+                out[i] = next(r for r in rows if r.value() < p.f)
+            return out
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum(theta**2), 2.0 * theta
@@ -781,17 +816,66 @@ def test_a_step_serves_as_many_trials_as_the_method_asks_for() -> None:
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
-        **flock_kwargs(
-            flock(1),
-            unit_domain(),
-            key=jax.random.PRNGKey(11),
-        ),  # one path: a single batch per trial keeps the count exact
+        **flock_kwargs(flock(1), unit_domain(), key=jax.random.PRNGKey(11)),
+        eval_f=rec.values,
         max_iters=2,  # iteration 0 places x0, then this one step
         local_solver=Patient(),
     )
-    assert len(rec.batch_shapes) == 1 + n_rejects + 1, rec.batch_shapes  # x0 + trials
+    # The whole errand reached the seam once, as one batch of 31 points...
+    assert rec.f_only_shapes == [(n_uphill + 1, 1)], rec.f_only_shapes
+    assert res.n_f_points == n_uphill + 1, res.n_f_points
+    # ...and cost no gradient: the start and the winner are the only fused points.
+    assert res.n_f_g_points == 2, res.n_f_g_points
+    assert rec.batch_shapes == [(1, 1), (1, 1)], rec.batch_shapes
     assert res.n_iters == 2, res
     assert rec.all_f_vals[-1] < rec.all_f_vals[0], rec.all_f_vals  # it committed
+
+
+def test_a_stalled_path_leaves_the_cohort() -> None:
+    """A stalled path is asked nothing until a restart: the engine stops it.
+
+    Its method named no winner, so the engine keeps it where it stands - and
+    asking again would let the method un-stall a path the engine had already
+    stopped, which is the one thing a stopping rule must not allow. The live
+    path keeps being asked every iteration; the stopped one is not in the
+    cohort at all.
+    """
+
+    class HalfCohort(HalfStep):
+        """Step path 0 normally; never name a winner for path 1."""
+
+        def __init__(self) -> None:
+            """Start empty and begin the ask log."""
+            super().__init__()
+            self.asked: list[list[int]] = []
+
+        def propose(
+            self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        ) -> dict[int, Pending | None]:
+            """Log the cohort, then refuse the step for path 1."""
+            self.asked.append(list(idxs))
+            answers = super().propose(idxs, domain, serve_trials)
+            return {i: (None if i == 1 else a) for i, a in answers.items()}
+
+    def quartic(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        # A quartic, not a quadratic: one half-step of steepest descent lands a
+        # 1-D quadratic exactly on its minimizer, where the live path would stall
+        # too, and this test needs it to keep running to the horizon.
+        d = theta - 0.7
+        return jnp.sum(d**4 + d**2), 4.0 * d**3 + 2.0 * d
+
+    solver = HalfCohort()
+    res = n_path_schedule(
+        Recorder(quartic),
+        **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(0)),
+        max_iters=4,
+        local_solver=solver,
+        restart_stalled=False,
+    )
+    assert res.status == "max_iters", res.status
+    assert solver.asked[0] == [0, 1], solver.asked  # the first step asks both
+    # Only the path still running is asked after that: one stall, one stop.
+    assert all(a == [0] for a in solver.asked[1:]), solver.asked
 
 
 def test_bounds_spellings_are_the_same_box() -> None:
@@ -1087,7 +1171,7 @@ def test_x0_is_placed_once_and_every_later_restart_is_a_draw() -> None:
         x0=x0,
         global_model=model,
         max_iters=3,
-        local_solver=HalfStep(trial_cap=1),  # a flat surface stalls on one reject
+        local_solver=HalfStep(),  # a flat surface names no winner
         restart_stalled=True,
     )
     assert jnp.array_equal(served[0], x0)

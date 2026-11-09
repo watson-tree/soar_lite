@@ -2,13 +2,23 @@
 
 The adapter exists so a caller writes a scalar ``(d,) -> ()`` function and no
 `vmap`/`value_and_grad`; these tests pin each half against the spelling it
-replaces, and check the pair actually drives the engine.
+replaces, and check the pair actually drives the engine - including the value-only
+half, which only a method that reads its own trials ever reaches.
 """
 
 import jax
 import jax.numpy as jnp
 
-from soar_lite import DiagonalPreconditioner, Domain, n_path_schedule, pointwise
+from soar_lite import (
+    DiagonalPreconditioner,
+    Domain,
+    LocalSolver,
+    PathPoint,
+    Pending,
+    ServeTrials,
+    n_path_schedule,
+    pointwise,
+)
 
 
 def _objective(row: jnp.ndarray) -> jnp.ndarray:
@@ -83,6 +93,41 @@ def test_building_the_pair_runs_nothing() -> None:
     assert callable(eval_f)
 
 
+class _ValueReader(LocalSolver):
+    """A method that reads its candidate's value: the value-only seam's client.
+
+    One fixed step along -g, read before it is handed back, so the winner arrives
+    with its value served and owes only its gradient. That is the minimal method
+    that makes both counters move, which is what the seam pair is for.
+    """
+
+    def __init__(self) -> None:
+        """Start with no point: `restart` places the first one."""
+        self.p: PathPoint | None = None
+
+    def restart(self, i: int, p: PathPoint) -> None:
+        """Take the point the engine placed."""
+        del i
+        self.p = p
+
+    def fold(self, i: int, p: PathPoint) -> None:
+        """Take the point the engine committed."""
+        del i
+        self.p = p
+
+    def propose(
+        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Pending | None]:
+        """Return the read candidate for every path asked about."""
+        assert self.p is not None
+        x = jnp.clip(self.p.x - 0.1 * self.p.g, domain.lo, domain.hi)
+        out: dict[int, Pending | None] = {}
+        for i in idxs:
+            (read,) = serve_trials(x[None, :])
+            out[i] = read
+        return out
+
+
 def test_the_pair_drives_a_run() -> None:
     """The seams it returns are the ones `n_path_schedule` takes."""
     domain = Domain(jnp.asarray([[-2.0, 2.0], [-2.0, 2.0]]))
@@ -93,17 +138,35 @@ def test_the_pair_drives_a_run() -> None:
         n_paths=4,
         domain=domain,
         eval_f=eval_f,
-        max_iters=5,
-        # n_alpha >= 2 puts every path in the judged lane, so the value-only seam is
-        # exercised from the first iteration instead of whenever a gradient floor
-        # happens to be hit - with the default n_alpha=1 it took a lucky path, and
-        # a different direction rule moved it out of reach.
-        local_solver=DiagonalPreconditioner(n_alpha=2),
+        max_iters=20,
+        local_solver=DiagonalPreconditioner(),
     )
 
     assert result.status == "max_iters", result.status
     assert bool(jnp.all(jnp.isfinite(result.x))), result.x.tolist()
     assert result.fun < 1.0, result.fun
-    # With the value-only seam in play, trials are served for values alone, so the
-    # run must have used both counters rather than the fused half only.
+    # The default method takes one full step and reads nothing, so its only seam
+    # is the fused one: `eval_f` being supplied costs it nothing.
+    assert result.n_f_points == 0, result.n_f_points
+
+
+def test_the_value_only_seam_carries_the_trials_a_method_reads() -> None:
+    """A method that reads its trials is served by `eval_f`, and only by it."""
+    domain = Domain(jnp.asarray([[-2.0, 2.0], [-2.0, 2.0]]))
+    eval_f_g, eval_f = pointwise(_objective)
+
+    result = n_path_schedule(
+        eval_f_g,
+        n_paths=1,
+        domain=domain,
+        x0=jnp.asarray([[1.5, 1.5]]),
+        eval_f=eval_f,
+        max_iters=20,
+        local_solver=_ValueReader(),
+    )
+
+    assert result.fun < 1e-3, result.fun
+    # Every iteration served one trial for its value and then bought that
+    # winner's gradient on its own: the two counters are the two seams.
     assert result.n_f_points > 0, result.n_f_points
+    assert result.n_f_g_points > 0, result.n_f_g_points

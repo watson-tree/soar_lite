@@ -1,25 +1,25 @@
-"""`_Paths.move` one ruling at a time.
+"""`_Paths.move` one step at a time.
 
 The end-to-end suites reach `move` through `n_path_schedule`, so what they can
 see is a whole run's arithmetic: the horizon, the three stop gates and the
 assembled report all sit between the caller and a single iteration's decisions.
 This suite drives `move` directly - no horizon, no clock, no report - so each
-verdict the method can rule becomes one statement about where the path stands
-and which counters moved.
+statement about where a path stands, which counters moved and what the method was
+told becomes one test.
 
-That needs no seam: `_Paths` takes all four of its collaborators injected, and
-`_Budget`, `_Best` and `_Evaluator` are four lines each to build. Every run here
+That needs no seam: `_Paths` takes all five of its collaborators injected, and
+`_Budget`, `_Best` and `_Evaluator` are a few lines each to build. Every run here
 is one path in the unit box unless it says otherwise, and every step is stated as
-the script it is - the candidates `propose` hands back and the rulings `verdict`
-gives, in call order.
+the script it is - the candidates `propose` hands back, in call order.
 
-The two lifecycles this pins, which no whole-run test can see cheaply:
+The three promises this pins, which no whole-run test can see cheaply:
 
-- a path that stalls keeps the point it holds and buys no gradient, while a path
-  that wins buys exactly one, in one batch, however many trials it served;
-- every coordinate the engine serves is clipped into the box first, so the
-  method judges the point that was actually served rather than the one it asked
-  for.
+- a winner the method never read is graded by one fused batch, and a winner the
+  method read through `serve_trials` only still owes its gradient;
+- an iteration buys its gradients once, covering restart starts and step winners
+  in the same batch;
+- the clip is asymmetric: the engine clips a restart start it draws, and hands a
+  step through exactly as the method left it.
 """
 
 # pyright: reportPrivateUsage=false
@@ -35,7 +35,7 @@ import jax.numpy as jnp
 import pytest
 
 from soar_lite.domain import Domain
-from soar_lite.engine import PathPoint, Verdict, pointwise
+from soar_lite.engine import PathPoint, Pending, ServeTrials, pointwise
 from soar_lite.engine.schedule import (
     _AllStalled,
     _Best,
@@ -49,8 +49,8 @@ from tests.flock import flock, unit_domain
 jax.config.update("jax_enable_x64", val=True)
 
 # The box the runs below search, and the objective they minimise: a bowl centred
-# at 0.25, so a trial at 0.2 is better than one at 0.4 and the step's argmin is
-# not simply the last point served.
+# at 0.25, so a step from 0.6 towards 0.2 is an improvement and a step towards
+# 0.4 is not.
 BOWL_MIN = 0.25
 
 
@@ -59,53 +59,47 @@ def bowl(x: jnp.ndarray) -> jnp.ndarray:
     return jnp.sum(jnp.square(x - BOWL_MIN))
 
 
-class Rigged:
-    """An objective that serves its value until the test kills it.
+def nan_at_bowl_floor(x: jnp.ndarray) -> jnp.ndarray:
+    """Return the bowl's value above 0.5 and NaN below it.
 
     A run whose very first batch is non-finite never places a flock, so reaching
-    "accepted, but the step served no finite sample" needs a value that is live
-    when the flock lands and dead afterwards.
+    "a winner the engine cannot use" needs a value that is live where the flock
+    lands and dead where the step goes.
     """
-
-    def __init__(self) -> None:
-        """Start live: the flock this objective is handed lands."""
-        self.dead = False
-
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Return the bowl's value, or NaN once `dead` is set."""
-        return jnp.asarray(jnp.nan) if self.dead else bowl(x)
+    return jnp.where(x[0] > 0.5, bowl(x), jnp.asarray(jnp.nan))
 
 
 class Script:
     """A `LocalSolver` that walks a caller's script, one call at a time.
 
-    `moves` is consumed by `propose` and `rules` by `verdict`, both in call
-    order, so a test states a step as the two lists it already is. The points the
-    engine hands over (`restart`, `fold`) are kept in `got`, and the points the
-    method was asked to judge in `judged`: those are the two facts a test needs
-    about the commit, and neither requires reading the path's own state.
+    `moves` is consumed by `propose` in call order, one entry per path, so a test
+    states a step as the list it already is: a number is a raw candidate for that
+    path, and ``None`` is its method's stopping test firing.
+
+    `serve` picks what the returned `Pending` already holds. False hands the
+    candidate back unread, the shape a method that takes one full step returns.
+    True reads the candidate's value through `serve_trials` first, the shape a
+    method that enumerates its step returns - so its winner still owes only its
+    gradient.
+
+    The points the engine hands over (`restart`, `fold`) are kept in `got`, and
+    the values the method served in `served`: those are the two facts a test
+    needs about the commit, and neither requires reading the path's own state.
     """
 
-    def __init__(
-        self,
-        moves: list[float],
-        rules: list[Verdict],
-        *,
-        ruled: bool = True,
-    ) -> None:
+    def __init__(self, moves: list[float | None], *, serve: bool = False) -> None:
         """Keep the script, and start with nothing handed over.
 
         Args:
-            moves: one raw candidate per `propose` call, in call order.
-            rules: one verdict per judged trial, in call order.
-            ruled: whether this path's step is judged at all.
+            moves: one raw candidate per path per `propose` call, in call order.
+            serve: whether a candidate is read for its value before it is
+                returned.
 
         """
         self._moves = list(moves)
-        self._rules = list(rules)
-        self._ruled = ruled
+        self._serve = serve
         self.got: list[PathPoint] = []
-        self.judged: list[tuple[jnp.ndarray, float]] = []
+        self.served: list[float] = []
 
     def restart(self, i: int, p: PathPoint) -> None:
         """Keep the point the engine seeded path `i` with."""
@@ -117,21 +111,25 @@ class Script:
         del i
         self.got.append(p)
 
-    def needs_verdict(self, i: int) -> bool:
-        """Return whether this run's step is judged."""
-        del i
-        return self._ruled
-
-    def propose(self, i: int) -> jnp.ndarray:
-        """Return the script's next raw candidate."""
-        del i
-        return jnp.asarray([self._moves.pop(0)])
-
-    def verdict(self, i: int, x: jnp.ndarray, f: float) -> Verdict:
-        """Return the script's next ruling, keeping the served point."""
-        del i
-        self.judged.append((x, f))
-        return self._rules.pop(0)
+    def propose(
+        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Pending | None]:
+        """Return the script's next entry for each path asked about."""
+        del domain  # the script never clips: it states a candidate, not a box
+        out: dict[int, Pending | None] = {}
+        for i in idxs:
+            move = self._moves.pop(0)
+            if move is None:
+                out[i] = None
+                continue
+            x = jnp.asarray([move])
+            if self._serve:
+                (read,) = serve_trials(x[None, :])
+                self.served.append(read.value())
+                out[i] = read
+            else:
+                out[i] = Pending(x, None, None)
+        return out
 
 
 def model_at(x: jnp.ndarray) -> Callable[[int, Domain], jnp.ndarray]:
@@ -144,21 +142,22 @@ def model_at(x: jnp.ndarray) -> Callable[[int, Domain], jnp.ndarray]:
     return propose
 
 
-def paths(
+def paths(  # noqa: PLR0913 - each knob names one axis a test varies
     solver: LocalSolver,
     *,
     objective: Callable[[jnp.ndarray], jnp.ndarray] = bowl,
     x0: jnp.ndarray | None = None,
     restart_at: jnp.ndarray | None = None,
     value_only: bool = True,
+    restart_stalled: bool = False,
 ) -> tuple[_Paths, _Budget]:
     """Return a state machine around `solver`, plus the meter it charges.
 
     No horizon and no clock: `_Budget`'s three gates are the entry's business and
     this suite never wants one closing, so the run's length is however many
     `move` calls the test makes. `value_only` picks which seam serves a trial -
-    the value-only one when present, which is what lets a step's rejected trials
-    be paid for without their gradients.
+    the value-only one when present, which is what lets a method's read trials be
+    paid for without their gradients.
 
     Args:
         solver: the method to drive, ordinarily a `Script`.
@@ -166,6 +165,7 @@ def paths(
         x0: the caller's flock, consumed by the first `move` when handed in.
         restart_at: the row a restart proposes, zeros when None.
         value_only: whether the value-only seam is present.
+        restart_stalled: whether a stalled path is re-drawn.
 
     Returns:
         The state machine and the meter it charges, so a test can name a
@@ -191,7 +191,7 @@ def paths(
         model_at(restart_at),
         solver,
         x0=x0,
-        restart_stalled=False,
+        restart_stalled=restart_stalled,
     )
     return started, budget
 
@@ -211,48 +211,49 @@ def placed(solver: LocalSolver) -> tuple[_Paths, _Budget, float]:
     return run, budget, float(start[0, 0])
 
 
-def test_a_retry_then_an_accept_commits_the_steps_argmin() -> None:
-    """The commit is the lowest finite trial served, not the last one served."""
-    solver = Script([0.2, 0.4], ["retry", "accept"])
+def test_a_winner_never_read_is_graded_by_one_fused_batch() -> None:
+    """The method may not read its own winner: `settle` buys both halves once."""
+    solver = Script([0.2])
     run, budget, start = placed(solver)
     assert float(held(run).x[0]) == pytest.approx(start)
 
     run.move()
 
-    # 0.4 was served last and is worse than 0.2, so a commit of the last served
-    # point would land on the wrong side of the bowl's centre.
     assert float(held(run).x[0]) == pytest.approx(0.2)
     assert not run.flock[0].stalled
-    assert solver.got[-1] is held(run)
-    # Two value-only turns, one served point each, then one fused batch buying
-    # the winner's gradient: an iteration costs one gradient pass, not one per
-    # trial.
-    assert (budget.n_f_batches, budget.n_f_points) == (2, 2)
+    assert solver.got[-1] is held(run)  # folded the very point the engine holds
+    assert solver.served == []  # nothing was read on the way in
+    # Its value was never served alone: the one batch that graded the winner
+    # carried f and g together.
+    assert (budget.n_f_batches, budget.n_f_points) == (0, 0)
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 2)
 
 
-@pytest.mark.parametrize(
-    ("kill_before_step", "rules"),
-    [
-        (False, ["give_up"]),  # the method's own stopping test fired
-        (True, ["accept"]),  # accepted, but the step served no finite sample
-    ],
-)
-def test_a_step_with_nothing_to_win_stalls_without_buying_a_gradient(
-    *,
-    kill_before_step: bool,
-    rules: list[Verdict],
-) -> None:
-    """Both routes into a stall keep the point the path holds and charge no g."""
-    start = 0.6
-    objective = Rigged()
-    solver = Script([0.2], rules)
-    run, budget = paths(solver, objective=objective, x0=jnp.asarray([[start]]))
-    run.move()  # plants the flock: one fused batch, nothing served for value
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 1)
-    objective.dead = kill_before_step
+def test_a_winner_read_for_its_value_still_owes_its_gradient() -> None:
+    """A read trial is paid for once, and the gradient is bought afterwards."""
+    solver = Script([0.2], serve=True)
+    run, budget, _ = placed(solver)
 
-    run.move()  # the step, which finds nothing to win
+    run.move()
+
+    assert float(held(run).x[0]) == pytest.approx(0.2)
+    assert solver.served == pytest.approx([bowl(jnp.asarray([0.2]))])
+    # One value-only turn for the candidate, then one fused batch buying the
+    # winner's gradient alone - and the path is graded, not just valued.
+    assert (budget.n_f_batches, budget.n_f_points) == (1, 1)
+    assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 2)
+    assert math.isfinite(float(held(run).f))
+    assert jnp.all(jnp.isfinite(held(run).g))
+
+
+def test_a_named_stall_keeps_the_point_and_buys_nothing() -> None:
+    """``None`` is the method's own stopping test: the path stays put, uncharged."""
+    start = 0.6
+    solver = Script([None])
+    run, budget = paths(solver, x0=jnp.asarray([[start]]))
+    run.move()  # plants the flock: one fused batch, nothing served for value
+
+    run.move()  # the step, which the method declines to take
 
     assert run.flock[0].stalled
     # Where the path stood when its step failed is still where it stands: a
@@ -260,41 +261,54 @@ def test_a_step_with_nothing_to_win_stalls_without_buying_a_gradient(
     assert float(held(run).x[0]) == pytest.approx(start)
     assert solver.got == [held(run)]  # seeded once, never folded
     # The stall bought nothing: the only fused batch was the one that placed the
-    # flock, and the trial's value came from the value-only seam.
+    # flock.
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 1)
-    assert (budget.n_f_batches, budget.n_f_points) == (1, 1)
-
-
-def test_the_unjudged_lane_commits_its_proposal_unread() -> None:
-    """A path whose method needs no verdict buys its proposal's f with its g."""
-    solver = Script([0.2], [], ruled=False)
-    run, budget, _ = placed(solver)
-
-    run.move()
-
-    assert float(held(run).x[0]) == pytest.approx(0.2)
-    assert not run.flock[0].stalled
-    assert solver.got[-1] is held(run)
-    # Nothing was served for its value alone: the value came with the gradient.
     assert (budget.n_f_batches, budget.n_f_points) == (0, 0)
+
+
+def test_an_unusable_winner_stalls_without_folding() -> None:
+    """A winner the engine cannot grade leaves the path where it stood."""
+    start = 0.6
+    solver = Script([0.2])
+    run, budget = paths(solver, objective=nan_at_bowl_floor, x0=jnp.asarray([[start]]))
+    run.move()  # plants the flock; 0.6 is above the NaN floor
+
+    run.move()  # the step, whose winner grades to NaN
+
+    assert run.flock[0].stalled
+    assert float(held(run).x[0]) == pytest.approx(start)
+    assert solver.got == [held(run)]  # the refused winner was never folded
+    # The winner was still served and charged: a refusal is about the point, not
+    # about the work the run already paid for.
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 2)
 
 
-def test_the_engine_clips_every_served_coordinate() -> None:
-    """The method judges the point the engine served, not the one it asked for."""
-    solver = Script([-5.0], ["accept"])
+def test_a_restart_start_is_clipped_by_the_engine() -> None:
+    """A start drawn outside the box is placed on the wall, not out of bounds."""
+    solver = Script([])
+    run, _ = paths(solver, restart_at=jnp.asarray([5.0]))
+
+    run.move()
+
+    assert float(held(run).x[0]) == pytest.approx(1.0)  # the box's upper wall
+    assert float(solver.got[0].x[0]) == pytest.approx(1.0)  # told the clipped one
+
+
+def test_a_step_reaches_the_engine_as_the_method_left_it() -> None:
+    """The engine clips only the starts it draws: a step is the method's to clip."""
+    solver = Script([-5.0])
     run, _, _ = placed(solver)
 
     run.move()
 
-    served_x, _ = solver.judged[0]
-    assert float(served_x[0]) == pytest.approx(0.0)  # the box's lower wall
-    assert float(held(run).x[0]) == pytest.approx(0.0)
+    # No silent relocation: `domain` is handed to `propose` precisely so the
+    # method decides, and a method that ignores it gets what it asked for.
+    assert float(held(run).x[0]) == pytest.approx(-5.0)
 
 
 def test_an_unusable_start_is_refused_rather_than_placed() -> None:
     """A start the engine cannot use leaves the path with no point and no seed."""
-    solver = Script([], [])
+    solver = Script([])
     run, budget = paths(solver, restart_at=jnp.asarray([math.nan]))
 
     run.move()
@@ -310,7 +324,7 @@ def test_an_unusable_start_is_refused_rather_than_placed() -> None:
 
 def test_a_flock_with_nothing_left_to_do_ends_the_run() -> None:
     """With no re-draws, an entirely stalled flock is terminal, not idle."""
-    solver = Script([0.2], ["give_up"])
+    solver = Script([None])
     run, _, _ = placed(solver)
     run.move()
     assert run.flock[0].stalled
@@ -322,7 +336,7 @@ def test_a_flock_with_nothing_left_to_do_ends_the_run() -> None:
 def test_the_caller_flock_is_placed_in_one_batch() -> None:
     """Iteration 0 hands `x0` over whole: no model, one fused batch."""
     starts = flock(3)
-    solver = Script([], [])
+    solver = Script([])
     run, budget = paths(solver, x0=starts)
 
     run.move()
@@ -334,3 +348,25 @@ def test_the_caller_flock_is_placed_in_one_batch() -> None:
         [float(start) for start in starts[:, 0]]
     )
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 3)
+
+
+def test_one_batch_grades_the_starts_and_the_winners_together() -> None:
+    """A restart and a step in the same iteration share one gradient pass."""
+    starts = jnp.asarray([[0.6], [0.6]])
+    solver = Script([None, 0.2, 0.4])
+    run, budget = paths(solver, x0=starts, restart_stalled=True)
+    run.move()  # plants both paths: one fused batch of two
+    assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 2)
+
+    run.move()  # path 0 declines, path 1 wins
+    assert run.flock[0].stalled
+    assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 3)
+
+    run.move()  # path 0 is re-drawn, path 1 steps again
+
+    # One batch, not two: the re-drawn start and the step winner were both owed
+    # their gradient, so `settle` bought them together.
+    assert (budget.n_f_g_batches, budget.n_f_g_points) == (3, 5)
+    assert not run.flock[0].stalled
+    assert float(held(run, 0).x[0]) == pytest.approx(0.0)  # the restart row
+    assert float(held(run, 1).x[0]) == pytest.approx(0.4)

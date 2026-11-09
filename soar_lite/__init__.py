@@ -27,7 +27,8 @@ from soar_lite.engine import (
     NPathResult,
     NPathStatus,
     PathPoint,
-    Verdict,
+    Pending,
+    ServeTrials,
     n_path_schedule,
     pointwise,
 )
@@ -59,11 +60,12 @@ __all__ = [
     "NPathResult",
     "NPathStatus",
     "PathPoint",
+    "Pending",
     "Projection",
     "ProjectionFactory",
     "SampleGlobalModel",
+    "ServeTrials",
     "SphereProjection",
-    "Verdict",
     "n_path_schedule",
     "pointwise",
 ]

@@ -29,43 +29,9 @@ from soar_lite.engine.contracts import (
     NPathStatus,
     ObserveFn,
     PathPoint,
+    Pending,
     ProposeFn,
 )
-
-
-@dataclass(frozen=True)
-class _Pending:
-    """A produced point that `settle` has not promoted to a `PathPoint` yet.
-
-    Producing a point is one decision and grading it is one batch, so a point
-    travels between them as this: each half is either served or still owed.
-    Everything produced goes through here, and `settle` is the one site that
-    promotes it, which keeps "does it still need g" a question about the point
-    rather than about which producer made it.
-
-    `g is not None` implies `f is not None`: a fused pass serves both, and only
-    a value-only trial arrives with `f` alone, its gradient waiting for
-    `settle`.
-    """
-
-    x: jnp.ndarray
-    f: float | None
-    g: jnp.ndarray | None
-
-    def value(self) -> float:
-        """Return the served value, or raise if this point was never read."""
-        if self.f is None:
-            msg = "_Pending is missing its f"
-            raise RuntimeError(msg)
-        return self.f
-
-    def graded(self) -> PathPoint:
-        """Return this point as a `PathPoint`, or raise if either half is owed."""
-        if self.f is None or self.g is None:
-            missing = "f" if self.f is None else "g"
-            msg = f"_Pending is missing its {missing}"
-            raise RuntimeError(msg)
-        return PathPoint(self.x, self.f, self.g)
 
 
 def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
@@ -106,15 +72,17 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 ) -> NPathResult:
     """Advance a flock of paths in x from the caller's initial points.
 
-    The engine owns the schedule: it clips every proposal into `domain`, serves
-    each batch as one call through the seam it came from - `eval_f_g` for a
-    fused batch, `eval_f` for a value-only one - keeps the n-path state machine,
-    and owns the best `f⋆` (`fun` in the result). Two things are injected, named
+    The engine owns the schedule: it clips every restart start into `domain`,
+    serves each batch as one call through the seam it came from - `eval_f_g` for
+    a fused batch, `eval_f` for a value-only one - buys the iteration's deferred
+    gradients in one batch, keeps the n-path state machine, and owns the best
+    `f⋆` (`fun` in the result). Two things are injected, named
     `global_model` and `local_solver`, in that order wherever they appear:
     `global_model` supplies **where** a restart lands (one point per restarting
     path, clipped into the box) and is also the run's evidence sink, while
-    `local_solver` owns direction, step size and acceptance and keeps its
-    per-path state inside itself. `restart_stalled` is one flag on top of them:
+    `local_solver` owns direction, step size, acceptance, and the enumeration
+    inside a step, keeping its per-path state inside itself. `restart_stalled`
+    is one flag on top of them:
     **when** a path stalls is the local solver's own stopping test, **whether**
     it is then re-drawn is `restart_stalled`, and **where** the new start lands
     is `global_model.propose`, so the engine needs no restart rule of its own.
@@ -184,12 +152,12 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         eval_f: the objective's value half alone, same ``x`` rows, returning
             ``(f: (M,), feas: (M,) | None)``. ``None`` means every served trial
             takes its gradient in the same fused pass; supplying it lets a
-            judged step (one whose ``needs_verdict`` answered True) serve its
-            trials for their values alone and buy the winners' gradients
-            afterwards, together in one fused batch. That same final batch also
-            buys the value and gradient of an unjudged winner and of a redraw
-            start: both are committed without reading a value, so neither is
-            served before it.
+            method that enumerates its step serve trials for their values alone
+            and buy the winners' gradients afterwards, together in one fused
+            batch. That same final batch also buys the value and gradient of a
+            winner the method never read, and of a redraw start: both are
+            committed without anyone reading a value, so neither is served
+            before it.
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two.
         time_limit: a wall-clock deadline in seconds (``None`` means none).
@@ -572,38 +540,38 @@ class _Evaluator:
         self._best = best
         self._observe = observe
 
-    def pending_unread(self, x_batch: jnp.ndarray) -> list[_Pending]:
+    def pending_unread(self, x_batch: jnp.ndarray) -> list[Pending]:
         """Return one unread point per row: both halves owed to `settle`.
 
         The twin of `serve_trials` for a batch nothing has read yet: a restart
-        start has no values to compare, and an unjudged step winner is committed
-        as proposed, so each defers even its cheap f and takes f and g from one
-        fused pass. Keeping this spelling beside `settle`'s promotion keeps
-        `_Pending` construction in this object instead of at the call sites.
+        start has no values to compare, and a winner the method never read is
+        committed as proposed, so each defers even its cheap f and takes f and g
+        from one fused pass. Keeping this spelling beside `settle`'s promotion
+        keeps `Pending` construction in this object instead of at the call sites.
         """
-        return [_Pending(row, None, None) for row in x_batch]
+        return [Pending(row, None, None) for row in x_batch]
 
-    def serve_trials(self, x_batch: jnp.ndarray) -> list[_Pending]:
+    def serve_trials(self, x_batch: jnp.ndarray) -> list[Pending]:
         """Serve one step's trial batch, as one produced candidate per row.
 
         A trial's gradient is only wanted for the step's winner, so with the
         value-only seam each trial is served for its value alone and the winners are
         graded once, together (`settle`). Without it a fused pass is the
         only way to a value, so every trial carries its gradient whether or not
-        the step's argmin keeps it; `settle` then buys nothing.
+        the method's own enumeration keeps it; `settle` then buys nothing.
         """
         if self._eval_f is not None:
             return [
-                _Pending(row, f, None)
+                Pending(row, f, None)
                 for row, f in zip(x_batch, self._serve_f(x_batch), strict=True)
             ]
         f_vals, g_batch = self._serve_f_g(x_batch)
         return [
-            _Pending(x_batch[pos], f_vals[pos], g_batch[pos])
+            Pending(x_batch[pos], f_vals[pos], g_batch[pos])
             for pos in range(len(f_vals))
         ]
 
-    def settle(self, decided: dict[int, _Pending]) -> dict[int, PathPoint]:
+    def settle(self, decided: dict[int, Pending]) -> dict[int, PathPoint]:
         """Buy whatever gradient the iteration's points still owe, in one batch.
 
         Everything the value-only seam left pending goes out as a single batch, so an
@@ -634,9 +602,9 @@ class _Evaluator:
 
         The stop query is asked at this batch altitude before the charge, so a
         batch is served whole or not at all and the fused counters only ever
-        hold batches that were served. This is the expensive half; a judged
-        step's rejected trials are served by `_serve_f`, which asks the same gate
-        and counts on the other pair. Returns ``(f_vals, g_batch)``.
+        hold batches that were served. This is the expensive half; an
+        enumerating step's rejected trials are served by `_serve_f`, which asks
+        the same gate and counts on the other pair. Returns ``(f_vals, g_batch)``.
         """
         reason = self._budget.stop()
         if reason is not None:
@@ -658,7 +626,7 @@ class _Evaluator:
 
         The gate is asked here exactly as the fused half asks it, so a deadline
         that passes mid-step cuts the run at the next value-only batch rather
-        than after a whole iteration's retries: the judged lane's loop can turn
+        than after a whole iteration's retries: a method's enumeration can turn
         many times without reaching the loop head or `settle`. What stays
         asymmetric is the charge - this batch counts on the f pair, and no count
         closes the gate. Only `serve_trials` calls this; the None-check below is
@@ -711,9 +679,9 @@ class _Paths:
       list once and threads it to `_restart_starts` and to the complement both
       halves share.
     - An iteration decides on values and pays for gradients once: whatever the
-      value-only seam left ungraded (restart starts and step winners alike) is bought
-      in one batch before anything is placed, so a decision is never priced
-      before it is made.
+      value-only seam left ungraded - restart starts and step winners alike - is
+      bought in one batch before anything is placed, so nothing is committed
+      before it is graded.
     - A path is stalled when it did not move at all this iteration - its method
       gave up on every trial, or its fresh start or its winner was not usable. A
       stalled path does not step, so it serves nothing that iteration and the
@@ -774,12 +742,13 @@ class _Paths:
 
         The restart decision comes first: a path that holds no point, or that is
         stalled and whose run opted into `restart_stalled`, is given a fresh
-        start instead of stepping. Both halves decide where a path goes from
-        values alone when the value-only seam is present, and the gradients those
-        decisions need are then bought together in one batch (`settle`), so an
-        iteration costs one gradient pass however many moves it deferred. A run
-        without the seam serves everything fused and reaches `settle` already
-        graded.
+        start instead of stepping. The cohort that steps is answered by one
+        `propose` call, and the method makes the decision there - on values
+        alone when the value-only seam is present, reading whatever trials it
+        wants. The gradients those decisions need are then bought together in one
+        batch (`settle`), so an iteration costs one gradient pass however many
+        moves it deferred. A run without the seam serves everything fused and
+        reaches `settle` already graded.
 
         The two halves touch disjoint paths, and every call into a collaborator
         is per path, so deciding all moves before placing any is the same
@@ -802,10 +771,15 @@ class _Paths:
         # than idling out the horizon.
         if not restarted and all(slot.stalled for slot in self.flock):
             raise _AllStalled
-        # Every path that did not restart. A stalled path is in here only when
-        # the run never restarts: it proposes nothing, but it still holds its
-        # place in the cohort so its point stays readable.
-        cohort = [i for i in range(self.n_paths) if i not in restarted]
+        # Every path that did not restart and is not stalled. A stalled path is
+        # left out rather than asked again: `restart_stalled` is its only way
+        # back, and asking would let a method un-stall a path the engine has
+        # already stopped - the two would disagree about whether it is running.
+        cohort = [
+            i
+            for i, slot in enumerate(self.flock)
+            if i not in restarted and not slot.stalled
+        ]
         starts = self._restart_starts(restarted)
         won = self._decide(cohort)
         # One batch over both halves, keyed by path so neither is re-paired by
@@ -817,7 +791,7 @@ class _Paths:
         self._place({i: settled[i] for i in restarted})
         self._advance({i: settled[i] for i in won})
 
-    def _restart_starts(self, restarted: list[int]) -> dict[int, _Pending]:
+    def _restart_starts(self, restarted: list[int]) -> dict[int, Pending]:
         """Ask for one fresh start per restarted path, clipped into the run's box.
 
         The caller's flock, if it handed one, answers the run's first call and
@@ -831,7 +805,7 @@ class _Paths:
         so a model returning another width fails here, naming the shape, instead
         of deep in a broadcast during the clip. The clip stays as the defensive
         seam for a model that oversteps. Both halves stay owed - a start has
-        nothing to be judged on - so `settle` buys them in the same batch as the
+        nothing to be compared - so `settle` buys them in the same batch as the
         step winners, and a restart costs no gradient pass of its own.
         """
         if not restarted:
@@ -851,108 +825,39 @@ class _Paths:
         x_cand = jnp.clip(proposed, self.domain.lo, self.domain.hi)
         return dict(zip(restarted, self.evaluator.pending_unread(x_cand), strict=True))
 
-    def _decide(self, cohort: list[int]) -> dict[int, _Pending]:
-        """Run the cohort's trials: the method judges, the engine records winners.
+    def _decide(self, cohort: list[int]) -> dict[int, Pending]:
+        """Ask the method for the cohort's steps and keep the winners it names.
 
-        The cohort splits on ``needs_verdict``. A path that needs one has its
-        step enumerated: the method proposes, the engine clips and serves, the
-        method judges. Trial passes run in lockstep over the still-rejecting
-        subset, each served whole or not at all. A path's point is unchanged
-        while it rejects - the engine commits one only on "accept" - so the
-        point the method holds for the whole step is also the step's start. A
-        path that needs none commits its one proposal unread -
-        the same deal a restart start gets - so its value is served once, fused
-        with its gradient, by the caller's `settle`.
+        One call covers the whole stepping cohort, so a method that enumerates a
+        step does so here, inside its own ``propose``. A ``None`` answer is the
+        method's own stopping test firing: the path stalls where it stands, and
+        nothing is served or folded for it. A `Pending` winner goes out with
+        whatever halves the method holds - both owed when it never read the
+        point, the value alone when it read it through `serve_trials` - and
+        `settle` buys the rest.
 
-        Returns the per-step argmin each accepting path won, keyed by path, still
-        waiting for `settle` when the seam served values only. Nothing is
-        committed here: a path ends this iteration stalled exactly when its
-        method found nothing to win (its convergence test fired, or it accepted
-        with no finite sample). The cohort also holds already-stalled paths: they
-        run no trials and emit no winner.
+        Nothing is committed here: a path ends this iteration stalled exactly
+        when its method named no winner, or when the winner turns out not to be
+        usable (`_advance` decides that). A stalled path is never in the cohort:
+        the engine asks nothing more of it until a restart re-draws it.
         """
         if not cohort:
             # Every path restarted this iteration: the cohort is empty.
             return {}
-        lo, hi = self.domain.lo, self.domain.hi
         # A path already stalled only reports its sample this iteration, so it
-        # stays out of both lanes; `stalled` also gates the exit observation
-        # below without a second membership list.
-        unjudged, rejecting = self._lanes(cohort)
-        won = self._propose_unjudged(unjudged) if unjudged else {}
-        # Per-step argmin cache: "accept" commits the lowest-f finite trial served
-        # this step (not the last served one), so a method can sweep a step-length
-        # grid without re-evaluating its argmin. The engine is the sole owner of
-        # "who won": the method learns the winner only through the fold callback,
-        # never by tracking its own argmin (two copies would drift). `won` holds
-        # only the paths that actually won, so a path that gives up after a good
-        # earlier trial commits nothing.
-        best: dict[int, _Pending] = {}
-        # No engine-side trial cap: how long a step's enumeration may run is the
-        # method's own business (its convergence test, its own trial budget), and
-        # `verdict` is where it says so. A cap here would be a second, invisible
-        # stopping rule for a decision the method already owns.
-        while rejecting:
-            # The method proposes raw candidates; the engine clips them into
-            # the run's `domain`, so the caller's map never sees a point outside
-            # the box the engine advertised. The clipped step is the actual one,
-            # so the verdict is handed the served point.
-            raw = jnp.stack(
-                [self.local_solver.propose(i) for i in rejecting],
-            )
-            x_trial = jnp.clip(raw, lo, hi)
-            served = self.evaluator.serve_trials(x_trial)
-            still_rejecting: list[int] = []
-            for pos, i in enumerate(rejecting):
-                trial = served[pos]
-                f_trial = trial.value()
-                # A gradient the seam already served is gated here, on the same
-                # rule as a start: nothing folds a, or proposes from, a point
-                # whose gradient is not all finite. A value-only trial has none
-                # to gate yet - it is gated by `settle` + `_advance` instead.
-                finite = math.isfinite(f_trial) and (
-                    trial.g is None or _all_finite(trial.g)
-                )
-                if finite and (i not in best or f_trial < best[i].value()):
-                    best[i] = trial
-                verdict = self.local_solver.verdict(i, trial.x, f_trial)
-                if verdict == "retry":
-                    still_rejecting.append(i)
-                elif verdict == "accept":
-                    if i not in best:  # no finite sample served: nothing to win
-                        self.flock[i].stalled = True
-                    else:
-                        won[i] = best[i]
-                else:  # "give_up": the method's own convergence test fired
-                    self.flock[i].stalled = True
-            rejecting = still_rejecting
-        return won
+        # stays out of the cohort's proposals; `stalled` also gates the exit
+        # observation below without a second membership list.
+        steps = [i for i in cohort if not self.flock[i].stalled]
 
-    def _lanes(self, cohort: list[int]) -> tuple[list[int], list[int]]:
-        """Split the cohort into its (unjudged, judged) lanes.
-
-        A stalled path joins neither: it proposes nothing this iteration and
-        emits no winner, it only reports its stall.
-        """
-        unjudged: list[int] = []
-        judged: list[int] = []
-        for i in cohort:
-            if self.flock[i].stalled:
+        res = self.local_solver.propose(steps, self.domain, self.evaluator.serve_trials)
+        won: dict[int, Pending] = {}
+        for i, pend in res.items():
+            if pend is None:
+                self.flock[i].stalled = True
                 continue
-            ruled = self.local_solver.needs_verdict(i)
-            (judged if ruled else unjudged).append(i)
-        return unjudged, judged
+            won[i] = pend
 
-    def _propose_unjudged(self, paths: list[int]) -> dict[int, _Pending]:
-        """Take each unjudged path's one proposal as its step's winner, unread.
-
-        Proposals are still clipped into the box: the engine owns that, and the
-        served point is the clipped one. Both halves are left owed, which is what
-        makes the iteration serve this point's value once rather than twice.
-        """
-        raw = jnp.stack([self.local_solver.propose(i) for i in paths])
-        clipped = jnp.clip(raw, self.domain.lo, self.domain.hi)
-        return dict(zip(paths, self.evaluator.pending_unread(clipped), strict=True))
+        return won
 
     def _place(self, placed: dict[int, PathPoint]) -> None:
         """Place the given paths on their fresh starts (one restart event).
@@ -984,10 +889,11 @@ class _Paths:
         for i, best in won.items():
             slot = self.flock[i]
             if not best.usable:
-                # A judged winner was ruled usable before it was kept, so this
-                # gate only ever bites the unjudged lane, whose value is first
-                # seen in the batch that bought its gradient. Same gate as
-                # `_place`: an unusable point never becomes a path's point.
+                # `settle` graded the winner and this is the first read, so a
+                # non-finite value or gradient is refused here: the path keeps
+                # the point it held, and the method is never told the step
+                # landed. Same gate as `_place`: an unusable point never becomes
+                # a path's point.
                 slot.stalled = True
                 continue
             slot.point = best

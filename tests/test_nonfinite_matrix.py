@@ -176,6 +176,10 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
     The arm is the frozen flock (`restart_stalled=False`): the path stalls and
     nothing can un-stall it, so the run ends on `all_stalled` rather than idling
     out the horizon.
+
+    The start sits off the minimizer on purpose: one placed on it is stationary,
+    and the method stops the path itself without serving a step - a different row
+    of the table, owned by the method's stopping test rather than by this gate.
     """
     n_batches = [0]
 
@@ -190,7 +194,7 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
 
     res = n_path_schedule(
         eval_f_g,
-        **flock_kwargs(jnp.array([[0.5]]), unit_domain(), key=jax.random.PRNGKey(0)),
+        **flock_kwargs(jnp.array([[0.2]]), unit_domain(), key=jax.random.PRNGKey(0)),
         max_iters=10,
         restart_stalled=False,
     )
