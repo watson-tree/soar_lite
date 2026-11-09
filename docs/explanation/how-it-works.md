@@ -364,8 +364,11 @@ A restart is assembled from three distinct decisions, and this implementation
 keeps them in three different places, none answering for another:
 
 - **When**: a path stopping is the local method's own judgment (the `τ_rel`
-  stopping test, or a step that read every trial it served as non-finite). The
-  engine adds no second stopping rule and does not guess "how far off we are".
+  stopping test, or a step that read only non-finite trials and declined to name
+  a winner), or the commit gate refusing a point it cannot use — a non-finite
+  value or gradient, on the winner the method named or the start the model drew.
+  The engine adds no second *convergence* rule and does not guess "how far off
+  we are".
 - **Whether**: `restart_stalled`, a boolean knob, default `True`. While it is
   off, a stopped path stays stopped — `stalled` is still recorded, it still
   occupies its slot, and its last usable point stays in the run's best — only
@@ -443,8 +446,9 @@ batches its steps serve out of `serve_trials` (see Cost):
    serve_trials)` once, for the whole cohort, producing each path's winner or
    `None`.
 5. **One `settle` batch**: redraw starts first, then the step winners in path
-   order; the **same** batch buys the halves still owed — a read winner's
-   gradient, and both halves of anything named unread.
+   order; the **same** batch buys the halves still owed — each read winner's
+   gradient when the `eval_f` seam served it value-only, and both halves of
+   anything named unread or drawn as a start.
 6. **Landing**: a start goes through `_restart` (unusable leaves it `stalled`,
    redrawn next iteration when `restart_stalled` is on) and a winner through
    `_step` (unusable is `stalled`, no `step`).
@@ -469,11 +473,13 @@ the whole of the protocol — the engine has no second question to ask, and
 
 A winner is a `Pending` point, and what it carries says what the step read. A
 **read** winner carries `x` and `f`: the method served it as a trial through
-`serve_trials` and ruled on the value itself, so its gradient is still owed and
-`settle` buys it in the iteration's fused batch. An **unread** winner carries `x`
-alone: the method named its proposal without reading anything — one whole step,
-read by no value — exactly what `DiagonalPreconditioner` does — so both halves
-are owed and both arrive in that same batch.
+`serve_trials` and ruled on the value itself, so on the value-only seam its
+gradient is still owed and `settle` buys it in the iteration's fused batch (on
+the fused seam the trial brought the gradient too, and nothing is owed). An
+**unread** winner carries `x` alone: the method named its proposal without
+reading anything — one whole step, read by no value — exactly what
+`DiagonalPreconditioner` does — so both halves are owed and both arrive in that
+same batch.
 
 Which of the two a method sends is its own business. The engine stocks
 `serve_trials`, calls `propose` once, and grades whatever comes back, so the
@@ -482,12 +488,14 @@ picks among them are all inside the method: a line search, a grid, an early
 exit, and the case of no comparison at all are one code path from where the
 engine stands.
 
-Two exits set `stalled`, and both are the method's: `None` (its stopping test
-fired), and a step whose every trial it read was non-finite. The engine sets no
-trial limit — how long a step enumerates is the method's business, and a limit
-would give an already-decided step a second, invisible stopping rule — so a
-method whose enumeration never terminates blocks the process rather than
-running slowly.
+Two things set `stalled`: `propose` answering `None` (whatever the method's
+reason — its stopping test, or a step that read only non-finite trials and
+declined to name a winner), and the commit gate refusing a point whose `f` or
+`g` is non-finite — an unusable start or winner. The engine sets no trial
+limit — how long a step enumerates is the method's business, and a limit would
+give an already-decided step a second, invisible stopping rule — so a method
+whose enumeration never terminates blocks the process rather than running
+slowly.
 
 `serve_trials` takes the batch of candidate points and returns one `Pending` per
 row. When `eval_f` is connected a trial costs its value alone; when it is not,
@@ -530,19 +538,21 @@ not the interface, that needs the previous point as well as the current one.
 Which candidate a step keeps is decided inside the step: the method reads
 whatever trials its own rule needs and names the winner, so a step that compares
 six candidates and one that compares none are the same call from where the
-engine stands. What the engine owns is the **price**: it batches every path's
-gradient into one fused pass, applies the finite gate, and clips nothing that a
-method already placed. The method learns the landing point only through
-`step(i, p)`, with `p` the point the engine committed, and keeps no second copy
-of what the engine bought.
+engine stands. What the engine owns is the **price**: it batches whatever
+gradients the iteration still owes into one fused pass, applies the finite gate,
+and clips nothing that a method already placed. The method learns the landing
+point only through `step(i, p)`, with `p` the point the engine committed, and
+keeps no second copy of what the engine bought.
 
-A trial carries its **coordinate and its value**, because a value is what a
-selection rule reads; the topmost candidate rarely needs a gradient, so the seam
-does not buy one. What the engine buys is the winner's gradient, at the commit
-point — and for an unread winner, `f` is first seen there too. So the commit gate
-checks **both halves**: if either `f` or `g` is non-finite, nothing is committed
-and the path is `stalled`. That makes `step` the single commit point: a landing
-point the method is told about is never taken back.
+A trial carries its **coordinate, its value, and — on the fused seam, where the
+value arrives with it — its gradient**, because a value is what a selection rule
+reads; the topmost candidate rarely needs a gradient, so the value-only seam
+does not buy one. What the commit point buys is whatever the winner still owes —
+its gradient under the value-only seam — and for an unread winner, `f` is first
+seen there too. So the commit gate checks **both halves**: if either `f` or `g`
+is non-finite, nothing is committed and the path is `stalled`. That makes
+`step` the single commit point: a landing point the method is told about is
+never taken back.
 
 ### stalled is the only path state
 
@@ -563,8 +573,9 @@ redraw), so it is always redrawn. A refused point is a stall, and
 
 ### All stalled: redraw, or end
 
-When every path is `stalled`, the iteration has neither steps nor owed starts, and
-only two outcomes remain, decided by one bit, `restart_stalled`:
+When every path is `stalled`, the iteration has no cohort at all — nothing
+steps. What is owed a start depends on one bit, `restart_stalled`, and so does
+the outcome:
 
 - **On (default)**: stalled paths enter the redraw set on the next iteration, so every
   iteration has a batch to serve — the flock cycles between stalling and restarting,

@@ -26,8 +26,8 @@ fused pass. A **step** is one `LocalSolver.propose` call for one cohort: the
 method reads as many trials as it wants and returns a **winner** per path, or
 `None` to stop that path where it stands. A winner that was read travels as a
 `Pending` with its gradient still **owed**, and whatever the step owes is bought
-in one fused batch over the whole iteration (`settle`) — so an iteration costs
-one fused pass however many trials it read. A winner that does not survive that
+in one fused batch over the whole iteration (`settle`) — so with `eval_f`
+connected an iteration adds one fused pass however many trials it read. A winner that does not survive that
 batch's finite check, or that was read as non-finite, stalls the path rather than
 being committed. An **arm** is one variant of a plugin, and an **ask** is one
 `propose` call.

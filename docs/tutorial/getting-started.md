@@ -20,8 +20,8 @@ for you.
 | output 2 | `(M, d)` | gradients `∂f/∂x` |
 | output 3 | `(M,)` or `None` | feasibility mask: 0/1 (or booleans); `None` means all feasible |
 
-The engine clips every proposal into `domain` before calling your function, so
-every row of `x` is inside it already.
+Every point served is inside `domain` already: the engine clips the restart
+starts it draws, and a method clips its own step.
 
 ### 1.1 The objective
 
@@ -57,7 +57,8 @@ preference:
   a per-point predicate that returns `True` where the point is allowed. A point
   masked `False` is still served — its f value and gradient come back normally
   and are used — but it never becomes the best. So `result.fun` is a minimum
-  over feasible points only, and is `nan` if nothing feasible was ever served.
+  over feasible points only, and is `nan` when no feasible point carried a
+  finite value.
   The mask is read as 0/1, booleans included (`True == 1`): a `1` marks the
   point feasible, a `0` infeasible, and any other value — a signed margin, a
   `NaN` — raises a `ValueError` instead of being read.
@@ -79,7 +80,7 @@ can hold. `feasible` is how a constraint the domain cannot state reaches the eng
 `below_diagonal` is a diagonal half-space, not a box side, and it leaves this
 run's answer alone because `(3, 3)` sits well inside it.
 
-Remember neither route steers: `domain` only clips each proposal into its
+Remember neither route steers: `domain` only bounds each proposal by its
 sides, and the mask is a gate, not a guide — masked-out points are still served
 and still pull the paths, so it decides who may be `best` but does not steer a
 path away from infeasible regions. To make a constraint the domain cannot state
@@ -150,8 +151,9 @@ every shape in that table.
 The fused seam — `eval_f_g` here, whatever you name it — is the only positional
 argument; everything else is keyword-only.
 `domain` and `n_paths` are required, and a run needs a stop — at least one of
-the horizon `max_iters` or the deadline `time_limit`. Each missing required
-argument is refused by `ValueError` rather than guessed.
+the horizon `max_iters` or the deadline `time_limit`. Leaving out a required
+keyword is a `TypeError` from the signature, and giving neither stop is a
+`ValueError` at the entry — checked, rather than guessed.
 
 `eval_f` is optional: hand it in when the method enumerates trials for their
 values alone; §4 says when that saves budget. The default solver reads no trial
@@ -194,8 +196,8 @@ correspond:
 
 | Field | Meaning |
 | --- | --- |
-| `x` | argmin over the served points that were feasible — a feasible `-inf` names itself — in the coordinates you handed the engine |
-| `fun` | its value: the best over feasible points, `nan` if none, `-inf` if the objective has no floor |
+| `x` | argmin over the served points that were feasible with a finite value — a feasible `-inf` names itself — in the coordinates you handed the engine |
+| `fun` | its value: the best finite feasible value, `nan` when no feasible point had one, `-inf` if the objective has no floor |
 | `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path holds no usable point (a refused start leaves the row empty) |
 | `flock_fun` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |
 | `n_f_g_points` | fused points billed — the serial-cost count |
@@ -242,12 +244,13 @@ Four gotchas worth knowing up front:
   `N(0, scale²)`, a half-side draws the same normal truncated, and any side can
   take its own injected sampler. There is no uniform prior over an infinite
   side, so the engine never invents one — it falls back to those draws.
-- **`eval_f` serves a step's trials value-only; the winner's gradient is still
-  the iteration's one fused `settle` batch.** A method that reads its candidates
-  (§6) gets each trial's f cheaply and pays one gradient pass for the winner —
-  the same batch, with or without `eval_f`. Without `eval_f` every trial is
-  itself a fused batch, so the count lands on the `f_g` pair instead of the `f`
-  pair.
+- **`eval_f` serves a step's trials value-only; the winner's gradient still
+  costs the iteration's one fused `settle` batch.** A method that reads its
+  candidates (§6) gets each trial's f cheaply and pays that one gradient pass
+  for the winner — so reading more candidates costs serial work, never another
+  gradient pass. Without `eval_f` every trial is itself a fused batch and
+  already carries its gradient, so the count lands on the `f_g` pair instead of
+  the `f` pair.
 - **`n_paths = 1` is the single-path baseline.** Same code, one path — and with
   one path the parallelism is gone while the default restart bit still fires:
   every stop becomes a random redraw, which on a unimodal problem is a restart
@@ -311,12 +314,14 @@ result = n_path_schedule(
 To replace one outright, implement its protocol and pass the instance:
 
 - **`LocalSolver`** — the search method: `restart`, `propose`, `step`. You own
-  direction, step size, acceptance and how many candidates a step looks at; the
-  engine owns the clip, the horizon, the finite gate and the one fused batch
-  that grades what a step keeps. `propose` gets the cohort's indices, the run's
+  direction, step size, acceptance, how many candidates a step looks at and the
+  clip of your own step into the domain; the engine owns the horizon, the finite
+  gate and the one fused batch that grades what a step keeps. `propose` gets the
+  cohort's indices, the run's
   `domain` and `serve_trials`, and answers a winner (a `Pending` point, read or
-  unread) or `None` to stop that path. Trials are read for their value alone,
-  never for their gradient. `restart` is the only cold-start call, so it runs at
+  unread) or `None` to stop that path. With `eval_f` connected a trial is read
+  for its value alone, never for its gradient; without it the same call brings
+  both. `restart` is the only cold-start call, so it runs at
   initialization and after every restart; `step` is the only place a landed step
   is announced.
 - **`GlobalModel`** — the restart-point source and evidence sink: `observe`,

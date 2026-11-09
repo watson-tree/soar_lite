@@ -38,9 +38,9 @@ splits the paths into a redraw set (no point yet, or stalled with
 `restart_stalled` on) and a cohort that steps: a path either redraws or steps
 this iteration, never both. The parallel wall-clock unit; an iteration serves
 one or more batches (the steppers' trials as the method reads them, and the one
-settle batch that buys whatever the iteration kept still owes). A flock with
-nothing left to do ends the run
-on `all_stalled` instead of entering a batchless iteration.
+settle batch that buys whatever the iteration kept still owes). A flock in
+which every path is parked — nothing left to do, since restarts are off — ends
+the run on `all_stalled` instead of entering a batchless iteration.
 Iteration 0 is the flock's placement: an empty `x` redraws unconditionally,
 so starting the flock is the same operation as any later redraw. `n_iters`
 counts finished iterations only — one cut short by a refused batch is not
@@ -63,12 +63,14 @@ _Avoid_: update, move; accept, commit (as names for this handoff)
 
 **trial**:
 One served proposal within a step — one row of a batch the method reads through
-`serve_trials`. The method is handed its coords and value, never its gradient:
-only the winner's gradient is bought (see *settle*), so a method that needs one
-to rule is out of this engine's reach. There is no engine-side cap: the method's
-own stopping test (or its own trial budget) ends the enumeration, one batch per
-`serve_trials` call. A step that reads no trial — a single full proposal, like
-the shipped method's — serves none at all.
+`serve_trials`. What a trial carries is the seam's business: with `eval_f`
+connected it is the coords and value alone — the winner's gradient is bought
+later (see *settle*), so a method that needs a gradient to rule needs the fused
+seam — and without `eval_f` the same call serves the fused pair, gradient
+included. There is no engine-side cap: the method's own stopping test (or its
+own trial budget) ends the enumeration, one batch per `serve_trials` call. A
+step that reads no trial — a single full proposal, like the shipped method's —
+serves none at all.
 _Avoid_: line-search round (retired)
 
 **best**:
@@ -85,8 +87,9 @@ _Avoid_: incumbent (retired), best-so-far, current optimum
 **stall / stalled**:
 A path that moved nowhere this iteration — it neither redrew nor committed a
 step: its local method answered no winner (`None` — its own stopping test
-fired), or the winner it named was refused as not usable: a non-finite value or
-gradient.
+fired), or the point it was given was refused as not usable, whether the winner
+the method named or the start the model drew: a non-finite value or gradient in
+either.
 Stalled is not dead: unless the run turned `restart_stalled` off, the path is
 re-drawn by the global model on the next iteration; with the knob off it stays
 parked — still counted, still readable for `best` — but never moved again. A
@@ -250,7 +253,8 @@ _Avoid_: stopping budget
 The object that carries everything the engine knows about the search space: the
 per-dimension `(lb, ub)` sides (either may be unbounded), the per-dimension
 `scale` the draws use, and the injected per-dimension samplers. It is the sole
-authority on the dimension `d`; the engine clips every proposal into it. Bounds
+authority on the dimension `d`, and every point the run serves lies inside it:
+the engine clips the starts it draws, and a method clips its own step. Bounds
 are data, never a unit-cube assumption.
 _Avoid_: box (the box is only the bounded-sides part of the domain)
 

@@ -86,8 +86,8 @@ schedules the work, and nothing beyond JAX and the standard library.
 
 - **The engine, `n_path_schedule`** — runs the `n_paths` paths in lockstep and
   owns the domain, the shared horizon (`max_iters`), and the restart schedule: a
-  path reports itself stalled through `LocalSolver`, and the engine redraws it —
-  `restart_stalled` on — from a fresh point.
+  path stalls when its `propose` answers `None` or its point fails the finite
+  gate, and the engine redraws it — `restart_stalled` on — from a fresh point.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
   from successive gradients, no matrix and no scalar learning rate to tune. It
