@@ -139,7 +139,7 @@ class HalfStep:
         """Take the start the engine placed."""
         self.points[i] = p
 
-    def fold(self, i: int, p: PathPoint) -> None:
+    def step(self, i: int, p: PathPoint) -> None:
         """Stand on the committed point; this method keeps no model."""
         self.points[i] = p
 
@@ -792,7 +792,7 @@ def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
             """Take the start the engine placed."""
             self.points[i] = p
 
-        def fold(self, i: int, p: PathPoint) -> None:
+        def step(self, i: int, p: PathPoint) -> None:
             """Take the point the engine committed."""
             self.points[i] = p
 

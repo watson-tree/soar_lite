@@ -83,7 +83,7 @@ def test_diag_warmup_is_one_gradient_step() -> None:
     assert pending.g is None
     # Committed exactly as proposed: the step need not beat the start's value.
     above = PathPoint(x=p.x - p.g, f=9.0, g=p.g)
-    solver.fold(0, above)
+    solver.step(0, above)
     assert not solver._state[0].warm_up
     assert close(solver._state[0].s_ema, jnp.square(-p.g), 1e-12)
 
@@ -99,10 +99,10 @@ def test_a_stationary_path_proposes_nothing() -> None:
     solver = DiagonalPreconditioner()
     start = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.restart(0, start)
-    # The floor is where the path ends up, so it is a committed point: folded in,
-    # not handed to the ask - what the stopping test reads is the path itself.
+    # The floor is where the path ends up, so it is a committed point: handed to
+    # `step`, not to the ask - what the stopping test reads is the path itself.
     floor = PathPoint(x=start.x - start.g, f=0.5, g=jnp.array([1e-9, -1e-9]))
-    solver.fold(0, floor)
+    solver.step(0, floor)
     assert solver.propose([0], wide(2), _unread) == {0: None}
 
 
@@ -116,8 +116,8 @@ def test_a_path_pinned_by_an_outward_gradient_is_stationary() -> None:
     # Path 0 stands on the lower wall with g > 0, path 1 on the upper wall with
     # g < 0: in both the descent -g points out of the box, so the clip would pin
     # every step to the point the path already stands on.
-    solver.fold(0, PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.full(2, 2.0)))
-    solver.fold(1, PathPoint(x=jnp.ones(2), f=1.0, g=jnp.full(2, -2.0)))
+    solver.step(0, PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.full(2, 2.0)))
+    solver.step(1, PathPoint(x=jnp.ones(2), f=1.0, g=jnp.full(2, -2.0)))
 
     assert solver.propose([0, 1], box, _unread) == {0: None, 1: None}
 
@@ -132,7 +132,7 @@ def test_the_wall_decides_what_pins_a_point_not_the_gradient() -> None:
     def verdict(box: Domain) -> Pending | None:
         solver = DiagonalPreconditioner()
         solver.restart(0, start)
-        solver.fold(0, point)
+        solver.step(0, point)
         return solver.propose([0], box, _unread)[0]
 
     assert verdict(upper_wall) is None  # g < 0 against the upper wall: pinned
@@ -144,7 +144,7 @@ def test_momentum_pointing_out_does_not_pin_a_point() -> None:
     solver = DiagonalPreconditioner(mu=0.9)
     start = PathPoint(x=jnp.array([0.5]), f=1.0, g=jnp.array([3.0]))
     solver.restart(0, start)
-    solver.fold(0, PathPoint(x=jnp.zeros(1), f=1.0, g=jnp.array([-2.0])))
+    solver.step(0, PathPoint(x=jnp.zeros(1), f=1.0, g=jnp.array([-2.0])))
     # The blend leaves m positive, so the direction -m still points out of the
     # box while -g points back in. Read m here and this path is stalled away from
     # a descent it can still take.
@@ -161,7 +161,7 @@ def test_propose_answers_the_whole_cohort_in_one_call() -> None:
     live = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.restart(0, live)
     solver.restart(1, live)
-    solver.fold(1, PathPoint(x=live.x, f=0.5, g=jnp.array([1e-9, 1e-9])))
+    solver.step(1, PathPoint(x=live.x, f=0.5, g=jnp.array([1e-9, 1e-9])))
 
     out = solver.propose([0, 1], wide(2), _unread)
 
@@ -192,14 +192,14 @@ def _warm_up(
 ) -> PathPoint:
     """Drive the warm-up by hand for path 0 the way the engine does.
 
-    One unread proposal, graded and folded: the warm-up always commits what it
+    One unread proposal, graded and stepped: the warm-up always commits what it
     proposed, so there is no ruling to wait for. The start is whatever `restart`
     was last given - the method holds it, so nothing here passes it back in.
     """
     x = proposed(solver).x
     f, g = quad(x)
     trial = PathPoint(x=x, f=f, g=g)
-    solver.fold(0, trial)
+    solver.step(0, trial)
     return trial
 
 
@@ -225,7 +225,7 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     assert solver._state[0].alpha == 1.0
     assert not solver._state[0].warm_up
     # y = h·s ⇒ √(S/Y) = 1/h ⇒ Δx = -(1/h)·h·x₁ = -x₁, the Newton step. The step
-    # is taken from the point the fold left the path on, which is what `_warm_up`
+    # is taken from the point `step` left the path on, which is what `_warm_up`
     # committed.
     assert close(proposed(solver).x, jnp.zeros(3), 1e-12)
 
@@ -267,7 +267,7 @@ def test_diag_step_scales_with_the_coordinate_unit() -> None:
         best = PathPoint(x=c * s, f=-1.0, g=g / c + y / c)
         solver = DiagonalPreconditioner(theta=0.0)
         solver.restart(0, p)
-        solver.fold(0, best)
+        solver.step(0, best)
         return proposed(solver).x - best.x
 
     c = jnp.array([1e3, 1e-3])
@@ -282,7 +282,7 @@ def test_diag_gradient_floor_carries_a_flat_secant() -> None:
     solver.restart(0, p)
     x1 = p.x - g  # the full step, committed as proposed
     trial = PathPoint(x=x1, f=0.5, g=g)  # g unchanged ⇒ y = 0
-    solver.fold(0, trial)
+    solver.step(0, trial)
     # d_i = |s_i|/(√θ·|g_i|) = |g_i|/(√θ·|g_i|) = 1/√θ = 100 for both dims.
     assert close(proposed(solver).x, x1 - 100.0 * g, 1e-9)
     step = proposed(solver).x - x1
@@ -305,7 +305,7 @@ def test_diag_floor_is_a_floor_not_an_addend() -> None:
     # crossover Y = θ·g1² = λ (elementwise, in the mean-square spelling).
     g1 = g0 / (1.0 + math.sqrt(theta))
     trial = PathPoint(x=p.x - g0, f=0.9, g=g1)  # committed unread; f is not read
-    solver.fold(0, trial)
+    solver.step(0, trial)
     lam = theta * jnp.square(g1)
     assert close(solver._state[0].y_ema, lam, 1e-12)  # secant sits on the crossover
     # max floor: d = √(S/max(Y, λ)) = √(g0²/θg1²) = (1+√θ)/√θ per coordinate.
@@ -325,13 +325,13 @@ def test_diag_decay_blends_later_secants() -> None:
     x1 = p.x - g0  # the full step, committed unread
     g1 = jnp.array([0.5, 1.0])
     first = PathPoint(x=x1, f=0.9, g=g1)
-    solver.fold(0, first)
+    solver.step(0, first)
     s1, y1 = x1 - p.x, g1 - g0
     assert close(solver._state[0].s_ema, jnp.square(s1), 1e-12)
     assert close(solver._state[0].y_ema, jnp.square(y1), 1e-12)
     s2, y2 = jnp.array([0.25, -0.5]), jnp.array([0.1, 0.2])
     second = PathPoint(x=x1 + s2, f=0.8, g=g1 + y2)
-    solver.fold(0, second)
+    solver.step(0, second)
     s_expect = 0.5 * jnp.square(s1) + 0.5 * jnp.square(s2)
     y_expect = 0.5 * jnp.square(y1) + 0.5 * jnp.square(y2)
     assert close(solver._state[0].s_ema, s_expect, 1e-12)
@@ -345,15 +345,15 @@ def test_diag_stops_only_when_the_gradient_norm_converged() -> None:
     solver.restart(0, p)
     # The start never trips the test: ‖g0‖ <= τ‖g0‖ is false for τ < 1.
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
-    solver.fold(0, first)  # the warm-up step, committed as proposed
-    # Each point below is where a step landed, so folding it is also how the path
-    # gets there: the stopping test reads the path, not a point handed to it.
+    solver.step(0, first)  # the warm-up step, committed as proposed
+    # Each point below is where a step landed, so handing it to `step` is also how
+    # the path gets there: the stopping test reads the path, not a point handed to it.
     # dim 1's magnitude dominates the norm: not converged.
     partial = PathPoint(x=first.x, f=0.5, g=jnp.array([1e-5, 1.0]))
-    solver.fold(0, partial)
+    solver.step(0, partial)
     assert proposed(solver)  # still stepping
     converged = PathPoint(x=partial.x, f=0.5, g=jnp.array([9e-4, 3e-4]))
-    solver.fold(0, converged)
+    solver.step(0, converged)
     assert solver.propose([0], wide(2), _unread) == {0: None}
 
 
@@ -363,7 +363,7 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 2.0]))
     solver.restart(0, p)
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
-    solver.fold(0, first)
+    solver.step(0, first)
     assert not solver._state[0].warm_up
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
     solver.restart(0, fresh)
@@ -387,12 +387,12 @@ def _solver_with_secant(
     s: jnp.ndarray = S_MOM,
     y: jnp.ndarray = Y_MOM,
 ) -> tuple[DiagonalPreconditioner, PathPoint]:
-    """Return a solver holding one folded secant (s, y) and the point it sits on.
+    """Return a solver holding one committed secant (s, y) and the point it sits on.
 
     The step start's gradient is ``g - y``, so the committed point's gradient is
-    exactly ``g``: the same secant the engine would have folded after a step of
+    exactly ``g``: the same secant the engine would have committed after a step of
     ``s``. ``restart`` seeds the momentum chain with the step start's gradient and
-    that first fold blends the committed ``g`` into it, so the record is left
+    that first `step` blends the committed ``g`` into it, so the record is left
     holding ``mu·(g - y) + (1 - mu)·g`` - history only; the next ``propose``
     reads it as is.
     """
@@ -400,7 +400,7 @@ def _solver_with_secant(
     start = PathPoint(x=jnp.zeros_like(g), f=1.0, g=g - y)
     best = PathPoint(x=start.x + s, f=0.5, g=g)
     solver.restart(0, start)
-    solver.fold(0, best)
+    solver.step(0, best)
     return solver, best
 
 
@@ -416,7 +416,7 @@ def test_diag_momentum_is_the_committed_gradient_blend() -> None:
     No projection means the descent gain on g is *not* pinned to the plain
     step's: the blend adds ``mu·m_prev`` wherever the history helps or opposes
     g. What the step must reproduce exactly is the weighted average of the
-    committed point's gradient and the history the commit folded it into.
+    committed point's gradient and the history the commit blended it into.
     """
     g = jnp.array([0.5, -1.5])
     mu = 0.5
@@ -424,7 +424,7 @@ def test_diag_momentum_is_the_committed_gradient_blend() -> None:
     mom, _ = _solver_with_secant(mu, g)
     d_plain = _direction(plain)  # d⊙g, alpha divided out
     d_mom = _direction(mom)
-    d = d_plain / g  # per-coordinate d; both solvers fold the same secant
+    d = d_plain / g  # per-coordinate d; both solvers blend the same secant
     m_prev = g - Y_MOM  # restart seeded m with the step start's gradient
     assert close(d_mom, d * ((1.0 - mu) * g + mu * m_prev), 1e-12)
     assert not close(d_mom, d_plain, 1e-9)  # the momentum really was blended in
@@ -433,7 +433,7 @@ def test_diag_momentum_is_the_committed_gradient_blend() -> None:
 
 
 def test_diag_propose_never_writes_the_momentum() -> None:
-    """``propose`` reads the history and never writes it; only ``fold`` folds.
+    """``propose`` reads the history and never writes it; only ``step`` does.
 
     Asked twice between commits it answers the same step both times: the model
     cannot advance on a point the engine has not committed, which is what keeps
@@ -442,7 +442,7 @@ def test_diag_propose_never_writes_the_momentum() -> None:
     g = jnp.array([0.5, -1.5])
     solver, at = _solver_with_secant(0.5, g)
     m_before = solver._state[0].m
-    # The fold already blended the committed g into the seeded (g - y).
+    # `step` already blended the committed g into the seeded (g - y).
     assert close(m_before, 0.5 * (at.g - Y_MOM) + 0.5 * at.g, 1e-12)
     first = proposed(solver).x
     assert jnp.array_equal(solver._state[0].m, m_before)  # propose wrote nothing
@@ -454,7 +454,7 @@ def test_diag_propose_never_writes_the_momentum() -> None:
 def test_diag_restart_drops_the_momentum_history() -> None:
     """A restart re-seeds the momentum chain from the new start's gradient.
 
-    The seed is the restart's own write, not a later fold's: the fold that
+    The seed is the restart's own write, not a later step's: the `step` that
     follows only blends one gradient into it, so what the old path had
     accumulated cannot survive at any weight - the same reason S and Y are
     re-seeded outright rather than blended against.
@@ -466,23 +466,23 @@ def test_diag_restart_drops_the_momentum_history() -> None:
     solver.restart(0, fresh)
     assert close(solver._state[0].m, fresh.g, 1e-12)  # nothing crossed the restart
     landed = PathPoint(x=fresh.x + S_MOM, f=0.5, g=fresh.g + Y_MOM)
-    solver.fold(0, landed)
+    solver.step(0, landed)
     assert close(solver._state[0].m, 0.5 * fresh.g + 0.5 * landed.g, 1e-12)
 
 
 def test_diag_mu_zero_leaves_no_history_behind() -> None:
     """The default keeps no memory in the direction: a weight of 0 stores none.
 
-    The record still folds a history at every ``mu`` - it costs one vector and
+    The record still records a history at every ``mu`` - it costs one vector and
     is there for the moment the knob is turned up - so the property worth
-    pinning is that the fold at ``mu = 0`` writes the arriving gradient outright,
+    pinning is that `step` at ``mu = 0`` writes the arriving gradient outright,
     whatever the history held.
     """
     g = jnp.array([0.5, -1.5])
     solver, at = _solver_with_secant(0.0, g)
     solver._state[0] = replace(solver._state[0], m=jnp.array([1e6, -1e6]))
     landed = PathPoint(x=at.x + S_MOM, f=0.25, g=jnp.array([1.0, 2.0]))
-    solver.fold(0, landed)
+    solver.step(0, landed)
     assert jnp.array_equal(solver._state[0].m, landed.g)
 
 
@@ -500,7 +500,7 @@ def test_diag_momentum_moves_only_where_d_has_support() -> None:
     solver.restart(0, start)
     # y = [-1, 0] against s = [1, 0] leaves d = [1, 0]; g lives on coordinate 1.
     at = PathPoint(x=start.x + jnp.array([1.0, 0.0]), f=0.5, g=jnp.array([0.0, 0.5]))
-    solver.fold(0, at)  # m = ½·start.g + ½·at.g, live on coordinate 0
+    solver.step(0, at)  # m = ½·start.g + ½·at.g, live on coordinate 0
     assert close(solver._state[0].m, 0.5 * start.g + 0.5 * at.g, 1e-12)
     step = at.x - proposed(solver).x
     assert close(step[1], 0.0, 1e-12)  # d = 0 there: no step, history or not
@@ -542,7 +542,7 @@ def test_diag_momentum_runs_through_the_engine() -> None:
     Not a convergence claim - near the argmin g → 0 while m does not, so the
     gradient-norm stopping test loses its anchor. That is the cost the default
     ``mu`` pays, and the reason the exactness tests above pin ``mu = 0``.
-    What this pins is the engine's own restart→propose→fold gluing: ``restart``
+    What this pins is the engine's own restart→propose→step gluing: ``restart``
     must have seeded the path's momentum, or the steady propose raises.
     """
     h = jnp.array([2.0, 4.0])
@@ -611,18 +611,18 @@ def test_beta_zero_is_legal_and_reads_only_the_newest_secant() -> None:
     The smooth trades currentness for stability: it damps the step-to-step wobble
     the dropped coupling puts into the ratio. A diagonal problem has no coupling
     and nothing wobbling, so a caller may ask for the raw secant; the knob's range
-    is [0, 1) and 0 folds each pair on top of the last instead of refusing to
+    is [0, 1) and 0 blends each pair on top of the last instead of refusing to
     exist.
     """
     solver = DiagonalPreconditioner(beta=0.0, theta=0.0)
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.restart(0, p)
-    solver.fold(0, PathPoint(x=p.x - p.g, f=0.0, g=2.0 * p.g))
+    solver.step(0, PathPoint(x=p.x - p.g, f=0.0, g=2.0 * p.g))
     assert close(solver._state[0].s_ema, jnp.square(p.g), 1e-12)
     # A second, different pair replaces the first rather than blending into it.
     # Its start is the point the path now stands on, not one passed in again.
     q = solver._state[0].p
-    solver.fold(0, PathPoint(x=q.x - q.g, f=0.0, g=2.0 * q.g))
+    solver.step(0, PathPoint(x=q.x - q.g, f=0.0, g=2.0 * q.g))
     assert close(solver._state[0].s_ema, jnp.square(q.g), 1e-12)
     assert close(solver._state[0].y_ema, jnp.square(q.g), 1e-12)
 

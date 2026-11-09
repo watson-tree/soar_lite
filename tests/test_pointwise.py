@@ -110,7 +110,7 @@ class _ValueReader(LocalSolver):
         del i
         self.p = p
 
-    def fold(self, i: int, p: PathPoint) -> None:
+    def step(self, i: int, p: PathPoint) -> None:
         """Take the point the engine committed."""
         del i
         self.p = p

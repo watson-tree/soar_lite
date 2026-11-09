@@ -77,7 +77,7 @@ class StubSolver:
         self.give_up = give_up
         self.inited: list[int] = []
         self.trials: list[int] = []
-        self.folds: list[int] = []
+        self.steps: list[int] = []
         self.points: dict[int, PathPoint] = {}
 
     def restart(self, i: int, p: PathPoint) -> None:
@@ -85,10 +85,10 @@ class StubSolver:
         self.points[i] = p
         self.inited.append(i)
 
-    def fold(self, i: int, p: PathPoint) -> None:
-        """Record the folded committed step and stand on it; nothing else is kept."""
+    def step(self, i: int, p: PathPoint) -> None:
+        """Record the committed step and stand on it; nothing else is kept."""
         self.points[i] = p
-        self.folds.append(i)
+        self.steps.append(i)
 
     def _trial(self, idxs: list[int], domain: Domain) -> jnp.ndarray:
         """Return the cohort's halved steepest-descent steps, clipped."""
@@ -265,7 +265,7 @@ def test_an_unusable_start_is_refused_before_it_seeds_the_method() -> None:
         local_solver=solver,
     )
     assert solver.inited == [], solver.inited  # an unusable start is never seed
-    assert solver.folds == [], solver.folds  # and never becomes a start
+    assert solver.steps == [], solver.steps  # and never becomes a start
     assert res.n_f_g_batches == 2, res.n_f_g_batches  # the flock and one re-draw
     assert res.status == "max_iters"
 
@@ -568,7 +568,7 @@ def test_a_rejected_trial_is_bought_no_gradient() -> None:
     # `settle` unread, so it spends no f of its own.
     assert f_calls == [k, k], f_calls
     assert solver.trials == [0, 0], solver.trials
-    assert solver.folds == [0], solver.folds  # one winner, one fold
+    assert solver.steps == [0], solver.steps  # one winner, one step
     # Two batches for the whole run: the flock's, then the winner's.
     assert res.n_f_g_batches == 2, res
     assert res.n_f_g_points == 2 * k, res
@@ -696,7 +696,7 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
     method is told nothing about gradients at all, so the engine's commit is the
     only place that can refuse one. A winner whose gradient is unusable does not
     become the next start - it stalls the path exactly like a dead flock row -
-    and the fold never happens, so the method is not told a step landed.
+    and `step` is never called, so the method is not told a step landed.
     """
     fused = [0]
 
@@ -721,7 +721,7 @@ def test_a_winner_with_no_usable_gradient_is_not_committed() -> None:
         local_solver=solver,
     )
     assert solver.trials == [0], solver.trials  # the trial was read
-    assert solver.folds == [], solver.folds  # but never committed
+    assert solver.steps == [], solver.steps  # but never committed
     assert res.status == "max_iters", res
 
 
@@ -729,7 +729,7 @@ def test_a_non_finite_gradient_start_arrives_stalled() -> None:
     """A start is committed only when f *and* g are finite.
 
     A finite f with a non-finite gradient is not a usable start: `p.g` is what
-    the method proposes from and folds on, so one NaN in it poisons that
+    the method proposes from and blends in, so one NaN in it poisons that
     coordinate's magnitude EMAs for the rest of the run. Such a start arrives
     stalled and waits for its rule to fire instead of stepping.
     """
@@ -747,7 +747,7 @@ def test_a_non_finite_gradient_start_arrives_stalled() -> None:
     )
     # No path was ever live, so nothing stepped and nothing was read.
     assert solver.trials == [], solver.trials
-    assert solver.folds == [], solver.folds
+    assert solver.steps == [], solver.steps
     assert res.status == "max_iters", res
 
 
@@ -798,7 +798,7 @@ def test_an_unjudged_winner_must_be_finite_to_be_committed() -> None:
 
     A judged winner was ruled finite before it was kept; an unjudged one is first
     seen in the batch that buys its gradient, so a non-finite half there must
-    stall the path rather than fold a nan into the rule's next Δ and the pool.
+    stall the path rather than blend a nan into the rule's next Δ and the pool.
     """
 
     def make_eval(
@@ -830,9 +830,9 @@ def test_an_unjudged_winner_must_be_finite_to_be_committed() -> None:
         return solver
 
     # Control: a finite value and gradient commit, so the gate is what stalls below.
-    assert run(None).folds == [0, 0]
-    assert run("f").folds == []
-    assert run("g").folds == []
+    assert run(None).steps == [0, 0]
+    assert run("f").steps == []
+    assert run("g").steps == []
 
 
 if __name__ == "__main__":

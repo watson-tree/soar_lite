@@ -82,7 +82,7 @@ class Script:
     method that enumerates its step returns - so its winner still owes only its
     gradient.
 
-    The points the engine hands over (`restart`, `fold`) are kept in `got`, and
+    The points the engine hands over (`restart`, `step`) are kept in `got`, and
     the values the method served in `served`: those are the two facts a test
     needs about the commit, and neither requires reading the path's own state.
     """
@@ -106,7 +106,7 @@ class Script:
         del i  # one path per run below: the index carries nothing extra
         self.got.append(p)
 
-    def fold(self, i: int, p: PathPoint) -> None:
+    def step(self, i: int, p: PathPoint) -> None:
         """Keep the point the engine committed for path `i`."""
         del i
         self.got.append(p)
@@ -221,7 +221,7 @@ def test_a_winner_never_read_is_graded_by_one_fused_batch() -> None:
 
     assert float(held(run).x[0]) == pytest.approx(0.2)
     assert not run.flock[0].stalled
-    assert solver.got[-1] is held(run)  # folded the very point the engine holds
+    assert solver.got[-1] is held(run)  # stepped onto the very point the engine holds
     assert solver.served == []  # nothing was read on the way in
     # Its value was never served alone: the one batch that graded the winner
     # carried f and g together.
@@ -259,14 +259,14 @@ def test_a_named_stall_keeps_the_point_and_buys_nothing() -> None:
     # Where the path stood when its step failed is still where it stands: a
     # stalled path is not moved, and it is not re-drawn either.
     assert float(held(run).x[0]) == pytest.approx(start)
-    assert solver.got == [held(run)]  # seeded once, never folded
+    assert solver.got == [held(run)]  # seeded once, never stepped
     # The stall bought nothing: the only fused batch was the one that placed the
     # flock.
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 1)
     assert (budget.n_f_batches, budget.n_f_points) == (0, 0)
 
 
-def test_an_unusable_winner_stalls_without_folding() -> None:
+def test_an_unusable_winner_stalls_without_stepping() -> None:
     """A winner the engine cannot grade leaves the path where it stood."""
     start = 0.6
     solver = Script([0.2])
@@ -277,7 +277,7 @@ def test_an_unusable_winner_stalls_without_folding() -> None:
 
     assert run.flock[0].stalled
     assert float(held(run).x[0]) == pytest.approx(start)
-    assert solver.got == [held(run)]  # the refused winner was never folded
+    assert solver.got == [held(run)]  # the refused winner was never stepped
     # The winner was still served and charged: a refusal is about the point, not
     # about the work the run already paid for.
     assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 2)

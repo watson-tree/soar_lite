@@ -27,10 +27,10 @@ class _PathState:
 
     - the point the path stands at is written only when a point arrives, and the
       contract hands one over in exactly two places: `restart` places it and
-      `fold` moves it. `propose` is not handed it again, so a method that steps
+      `step` moves it. `propose` is not handed it again, so a method that steps
       from a point keeps it - this field is that copy;
     - the curvature estimate, the direction's history, and the stopping test's
-      anchor live for the whole run: the first two are folded into by every
+      anchor live for the whole run: the first two are blended into by every
       committed step, and a restart re-seeds all three at the new start;
     - the step's ``alpha`` progress is re-armed after every commit and every
       restart.
@@ -41,12 +41,12 @@ class _PathState:
     ``eq=False`` keeps a stray ``==`` off a field-wise array comparison.
     """
 
-    # where the path stands: `restart` places it and `fold` moves it, nothing
+    # where the path stands: `restart` places it and `step` moves it, nothing
     # else writes it - the two calls that pair with the engine's own two writes
     # to its copy, so the two can never disagree
     p: PathPoint
     # no pair in hand yet: set by `restart`, cleared by the first committed step,
-    # so `propose` descends along -g and that first `fold` seeds outright
+    # so `propose` descends along -g and that first `step` seeds outright
     warm_up: bool
     # the curvature estimate: seeded by `restart`, blended once per committed step
     s_ema: jnp.ndarray
@@ -62,7 +62,7 @@ class _PathState:
 
     @classmethod
     def restarted(cls, p: PathPoint, alpha0: float) -> "_PathState":
-        """Return the state a path cold-starts at from p: no secant, nothing folded."""
+        """Return the state a path cold-starts at from p: no secant, nothing in it."""
         return cls(
             p=p,
             warm_up=True,
@@ -113,7 +113,7 @@ class DiagonalPreconditioner(LocalSolver):
     With ``mu > 0`` the direction is the *current* momentum,
     ``m = (1 - mu)·g + mu·m_prev``, where ``m_prev`` is an EMA of the past
     steps' start gradients (window ≈ ``1/(1-mu)``; the current step's gradient
-    enters only once that step has committed, folded by ``fold``). At ``mu = 0``
+    enters only once that step has committed, blended in by ``step``). At ``mu = 0``
     it degenerates to ``g`` exactly. This is the unprojected heavy-ball direction;
     being unprojected, it withdraws the descent-direction guarantee, so
     convergence rests on the engine's best-so-far bookkeeping and restart.
@@ -134,7 +134,7 @@ class DiagonalPreconditioner(LocalSolver):
     the two histories are different quantities.
 
     Two phases, one step mechanic. Every step takes the full proposal at
-    ``alpha0`` along its own direction, and ``fold`` records the committed step.
+    ``alpha0`` along its own direction, and ``step`` records the committed step.
     The phases differ only in the direction: the warm-up (the first step) has no
     secant pair yet, so it descends along -g from ``alpha0``, and afterwards the
     direction is -d⊙m.
@@ -235,32 +235,32 @@ class DiagonalPreconditioner(LocalSolver):
         # coordinate scale itself
         self._state[i] = _PathState.restarted(p, self.alpha0)
 
-    def fold(self, i: int, p: PathPoint) -> None:
-        """Fold the step the engine just committed for path i.
+    def step(self, i: int, p: PathPoint) -> None:
+        """Take the step the engine just committed for path i.
 
         ``p`` means what it means in `restart`: the point the path now stands
         at, handed over once. The point it stepped from is the record's own, so
         the pair the step observed is read entirely off (record, p).
 
-        Only the winner is folded, never a trial the method's own enumeration
+        Only the winner is taken in, never a trial the method's own enumeration
         rejected: a secant from a point the path never stood on would smear the
         magnitude EMAs. The engine calls this with the exact point it just
-        committed, so both folds see what the step observed: the pair (Δx, Δg)
-        for the curvature, and the gradient at the point arrived at for the
-        momentum. The first call after a restart is the warm-up pair and seeds
-        the secant EMAs outright; later calls blend at beta - the record's
-        ``warm_up`` is that same first-fold marker, cleared here. This is also
-        where a step is re-armed: a call the engine refuses (a winner whose
-        gradient it refused) leaves the method untouched rather than half-reset.
+        committed, so both histories see what the step observed: the pair
+        (Δx, Δg) for the curvature, and the gradient at the point arrived at for
+        the momentum. The first call after a restart is the warm-up pair and
+        seeds the secant EMAs outright; later calls blend at beta - the record's
+        ``warm_up`` is that same first-step marker, cleared here. This is also
+        where a step is re-armed: a winner the engine refuses never reaches
+        here, so the method is left untouched rather than half-reset.
         """
         state = self._state[i]
         s_ema, y_ema = self._blended_secant(state, p.x - state.p.x, p.g - state.p.g)
-        # Folded only now that the step has committed, and folded from the point
-        # it committed to: the gradient this step started from was already spent
-        # on this step's direction, so the arriving one is the news. `restart`
-        # seeds the descent with the start's own gradient, which is why every fold
-        # after it blends rather than seeding; at mu = 0 the blend keeps only the
-        # arriving gradient, which is the default's bare direction.
+        # Read only now that the step has committed, and read from the point it
+        # committed to: the gradient this step started from was already spent on
+        # this step's direction, so the arriving one is the news. `restart`
+        # seeds the descent with the start's own gradient, which is why every
+        # step after it blends rather than seeding; at mu = 0 the blend keeps
+        # only the arriving gradient, which is the default's bare direction.
         m = self.mu * state.m + (1.0 - self.mu) * p.g
         self._state[i] = replace(
             state,
@@ -292,11 +292,11 @@ class DiagonalPreconditioner(LocalSolver):
         every proposal comes back with both halves owed: nothing was read.
 
         Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x + alpha·(-d⊙m).
-        Steps from the point the record holds - `restart` placed it and `fold`
+        Steps from the point the record holds - `restart` placed it and `step`
         moved it - so the step's start is not passed in a second time. ``m`` is
-        the history ``fold`` left behind: the EMA over the gradients at
+        the history ``step`` left behind: the EMA over the gradients at
         committed points, which includes the gradient of the point this step
-        starts from. At ``mu = 0`` the last fold stored that gradient outright,
+        starts from. At ``mu = 0`` the last step stored that gradient outright,
         so the direction is the bare gradient.
         """
         del serve_trials  # single full step: nothing to rule, so nothing to read

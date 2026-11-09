@@ -287,14 +287,14 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             paths.move()
         except _BudgetExhausted as exc:
             # The iteration asked for a batch it could not afford and was cut
-            # short: it did not finish, so it is not folded and not counted.
+            # short: it did not finish, so it is not ticked.
             status = exc.reason
             break
         except _OptimumReached:
             # A served feasible point priced f at -inf. Nothing to unwind and
             # nothing left to decide: the batch that found it was paid for and
-            # is counted, but the iteration did not finish, so it is not folded
-            # or ticked either.
+            # is counted, but the iteration did not finish, so it is not ticked
+            # either.
             status = "unbounded"
             break
         except _AllStalled:
@@ -363,8 +363,8 @@ class _AllStalled(Exception):  # noqa: N818 - a signal, not an error
 
     Raised inside `_Paths.move` when no path restarts and every path is stalled
     - only reachable with `restart_stalled=False`, since a stalled path restarts
-    otherwise. Nothing can un-stall a path but `_place`, which only ever sees the
-    restarted paths, so the state is terminal: the iteration would serve
+    otherwise. Nothing can un-stall a path but `_restart`, which only ever sees
+    the restarting paths, so the state is terminal: the iteration would serve
     nothing, and repeating it would idle out the horizon. The run stops on it,
     naming the state in `status`.
     """
@@ -540,17 +540,6 @@ class _Evaluator:
         self._best = best
         self._observe = observe
 
-    def pending_unread(self, x_batch: jnp.ndarray) -> list[Pending]:
-        """Return one unread point per row: both halves owed to `settle`.
-
-        The twin of `serve_trials` for a batch nothing has read yet: a restart
-        start has no values to compare, and a winner the method never read is
-        committed as proposed, so each defers even its cheap f and takes f and g
-        from one fused pass. Keeping this spelling beside `settle`'s promotion
-        keeps `Pending` construction in this object instead of at the call sites.
-        """
-        return [Pending(row, None, None) for row in x_batch]
-
     def serve_trials(self, x_batch: jnp.ndarray) -> list[Pending]:
         """Serve one step's trial batch, as one produced candidate per row.
 
@@ -656,8 +645,8 @@ class _Slot:
     `point is None` is "no point yet" - a path the run has not placed. That is
     the machine's own state, not a stall: such a path is re-drawn whatever
     `restart_stalled` says, which is how iteration 0 places the flock and how a
-    refused start is eventually re-drawn. `_place` is the one writer that clears
-    `stalled`, so a re-drawn path cannot stay stalled.
+    refused start is eventually re-drawn. `_restart` is the one writer that
+    clears `stalled`, so a re-drawn path cannot stay stalled.
 
     `x` is not gated on finiteness - `usable` asks f and g only - so a point
     whose coordinates are `nan` is still a point the path holds.
@@ -675,7 +664,7 @@ class _Paths:
 
     - A path that restarted this iteration moved by its fresh start, so it does
       not also step and runs no trials: its method sees no step, so the restart
-      is never read back as a zero-length step. `move` computes the restarted
+      is never read back as a zero-length step. `move` computes the restarting
       list once and threads it to `_restart_starts` and to the complement both
       halves share.
     - An iteration decides on values and pays for gradients once: whatever the
@@ -742,7 +731,7 @@ class _Paths:
 
         The restart decision comes first: a path that holds no point, or that is
         stalled and whose run opted into `restart_stalled`, is given a fresh
-        start instead of stepping. The cohort that steps is answered by one
+        start instead of stepping. The paths that step are answered by one
         `propose` call, and the method makes the decision there - on values
         alone when the value-only seam is present, reading whatever trials it
         wants. The gradients those decisions need are then bought together in one
@@ -758,41 +747,41 @@ class _Paths:
         path restarts and every path is stalled, `_AllStalled` is raised before
         any batch is asked for.
         """
-        restarted = [
+        restarting = [
             i
             for i, slot in enumerate(self.flock)
             if slot.point is None or (self.restart_stalled and slot.stalled)
         ]
         # Nothing is going to move again: no path restarts, and every path is
-        # stalled. `_place` is the only writer that clears a stall bit and it
-        # only ever sees the restarted paths, so an empty `restarted` beside a
+        # stalled. `_restart` is the only writer that clears a stall bit and it
+        # only ever sees the restarting paths, so an empty `restarting` beside a
         # fully stalled flock is terminal - the iteration would serve nothing.
         # Only reachable with `restart_stalled=False`; the run ends here rather
         # than idling out the horizon.
-        if not restarted and all(slot.stalled for slot in self.flock):
+        if not restarting and all(slot.stalled for slot in self.flock):
             raise _AllStalled
         # Every path that did not restart and is not stalled. A stalled path is
         # left out rather than asked again: `restart_stalled` is its only way
         # back, and asking would let a method un-stall a path the engine has
         # already stopped - the two would disagree about whether it is running.
-        cohort = [
+        stepping = [
             i
             for i, slot in enumerate(self.flock)
-            if i not in restarted and not slot.stalled
+            if i not in restarting and not slot.stalled
         ]
-        starts = self._restart_starts(restarted)
-        won = self._decide(cohort)
+        starts = self._restart_starts(restarting)
+        winners = self._step_winners(stepping)
         # One batch over both halves, keyed by path so neither is re-paired by
         # position. A refusal (`_BudgetExhausted`) cuts the iteration short with
         # nothing placed - this is the only batch it serves. A point that arrived
         # already graded (a run without the seam) passes straight through
         # `settle` without being served again.
-        settled = self.evaluator.settle({**starts, **won})
-        self._place({i: settled[i] for i in restarted})
-        self._advance({i: settled[i] for i in won})
+        settled = self.evaluator.settle({**starts, **winners})
+        self._restart({i: settled[i] for i in restarting})
+        self._step({i: settled[i] for i in winners})
 
-    def _restart_starts(self, restarted: list[int]) -> dict[int, Pending]:
-        """Ask for one fresh start per restarted path, clipped into the run's box.
+    def _restart_starts(self, restarting: list[int]) -> dict[int, Pending]:
+        """Ask for one fresh start per restarting path, clipped into the run's box.
 
         The caller's flock, if it handed one, answers the run's first call and
         only that one: iteration 0 is the one move where every path holds no
@@ -808,10 +797,10 @@ class _Paths:
         nothing to be compared - so `settle` buys them in the same batch as the
         step winners, and a restart costs no gradient pass of its own.
         """
-        if not restarted:
+        if not restarting:
             return {}
         d = self.domain.d
-        n_points = len(restarted)
+        n_points = len(restarting)
         if self._x0 is not None:
             proposed, self._x0 = self._x0, None
         else:
@@ -823,53 +812,52 @@ class _Paths:
             )
             raise ValueError(msg)
         x_cand = jnp.clip(proposed, self.domain.lo, self.domain.hi)
-        return dict(zip(restarted, self.evaluator.pending_unread(x_cand), strict=True))
+        return dict(
+            zip(restarting, (Pending(row, None, None) for row in x_cand), strict=True)
+        )
 
-    def _decide(self, cohort: list[int]) -> dict[int, Pending]:
-        """Ask the method for the cohort's steps and keep the winners it names.
+    def _step_winners(self, stepping: list[int]) -> dict[int, Pending]:
+        """Ask the method for its step on each stepping path, keep the winners.
 
-        One call covers the whole stepping cohort, so a method that enumerates a
-        step does so here, inside its own ``propose``. A ``None`` answer is the
+        One call covers every stepping path, so a method that enumerates a step
+        does so here, inside its own ``propose``. A ``None`` answer is the
         method's own stopping test firing: the path stalls where it stands, and
-        nothing is served or folded for it. A `Pending` winner goes out with
-        whatever halves the method holds - both owed when it never read the
-        point, the value alone when it read it through `serve_trials` - and
-        `settle` buys the rest.
+        nothing is served and no point is committed for it. A `Pending` winner
+        goes out with whatever halves the method holds - both owed when it never
+        read the point, the value alone when it read it through `serve_trials` -
+        and `settle` buys the rest.
 
-        Nothing is committed here: a path ends this iteration stalled exactly
-        when its method named no winner, or when the winner turns out not to be
-        usable (`_advance` decides that). A stalled path is never in the cohort:
-        the engine asks nothing more of it until a restart re-draws it.
+        Nothing is committed here but the stall bit: a path ends this iteration
+        stalled exactly when its method named no winner, or when the winner turns
+        out not to be usable (`_step` decides that). A stalled path is never in
+        `stepping`: the engine asks nothing more of it until a restart re-draws
+        it.
         """
-        if not cohort:
-            # Every path restarted this iteration: the cohort is empty.
+        if not stepping:
+            # Every path restarted this iteration: nothing steps.
             return {}
-        # A path already stalled only reports its sample this iteration, so it
-        # stays out of the cohort's proposals; `stalled` also gates the exit
-        # observation below without a second membership list.
-        steps = [i for i in cohort if not self.flock[i].stalled]
-
-        res = self.local_solver.propose(steps, self.domain, self.evaluator.serve_trials)
-        won: dict[int, Pending] = {}
-        for i, pend in res.items():
-            if pend is None:
+        answers = self.local_solver.propose(
+            stepping, self.domain, self.evaluator.serve_trials
+        )
+        winners: dict[int, Pending] = {}
+        for i, answer in answers.items():
+            if answer is None:
                 self.flock[i].stalled = True
                 continue
-            won[i] = pend
+            winners[i] = answer
+        return winners
 
-        return won
-
-    def _place(self, placed: dict[int, PathPoint]) -> None:
+    def _restart(self, points: dict[int, PathPoint]) -> None:
         """Place the given paths on their fresh starts (one restart event).
 
         The method's per-path state resets to cold start. A start the engine
-        cannot use is refused on the same `usable` gate `_advance` applies to a
+        cannot use is refused on the same `usable` gate `_step` applies to a
         winner: it is not placed, the local solver is not seeded from it, and
         the path stays stalled until it is re-drawn - which keeps `flock[i].point`
         meaning "where the path stands". The start is this iteration's move for
-        every restarted path, usable or not, so none of them also steps.
+        every restarting path, usable or not, so none of them also steps.
         """
-        for i, point in placed.items():
+        for i, point in points.items():
             slot = self.flock[i]
             slot.stalled = not point.usable
             if slot.stalled:
@@ -877,27 +865,27 @@ class _Paths:
             slot.point = point
             self.local_solver.restart(i, point)
 
-    def _advance(self, won: dict[int, PathPoint]) -> None:
-        """Commit each accepted winner as its path's next point, then fold it.
+    def _step(self, points: dict[int, PathPoint]) -> None:
+        """Commit each usable winner as its path's next point, then step it.
 
-        The fold is the step's commit half: it is what tells the method the point
-        landed, and it is the only place the secant is read, so a winner the
-        engine refuses here is refused before the method has been told anything.
-        The point the step started from is not passed on: the method kept it when
-        it was placed or last folded.
+        `local_solver.step` is the step's commit half: it is what tells the
+        method the point landed, and it is the only place the secant is read, so
+        a winner the engine refuses here is refused before the method has been
+        told anything. The point the step started from is not passed on: the
+        method kept it when it was placed or last stepped from.
         """
-        for i, best in won.items():
+        for i, point in points.items():
             slot = self.flock[i]
-            if not best.usable:
+            if not point.usable:
                 # `settle` graded the winner and this is the first read, so a
                 # non-finite value or gradient is refused here: the path keeps
                 # the point it held, and the method is never told the step
-                # landed. Same gate as `_place`: an unusable point never becomes
-                # a path's point.
+                # landed. Same gate as `_restart`: an unusable point never
+                # becomes a path's point.
                 slot.stalled = True
                 continue
-            slot.point = best
-            self.local_solver.fold(i, best)
+            slot.point = point
+            self.local_solver.step(i, point)
 
 
 def _validate_run(

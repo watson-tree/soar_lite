@@ -1,7 +1,7 @@
 """The non-finite event matrix: one table for what every odd value may become.
 
 There is no single owner of the "is this number usable" decision - `_Best`,
-`_argmin_finite`, the paths' start/trial/winner gates and the solver's fold
+`_argmin_finite`, the paths' start/trial/winner gates and the solver's step
 gate each decide locally, on purpose, because each decides a different
 question. What they must agree on is the table, and the table is short:
 
@@ -19,8 +19,8 @@ question. What they must agree on is the table, and the table is short:
 A seventh dimension is not in that table because it is not a value: with the
 value finite, either half of the pair can still be broken. A gradient that is
 not all finite is "half dead" - the value is real and reports, the point cannot
-be proposed from or folded on - so the run stalls the path instead of poisoning
-the secant. `test_local_solver.py` owns the fold gate; the engine-level rows are here.
+be proposed from or stepped on - so the run stalls the path instead of poisoning
+the secant. `test_local_solver.py` owns the step gate; the engine-level rows are here.
 
 `test_scheduler.py` covers the same events where they meet a specific
 mechanism (a probe group with a dead column, an all-NaN pool, the
@@ -101,11 +101,11 @@ def test_a_mask_of_zero_and_one_flags_is_accepted() -> None:
 
 @pytest.mark.parametrize("flag", [math.nan, -2.0, 0.5, 2.0, 1e-12])
 def test_a_mask_flag_that_is_not_zero_or_one_is_refused(flag: float) -> None:
-    """Every truthy-but-not-1 flag is refused, and refused before any fold."""
+    """Every truthy-but-not-1 flag is refused, and refused before any step."""
     best = _Best(1)
     with pytest.raises(ValueError, match="feas mask"):
         best.observe(jnp.array([[0.25]]), [1.0], jnp.array([flag]))
-    assert math.isnan(best.fun)  # the batch was refused before any fold
+    assert math.isnan(best.fun)  # the batch was refused before any step
 
 
 @pytest.mark.parametrize(

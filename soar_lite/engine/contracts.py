@@ -51,9 +51,9 @@ class PathPoint:
 
         Both halves must be finite, because both are carried forward: a
         non-finite f cannot be reported, re-started from or finished on, and a
-        non-finite g is proposed from and folded on, so one NaN there poisons
-        that coordinate's magnitude EMAs for the rest of the run. f is asked
-        first, so a dead value skips g's finite scan.
+        non-finite g is proposed from and blended into the secant, so one NaN
+        there poisons that coordinate's magnitude EMAs for the rest of the run.
+        f is asked first, so a dead value skips g's finite scan.
         """
         return math.isfinite(self.f) and bool(jnp.all(jnp.isfinite(self.g)))
 
@@ -178,13 +178,14 @@ class LocalSolver(Protocol):
     instance, and is opaque to the engine - implementers index it by path ``i``.
 
     A path's point reaches the method in exactly two places: ``restart(i, p)``,
-    which places it, and ``fold(i, p)``, which moves it. Both are the engine's
+    which places it, and ``step(i, p)``, which moves it. Both are the engine's
     own commit points, so a method that keeps the point it was handed holds the
     one the engine holds. A method that steps from a point must keep it, because
     no later call hands it back: ``propose`` reads the current point off the
-    method's own state and answers from it. ``fold`` is the only place a landed
+    method's own state and answers from it. ``step`` is the only place a landed
     point is announced, so it is also the only place the method may advance its
-    model - a secant is a step that was taken, and only ``fold`` knows one was.
+    model - a secant is a step that was taken, and only the ``step`` callback is
+    told one was.
 
     The split between the two evaluation halves is the method's cost lever. A
     step's *value* is what its enumeration compares, so the method reads it:
@@ -192,7 +193,7 @@ class LocalSolver(Protocol):
     and may be called as often as the enumeration needs. A step's *gradient* is
     wanted only for the winner, so the engine buys it afterwards - one fused
     batch per iteration, covering every winner and every restart start - and
-    hands it back through ``fold``. A `Pending` therefore leaves ``propose``
+    hands it back through ``step``. A `Pending` therefore leaves ``propose``
     with whatever halves the method already holds: both owed when it never read
     the point, the value alone when it read it through ``serve_trials``, and both
     when the caller supplied no ``eval_f`` seam and the hook served the pair.
@@ -203,7 +204,7 @@ class LocalSolver(Protocol):
     starts it draws, and never silently relocates a step.
 
     These methods are called by the engine on its own schedule - `restart` on
-    every placement, `propose` once per iteration for the paths that step, `fold`
+    every placement, `propose` once per iteration for the paths that step, `step`
     once per committed step - so they trust their arguments: this Protocol is the
     whole contract.
     """
@@ -229,12 +230,12 @@ class LocalSolver(Protocol):
         wants a trial grid proposes the whole flock's samples in one batch
         rather than once per path. The answer is keyed by the indices asked, and
         ``None`` means the path's own stopping test holds: the engine stalls it
-        where it stands, serving nothing and folding nothing.
+        where it stands, serving nothing and committing nothing.
 
         A non-``None`` entry is the step's winner, held as a `Pending`. The
         engine promotes it by buying the halves still owed, then commits it as
-        the path's next point and calls ``fold`` - unless it is not `usable`, in
-        which case the path stalls and ``fold`` is never called.
+        the path's next point and calls ``step`` - unless it is not `usable`, in
+        which case the path stalls and ``step`` is never called.
 
         ``serve_trials`` is the run's value-only evaluation hook. Every call
         serves one batch and reports it to the run's best and to the global
@@ -248,17 +249,17 @@ class LocalSolver(Protocol):
         """
         ...
 
-    def fold(self, i: int, p: PathPoint) -> None:
-        """Fold the step the engine just committed into the model: the path is at p.
+    def step(self, i: int, p: PathPoint) -> None:
+        """Take the step the engine just committed: the path now stands at p.
 
         The engine's only call site is the commit of a usable winner, with ``p``
-        the graded point it committed, so the folded secant is always a step
-        that was taken and can never disagree with the path. It is never called
-        for a point the engine refused (not `usable`) or for a path whose
-        stopping test held. ``p`` means what it means in ``restart``: the point
-        the path now stands at. The point it stepped from is the method's own
-        record, not an argument - the same rule that makes ``propose`` read its
-        point instead of being handed it.
+        the graded point it committed, so the recorded step is always one that
+        was taken and can never disagree with the path. It is never called for a
+        point the engine refused (not `usable`) or for a path whose stopping
+        test held. ``p`` means what it means in ``restart``: the point the path
+        now stands at. The point it stepped from is the method's own record, not
+        an argument - the same rule that makes ``propose`` read its point
+        instead of being handed it.
         """
         ...
 
