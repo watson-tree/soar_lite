@@ -106,6 +106,55 @@ def test_a_stationary_path_proposes_nothing() -> None:
     assert solver.propose([0], wide(2), _unread) == {0: None}
 
 
+def test_a_path_pinned_by_an_outward_gradient_is_stationary() -> None:
+    """A wall is a reachable stop: the gradient points out, so no step is feasible."""
+    box = Domain(jnp.stack([jnp.zeros(2), jnp.ones(2)], axis=1))
+    solver = DiagonalPreconditioner()
+    start = PathPoint(x=jnp.full(2, 0.5), f=1.0, g=jnp.full(2, 3.0))
+    solver.restart(0, start)
+    solver.restart(1, start)
+    # Path 0 stands on the lower wall with g > 0, path 1 on the upper wall with
+    # g < 0: in both the descent -g points out of the box, so the clip would pin
+    # every step to the point the path already stands on.
+    solver.fold(0, PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.full(2, 2.0)))
+    solver.fold(1, PathPoint(x=jnp.ones(2), f=1.0, g=jnp.full(2, -2.0)))
+
+    assert solver.propose([0, 1], box, _unread) == {0: None, 1: None}
+
+
+def test_the_wall_decides_what_pins_a_point_not_the_gradient() -> None:
+    """One (x, g) is a stop under the upper wall and a live descent under the lower."""
+    start = PathPoint(x=jnp.array([-0.5]), f=1.0, g=jnp.array([-3.0]))
+    point = PathPoint(x=jnp.zeros(1), f=1.0, g=jnp.array([-2.0]))
+    lower_wall = Domain(jnp.asarray([[0.0, 1e6]]))
+    upper_wall = Domain(jnp.asarray([[-1e6, 0.0]]))
+
+    def verdict(box: Domain) -> Pending | None:
+        solver = DiagonalPreconditioner()
+        solver.restart(0, start)
+        solver.fold(0, point)
+        return solver.propose([0], box, _unread)[0]
+
+    assert verdict(upper_wall) is None  # g < 0 against the upper wall: pinned
+    assert verdict(lower_wall) is not None  # the same g against the lower: inward
+
+
+def test_momentum_pointing_out_does_not_pin_a_point() -> None:
+    """The stop reads the gradient, so lagging momentum cannot declare a path done."""
+    solver = DiagonalPreconditioner(mu=0.9)
+    start = PathPoint(x=jnp.array([0.5]), f=1.0, g=jnp.array([3.0]))
+    solver.restart(0, start)
+    solver.fold(0, PathPoint(x=jnp.zeros(1), f=1.0, g=jnp.array([-2.0])))
+    # The blend leaves m positive, so the direction -m still points out of the
+    # box while -g points back in. Read m here and this path is stalled away from
+    # a descent it can still take.
+    assert float(solver._state[0].m[0]) > 0.0
+
+    lower_wall = Domain(jnp.asarray([[0.0, 1e6]]))
+
+    assert solver.propose([0], lower_wall, _unread)[0] is not None
+
+
 def test_propose_answers_the_whole_cohort_in_one_call() -> None:
     """One call covers every path asked about, each entry independent."""
     solver = DiagonalPreconditioner()
