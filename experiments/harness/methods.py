@@ -79,11 +79,14 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
     The budget is `max_batches` **batches** - one eval of parallel evaluations,
     the axis a single chain pays one point per step on. The engine's own stop
     counts iterations, not batches, so the ceiling is held by a batch gate
-    (`budget_check`), which is handed the run's `Work`: it reads the engine's own
-    count instead of keeping a parallel one, so the stop lands on the number the
-    report carries. The gate is asked before each batch, so the run stops on the
-    ceiling, not past it. `max_iters` is the horizon the engine requires -
-    deliberately non-binding, so it never ends the run first.
+    (`budget_check`), which is handed the run's `Work` as that batch would leave
+    it: it reads the engine's own count instead of keeping a parallel one, so
+    the stop lands on the number the report carries. A batch is charged only if
+    the gate allows it, so `<= max_batches` is the ceiling exactly - neither one
+    batch past it nor one short. `max_iters` is given the same value, as the
+    horizon the engine requires; it can only bind on a run that serves exactly
+    one batch per iteration, where the two arrive together and `stop` names the
+    horizon first.
 
     `restart_stalled` is whether a path the engine marks stalled is re-drawn.
     The default mirrors the engine's (on), but every panel arm passes `False`:
@@ -132,7 +135,7 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
         domain=domain,
         x0=x0,
         max_iters=max_batches,
-        budget_check=lambda work: work.n_f_batches + work.n_f_g_batches < max_batches,
+        budget_check=lambda work: work.n_f_batches + work.n_f_g_batches <= max_batches,
         local_solver=DiagonalPreconditioner(mu=mu),
         restart_stalled=restart_stalled,
         global_model=None if model is None else model(key),

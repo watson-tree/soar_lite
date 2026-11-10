@@ -340,8 +340,14 @@ class Work:
     stop predicates decide. A caller's ``budget_check`` gate is handed one of
     these: it reads the ledger and cannot write it. Frozen, and replaced rather
     than mutated as the run charges it, so a reference to one is the snapshot of
-    the moment it was handed over, and the run's report carries exactly the
-    ledger last charged.
+    the moment it was handed over.
+
+    At a serve site the gate is handed the ledger the pending batch *would*
+    leave, which is why a points ceiling holds: a batch is charged only if the
+    gate allows it, and the count a refusal was decided on never enters the
+    ledger. What the report carries is therefore exactly the ledger the last
+    allowed batch left - never one a gate refused. At the loop head, where no
+    batch is pending, the gate is handed the ledger as it stands.
 
     The iteration count is not here: `max_iters` bounds it, and one iteration
     may serve several batches (a restart's starts plus the method's trials), so

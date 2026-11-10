@@ -597,17 +597,25 @@ raises `ValueError`.
 `budget_check` is the extra gate for budgets the engine cannot see (points,
 money, an external early stop). It is handed the run's `Work`, the four counts
 the result reports, so the ceiling is set on the engine's own ledger rather than
-on a second tally the caller keeps in step by hand.
+on a second tally the caller keeps in step by hand. Before a batch it is handed
+the ledger **that batch would leave**, and the batch is charged only if the gate
+allows it: a ceiling on points is one the run cannot cross, and the counts a
+refusal was decided on never enter the result. Since a batch is served whole or
+not at all, such a ceiling is met from below - the run stops within one batch
+width of it. At the loop head, with no batch pending, the gate is handed the
+ledger as it stands.
 
 The budget object therefore holds two separate things: the three stop predicates
 and the four work counts (one frozen `Work`, replaced on each charge).
 **Both pairs of counts are recorded** (fused and value-only; see
 [Cost](#cost-two-evaluation-seams-two-rulers)), but **the
 counts never decide a stop**: `stop` reads only three predicates (horizon, wall
-clock, the caller's gate). `charge` only records, `tick` records one iteration
-after a completed iteration, and `stop` is the only stop query. The refusal is **not**
+clock, the caller's gate). `after` projects a charge without making it, `commit`
+makes the one the gate allowed, `tick` records one iteration after a completed
+iteration, and `stop` is the only stop query. The refusal is **not**
 stored as state: a cached flag could drift from the counts that justify it.
-(`charge`, `tick`, `stop` are internal to the budget object, not public API.)
+(`after`, `commit`, `tick`, `stop` are internal to the budget object, not public
+API.)
 
 The same `stop` is also the loop head's condition: a completed iteration may have
 just reached the horizon, so it is asked once before a new iteration opens. A

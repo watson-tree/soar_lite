@@ -263,8 +263,12 @@ Four gotchas worth knowing up front:
   is a deterministic stop, not a cost estimate: read the counters for what the
   run actually did, and pass the deadline (`time_limit`) if wall-clock is what
   you care about. An external budget derived from batches or points, checked
-  through `budget_check`, can over-run by less than one batch, never more — the
-  gate is asked before each batch and sees the counts the result will report.
+  through `budget_check`, is a ceiling the engine cannot cross: before each
+  batch the gate is handed the `Work` that batch would leave, and the batch is
+  charged only if the gate allows it. Write the comparison with `<=` — the
+  count already includes the batch — and remember that a batch is served whole
+  or not at all, so the run meets the ceiling from below, within one batch
+  width of it.
 
 ## 5. What a batch and a point cost
 

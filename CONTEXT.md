@@ -125,8 +125,9 @@ decides the stop. Points and batches are different numbers on different axes
 and must never share a chart, and the `f` pair must never be read as the `f_g`
 pair. They replace scipy's single `nfev`. The four live in one frozen `Work`,
 reached as `result.work` and read flat on the result as well; that object is
-what the budget gate is handed, so a gate reads the ledger the report carries
-and cannot write it.
+what the budget gate is handed — as it stands at the loop head, and as a
+pending batch would leave it at a serve site — so a gate reads counts on their
+way into the report and cannot write them.
 _Avoid_: nfev (retired)
 
 **objective**:
@@ -249,10 +250,12 @@ The caller's predicate, asked as one of the run's three stops at every loop head
 and again before each batch — serve the whole batch or nothing, never a partial
 prefix. It is handed the run's `Work`, the same four counts the result reports,
 so it gates on any axis it likes (points, batches, both seams together) without
-keeping a tally of its own; the count it reads and the count it reports can
-never drift apart. It exists for a budget the engine cannot see (points,
-wall-clock, dollars). Such an external gate can over-run by less than one batch.
-It is an extra gate, never a horizon.
+keeping a tally of its own. Before a batch it is handed the ledger that batch
+would leave, and a batch it refuses is never charged: a ceiling on points is one
+the run cannot cross, met from below by up to one batch width since a batch is
+served whole or not at all. At the loop head it is handed the ledger as it
+stands. It exists for a budget the engine cannot see (points, wall-clock,
+dollars). It is an extra gate, never a horizon.
 _Avoid_: stopping budget
 
 **domain** (type `Domain`):

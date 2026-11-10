@@ -190,16 +190,18 @@ class Recorder:
         return f_vals, None
 
     def limit_check(self, limit: int) -> Callable[[Work], bool]:
-        """Return a batch-level budget_check False once `limit` points were served.
+        """Return a points ceiling: False once a batch would push past `limit`.
 
         The core consults it before each batch (and once at the head of each
-        iteration), so the terminal batch over-runs by less than one batch width.
-        It reads the run's own ledger rather than keeping a tally of its own, so
-        the count it gates on is the one the report will carry.
+        iteration) with the ledger that batch would leave, so the run stops
+        within one batch width below the ceiling instead of crossing it: a batch
+        is served whole or not at all. It reads the run's own ledger rather than
+        keeping a tally of its own, so the count it gates on is the one the
+        report will carry.
         """
 
         def check(work: Work) -> bool:
-            return work.n_f_g_points < limit
+            return work.n_f_g_points <= limit
 
         return check
 
@@ -245,7 +247,7 @@ def test_batch_shape_and_point_counting() -> None:
 
 
 def test_budget_exhaustion_stops_everything() -> None:
-    """budget_check() False -> global stop; terminal batch over-runs < n_paths."""
+    """budget_check() False -> global stop, never past the ceiling it names."""
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum((theta - 0.7) ** 2), 2.0 * (theta - 0.7)
@@ -259,9 +261,11 @@ def test_budget_exhaustion_stops_everything() -> None:
         local_solver=HalfStep(),
     )
     assert res.n_f_g_points == rec.evals
-    assert 30 <= res.n_f_g_points < 30 + 8  # at most one batch past the limit
-    assert 0 < res.n_iters < 100  # the gate stopped it, not the horizon
+    # A batch of 8 is served whole or not at all, so a 30-point ceiling is met
+    # from below: the batch that would reach 32 is refused, leaving 24.
+    assert res.n_f_g_points == 24
     assert res.status == "budget_exhausted"
+    assert 0 < res.n_iters < 100  # the gate stopped it, not the horizon
 
     # gate already False on entry: nothing evaluated at all
     rec0 = Recorder(quad)
