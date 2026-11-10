@@ -595,10 +595,12 @@ seam, from the batch that redraws starts to the method's trial batches.
 say how expensive an iteration is. At least one of them must be given, or the entry
 raises `ValueError`.
 `budget_check` is the extra gate for budgets the engine cannot see (points,
-money, an external early stop).
+money, an external early stop). It is handed the run's `Work`, the four counts
+the result reports, so the ceiling is set on the engine's own ledger rather than
+on a second tally the caller keeps in step by hand.
 
 The budget object therefore holds two separate things: the three stop predicates
-and the four work counts.
+and the four work counts (one frozen `Work`, replaced on each charge).
 **Both pairs of counts are recorded** (fused and value-only; see
 [Cost](#cost-two-evaluation-seams-two-rulers)), but **the
 counts never decide a stop**: `stop` reads only three predicates (horizon, wall

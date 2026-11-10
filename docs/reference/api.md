@@ -39,11 +39,12 @@ being committed. An **arm** is one variant of a plugin, and an **ask** is one
 
 ## Results
 
-One run's end state — the result, and the status that names why it ended — and
-the two point types the plugins exchange: a `PathPoint` is a committed point, a
-`Pending` is one still owed a half.
+One run's end state — the result, the work it billed, and the status that names
+why it ended — and the two point types the plugins exchange: a `PathPoint` is a
+committed point, a `Pending` is one still owed a half.
 
 ::: soar_lite.NPathResult
+::: soar_lite.Work
 ::: soar_lite.NPathStatus
 ::: soar_lite.PathPoint
 ::: soar_lite.Pending

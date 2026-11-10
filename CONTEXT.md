@@ -116,14 +116,17 @@ assembled only once both halves exist (see *settle*), so a point that arrived
 fused travels on as one object rather than three arrays.
 _Avoid_: query, sample, evaluation (retired)
 
-**four counters** (`n_f_g_points` / `n_f_g_batches` / `n_f_points` / `n_f_batches`):
+**four counters** (`n_f_g_points` / `n_f_g_batches` / `n_f_points` / `n_f_batches`, all four in one `Work`):
 The run's reported work, on two axes and two seams. `points` counts billed
 points (a batch bills its actual size), `batches` counts billed batches (a batch
 bills 1); `f_g` is the fused value+gradient pair, `f` the value-only pair. All
 four are counted — "billed" means "actually served out" — and none of them
 decides the stop. Points and batches are different numbers on different axes
 and must never share a chart, and the `f` pair must never be read as the `f_g`
-pair. They replace scipy's single `nfev`.
+pair. They replace scipy's single `nfev`. The four live in one frozen `Work`,
+reached as `result.work` and read flat on the result as well; that object is
+what the budget gate is handed, so a gate reads the ledger the report carries
+and cannot write it.
 _Avoid_: nfev (retired)
 
 **objective**:
@@ -244,9 +247,12 @@ _Avoid_: budget, timeout (that is a per-call concern)
 **budget gate** (`budget_check`):
 The caller's predicate, asked as one of the run's three stops at every loop head
 and again before each batch — serve the whole batch or nothing, never a partial
-prefix. It exists for a budget the engine cannot see (points, wall-clock,
-dollars). Such an external gate can over-run by less than one batch. It is an
-extra gate, never a horizon.
+prefix. It is handed the run's `Work`, the same four counts the result reports,
+so it gates on any axis it likes (points, batches, both seams together) without
+keeping a tally of its own; the count it reads and the count it reports can
+never drift apart. It exists for a budget the engine cannot see (points,
+wall-clock, dollars). Such an external gate can over-run by less than one batch.
+It is an extra gate, never a horizon.
 _Avoid_: stopping budget
 
 **domain** (type `Domain`):

@@ -650,3 +650,49 @@ naming the one it wants; the engine clips the start, buys the winner's owed
 halves in one fused batch (`settle`), and folds the winner back.
 `DiagonalPreconditioner` takes the single full step the sweeps said was right,
 and reads no trial at all.
+
+## A `max_*` cap family (`max_batches` and its siblings)
+
+**Status: rejected at the interface level, before any delivered file changed.**
+The stop predicates are still `max_iters`, `time_limit`, and the caller's
+`budget_check`; `budget_check` is handed the run's `Work` instead, which covers
+the case the family was aimed at without a new knob.
+
+### What it was
+
+A fourth stop predicate beside the horizon and the deadline: `max_batches`,
+ending the run once the batch count reaches a ceiling. The same argument then
+applies to each remaining count — `max_points`, `max_f_batches`,
+`max_f_g_batches` — since the run reports two axes over two seams.
+
+### Why it was plausible
+
+The counts already exist, and an experiment whose x-axis is batches wants to stop
+on that axis. `max_iters` does not substitute: it counts iterations, and an
+iteration's batch cost is the method's business. Measured with `n_paths = 4` and
+`max_iters = 5`, the shipped method stalls out at **4 iterations / 3 fused
+batches**; `RetryingSolver(retries=2)` (up to two trials per step) reaches **5
+iterations / 49 fused batches**, and **5 iterations / 48 value-only + 5 fused =
+53 batches** with `eval_f` connected. Equal iteration ceilings are wildly
+unequal work.
+
+### Why it fails
+
+One axis is one knob, and a ceiling on each of four numbers is four knobs, each of
+which the engine then has to order against the others and name in `NPathStatus`
+— with a tie-break question at every combination. Connecting `eval_f` does not
+close the gap either: it adds calls, so the total grows (53 above), and a step
+that reads `k` trials serves `k + 1` batches however the seams are wired. The
+counts are a report; a family of caps turns the report into four more things the
+engine must decide.
+
+### What took its place
+
+The gate reads the ledger. `budget_check` now receives the run's `Work`, so any
+axis — or any sum of axes — is one predicate in the caller's own code:
+
+    budget_check=lambda w: w.n_f_g_batches < 3000
+    budget_check=lambda w: w.n_f_points + w.n_f_g_points < 10**5
+
+No new knob, no new `NPathStatus` name, and no second counter to keep in step
+with the report: the number the gate stops on is the number the panel plots.
