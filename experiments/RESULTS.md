@@ -198,6 +198,16 @@ dashed 16) and color is the momentum level. `mu=0` was drawn dash-dot on the
 strength of being a special arm, but it is also `n_paths=1`, and only one of
 those two facts should decide a linestyle.
 
+**Annotation, 2026-11-10 — the cut now spares an arm that stopped early.** An
+arm that stops before its batch budget (a chain that converged, on the diagonal
+quadratic within a handful of batches) is drawn to its own last point and no
+longer sets the shared cut; only arms that served their budget do. "All curves
+end together" therefore holds when every arm completes, which is every panel
+but the diagonal quadratic and rastrigin. Two consequences, both in the figure
+only: an early arm's last step is now sampled into the shared grid (without it
+the step that carried the run's answer was the one never drawn), and the cut it
+dictated is gone. No trace was re-measured and no number above changes.
+
 ## 2026-11-04 — lineup v3 supplement: the `mu=0.9` momentum arm
 
 Budget and code unchanged from the entry below (20 seeds x 3000 batches, the

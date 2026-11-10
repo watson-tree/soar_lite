@@ -280,14 +280,18 @@ settled against: the residual error is in the step's *direction*, not its length
     `n_paths` inflates, so an `n_paths=16` arm serves 16 points per batch and
     would trail 16x past every single chain - 48000 against 3000 on these runs.
     Every arm is therefore cut at the shortest extent present **on the points
-    axis**, so all curves end together and the wide arm shows the first ~187 of
-    its 3000 batches. That truncation is the reading, not a loss: on equal
-    points, `n_paths=16` splits one long run into sixteen short ones - 1/16 the
-    depth each - and reports their best, so the axis asks whether a breadth of
-    short independent searches beats one deep one. Parallelism is a trade of
-    per-chain depth for a tighter best-of-n spread, and the points axis is the
-    only place that trade is charged instead of hidden behind a 16x point
-    budget. It is the axis of the curve's *shape*, not of a final value: a
+    axis**, taken over the arms that served their batch budget: an arm that
+    stopped early — a chain that converged, at machine precision within a
+    handful of batches on the diagonal quadratic — is drawn to its own last
+    point instead, so its stop cannot clip the arms still spending budget. With
+    every arm completing, all curves end together and the wide arm shows the
+    first ~187 of its 3000 batches. That truncation is the reading, not a loss:
+    on equal points, `n_paths=16` splits one long run into sixteen short ones -
+    1/16 the depth each - and reports their best, so the axis asks whether a
+    breadth of short independent searches beats one deep one. Parallelism is a
+    trade of per-chain depth for a tighter best-of-n spread, and the points axis
+    is the only place that trade is charged instead of hidden behind a 16x
+    point budget. It is the axis of the curve's *shape*, not of a final value: a
     converged median read off a truncated curve is an artefact, so final numbers
     come from the batches column in `RESULTS.md`.
 - Seeds `N=20`; report **median, shaded [Q1, Q3]** (interquartile band), log-y,

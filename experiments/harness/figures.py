@@ -18,7 +18,7 @@ from matplotlib.axes import Axes
 from experiments.harness import problems
 from experiments.harness.methods import Trace
 from experiments.harness.panels import PANELS, Roster
-from experiments.harness.record import HERE, Roots, load_arm
+from experiments.harness.record import HERE, Loaded, Roots, load_arm
 
 Axis: TypeAlias = Literal["points", "batches"]
 """The two cost units a panel can be drawn against.
@@ -74,20 +74,24 @@ def _draw_problem(
         print(f"  no trace: {prob.name}: {', '.join(missing)}")
     if not present:
         return False
-    # Cut every arm at the shortest extent **of the axis being drawn**: one arm
-    # can be shared with a panel that runs longer, and a curve that outlives the
-    # others on x reads as a comparison it is not. The unit is the axis's own -
-    # batches are level across arms, points are not, since a point count is
-    # exactly what n_paths inflates and an n_paths=16 arm would otherwise trail
-    # 16x past every single chain. A panel whose arms are all one width is
-    # untouched by this, so this cannot starve a wide arm of its own run.
+    # Cut every arm at the shortest extent **of the axis being drawn**, taking
+    # that shortest among the arms that served their budget: one arm can be
+    # shared with a panel that runs longer, and a curve that outlives the others
+    # on x reads as a comparison it is not. The unit is the axis's own - batches
+    # are level across arms, points are not, since a point count is exactly what
+    # n_paths inflates and an n_paths=16 arm would otherwise trail 16x past every
+    # single chain. A panel whose arms are all one width is untouched by this, so
+    # this cannot starve a wide arm of its own run.
+    #
+    # An arm that stopped early - a converged chain, at machine precision within
+    # a handful of batches on the diagonal quadratic - is a result, not a ruler:
+    # it is drawn to its own last point below, and letting its stop clip the
+    # panel would hide every arm still spending its budget. With every arm
+    # completing, the ruler set is the whole panel and the cut is the one it
+    # always was.
     xcol = 0 if axis == "points" else 1
-    xmax = min(
-        max(
-            float(t.as_arrays()[xcol].max()) for t in loaded.traces if len(t.points) > 0
-        )
-        for _, loaded in present
-    )
+    loads = [loaded for _, loaded in present]
+    xmax = _cut(loads, xcol)
     if len({loaded.max_batches for _, loaded in present}) > 1:
         print(f"  mixed budgets: {prob.name}: cutting all arms at {xmax:g} {axis}")
     shown = {
@@ -146,6 +150,16 @@ def plot_cohort(  # noqa: PLR0913 - one parameter per fact the call site decides
     # of served cost, and a linear grid would compress it into the left edge.
     grid = np.logspace(0.0, np.log10(xmax), 120)
     grid[-1] = xmax  # logspace rounds the last sample past its own end
+    # Every seed's last point carries the step its run stopped on - the whole
+    # answer of a chain that converged early - and a log grid need not land on
+    # it, since each arm stops where its own run did. Its stop is added, or the
+    # step that mattered most would be the one never drawn.
+    stops = [
+        float(t.as_arrays()[0 if axis == "points" else 1].max())
+        for t in traces
+        if len(t.points) > 0
+    ]
+    grid = np.unique(np.append(grid, [s for s in stops if s <= xmax]))
     med, q1, q3 = _summary(_resample(traces, grid, axis))
     ax.plot(grid, np.maximum(med, 1e-16), label=label, **style)
     ax.fill_between(
@@ -190,6 +204,33 @@ def _summary(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         q1 = np.nanpercentile(arr, 25, axis=0)
         q3 = np.nanpercentile(arr, 75, axis=0)
     return med, q1, q3
+
+
+def _cut(loads: list[Loaded], xcol: int) -> float:
+    """Return the x extent a panel shares: the shortest arm's, over its seeds.
+
+    Arms that stopped before their batch budget are left out of the shortest:
+    they are drawn to their own last point instead, so a converged chain cannot
+    clip the ones still spending budget. A panel where every arm stopped early
+    has no ruler but those, and falls back to all of them.
+    """
+    served = [loaded for loaded in loads if _served_budget(loaded)]
+    return min(_extent(loaded, xcol) for loaded in served or loads)
+
+
+def _extent(loaded: Loaded, xcol: int) -> float:
+    """Return the furthest ``xcol`` this arm reached, over every seed."""
+    return max(
+        float(t.as_arrays()[xcol].max()) for t in loaded.traces if len(t.points) > 0
+    )
+
+
+def _served_budget(loaded: Loaded) -> bool:
+    """Whether every seed reached the batch budget, i.e. did not stop early."""
+    return all(
+        len(t.batches) > 0 and t.batches[-1] >= loaded.max_batches
+        for t in loaded.traces
+    )
 
 
 def _up_to(trace: Trace, axis: Axis, max_x: float) -> Trace:
