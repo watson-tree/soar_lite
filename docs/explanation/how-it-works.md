@@ -742,9 +742,14 @@ own job, joined by an **adaptive restart process** that decides where the next
 start comes from — mainly by choosing an *acquisition function*, an improvement
 function such as expected improvement (EI) or probability of improvement (PI)
 scored against a global model fitted on what has been evaluated — rather than
-leaving global diversity to the local search alone. `-lite`
-means this package implements only the minimal version of that skeleton: restart
-starts come from a `GlobalModel`. The details differ:
+leaving global diversity to the local search alone. The framework's reference
+implementation is
+[SOAR-Algorithmic-Framework](https://github.com/Lmathesen/SOAR-Algorithmic-Framework);
+its own citation request names a 2018 manuscript submitted for publication under
+this title, with two authors — the journal article above is the same title in
+its published form, with four. `-lite` means this package implements only the
+minimal version of that skeleton: restart starts come from a `GlobalModel`. The
+details differ:
 
 - **Three parts become two.** SOAR strings a surrogate model, an acquisition
   rule (which start is worth buying next), and a local method into one framework.
@@ -765,7 +770,12 @@ starts come from a `GlobalModel`. The details differ:
   inverse-stereographic by default (`SphereProjection`), `IdentityProjection` the
   injectable alternate for a task whose optimum sits on a boundary — and that
   geometry cures the corner-seeking pathology a Euclidean RBF Gaussian-process
-  posterior falls into in high dimension; `propose` returns the local minimum of
+  posterior falls into in high dimension. What the bend adds is a prior that the
+  optimum is interior: a linear head gets a bowl under it, an RBF a compactified
+  metric weighted toward the center, and both are that one prior, so the cure is
+  the prior's — on a task whose optimum sits on a corner the ranking inverts,
+  which is what `IdentityProjection` is for (Tripp 2026). `propose` returns the
+  local minimum of
   `−log EI`. It is a fixed-hyperparameter port of Doumont et al. 2026. EI carries
   no acquisition hyperparameters of its own and is strong in practice, but
   choosing it as the default acquisition is a personal prior,
@@ -790,20 +800,32 @@ results. The citation is for attribution and to locate the difference.
 
 ## References
 
-- Conn, A. R., Gould, N. I. M., & Toint, P. L. (2000). *Trust-Region Methods*.
-  SIAM/MPS. (The secant equation `B s = y` and the SR1 update; its diagonal
-  degeneration is the ratio above.)
+- Conn, A. R., Gould, N. I. M., & Toint, P. L. (2000). *Trust region methods*.
+  Society for Industrial and Applied Mathematics.
+  [doi.org/10.1137/1.9780898719857](https://doi.org/10.1137/1.9780898719857).
+  The textbook account of the secant equation `B s = y` and the SR1 update,
+  whose diagonal degeneration is the ratio above.
 - Mathesen, L., Pedrielli, G., Ng, S. H., & Zabinsky, Z. B. (2021). Stochastic
-  optimization with adaptive restart: a framework for integrated local and global
-  learning. *Journal of Global Optimization*, 79, 87–110. (SOAR-style sample
-  restarts.)
+  optimization with adaptive restart: A framework for integrated local and
+  global learning. *Journal of Global Optimization, 79*(1), 87–110.
+  [doi.org/10.1007/s10898-020-00937-5](https://doi.org/10.1007/s10898-020-00937-5).
+  The restart skeleton this package implements a minimal version of.
 - Doumont, C., Fan, D., Maus, N., Gardner, J. R., Moss, H., & Pleiss, G. (2026).
-  *We Still Don't Understand High-Dimensional Bayesian Optimization*.
-  Proceedings of the Twenty-Ninth International Conference on Artificial
-  Intelligence and Statistics (AISTATS), PMLR 300:2629–2637,
-  [proceedings.mlr.press](https://proceedings.mlr.press/v300/doumont26a.html)
-  — the inverse-stereographic projection the surrogate arm ports, from
-  [github.com/colmont/linear-bo](https://github.com/colmont/linear-bo).
-- Jones, D. R., Schonlau, M., & Welch, W. J. (1998). Efficient global optimization
-  of expensive black-box functions. *Journal of Global Optimization*, 13,
-  455–492. (The closed-form EI.)
+  We still don't understand high-dimensional Bayesian optimization. In
+  *Proceedings of the Twenty-Ninth International Conference on Artificial
+  Intelligence and Statistics* (AISTATS), PMLR 300, 2629–2637.
+  [proceedings.mlr.press](https://proceedings.mlr.press/v300/doumont26a.html).
+  The inverse-stereographic projection the surrogate arm ports, from
+  [colmont/linear-bo](https://github.com/colmont/linear-bo).
+- Tripp, A. (2026). *Why does spherical-linear BO work?* [Report]. GitHub.
+  [github.com/AustinT/2026-07-high-dim-bo](https://github.com/AustinT/2026-07-high-dim-bo/blob/8491b39e143c/REPORT.md),
+  with a companion post at
+  [austintripp.ca](https://www.austintripp.ca/blog/2026-07-25-spherical-linear-high-dim-bo/).
+  The study that isolates what the bend contributes: the projection is a prior
+  that the optimum is interior, and moving the optimum to a corner reverses the
+  ranking of the methods compared.
+- Jones, D. R., Schonlau, M., & Welch, W. J. (1998). Efficient global
+  optimization of expensive black-box functions. *Journal of Global
+  Optimization, 13*(4), 455–492.
+  [doi.org/10.1023/A:1008306431147](https://doi.org/10.1023/A:1008306431147).
+  The closed-form expected improvement.

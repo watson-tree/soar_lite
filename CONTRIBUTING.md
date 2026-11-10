@@ -20,8 +20,9 @@ recorded golden numbers that would encode this repository's history.
 ## Front doors
 
 `docs/index.md` is the canonical home page and the root `README.md` mirrors it
-for the sections both carry. A fact in the opening, in `Install`, in `Minimal
-run` or in `What's inside` is corrected in `docs/index.md` and copied across;
+for the sections both carry. A fact in the opening, or in any section either one
+carries from the other — `Install`, `Minimal run`, `What's inside`, `Citing` — is
+corrected in `docs/index.md` and copied across;
 `tests/test_front_doors_agree.py` fails if the two drift apart, or if a link in
 either one stops resolving. Link destinations are the sole exception — the site
 addresses its neighbours from inside `docs/`, the README from the root.

@@ -127,3 +127,11 @@ where the two depart.
 - **[How it works](explanation/how-it-works.md)** — when you want the reasons:
   the derivation behind the local step, how cost is counted, and how this library
   departs from SOAR.
+
+## Citing
+
+If this library does useful work in something you publish, cite the software:
+the entry is `CITATION.cff` at the repository root, which is what GitHub's
+*Cite this repository* button reads. Its `version` field names the release this
+tree is at, so pin the citation to the version you ran — a result then names the
+code that produced it.

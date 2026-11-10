@@ -28,7 +28,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 CANONICAL = "docs/index.md"
 MIRROR = "README.md"
-SHARED = ("Install", "Minimal run", "What's inside")
+SHARED = ("Install", "Minimal run", "What's inside", "Citing")
 LINK = re.compile(r"\]\(([^)\s]+)\)")
 
 

@@ -121,6 +121,17 @@ class SphereProjection(Projection):
     same map bends a line, and its far end returns to the pole - the variance
     goes back to the prior instead of growing with ``|x|``, which is what an
     unbent coordinate does.
+
+    References:
+        - Doumont et al. (2026), AISTATS — the spherical-linear model this
+          projection comes from.
+        - Tripp (2026),
+          [github.com/AustinT/2026-07-high-dim-bo](https://github.com/AustinT/2026-07-high-dim-bo)
+          — the study that isolates what the bend contributes: a prior that the
+          optimum is interior, strong enough that sliding the optimum to a corner
+          reverses the ranking. Use this projection where that prior holds and
+          `IdentityProjection` where it does not.
+
     """
 
     def __init__(

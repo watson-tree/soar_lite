@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: If soar-lite does useful work in something you publish, cite it with this entry.
+title: soar-lite
+abstract: >-
+  A JAX optimizer for objectives that are differentiable but expensive to
+  evaluate. A flock of n paths descends in parallel with a unit-invariant
+  diagonal secant preconditioner; a stalled path restarts from a Bayesian
+  linear surrogate fit on projected coordinates; and the report keeps every
+  served point, so an outside budget is spent against counted work.
+authors:
+  - family-names: Tree
+    given-names: Watson
+    email: watson.tree@outlook.com
+version: 0.1.0
+license: MIT
+type: software
+repository-code: https://github.com/watson-tree/soar_lite
+url: https://watson-tree.github.io/soar_lite/
+keywords:
+  - optimization
+  - first-order
+  - quasi-newton
+  - multi-start
+  - nonconvex
+  - jax

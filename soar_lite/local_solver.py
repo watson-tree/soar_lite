@@ -155,6 +155,12 @@ class DiagonalPreconditioner(LocalSolver):
     The derivation behind both spellings - the secant equation read one
     coordinate at a time, and why no matrix is stored - is the explanation
     page's local-step section ([how it works](../explanation/how-it-works.md)).
+
+    References:
+        - Conn et al. (2000), *Trust region methods* (SIAM) — the textbook
+          account of the secant equation and the SR1 update, whose diagonal
+          degeneration is this ratio.
+
     """
 
     def __init__(  # noqa: PLR0913 - each knob is a distinct, independently-swept facet

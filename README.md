@@ -202,5 +202,16 @@ Published at <https://watson-tree.github.io/soar_lite/>.
   from SOAR.
 - [API Reference](docs/reference/api.md) — generated from the docstrings.
 
-Contributing, and the checks a change has to pass:
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) holds the checks a change has to pass
+(pytest, ruff, pyright, `mkdocs build --strict`), the sync contract between these
+two front doors, and where the benchmark suite lives.
+
+## Citing
+
+If this library does useful work in something you publish, cite the software:
+the entry is `CITATION.cff` at the repository root, which is what GitHub's
+*Cite this repository* button reads. Its `version` field names the release this
+tree is at, so pin the citation to the version you ran — a result then names the
+code that produced it.

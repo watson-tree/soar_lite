@@ -10,10 +10,9 @@ The geometry lives entirely in the injected `Projection`
 width is read off `features`, so any projection width fits, and the caller picks
 the prior its belief deserves.
 
-The structure of the sphere is a fixed-hyperparameter port of Doumont et al.
-(2026), "We Still Don't Understand High-Dimensional Bayesian Optimization",
-AISTATS, PMLR 300:2629-2637 (reference implementation
-``github.com/colmont/linear-bo``):
+The structure of the sphere is a fixed-hyperparameter port of the
+spherical-linear model of Doumont et al. (2026), whose reference implementation
+is ``github.com/colmont/linear-bo``:
 a linear kernel read after projecting onto the unit sphere, a box-diagonal
 lengthscale normalization, and a posterior variance bounded away from the prior
 away from data. Two things differ. That implementation fits its lengthscale,
@@ -22,6 +21,12 @@ this package is jax-only), so here the same knobs are constructor values. And it
 descends its acquisition with a shipped multi-start L-BFGS-B, where here the
 minimizer is injected (`MinimizeFn`) so a driver can descend with this library's
 own n-path engine.
+
+References:
+    - Doumont et al. (2026), AISTATS — the paper whose fixed-hyperparameter
+      spherical-linear model this file ports; its reference implementation is
+      the ``colmont/linear-bo`` link above.
+
 """
 
 import math
@@ -102,6 +107,11 @@ class BLRGlobalModel(GlobalModel):
     pathology. `IdentityProjection` stays the explicit alternate arm, for a task
     whose optimum lives on a boundary; it is a different prior, not a stand-in
     for "no projection".
+
+    References:
+        - Doumont et al. (2026), AISTATS — the spherical-linear model this class
+          ports.
+
     """
 
     def __init__(
