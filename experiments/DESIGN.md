@@ -8,7 +8,7 @@ sweep. This document is the lossless handoff: read it before touching
 This document is a **current-state** document, not a record: it describes the
 harness as it stands, so a passage that stops being true is rewritten rather
 than appended to. A direction that was explored and dropped goes to
-`DEPRECATED.md`, which is where the record lives - including the shapes this
+`../DEPRECATED.md`, which is where the record lives - including the shapes this
 file no longer describes.
 
 This document states no measured numbers. Every figure and table an experiment
@@ -82,7 +82,8 @@ panel.
      `H` the frequency response of a tridiagonal (banded) system, solved
      densely - one `n×n` complex solve per frequency, O(n³) rather than O(n),
      which at N=20 is the cheap side of the set. Synthetic target design → known
-     `f* = 0`; boxes are physical ranges. Serves the headline race.
+     `f* = 0`; boxes are the hidden design scaled by [¼, 4], coordinate by
+     coordinate. Serves the headline race.
      The response is scale-invariant (`m`, `k`, `c` scaled together leave
      `|H|` unchanged), so `f* = 0` is a whole ray through the truth rather
      than a point: what is identified is the transmissibility, not the design,
@@ -123,13 +124,13 @@ panel.
    oscillation keeps turning the gradient: the panel reads the descent rate
    there, not where a chain stops. One problem, not a sample of two — Ackley
    was retired from this group because no arm on it ever took a step (see
-   `DEPRECATED.md`).
+   `../DEPRECATED.md`).
 
 Two appendix panels, property demos rather than races:
 
 4. **Invariance — unit-rescaling consistency.** Run on the diag control:
    re-measure in two unit systems (here `x' = 10x`, see `INVARIANCE_SCALE` in
-   `compare_baselines.py`), **zero retune**. Claim is **outcome-level, not
+   `harness/appendix.py`), **zero retune**. Claim is **outcome-level, not
    trajectory-level**: the best-so-far-vs-cost curves overlap in both unit
    systems, while Adam's separate (one system needs a different `α`). Exact
    per-step covariance (`x̃=c·x ⇒ d̃=c²d, Δx̃=c·Δx`) is real but holds only for
@@ -180,7 +181,7 @@ asserted up front.
 
 A third side used to close that line: gradient-free multimodal relief (Ackley),
 where the gradient says nothing about where to move next. It is no longer a
-panel — it discriminated nothing (see Risks, and `DEPRECATED.md` for the
+panel — it discriminated nothing (see Risks, and `../DEPRECATED.md` for the
 readings). The conclusion it demonstrated is stated here rather than drawn: from
 a regular start, no first-order method reaches the funnel.
 
@@ -240,21 +241,22 @@ reached — each method stops on its own criterion, so a floor at machine
 precision is a statement about the stopping rule rather than about the
 algorithm.
 
-Adam learning rate is **per-problem grid-tuned**: the picks span over two
-orders of magnitude (diag 1e-2 → rotated quadratic and oscillator
-2.0), and on diag `lr=1e-4` costs 52 orders of magnitude against the pick
-(`6.6e3` against `8.8e-49`). On diag every grid point from 1e-2 up
-sits on the same floor or plateau, so that pick is one point of that tie
-rather than a strict argmin — the figure's diamond marks the pick, not a
-minimum. The grid and the picks live in `experiments/tuning/adam.json`,
-written by `--lr-sweep` and read by `harness/tuning.py`: the pick is that
-sweep's argmin, ties to the smallest rate. soar-lite has no learning rate.
-Tuning is itself
-budget — every trial is more objective points, and it is manual, not
-adaptive. soar-lite contributes no tuned knob to any run —
-its step knobs sit at their defaults because scalar step rescaling was swept and
-settled against: the residual error is in the step's *direction*, not its length
-(`DEPRECATED.md`). `README.md` states that contract in full.
+Adam learning rate is **per-problem grid-tuned**: the pick is that sweep's
+argmin (ties to the smallest rate), so different problems land on different
+points of the grid rather than on one tuned constant, and on the diagonal
+quadratic the slowest rate costs more than fifty orders of magnitude against
+the pick. On that problem every rate from the sweep's second point through
+`1.0` sits on the quadratic's rounding floor, so the pick there is one point of
+a rounding tie rather than a strict argmin — the figure's diamond marks the
+pick, not a minimum. The grid and the picks live in
+`experiments/tuning/adam.json`, written by `--lr-sweep` and read by
+`harness/tuning.py`; the curves those picks came from are in `RESULTS.md`.
+soar-lite has no learning rate. Tuning is itself budget — every trial is more
+objective points, and it is manual, not adaptive. soar-lite contributes no
+tuned knob to any run — its step knobs sit at their defaults because scalar
+step rescaling was swept and settled against: the residual error is in the
+step's *direction*, not its length (`../DEPRECATED.md`). `README.md` states that
+contract in full.
 
 ## Budget, statistics, outputs
 
@@ -268,8 +270,9 @@ settled against: the residual error is in the step's *direction*, not its length
   fixed cost. `L-BFGS-B` takes the same cap as `maxfun`/`maxiter` and is a serial
   reference, not the same cost axis.
 - Two honest budgets, both read off the **same** runs, no re-runs. They differ in
-  exactly one arm: every arm serves one point per batch, so its curve is the same
-  on both axes, and only the wide `n_paths=16` arm moves between them.
+  exactly one arm: every arm but the wide one serves one point per batch, so its
+  curve is the same on both axes, and only the wide `n_paths=16` arm moves
+  between them.
   - **batches** figure — every method 3000 batches. This is the wall-clock axis
     of a batched setting, the axis this library is built for, and the only axis
     where `n_paths=16` and a single chain compare at equal cost per step. It is
@@ -368,7 +371,7 @@ union a sweep iterates.
   that regime and the engine keeps a restart knob for it, so the extra
   complexity would buy nothing. That blind spot was demonstrated on Ackley,
   where every arm froze at its starting plateau — which is why it is retired
-  (`DEPRECATED.md`); rastrigin is the multimodal problem that remains, and
+  (`../DEPRECATED.md`); rastrigin is the multimodal problem that remains, and
   `RESULTS.md` holds its numbers.
 
 The banded-coupling question — whether the diagonal approximation's

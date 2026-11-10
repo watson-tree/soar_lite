@@ -28,21 +28,21 @@ def run_lr_sweep(roots: Roots, n_seeds: int, max_batches: int) -> None:
 
     Shows the optimal lr drifting across problems and a wrong lr costing many
     orders of magnitude. The C0 diamond marks the pick the panels use, which is
-    this sweep's argmin (ties to the smallest rate): the picks span over two
-    orders of magnitude, and lr=1e-4 costs 52 orders of magnitude on the
-    diagonal quadratic against its pick. Tuning is itself budget the y axis
-    never shows - every trial is more objective points served, and it is
-    manual, not adaptive.
+    this sweep's argmin (ties to the smallest rate): different problems land on
+    different points of the grid, and on the diagonal quadratic a rate far from
+    the pick costs dozens of orders of magnitude. Tuning is itself
+    budget the y axis never shows - every trial is more objective points served,
+    and it is manual, not adaptive.
 
     What that argmin is worth varies, and the figure is how a reader sees it.
-    On the diagonal quadratic every rate from 1e-2 up has already reached the
-    quadratic's rounding floor (1e-49..1e-52), so the winner there is decided
-    by rounding, not by a rate difference. On the rotated quadratic and the
-    oscillator the curve is still falling at the grid edge, so a wider grid
-    could move the pick; the compartment chain is the mirror case, an interior
-    minimum sharp on both sides (4.7 at lr=1e-2, 1.7e-4 at 1e-1, back up to
-    8.4e-4 at 2e-1). On rastrigin the floor is flat over 1e-3..2e-1 and the
-    pick sits about 5% below it: real, but a short gap.
+    On the diagonal quadratic every rate from the sweep's second point through
+    1.0 has already reached the quadratic's rounding floor, so the winner there
+    is decided by rounding, not by a rate difference. On the rotated quadratic
+    and the oscillator the curve is still falling at the grid edge, so a wider
+    grid could move the pick; the compartment chain is the mirror case, an
+    interior minimum sharp on both sides. On rastrigin the floor is flat across
+    four of the grid's points and the pick sits a few percent below it: real,
+    but a short gap. The curves behind those statements are in `RESULTS.md`.
 
     The record is written before the figure, so the picks are re-derivable from
     the curve that produced them.
@@ -115,7 +115,7 @@ def run_lr_sweep(roots: Roots, n_seeds: int, max_batches: int) -> None:
 
 
 def run_invariance(roots: Roots, n_seeds: int, max_batches: int) -> None:
-    """Draw panel 5: one physics in two unit systems, zero retune.
+    """Draw panel 4: one physics in two unit systems, zero retune.
 
     soar-lite's per-coordinate secant should overlap (outcome-level), Adam's
     single lr should separate because the effective lr rescales with the unit.
@@ -162,7 +162,7 @@ def run_invariance(roots: Roots, n_seeds: int, max_batches: int) -> None:
     )
     ax.legend(fontsize=8)
     ax.grid(alpha=0.25, which="both")
-    fig.suptitle("panel 5 - unit-rescaling consistency")
+    fig.suptitle("panel 4 - unit-rescaling consistency")
     fig.tight_layout()
     out = roots.panel_dir("invariance") / "invariance.png"
     out.parent.mkdir(parents=True, exist_ok=True)

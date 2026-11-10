@@ -4,7 +4,9 @@ The harness lives in `harness/`, one module per thing it owns: `record` (the
 file per problem and arm, and the budget it was measured at), `arms` (what to
 run and how to draw it), `panels` (rosters over arms, and the run that fills
 one), `figures` (drawing from the record), `appendix` (the two panels that
-measure as they draw), `cli` (flags, refusals, and the run). This module stays
+measure as they draw), `cli` (flags, refusals, and the run), and under those
+`methods` (the drivers that spend the budget), `problems` (the benchmark set)
+and `tuning` (the recorded picks). This module stays
 at the top of the directory because it is the command - `python -m
 experiments.compare_baselines` - and because it re-exports the names the tests
 and the notebook read.

@@ -5,7 +5,9 @@ The panels in `DESIGN.md` come from one canonical entry point,
 thin shell over the harness in `harness/`: `record` (the per-arm files), `arms`
 (what to run), `panels` (rosters over arms, and the run that fills one),
 `figures` (drawing from the record), `appendix` (the panels that measure as they
-draw) and `cli` (flags and the run); nothing else measures anything.
+draw) and `cli` (flags and the run). Three more sit under those: `methods` (the
+drivers that spend the budget), `problems` (the benchmark set) and `tuning` (the
+recorded Adam picks). Nothing outside `harness/` measures anything.
 That is the whole directory: code in `harness/`, and beside it the three
 documents plus the two output trees `results/` and `figures/`.
 This file is the run-book; `RESULTS.md` is the ledger of what past runs measured.
@@ -78,19 +80,21 @@ Reproduce the sweep figure with:
 uv run --group exp python -m experiments.compare_baselines --lr-sweep --seeds 2 --max-batches 3000
 ```
 
-The sweep is eight learning rates x five problems, so it keeps its own 2 seeds;
-`--seeds` reaches it like it reaches every other mode, and raising it there is
-rarely worth the compute.
+The sweep is eight learning rates x five problems, so it keeps its own 2 seeds.
+`--seeds` reaches it like every other mode, but a different count is refused
+rather than measured: that file is a committed input, so a cheap sweep would
+replace the picks the panels use. Changing the budget on purpose means deleting
+it (see below).
 
 The C0 diamond marks the lr the panels actually use, which is the argmin of
-every curve here (`lr=1e-4` costs 52 orders of magnitude on the diagonal
-quadratic against its pick). What that argmin is worth varies. On the diagonal
-quadratic every rate from `1e-2` up has already reached the quadratic's
-rounding floor (`1e-49..1e-52`), so the winner there is decided by rounding,
-not by a rate difference. On the rotated quadratic and the oscillator the curve
-is still falling at the right edge — `lr=2.0` — so a wider grid could move
-those picks. On rastrigin the floor is flat over `1e-3..2e-1` and the pick sits
-~5% below it: real, but a short gap. The compartment chain
+every curve here (`lr=1e-4` costs more than fifty orders of magnitude on the
+diagonal quadratic against its pick). What that argmin is worth varies. On the
+diagonal quadratic every rate from `1e-2` through `1.0` has already reached the
+quadratic's rounding floor (`1e-49..1e-52`), so the winner there is decided by
+rounding, not by a rate difference. On the rotated quadratic and the oscillator
+the curve is still falling at the right edge — `lr=2.0` — so a wider grid could
+move those picks. On rastrigin the floor is flat over `1e-3..2e-1` and the
+pick sits ~5% below it: real, but a short gap. The compartment chain
 (`pk_chain_n21_d61`) is the one problem that goes the other way: its curve rises
 steeply on both sides of the diamond, so there the pick is a strict interior
 optimum rather than an edge or a tie.
@@ -109,10 +113,12 @@ figure is always re-derivable and a trace never is. The unit is one
   are present.
 - `figures/<group>/batches.png` — budget axis: batches served.
 - `figures/<group>/points.png` — budget axis: objective points served (the
-  serial contest). Every arm is cut at the shortest extent
-  present **on that axis**, so all curves end together: an `n_paths=16` arm
-  serves 16 points per batch, so here it shows only the first ~187 of its 3000
-  batches. That is what the axis is for, not a clipped result.
+  serial contest). Every arm is cut at the shortest extent present **on that
+  axis**, taken over the arms that served their batch budget: an `n_paths=16`
+  arm serves 16 points per batch, so it shows only the first ~187 of its 3000
+  batches, while an arm that stopped early is drawn to its own last point
+  instead of clipping the panel. With every arm completing, all curves end
+  together. That is what the axis is for, not a clipped result.
 - `figures/invariance/invariance.png` — panel 4, one physics in two unit systems,
   zero re-tune.
 - `figures/lr_sweep/lr_sweep.png` — the Adam grid sweep.
@@ -186,12 +192,11 @@ happen. `--plot-only` and `--lr-sweep` measure no arm at all, so they refuse
   uses it for the start point and every stochastic step. Same lock + same seed
   ⇒ same number.
 - **No *tuned* knobs on soar-lite** — which is not the same as no knobs.
-  `DiagonalPreconditioner` exposes eight (`moment`, `beta`, `theta`, `mu`,
-  `alpha0`, `n_alpha`, `backtrack`, `tau_rel`), and two are live smoothing
-  windows: `beta` sets the preconditioner's memory (see
-  `docs/explanation/how-it-works.md` §Smoothing), `mu` the direction's (0 by
-  default, so a run takes direction memory only if it asks — §Momentum on the
-  same page). What the formal runs do is take them at
+  `DiagonalPreconditioner` exposes six (`moment`, `beta`, `mu`, `theta`,
+  `alpha0`, `tau_rel`), and two are live smoothing windows: `beta` sets the
+  preconditioner's memory (see `docs/explanation/how-it-works.md` §Smoothing),
+  `mu` the direction's (0 by default, so a run takes direction memory only if it
+  asks — §Momentum on the same page). What the formal runs do is take them at
   their factory defaults end to end, so soar-lite pays no per-problem search;
   Adam pays the per-problem lr grid each time. That asymmetry is about
   *tuning*, not about having parameters, and it is the point.
