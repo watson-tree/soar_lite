@@ -29,6 +29,7 @@ from soar_lite.engine import (
     PathPoint,
     Pending,
     ServeTrials,
+    Work,
     n_path_schedule,
     pointwise,
 )
@@ -66,6 +67,7 @@ __all__ = [
     "SampleGlobalModel",
     "ServeTrials",
     "SphereProjection",
+    "Work",
     "n_path_schedule",
     "pointwise",
 ]

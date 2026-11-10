@@ -325,6 +325,42 @@ path can move and ``restart_stalled`` is off).
 """
 
 
+@dataclass(frozen=True)
+class Work:
+    """What one run billed, on two axes that never mix.
+
+    Four counts instead of scipy's single ``nfev``. Which evaluation seam served
+    the work decides the pair: ``n_f_points`` and ``n_f_batches`` for the
+    value-only seam, ``n_f_g_points`` and ``n_f_g_batches`` for the fused one.
+    Points are the serial cost and batches the parallel wall-clock cost. Which
+    axis a comparison reads is the caller's business; a run handed no ``eval_f``
+    seam reports zero on both f counts.
+
+    These are reports, not caps: no count stops a run on its own, only the run's
+    stop predicates decide. A caller's ``budget_check`` gate is handed one of
+    these: it reads the ledger and cannot write it. Frozen, and replaced rather
+    than mutated as the run charges it, so a reference to one is the snapshot of
+    the moment it was handed over, and the run's report carries exactly the
+    ledger last charged.
+
+    The iteration count is not here: `max_iters` bounds it, and one iteration
+    may serve several batches (a restart's starts plus the method's trials), so
+    an iteration is not a batch.
+    """
+
+    n_f_points: int
+    """Value-only points served (the ``eval_f`` seam)."""
+
+    n_f_batches: int
+    """Value-only batches served (the ``eval_f`` seam)."""
+
+    n_f_g_points: int
+    """Fused points served: the serial-cost count."""
+
+    n_f_g_batches: int
+    """Fused batches served: the parallel wall-clock count."""
+
+
 @dataclass
 class NPathResult:
     """End state of one n_path_schedule run.
@@ -334,13 +370,8 @@ class NPathResult:
     beside the four work counts: one iteration may serve several batches (a
     restart's starts plus the method's trials), so an iteration is not a batch.
 
-    Work is reported as four counts instead of scipy's single ``nfev``, on two
-    axes that never mix. Which evaluation seam served the work decides the pair:
-    ``n_f_points`` and ``n_f_batches`` for the value-only seam, ``n_f_g_points``
-    and ``n_f_g_batches`` for the fused one. Points are the serial cost and
-    batches the parallel wall-clock cost. Which axis a comparison reads is the
-    caller's business; a run handed no ``eval_f`` seam reports zero on both f
-    counts (``n_f_points`` and ``n_f_batches``).
+    The work the run billed lives in `work` (`Work`), which is what those four
+    counts are; they also read flat on the result, as its aliases.
 
     Two deliberate differences from `OptimizeResult`: ``success``/``message`` are
     absent, because the engine has no convergence criterion of its own - apart
@@ -381,17 +412,13 @@ class NPathResult:
     ``nan`` for a path that never held a usable point.
     """
 
-    n_f_points: int
-    """Value-only points served (the ``eval_f`` seam)."""
+    work: Work
+    """The work the run billed, per seam and per axis; see `Work`.
 
-    n_f_batches: int
-    """Value-only batches served (the ``eval_f`` seam)."""
-
-    n_f_g_points: int
-    """Fused points served: the serial-cost count."""
-
-    n_f_g_batches: int
-    """Fused batches served: the parallel wall-clock count."""
+    The single home of the four counts: the `n_f_points`, `n_f_batches`,
+    `n_f_g_points` and `n_f_g_batches` attributes below are read-only aliases
+    for its fields.
+    """
 
     n_iters: int
     """Completed engine iterations; iteration 0 is the flock's placement.
@@ -402,6 +429,26 @@ class NPathResult:
 
     status: NPathStatus
     """Why the run stopped; see `NPathStatus`."""
+
+    @property
+    def n_f_points(self) -> int:
+        """Value-only points served; `Work.n_f_points`, read flat."""
+        return self.work.n_f_points
+
+    @property
+    def n_f_batches(self) -> int:
+        """Value-only batches served; `Work.n_f_batches`, read flat."""
+        return self.work.n_f_batches
+
+    @property
+    def n_f_g_points(self) -> int:
+        """Fused points served; `Work.n_f_g_points`, read flat."""
+        return self.work.n_f_g_points
+
+    @property
+    def n_f_g_batches(self) -> int:
+        """Fused batches served; `Work.n_f_g_batches`, read flat."""
+        return self.work.n_f_g_batches
 
 
 def pointwise(

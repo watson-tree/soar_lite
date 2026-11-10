@@ -225,8 +225,8 @@ def test_a_winner_never_read_is_graded_by_one_fused_batch() -> None:
     assert solver.served == []  # nothing was read on the way in
     # Its value was never served alone: the one batch that graded the winner
     # carried f and g together.
-    assert (budget.n_f_batches, budget.n_f_points) == (0, 0)
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 2)
+    assert (budget.work.n_f_batches, budget.work.n_f_points) == (0, 0)
+    assert (budget.work.n_f_g_batches, budget.work.n_f_g_points) == (2, 2)
 
 
 def test_a_winner_read_for_its_value_still_owes_its_gradient() -> None:
@@ -240,8 +240,8 @@ def test_a_winner_read_for_its_value_still_owes_its_gradient() -> None:
     assert solver.served == pytest.approx([bowl(jnp.asarray([0.2]))])
     # One value-only turn for the candidate, then one fused batch buying the
     # winner's gradient alone - and the path is graded, not just valued.
-    assert (budget.n_f_batches, budget.n_f_points) == (1, 1)
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 2)
+    assert (budget.work.n_f_batches, budget.work.n_f_points) == (1, 1)
+    assert (budget.work.n_f_g_batches, budget.work.n_f_g_points) == (2, 2)
     assert math.isfinite(float(held(run).f))
     assert jnp.all(jnp.isfinite(held(run).g))
 
@@ -262,8 +262,8 @@ def test_a_named_stall_keeps_the_point_and_buys_nothing() -> None:
     assert solver.got == [held(run)]  # seeded once, never stepped
     # The stall bought nothing: the only fused batch was the one that placed the
     # flock.
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 1)
-    assert (budget.n_f_batches, budget.n_f_points) == (0, 0)
+    assert (budget.work.n_f_g_batches, budget.work.n_f_g_points) == (1, 1)
+    assert (budget.work.n_f_batches, budget.work.n_f_points) == (0, 0)
 
 
 def test_an_unusable_winner_stalls_without_stepping() -> None:
@@ -280,7 +280,7 @@ def test_an_unusable_winner_stalls_without_stepping() -> None:
     assert solver.got == [held(run)]  # the refused winner was never stepped
     # The winner was still served and charged: a refusal is about the point, not
     # about the work the run already paid for.
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 2)
+    assert (budget.work.n_f_g_batches, budget.work.n_f_g_points) == (2, 2)
 
 
 def test_a_restart_start_is_clipped_by_the_engine() -> None:
@@ -319,7 +319,7 @@ def test_an_unusable_start_is_refused_rather_than_placed() -> None:
     assert solver.got == []
     # The batch was still served and charged - a refusal is about the point, not
     # about the work the run already paid for.
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 1)
+    assert (budget.work.n_f_g_batches, budget.work.n_f_g_points) == (1, 1)
 
 
 def test_a_flock_with_nothing_left_to_do_ends_the_run() -> None:
@@ -347,7 +347,7 @@ def test_the_caller_flock_is_placed_in_one_batch() -> None:
     assert [float(point.x[0]) for point in solver.got] == pytest.approx(
         [float(start) for start in starts[:, 0]]
     )
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 3)
+    assert (budget.work.n_f_g_batches, budget.work.n_f_g_points) == (1, 3)
 
 
 def test_one_batch_grades_the_starts_and_the_winners_together() -> None:
@@ -356,17 +356,17 @@ def test_one_batch_grades_the_starts_and_the_winners_together() -> None:
     solver = Script([None, 0.2, 0.4])
     run, budget = paths(solver, x0=starts, restart_stalled=True)
     run.move()  # plants both paths: one fused batch of two
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (1, 2)
+    assert (budget.work.n_f_g_batches, budget.work.n_f_g_points) == (1, 2)
 
     run.move()  # path 0 declines, path 1 wins
     assert run.flock[0].stalled
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (2, 3)
+    assert (budget.work.n_f_g_batches, budget.work.n_f_g_points) == (2, 3)
 
     run.move()  # path 0 is re-drawn, path 1 steps again
 
     # One batch, not two: the re-drawn start and the step winner were both owed
     # their gradient, so `settle` bought them together.
-    assert (budget.n_f_g_batches, budget.n_f_g_points) == (3, 5)
+    assert (budget.work.n_f_g_batches, budget.work.n_f_g_points) == (3, 5)
     assert not run.flock[0].stalled
     assert float(held(run, 0).x[0]) == pytest.approx(0.0)  # the restart row
     assert float(held(run, 1).x[0]) == pytest.approx(0.4)

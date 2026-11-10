@@ -40,6 +40,7 @@ from soar_lite.engine.contracts import (
     PathPoint,
     Pending,
     ServeTrials,
+    Work,
     pointwise,
 )
 from soar_lite.engine.schedule import n_path_schedule
@@ -54,6 +55,7 @@ __all__ = [
     "PathPoint",
     "Pending",
     "ServeTrials",
+    "Work",
     "n_path_schedule",
     "pointwise",
 ]

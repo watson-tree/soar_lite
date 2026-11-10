@@ -14,7 +14,7 @@ acyclic.
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import jax
 import jax.numpy as jnp
@@ -31,6 +31,7 @@ from soar_lite.engine.contracts import (
     PathPoint,
     Pending,
     ProposeFn,
+    Work,
 )
 
 
@@ -323,10 +324,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         fun=best.fun,
         flock_x=flock_x,
         flock_fun=flock_fun,
-        n_f_points=budget.n_f_points,
-        n_f_batches=budget.n_f_batches,
-        n_f_g_points=budget.n_f_g_points,
-        n_f_g_batches=budget.n_f_g_batches,
+        work=budget.work,
         n_iters=budget.n_iters,
         status=status,
     )
@@ -401,22 +399,27 @@ class _Budget:
     ) -> None:
         self.max_iters = max_iters
         self.deadline = None if time_limit is None else time.monotonic() + time_limit
-        self.n_f_points = 0
-        self.n_f_batches = 0
-        self.n_f_g_points = 0
-        self.n_f_g_batches = 0
+        self.work = Work(n_f_points=0, n_f_batches=0, n_f_g_points=0, n_f_g_batches=0)
         self.n_iters = 0
         self._gate = budget_check
 
     def charge_f(self, batch_size: int) -> None:
         """Record one served value-only batch. Counted on the f pair; never gates."""
-        self.n_f_batches += 1
-        self.n_f_points += batch_size
+        work = self.work
+        self.work = replace(
+            work,
+            n_f_batches=work.n_f_batches + 1,
+            n_f_points=work.n_f_points + batch_size,
+        )
 
     def charge_f_g(self, batch_size: int) -> None:
         """Record one served fused batch. Counted on the f_g pair; never gates."""
-        self.n_f_g_batches += 1
-        self.n_f_g_points += batch_size
+        work = self.work
+        self.work = replace(
+            work,
+            n_f_g_batches=work.n_f_g_batches + 1,
+            n_f_g_points=work.n_f_g_points + batch_size,
+        )
 
     def tick(self) -> None:
         """Record one completed iteration. The caller ticks only finished ones."""
