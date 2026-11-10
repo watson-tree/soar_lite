@@ -345,8 +345,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
     """A batch was requested past a closed gate, the reason carried along.
 
-    Raised only inside `n_path_schedule`, at a serve site (`_Evaluator._serve_f_g`
-    or `_serve_f`), and caught by the loop. It carries the reason `stop`
+    Raised only inside `n_path_schedule`, by `_Evaluator._charge_gated` on the
+    way into a batch, and caught by the loop. It carries the reason `stop`
     answered at the batch altitude, so the loop names the run's status without
     re-asking the query.
     """
@@ -561,11 +561,13 @@ class _Best:
 class _Evaluator:
     """The run's evaluation seams, and what they charge and observe.
 
-    One rule, stated here so no call site restates it: every batch asks the gate
-    for the ledger it would leave, before anything is charged (so a batch is
-    served whole or not at all, and a refused one never reaches the ledger), and
-    the seam that served it decides which pair of counters moves - `_serve_f` the
-    f pair, `_serve_f_g` the fused pair. No count ever closes the gate.
+    Every batch goes through two edges, each written once here: `_charge_gated`
+    asks the gate for the ledger the batch would leave and commits it only if
+    the gate allows it (so a batch is served whole or not at all, and a refused
+    one is neither charged nor paid for), and `_report` tells the run's two
+    readers what it returned. The seam that served the batch decides which pair
+    of counters moves - `_serve_f` the f pair, `_serve_f_g` the fused pair - and
+    no count ever closes the gate.
 
     Whichever half served a batch reports it to the two readers of the run's
     evidence: the best (`_Best`, which filters for feasibility) and the global
@@ -636,60 +638,109 @@ class _Evaluator:
             for i, point in decided.items()
         }
 
-    def _serve_f_g(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
-        """Serve one fused batch, or raise `_BudgetExhausted` if it is unaffordable.
+    def _charge_gated(self, batch_size: int, *, fused: bool) -> None:
+        """Charge one batch the gate allows, or raise `_BudgetExhausted`.
 
-        The gate is asked at this batch altitude for the ledger the batch would
-        leave, before anything is charged: a batch is served whole or not at
-        all, the fused counters only ever hold batches that were served, and a
-        caller's points ceiling cannot be crossed. This is the expensive half;
-        an enumerating step's rejected trials are served by `_serve_f`, which
-        asks the same gate and counts on the other pair. Returns
-        ``(f_vals, g_batch)``.
+        The gate is asked for the ledger the batch would leave, before anything
+        is charged: a batch is served whole or not at all, and the ledger it
+        judged is the one committed rather than a second derivation of it.
+        Raises `_BudgetExhausted` when the gate refuses, before the batch is
+        evaluated.
+
+        Args:
+            batch_size: Points in the batch about to be served.
+            fused: Which pair of counters the calling seam moves.
+
+        Raises:
+            _BudgetExhausted: When a stop names a closed gate.
+
         """
-        after = self._budget.after(x_batch.shape[0], fused=True)
+        after = self._budget.after(batch_size, fused=fused)
         reason = self._budget.stop(after)
         if reason is not None:
             raise _BudgetExhausted(reason)
         self._budget.commit(after)
+
+    def _report(
+        self,
+        x_batch: jnp.ndarray,
+        f_vals: list[float],
+        g_batch: jnp.ndarray | None,
+        feas: jnp.ndarray | None,
+    ) -> None:
+        """Report one served batch to the run's two readers.
+
+        The model first: a feasible -inf below raises `_OptimumReached`, and the
+        batch was served and charged either way, so the model still sees it even
+        though the run keeps nothing else from that pass.
+
+        Args:
+            x_batch: The points the seam was handed.
+            f_vals: Their objective values, as host floats.
+            g_batch: Their gradients when the seam bought them, else None.
+            feas: The feasibility mask the seam reported, or None for all-feasible.
+
+        """
+        self._observe(x_batch, f_vals, g_batch)
+        self._best.observe(x_batch, f_vals, feas)
+
+    def _serve_f_g(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
+        """Serve one fused batch: the gradient comes with the value.
+
+        What is specific to this half is that the pass buys both, so its rows
+        come back graded; the gate, the charge and the two reports are the same
+        edges the value-only half goes through.
+
+        Args:
+            x_batch: The points to evaluate, shape ``(m, d)``.
+
+        Returns:
+            ``(f_vals, g_batch)``.
+
+        Raises:
+            _BudgetExhausted: When the gate refuses the batch.
+
+        """
+        self._charge_gated(x_batch.shape[0], fused=True)
         f_batch, g_batch, feas = self._eval_f_g(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
         f_vals = f_batch.tolist()
-        # The model first: a feasible -inf below raises `_OptimumReached`, and
-        # the batch was served and charged either way, so the model still sees
-        # it even though the run keeps nothing else from this pass.
-        self._observe(x_batch, f_vals, g_batch)
-        self._best.observe(x_batch, f_vals, feas)
+        self._report(x_batch, f_vals, g_batch, feas)
         return f_vals, g_batch
 
     def _serve_f(self, x_batch: jnp.ndarray) -> list[float]:
-        """Serve one value-only batch: the same gate, the other pair of counters.
+        """Serve one value-only batch, for a method's own enumeration.
 
-        The gate is asked here exactly as the fused half asks it - for the
-        ledger this batch would leave - so a deadline that passes mid-step cuts
-        the run at the next value-only batch rather than after a whole
-        iteration's retries: a method's enumeration can turn many times without
-        reaching the loop head or `settle`. What stays asymmetric is the pair it
-        counts on: this batch moves the f counters, and no count closes the
-        gate. Only `serve_trials` calls this; the None-check below is for the
-        type checker and is unreachable at runtime.
+        The gate rides along exactly as in the fused half, so a deadline that
+        passes mid-step cuts the run at the next value-only batch rather than
+        after a whole iteration's retries: a method's enumeration can turn many
+        times without reaching the loop head or `settle`. What stays
+        asymmetric is the pair it counts on - the f counters, which no count
+        closes the gate - and that no gradient comes back. Only `serve_trials`
+        calls this; the None-check below is for the type checker and is
+        unreachable at runtime.
+
+        Args:
+            x_batch: The points to evaluate, shape ``(m, d)``.
+
+        Returns:
+            Their objective values, as host floats.
+
+        Raises:
+            _BudgetExhausted: When the gate refuses the batch.
+
         """
         eval_f = self._eval_f
         if eval_f is None:
             msg = "_serve_f requires eval_f"
             raise RuntimeError(msg)
-        after = self._budget.after(x_batch.shape[0], fused=False)
-        reason = self._budget.stop(after)
-        if reason is not None:
-            raise _BudgetExhausted(reason)
-        self._budget.commit(after)
+        self._charge_gated(x_batch.shape[0], fused=False)
         f_batch, feas = eval_f(x_batch)
         f_vals = f_batch.tolist()
         # No gradient in hand: the f half alone. The same point is reported
         # again with `g` if it wins its step and `settle` buys the gradient.
-        self._observe(x_batch, f_vals, None)
-        self._best.observe(x_batch, f_vals, feas)
+        self._report(x_batch, f_vals, None, feas)
         return f_vals
 
 
