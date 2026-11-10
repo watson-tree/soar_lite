@@ -39,12 +39,14 @@ as `n_paths=1` and gets sixteen independent starts for that price.
 
 **Points** counts objective evaluations. Every path of the wide arm pays for its
 own point, so at equal points it has had sixteen times fewer iterations. This is
-the axis that charges width, and on the two real problems it reverses the wide
-arm's lead: ahead of both single chains at the last batch the three cohorts
-share, behind both at the last point count they share. That reversal is the
-reason the axis is here, and it is not a property the method owns either way —
-on the rotated quadratic the wide arm is not the best arm even on batches. What
-a batch or a point is charged for decides the order, not the method.
+the axis that charges width, and only one pairing isolates that charge:
+`n_paths=16, mu=0` against `n_paths=1, mu=0` — the arms that differ in nothing
+but width. `mu=0.9` moves two knobs at once and cannot say what the width costs.
+On that pairing the wide arm is **generally behind on points**: it trails at the
+last point count the cohorts share on four of the five problems, and on the
+fifth, the diagonal quadratic, every arm stops within three batches, so that
+ordering is one step deep. On batches it leads the same arm everywhere. What a
+batch or a point is charged for decides the order, not the method.
 `experiments/RESULTS.md` has the numbers.
 
 Two shapes on the points figures are alignment, not missing data:
