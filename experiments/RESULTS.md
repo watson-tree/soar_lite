@@ -28,6 +28,70 @@ Two entries (v2 and v3) also record wall clock. That is a property of the
 machine that ran them, not an expectation: no comparison here is made on time,
 and a re-run should reproduce the medians, not the hours.
 
+## 2026-11-11 — what the rastrigin panel's ordering is made of — CURRENT
+
+A one-off probe, not a lineup. The problem object, the seed list and the start
+call are the harness's own — a re-derived `x0` reproduced each arm's stored
+first evaluation on 20/20 seeds — but the driver is not kept, because
+`experiments/` holds panels and not probes. So the procedure below is the
+record, not a command, and reproducing it means re-writing those few lines
+against `harness/problems.rastrigin` rather than running a script. Nothing in it
+is stale: it measures the arms and the problem this entry's lineup still has,
+which is why it lives here and not in `DEPRECATED.md`.
+
+Lineup read: the v6 rastrigin arms (`n_paths=1, mu=0`; `n_paths=16, mu=0`;
+Adam `lr=0.5`) at 20 seeds x 3000 batches. The baselines carry their own
+budgets, named per row.
+
+| baseline | median |
+| --- | --- |
+| uniform random, best of 3000 evaluations, 200 independent trials | 1501.4 |
+| `round(x0)` — the nearest lattice well of the start, 20 seeds | 876.0 |
+| soar-lite `n_paths=1, mu=0` final | 896.0 |
+| Adam `lr=0.5` final | 807.9 |
+| wide `n_paths=16, mu=0` final (its best-of-16 `round(x0)` floor: 746.0) | 745.2 |
+| coordinate descent, f values only, from `round(x0)` | 0.0000 at 1201 evaluations |
+
+Random's interquartile range over those 200 trials is 1482.6–1521.1, so it does
+not reach the slowest measured arm: uniform points barely roll into a well at
+all, and "a big step is a random walk" is not what the panel is showing.
+
+**Soar's descent walks to a free rounding of its own start.** Per seed, the gap
+from `f(x0)` down to `f(round(x0))` is closed to a median of 98.3% (range
+89.5%–114.7%); per-seed `final − round(x0)²` has median +17.2 and max
+|Δ| 139.7, with 7/20 seeds below that floor and 13/20 above it. So the descent
+reaches the nearest well mostly, occasionally crosses one ridge further, and
+otherwise stops a little short of the well. The nearest-well reading is an
+approximation in distribution, not an identity per seed.
+
+**Adam is below that floor on every seed.** `Adam − round(x0)` is negative on
+20/20, median −87.1 — the panel's one systematic direction, and what the
+mechanism split predicts: the secant damps at a sign-reversing gradient and the
+RMS step does not, so Adam's coordinates can cross a ridge that stops
+soar-lite.
+
+**The wide arm's lead is its sixteen starts.** The floor `min` over the 16
+starts of `round(x0)²` is 746.0 median and the arm's final is 745.2: per-seed
+median +13.2, 7/20 below the floor. Width buys draw count here, not a better
+resolution of the well a single chain lands in.
+
+**A coordinate descent solves the panel within 40% of the budget.** From
+`round(x0)`, probing each coordinate at `xᵢ ± 1` and keeping the lower value,
+repeated until a pass moves nothing, reaches exactly 0.0000 on 3/3 seeds in 6
+passes and 1201 evaluations of the 3000 available. The landscape is separable,
+so axis-at-a-time search alone resolves it — and every arm's score sits within
+reach of rounding plus, for Adam, a few one-coordinate crossings. That is what
+makes this a boundary panel (`DESIGN.md`, panel 3): the ordering tracks start
+count and ridge crossing, not the per-coordinate scaling of coupled curvature
+that is the library's subject.
+
+Probe design, since it is not kept: `x0` from
+`jax.random.uniform(split(PRNGKey(seed))[1], (n_paths, d), ±5.12)`, seeds
+0..19, validated against the stored first evaluations; the random baseline is
+3000 uniform draws per trial over the same box, best value, 200 trials; the
+round baseline is the value at `round(x0)` (a grid point, so `Σkᵢ²`); the
+descent starts at `round(x0)` and counts every probe as one evaluation.
+
 ## 2026-11-11 — invariance panel: the rotated quadratic replaces the diag control — CURRENT
 
 20 seeds x 3000 batches, base vs `x' = 10x`, zero retune, one panel re-run at

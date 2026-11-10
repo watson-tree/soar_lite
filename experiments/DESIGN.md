@@ -126,10 +126,36 @@ panel.
      it can buy any of the dropped coupling back.
 3. **Multimodal — Rastrigin**, d=100 (drop to 50 if cost bites). A regular
    lattice of local minima where progress is piecewise, since the cos
-   oscillation keeps turning the gradient: the panel reads the descent rate
-   there, not where a chain stops. One problem, not a sample of two — Ackley
-   was retired from this group because no arm on it ever took a step (see
-   `DEPRECATED.md`).
+   oscillation keeps turning the gradient. This is a **boundary panel**, not a
+   race: it marks what the local solver does not do, and it earns its place by
+   saying so out loud rather than letting a reader infer it from a curve that
+   stalls. One problem, not a sample of two — Ackley was retired from this group
+   because no arm on it ever took a step (see `DEPRECATED.md`).
+
+   **What it marks.** The diagonal preconditioner is a local solver. Its secant
+   damps where the gradient reverses sign, so it settles into the nearest well
+   and has no mechanism for crossing the ridge into a better one. Multimodal
+   reach is not claimed from the local side at all: the global layer supplies it,
+   more paths and restarts exploring while the local solver resolves whatever
+   basin it is handed. A curve that stops on the lattice is that division of
+   labour working as specified, not the local solver failing to be something it
+   never claimed.
+
+   **Why momentum does not rescue it.** `mu` lengthens the trajectory; it is not
+   a ridge-crossing device, and here the arm that carries it finishes worse than
+   the arm that does not. The `mu > 0` trade is read where off-diagonal coupling
+   is the question, and this panel is where it is not.
+
+   **What it does not settle.** Adam has no convergence test, so it keeps
+   moving: it approaches the lattice instead of landing on it, and nothing in its
+   step rule keeps it from crossing the basin that holds the global optimum as
+   readily as any other ridge, or from drifting without settling at all. The
+   comparison is also one budget on one axis of time. Methods do not share a
+   descent-rate profile — some are fast then slow, some the reverse — so an
+   ordering taken at this budget is a marker, not a verdict, and the same panel
+   at a longer horizon could order differently. Whether multistart plus restarts
+   recovers the multimodal lead at a longer budget is an open question this panel
+   leaves unmeasured.
 
 Two appendix panels, property demos rather than races:
 
@@ -245,8 +271,8 @@ L-BFGS-B appears only on the smooth and headline panels. Its role there is the *
 reference* — how close soar-lite's diagonal secant gets to a full-memory
 second-order method on smooth, convex landscape (on the compartment problem it is
 not even that; see Risks). That role does not exist on
-the multimodal panel: the question there is the descent *rate* where progress is
-piecewise, and a full-memory method answers a different one. L-BFGS-B is
+the multimodal panel: the question there is where the local solver's reach ends,
+and a full-memory method answers a different one. L-BFGS-B is
 second-order and restart-free — on Rastrigin it would dive
 deterministically into the nearest local minimum and set there at
 second-order precision, so its curve could only show "a second-order method
