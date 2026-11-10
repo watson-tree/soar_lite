@@ -107,10 +107,10 @@ class GlobalModel(Protocol):
 
     The model answers the two questions the engine cannot: *where* a restart
     lands (`propose`) and *what the run has learned* (`observe`). The engine
-    feeds it every batch it serves and asks for points only when a restart
-    fires, so the model never has to seed a run itself: a model that wants more
-    evidence than it has can answer `propose` with a plain draw and the engine
-    has no opinion.
+    feeds it every batch it serves and asks for points on a restart, or for
+    iteration 0's placement when no `x0` was handed in, so `propose` is the only
+    place it is ever asked: a model that wants more evidence than it has can
+    answer with a plain draw and the engine has no opinion.
 
     A model carries no search space of its own. The run has one box, the engine
     owns it, and `propose` is handed that `Domain` at every ask - so a model must
@@ -126,8 +126,7 @@ class GlobalModel(Protocol):
 
     The flock is not this contract's: a caller's own starts go to
     `n_path_schedule` as `x0`, and the engine places them without asking any
-    model. `propose` is asked only for restarts, and on iteration 0 only when no
-    `x0` was handed in.
+    model.
 
     Implementing this pair is the whole extension point; a projection is a
     utility a `propose` may read, not part of the contract.

@@ -99,9 +99,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     schedule sees iteration 0 as the flock's placement. It is `x0` where one was
     handed
     in, and otherwise one start per path from the global model. A start whose
-    served value or gradient comes back non-finite stalls its path on arrival;
-    with `restart_stalled` on (the default), that path restarts again next
-    iteration.
+    served value or gradient comes back non-finite is never placed: the path
+    keeps the point it held - none at iteration 0 - and is marked stalled.
+    `restart_stalled` governs a path that holds a point, so an unplaceable flock
+    is asked for a fresh start every iteration whatever the flag says.
 
     `domain` is the run's box and the coordinate space the engine works in: the
     engine clips into it and knows nothing about any map from these coordinates

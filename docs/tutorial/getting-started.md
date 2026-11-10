@@ -198,7 +198,7 @@ correspond:
 | --- | --- |
 | `x` | argmin over the served points that were feasible with a finite value — a feasible `-inf` names itself — in the coordinates you handed the engine |
 | `fun` | its value: the best finite feasible value, `nan` when no feasible point had one, `-inf` if the objective has no floor |
-| `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path holds no usable point (a refused start leaves the row empty) |
+| `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path never held a usable point |
 | `flock_fun` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |
 | `n_f_g_points` | fused points billed — the serial-cost count |
 | `n_f_g_batches` | fused batches billed, one per `eval_f_g` call — the parallel-cost count |

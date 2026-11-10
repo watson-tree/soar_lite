@@ -80,9 +80,10 @@ time. Five things keep it honest:
   of width `n_points` serves the whole cohort one row per path. Looping
   `n_paths=1` runs would buy the same points with `n_points` times the batches
   — the serial shape of a job the GPU wants wide.
-- **The outer run's first restart draws, not descends.** Until `observe` has
-  given the posterior a spread to standardize by, `propose` has nothing to fit
-  and answers with the domain's own draw, never calling `minimize`.
+- **The outer run's first ask draws, not descends.** With no `x0`, iteration 0
+  asks for the flock's placement and `propose` has nothing to fit, so it answers
+  with the domain's own draw, never calling `minimize`. Any later ask also draws
+  until `observe` has given the posterior a spread to standardize by.
 - **A returned row can be all-`nan`.** A start at which the acquisition is not
   finite is refused, and so is every row of an inner run that does zero
   iterations (`max_iters=0`). An unplaced path carries an all-`nan` point; the
@@ -90,9 +91,10 @@ time. Five things keep it honest:
 - **The acquisition has no feasibility mask (`feas=None`).** It is finite
   everywhere, so the fused seam's third slot is `None`.
 
-`INNER_ITERS` is a horizon, not a convergence test: the inner run normally
-reaches it with the acquisition already flat, which is why 40 is a reasonable
-default. Raise it if the outer run keeps restarting paths that barely moved.
+`INNER_ITERS` is an upper bound, not a convergence test. A path that settles
+stops there, so an inner run whose flock settles early ends on `all_stalled`
+before reaching it; 40 is a cap with room to spare rather than an iteration
+count. Raise it if the outer run keeps restarting paths that barely moved.
 
 `MinimizeFn` and both projections are in the [API Reference](../reference/api.md),
 with their exact signatures and defaults.

@@ -417,9 +417,10 @@ owes its `f` and `g`, and handed to `settle` together with the iteration's step
 winners, so a restart start never buys a gradient batch of its own. With the
 value-only seam connected the merge is even tighter: the restart start's value
 is deferred and bought once in the same fused batch. An unusable start (`f` or `g`
-not finite) does not land, and the path stays `stalled` to be redrawn next
-iteration when `restart_stalled` is on — it never becomes the point the path
-holds, so "where this path stands" cannot be polluted by a degenerate point.
+not finite) does not land, and the path stays `stalled` — redrawn next iteration
+when `restart_stalled` is on, or whatever that flag says when the path holds no
+point at all. It never becomes the point the path holds, so "where this path
+stands" cannot be polluted by a degenerate point.
 
 ## The engine
 
@@ -510,8 +511,9 @@ For a start to be usable in the optimization, **both halves must be finite**: a
 start with finite `f` but a non-finite gradient would look usable on the value
 alone, yet the gradient is what the next secant reads — one NaN is enough to
 poison that coordinate's magnitude EMA permanently. Such a start is treated as
-a dead start, is `stalled` on arrival, and `restart_stalled` decides whether to
-redraw it.
+a dead start and is `stalled` on arrival; `restart_stalled` decides whether a
+path that holds a point is redrawn, and a path holding none is redrawn either
+way (see [stalled is the only path state](#stalled-is-the-only-path-state)).
 
 ### The current point is state, not an argument
 
@@ -569,7 +571,10 @@ point.
 outside `restart_stalled`'s control. A path starts with no point at all, holding
 nothing to be read (iteration 0 uses it to make every path go through one
 redraw), so it is always redrawn. A refused point is a stall, and
-`restart_stalled` decides whether that path is redrawn.
+`restart_stalled` decides whether it is redrawn — but a refused start leaves a
+path that held nothing still holding nothing, so the no-point rule is asked
+first and the flag never sees that case. In short: `restart_stalled` governs a
+path that had a point to keep.
 
 ### All stalled: redraw, or end
 

@@ -112,10 +112,10 @@ class SphereProjection(Projection):
     isotropic bowl whose center the weights place.
 
     `mask` keeps that bowl off dimensions whose natural prior is uniform - an
-    angle, say, wants no attraction to the center. A left-out dimension keeps its
-    coordinate and enters a linear head as a plain trend, so the feature vector is
-    ``d + 1`` wide however many dimensions the projection bends - and only its
-    bent part is unit-norm.
+    angle, say, wants no attraction to the center. A left-out dimension keeps
+    its own centered, scaled coordinate and enters a linear head as a plain
+    trend, so the feature vector is ``d + 1`` wide however many dimensions the
+    projection bends - and only its bent part is unit-norm.
 
     A dimension may be unbounded: inverse stereography takes all of ``R``, so the
     same map bends a line, and its far end returns to the pole - the variance
