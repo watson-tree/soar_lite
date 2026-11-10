@@ -6,7 +6,9 @@ This page continues [the tutorial](../tutorial/getting-started.md)'s example:
 `BLRGlobalModel` fits its posterior and builds its own `-log EI` acquisition,
 but it never descends that acquisition itself: the descent recipe belongs to the
 engine, so the model receives it as an injected `minimize`, a `MinimizeFn` with
-signature `(acquisition, bounds, n_points, key) -> (n_points, d)`. The
+signature `(acquisition, domain, n_points, key) -> (n_points, d)`. The
+domain is the one your ask was handed, not a box re-derived from it, so the
+`scale` and samplers you declared reach the inner run's own draws. The
 acquisition is `(M, d) -> ((M,), (M, d))` (value and gradient, no feasibility
 column) and `key` is a fresh subkey of the model's own key, split for this call
 alone. The natural answer is to hand the engine back to itself: one restart-free
@@ -24,7 +26,6 @@ unless you have a reason not to.
 import jax
 from soar_lite import (
     BLRGlobalModel,
-    Domain,
     SphereProjection,
     n_path_schedule,
 )
@@ -32,10 +33,8 @@ from soar_lite import (
 INNER_ITERS = 40  # long enough to settle; shorter than the outer's horizon
 
 
-def surrogate_minimize(acquisition, bounds, n_points, key):
+def surrogate_minimize(acquisition, domain, n_points, key):
     """Descend an acquisition with one restart-free n-path run."""
-    # bounds arrives as the engine's Bounds: scipy-style pairs, or a (d, 2) array
-    inner_domain = Domain(bounds)
 
     # the acquisition is two slots; the seam wants three, the last one None
     def fused_seam(x_batch):
@@ -44,7 +43,7 @@ def surrogate_minimize(acquisition, bounds, n_points, key):
 
     result = n_path_schedule(
         fused_seam,
-        domain=inner_domain,
+        domain=domain,
         n_paths=n_points,  # one path per minimizer: one batch, not n runs
         max_iters=INNER_ITERS,
         restart_stalled=False,  # a pure descent, no restarting inside it
