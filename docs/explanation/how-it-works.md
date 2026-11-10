@@ -17,9 +17,10 @@ and `observe` belong to `GlobalModel`, while `restart`, `propose(idxs, domain,
 serve_trials)` and `step` belong to `LocalSolver` — two different `propose`
 methods, each called with its own arguments. One name is neither: `settle` is the
 fused batch that closes an iteration, where every half the iteration's steps and
-restarts still owe is bought together; `_restart` and `_step` are the engine's
-own landing halves, and `_step` is what calls the method's `step(i, p)`. Those
-three are internal, explained where they run, and not callable from outside.
+restarts still owe is bought together; `_place` is the engine's own landing
+half, run once per channel, and is what calls the method's `restart(i, p)` or
+`step(i, p)`. Those two are internal, explained where they run, and not callable
+from outside.
 
 ## The contract: one objective, value and gradient
 
@@ -450,9 +451,10 @@ batches its steps serve out of `serve_trials` (see Cost):
    order; the **same** batch buys the halves still owed — each read winner's
    gradient when the `eval_f` seam served it value-only, and both halves of
    anything named unread or drawn as a start.
-6. **Landing**: a start goes through `_restart` (unusable leaves it `stalled`,
-   redrawn next iteration when `restart_stalled` is on) and a winner through
-   `_step` (unusable is `stalled`, no `step`).
+6. **Landing**: `_place` commits each usable point and calls that channel's
+   hook — a start goes through `restart` (unusable leaves it `stalled`, redrawn
+   next iteration when `restart_stalled` is on) and a winner through `step`
+   (unusable is `stalled`, no `step`).
 
 The redraw set and the cohort are disjoint, so "decide everything, then buy
 together" and "decide one at a time, then buy" are the same schedule.
@@ -614,16 +616,18 @@ The budget object therefore holds two separate things: the three stop predicates
 and the four work counts (one frozen `Work`, replaced on each charge).
 **Both pairs of counts are recorded** (fused and value-only; see
 [Cost](#cost-two-evaluation-seams-two-rulers)), but **the
-counts never decide a stop**: `stop` reads only three predicates (horizon, wall
-clock, the caller's gate). `after` projects a charge without making it, `commit`
-makes the one the gate allowed, `tick` records one iteration after a completed
-iteration, and `stop` is the only stop query. The refusal is **not**
+counts never decide a stop**: the stop query reads only three predicates (horizon, wall
+clock, the caller's gate). That query is asked at two heights: `stop` for the run's
+ledger at the loop head, `admit` for the ledger a batch would leave - `admit`
+projects the charge, asks, and commits it only when the gate allows it, so a
+refusal leaves no trace in the counts. `tick` records one iteration after a
+completed iteration. The refusal is **not**
 stored as state: a cached flag could drift from the counts that justify it.
-(`after`, `commit`, `tick`, `stop` are internal to the budget object, not public
-API.)
+(`stop`, `admit` and `tick` are the budget object's whole surface; the projection
+and the charge are its implementation.)
 
-The same `stop` is also the loop head's condition: a completed iteration may have
-just reached the horizon, so it is asked once before a new iteration opens. A
+The loop head asks `stop` before each iteration opens: a completed iteration may
+have just reached the horizon, so the run never begins one it cannot finish. A
 mid-iteration refusal raises at the point of the request and ends the run, with
 that iteration not counted in `n_iters` — so the engine's loop never checks a return
 value and never passes a flag up or down. **The gate is asked before every batch,

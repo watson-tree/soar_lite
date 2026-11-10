@@ -292,7 +292,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         # The run's one stop query names its reason, asked before a new iteration
         # starts so the run never begins one it cannot finish. A refusal
         # mid-iteration arrives as _BatchRefused carrying the same reason.
-        status = budget.stop(budget.work)
+        status = budget.stop()
         if status is not None:
             break
         try:
@@ -346,10 +346,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 class _BatchRefused(Exception):  # noqa: N818 - a signal, not an error
     """A serve was refused because a stop had closed, the reason carried along.
 
-    Raised only inside `n_path_schedule`, by `_Evaluator._charge_gated` on the
-    way into a batch, and caught by the loop. It carries the reason `stop`
-    answered at the batch altitude, so the loop names the run's status without
-    re-asking the query.
+    Raised only inside `n_path_schedule`, by `_Budget.admit` on the way into a
+    batch, and caught by the loop. It carries the reason `_refusal` answered at
+    the batch altitude, so the loop names the run's status without re-asking the
+    query.
     """
 
     reason: NPathStatus  # the gate `stop` named, carried to the loop's one catch
@@ -388,28 +388,27 @@ class _Budget:
 
     Three predicates decide whether work may go on: the iteration horizon
     (`max_iters`), the wall-clock deadline (`time_limit`), and the caller's
-    extra gate (`budget_check`), which reads the run's `Work`. `stop` asks all
-    three as one query - at the
-    loop head every iteration, and again before each served batch - and names
-    the reason it refuses. At least one of the first two is required at entry:
-    they advance on their own and the engine can see them do it, while a
-    `budget_check` is the caller's predicate, so the engine cannot tell a gate
-    that closes from one that never does.
+    extra gate (`budget_check`), which reads the run's `Work`. Two questions put
+    them to use: `stop` asks them of the run's ledger at the loop head, `admit`
+    of the ledger its batch would leave. At least one of the first two is
+    required at entry: they advance on their own and the engine can see them do
+    it, while a `budget_check` is the caller's predicate, so the engine cannot
+    tell a gate that closes from one that never does.
 
     The counters are pure reports, not caps, and not one of them gates: the
     fused pass counts on its pair (`n_f_g_points` / `n_f_g_batches`, one batch
     per value+gradient pass) and the value-only pass the same way on its own
-    (`n_f_points` / `n_f_batches`). `stop` reads only the run's three
+    (`n_f_points` / `n_f_batches`). `_refusal` reads only the run's three
     predicates, so a counted batch can still be refused by the gate like any
     other serve. That refusal is a signal (`_BatchRefused`), never a flag
     stored here. The counts live in `work` (`Work`), frozen and replaced on each
     charge.
 
-    A batch is charged only after the gate allows it, and the gate is handed
-    the ledger that batch would produce (`after`), not the one before it: a
-    ceiling on points is then one a run cannot cross, since a batch is served
-    whole or not at all. What a refusal was decided on never enters the ledger,
-    so the report carries exactly the counts the last allowed batch left.
+    `admit` charges a batch only after the gate allows it, and hands the gate
+    the ledger that batch would produce, not the one before it: a ceiling on
+    points is then one a run cannot cross, since a batch is served whole or not
+    at all. What a refusal was decided on never enters the ledger, so the report
+    carries exactly the counts the last allowed batch left.
     """
 
     def __init__(
@@ -418,18 +417,54 @@ class _Budget:
         time_limit: float | None,
         budget_check: Callable[[Work], bool] | None,
     ) -> None:
-        self.max_iters = max_iters
-        self.deadline = None if time_limit is None else time.monotonic() + time_limit
+        self._max_iters = max_iters
+        self._deadline = None if time_limit is None else time.monotonic() + time_limit
         self.work = Work(n_f_points=0, n_f_batches=0, n_f_g_points=0, n_f_g_batches=0)
         self.n_iters = 0
         self._gate = budget_check
 
-    def after(self, batch_size: int, *, fused: bool) -> Work:
-        """Project the ledger past one batch, charging nothing.
+    def stop(self) -> NPathStatus | None:
+        """Name the reason work may not go on, or None while it may.
 
-        This is what the caller's gate decides on: a batch is committed to the
-        ledger only if the gate allows it, so a ceiling the gate enforces on
-        points is never crossed by the batch that would cross it.
+        The iteration-altitude question, asked at the loop head before every
+        iteration against the ledger as it stands. `admit` asks the same three
+        predicates of the ledger its batch would leave.
+
+        Returns:
+            The closed gate's reason, or None.
+
+        """
+        return self._refusal(self.work)
+
+    def admit(self, batch_size: int, *, fused: bool) -> None:
+        """Charge one batch the gate allows, or refuse it before it is served.
+
+        The gate is asked for the ledger the batch would leave, before anything
+        is charged: a batch is served whole or not at all, and the ledger it
+        judged is the one committed rather than a second derivation of it. The
+        projection never escapes this method, so no caller ever holds a charge
+        a refusal threw away.
+
+        Args:
+            batch_size: Points in the batch about to be served.
+            fused: Which pair of counters the calling seam moves.
+
+        Raises:
+            _BatchRefused: When a stop names a closed gate.
+
+        """
+        after = self._after(batch_size, fused=fused)
+        reason = self._refusal(after)
+        if reason is not None:
+            raise _BatchRefused(reason)
+        self._commit(after)
+
+    def tick(self) -> None:
+        """Record one completed iteration. The caller ticks only finished ones."""
+        self.n_iters += 1
+
+    def _after(self, batch_size: int, *, fused: bool) -> Work:
+        """Project the ledger past one batch, charging nothing.
 
         Args:
             batch_size: Points in the batch about to be served.
@@ -453,51 +488,34 @@ class _Budget:
             n_f_points=work.n_f_points + batch_size,
         )
 
-    def commit(self, work: Work) -> None:
+    def _commit(self, work: Work) -> None:
         """Charge a batch the gate allowed: the ledger becomes the one it judged."""
         self.work = work
 
-    def tick(self) -> None:
-        """Record one completed iteration. The caller ticks only finished ones."""
-        self.n_iters += 1
+    def _refusal(self, work: Work) -> NPathStatus | None:
+        """Name the first closed gate for a ledger, or None while work may go on.
 
-    def full(self) -> bool:
-        """Whether the iteration horizon is reached."""
-        return self.max_iters is not None and self.n_iters >= self.max_iters
-
-    def expired(self) -> bool:
-        """Whether the wall-clock deadline has passed."""
-        return self.deadline is not None and time.monotonic() >= self.deadline
-
-    def gated(self, work: Work) -> bool:
-        """Whether the caller's extra gate refuses the ledger it is handed."""
-        return self._gate is not None and not self._gate(work)
-
-    def stop(self, work: Work) -> NPathStatus | None:
-        """Name the reason work may not go on, or None while it may.
-
-        Asked at the loop head before every iteration with the ledger as it
-        stands, and again before each served batch (fused or value-only) with
-        the ledger that batch would produce, where a stop becomes the
-        `_BatchRefused` signal. None while work may go on; otherwise the
-        first closed gate, named - the horizon outranks the clock, which
-        outranks the caller's gate.
-
-        Args:
-            work: The ledger to decide on: the run's own at the loop head, and
-                `after`'s projection of the pending batch at a serve site.
-
-        Returns:
-            The closed gate's reason, or None.
-
+        The horizon outranks the clock, which outranks the caller's gate.
         """
-        if self.full():
+        if self._full():
             return "max_iters"
-        if self.expired():
+        if self._expired():
             return "time_limit"
-        if self.gated(work):
+        if self._gated(work):
             return "budget_exhausted"
         return None
+
+    def _full(self) -> bool:
+        """Whether the iteration horizon is reached."""
+        return self._max_iters is not None and self.n_iters >= self._max_iters
+
+    def _expired(self) -> bool:
+        """Whether the wall-clock deadline has passed."""
+        return self._deadline is not None and time.monotonic() >= self._deadline
+
+    def _gated(self, work: Work) -> bool:
+        """Whether the caller's extra gate refuses the ledger it is handed."""
+        return self._gate is not None and not self._gate(work)
 
 
 class _Best:
@@ -562,20 +580,19 @@ class _Best:
 class _Evaluator:
     """The run's evaluation seams, and what they charge and observe.
 
-    Every batch goes through two edges, each written once here: `_charge_gated`
-    asks the gate for the ledger the batch would leave and commits it only if
-    the gate allows it (so a batch is served whole or not at all, and a refused
-    one is neither charged nor paid for), and `_report` tells the run's two
-    readers what it returned. The seam that served the batch decides which pair
-    of counters moves - `_serve_f` the f pair, `_serve_f_g` the fused pair - and
-    no count ever closes the gate.
+    Every batch goes through two edges, each written once here: `_Budget.admit`
+    charges it or refuses it before it is served (so a batch is served whole or
+    not at all, and a refused one is neither charged nor paid for), and
+    `_report` tells the run's two readers what it returned. The seam that served
+    the batch decides which pair of counters moves - `_serve_f` the f pair,
+    `_serve_f_g` the fused pair - and no count ever closes the gate.
 
     Whichever half served a batch reports it to the two readers of the run's
     evidence: the best (`_Best`, which filters for feasibility) and the global
     model (which does not). That is the only place either is fed, so a batch
     nobody decides on is still reported. `settle` lives here too: it is where an
     iteration's deferred gradients are bought together, since this object owns
-    both the seam and the charge.
+    both the seam and the budget.
     """
 
     def __init__(
@@ -639,29 +656,6 @@ class _Evaluator:
             for i, point in decided.items()
         }
 
-    def _charge_gated(self, batch_size: int, *, fused: bool) -> None:
-        """Charge one batch the gate allows, or raise `_BatchRefused`.
-
-        The gate is asked for the ledger the batch would leave, before anything
-        is charged: a batch is served whole or not at all, and the ledger it
-        judged is the one committed rather than a second derivation of it.
-        Raises `_BatchRefused` when the gate refuses, before the batch is
-        evaluated.
-
-        Args:
-            batch_size: Points in the batch about to be served.
-            fused: Which pair of counters the calling seam moves.
-
-        Raises:
-            _BatchRefused: When a stop names a closed gate.
-
-        """
-        after = self._budget.after(batch_size, fused=fused)
-        reason = self._budget.stop(after)
-        if reason is not None:
-            raise _BatchRefused(reason)
-        self._budget.commit(after)
-
     def _report(
         self,
         x_batch: jnp.ndarray,
@@ -702,7 +696,7 @@ class _Evaluator:
             _BatchRefused: When the gate refuses the batch.
 
         """
-        self._charge_gated(x_batch.shape[0], fused=True)
+        self._budget.admit(x_batch.shape[0], fused=True)
         f_batch, g_batch, feas = self._eval_f_g(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
@@ -736,7 +730,7 @@ class _Evaluator:
         if eval_f is None:
             msg = "_serve_f requires eval_f"
             raise RuntimeError(msg)
-        self._charge_gated(x_batch.shape[0], fused=False)
+        self._budget.admit(x_batch.shape[0], fused=False)
         f_batch, feas = eval_f(x_batch)
         f_vals = f_batch.tolist()
         # No gradient in hand: the f half alone. The same point is reported
@@ -752,8 +746,8 @@ class _Slot:
     `point is None` is "no point yet" - a path the run has not placed. That is
     the machine's own state, not a stall: such a path is re-drawn whatever
     `restart_stalled` says, which is how iteration 0 places the flock and how a
-    refused start is eventually re-drawn. `_restart` is the one writer that
-    clears `stalled`, so a re-drawn path cannot stay stalled.
+    refused start is eventually re-drawn. `_place` is the one writer that clears
+    `stalled`, so a re-drawn path cannot stay stalled.
 
     `x` is not gated on finiteness - `usable` asks f and g only - so a point
     whose coordinates are `nan` is still a point the path holds.
@@ -860,11 +854,11 @@ class _Paths:
             if slot.point is None or (self.restart_stalled and slot.stalled)
         ]
         # Nothing is going to move again: no path restarts, and every path is
-        # stalled. `_restart` is the only writer that clears a stall bit and it
-        # only ever sees the restarting paths, so an empty `restarting` beside a
-        # fully stalled flock is terminal - the iteration would serve nothing.
-        # Only reachable with `restart_stalled=False`; the run ends here rather
-        # than idling out the horizon.
+        # stalled. `_place` is the only writer that clears a stall bit, and no
+        # stalled path is ever handed to it as a step, so an empty `restarting`
+        # beside a fully stalled flock is terminal - the iteration would serve
+        # nothing. Only reachable with `restart_stalled=False`; the run ends here
+        # rather than idling out the horizon.
         if not restarting and all(slot.stalled for slot in self.flock):
             raise _AllStalled
         # Every path that did not restart and is not stalled. A stalled path is
@@ -884,8 +878,8 @@ class _Paths:
         # already graded (a run without the seam) passes straight through
         # `settle` without being served again.
         settled = self.evaluator.settle({**starts, **winners})
-        self._restart({i: settled[i] for i in restarting})
-        self._step({i: settled[i] for i in winners})
+        self._place({i: settled[i] for i in restarting}, restart=True)
+        self._place({i: settled[i] for i in winners}, restart=False)
 
     def _restart_starts(self, restarting: list[int]) -> dict[int, Pending]:
         """Ask for one fresh start per restarting path, clipped into the run's box.
@@ -954,45 +948,40 @@ class _Paths:
             winners[i] = answer
         return winners
 
-    def _restart(self, points: dict[int, PathPoint]) -> None:
-        """Place the given paths on their fresh starts (one restart event).
+    def _place(self, points: dict[int, PathPoint], *, restart: bool) -> None:
+        """Commit each usable point as its path's next point, then tell the method.
 
-        The method's per-path state resets to cold start. A start the engine
-        cannot use is refused on the same `usable` gate `_step` applies to a
-        winner: it is not placed, the local solver is not seeded from it, and
-        the path stays stalled until it is re-drawn - which keeps `flock[i].point`
-        meaning "where the path stands". The start is this iteration's move for
-        every restarting path, usable or not, so none of them also steps.
+        One gate for both channels, defined once on the point type: an unusable
+        point - non-finite in either half - never becomes a path's point and the
+        method is never told it landed. The path keeps the point it holds and is
+        marked stalled, so `restart_stalled` alone decides whether it is re-drawn.
+        `settle` graded the point and this is its first read, so a non-finite
+        value or gradient is refused here rather than at the seam.
+
+        The channels differ in one thing: which hook is called. A restart resets
+        the method's per-path state to cold start and seeds it from the fresh
+        start; it is this iteration's move for every restarting path, usable or
+        not, so none of them also steps. A step tells the method the winner
+        landed, and is where the secant is read: a winner refused here is refused
+        before the method has been told anything. The point a step started from
+        is not passed on - the method kept it when it was placed or last stepped
+        from.
+
+        Args:
+            points: The points to commit, keyed by path.
+            restart: Whether these are this iteration's fresh starts or its step
+                winners.
+
         """
-        for i, point in points.items():
-            slot = self.flock[i]
-            slot.stalled = not point.usable
-            if slot.stalled:
-                continue  # unusable: no point, no seed (see `usable`)
-            slot.point = point
-            self.local_solver.restart(i, point)
-
-    def _step(self, points: dict[int, PathPoint]) -> None:
-        """Commit each usable winner as its path's next point, then step it.
-
-        `local_solver.step` is the step's commit half: it is what tells the
-        method the point landed, and it is the only place the secant is read, so
-        a winner the engine refuses here is refused before the method has been
-        told anything. The point the step started from is not passed on: the
-        method kept it when it was placed or last stepped from.
-        """
+        notify = self.local_solver.restart if restart else self.local_solver.step
         for i, point in points.items():
             slot = self.flock[i]
             if not point.usable:
-                # `settle` graded the winner and this is the first read, so a
-                # non-finite value or gradient is refused here: the path keeps
-                # the point it held, and the method is never told the step
-                # landed. Same gate as `_restart`: an unusable point never
-                # becomes a path's point.
                 slot.stalled = True
                 continue
+            slot.stalled = False  # a placed path is moving again
             slot.point = point
-            self.local_solver.step(i, point)
+            notify(i, point)
 
 
 def _validate_run(
