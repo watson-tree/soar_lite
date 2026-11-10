@@ -98,17 +98,30 @@ objective points per batch for it. It is not ahead on both axes: the same runs
 on the points axis, where that width is charged per point, are in
 [`docs/figures/`](docs/figures/).
 
+Read across like with like, because the arms move more than one knob. Width is
+`n_paths=16` against `n_paths=1`, both at `mu=0`; momentum is `mu=0.9` against
+`mu=0`, both at `n_paths=1`. Adam carries the same 0.9 gradient EMA, so it is
+read against the `mu=0.9` arm rather than the `mu=0` one - and even there the
+comparison is momentum-aligned, not single-knob, since Adam also carries a
+second moment and a tuned learning rate. Neither `mu` wins on every panel, so
+the momentum arm is read panel by panel, not as a default.
+
 [![Two preconditioned quadratics, one where a diagonal metric is exact](docs/figures/smooth-batches.png)](docs/figures/smooth-batches.png)
 
 **Two quadratics, 100 dimensions each** - one diagonal and conditioned at `1e4`,
 where a per-coordinate estimate is exact, one rotated and conditioned at `1e6`,
-where it is not - on the batches axis. 20 seeds x 3000 batches.
+where it is not - on the batches axis. 20 seeds x 3000 batches. The diagonal
+one is a positive control rather than a contest - the case the secant was built
+for. On the rotated one soar-lite trails Adam and L-BFGS-B by design: the
+dropped off-diagonal curvature is the boundary the global side exists to cross.
 
 [![Rastrigin in 100 dimensions](docs/figures/multimodal-batches.png)](docs/figures/multimodal-batches.png)
 
-**A multimodal landscape** - Rastrigin in 100 dimensions, where the basin a run
-falls into decides how far it gets - on the batches axis. 20 seeds x 3000
-batches.
+**A multimodal landscape** - Rastrigin in 100 dimensions, read as a level rather
+than a rate - on the batches axis. 20 seeds x 3000 batches. The ordering is set
+early and every arm parks. The `mu=0.9` arm never improves on its own start, on
+any seed - and the trace records best-so-far alone, so what the path did between
+its evaluations is not something this record says.
 
 [![One physics measured in two unit systems, with no retuning](docs/figures/invariance-units.png)](docs/figures/invariance-units.png)
 
@@ -116,6 +129,11 @@ batches.
 nothing retuned: the per-coordinate secant overlaps, while a single global
 learning rate separates because the effective step rescales with the unit. 20
 seeds x 3000 batches.
+
+Where a curve stops and its neighbours run on, that arm stopped serving batches
+- converged, or stalled out - and the line is cut at its cohort's first stop
+rather than carried to the budget; the space to its right is the arm's absence,
+not a further measurement.
 
 Both axes of all four panels, and the Adam lr sweep, are in
 [`docs/figures/`](docs/figures/) - the points axis is the one that charges
