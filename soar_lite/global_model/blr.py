@@ -168,12 +168,13 @@ class BLRGlobalModel(GlobalModel):
         """Fold one served batch into the model's value-only evidence.
 
         A value-only batch and a fused one contribute the same, since the
-        surrogate fits values over coordinates. A non-finite value is dropped,
-        not fitted: the engine observes the objective bottoming out at ``-inf``
-        before it stops, and one such row would drag the standardization with it.
-        A point served twice is kept twice - under the tiny observation noise
-        that is a slight double weight, which is what a second look at the same
-        coordinate is worth.
+        surrogate fits values over coordinates. The values arrive as host
+        floats, one per point, so the finite check below costs no device sync
+        per row. A non-finite value is dropped, not fitted: the engine observes
+        the objective bottoming out at ``-inf`` before it stops, and one such row
+        would drag the standardization with it. A point served twice is kept
+        twice - under the tiny observation noise that is a slight double weight,
+        which is what a second look at the same coordinate is worth.
 
         Raises:
             ValueError: If `x` is not a two-dimensional batch, has a different

@@ -290,7 +290,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     while True:
         # The run's one stop query names its reason, asked before a new iteration
         # starts so the run never begins one it cannot finish. A refusal
-        # mid-iteration arrives as _BudgetExhausted carrying the same reason.
+        # mid-iteration arrives as _BatchRefused carrying the same reason.
         status = budget.stop(budget.work)
         if status is not None:
             break
@@ -298,9 +298,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             # Decide which paths restart (iteration 0: all of them, since no
             # path holds a point), decide every move on values, then buy the
             # gradients those decisions need in one batch. A refused batch
-            # raises `_BudgetExhausted` here, before anything is placed.
+            # raises `_BatchRefused` here, before anything is placed.
             paths.move()
-        except _BudgetExhausted as exc:
+        except _BatchRefused as exc:
             # The iteration asked for a batch it could not afford and was cut
             # short: it did not finish, so it is not ticked.
             status = exc.reason
@@ -342,8 +342,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     )
 
 
-class _BudgetExhausted(Exception):  # noqa: N818 - a signal, not an error
-    """A batch was requested past a closed gate, the reason carried along.
+class _BatchRefused(Exception):  # noqa: N818 - a signal, not an error
+    """A serve was refused because a stop had closed, the reason carried along.
 
     Raised only inside `n_path_schedule`, by `_Evaluator._charge_gated` on the
     way into a batch, and caught by the loop. It carries the reason `stop`
@@ -362,7 +362,7 @@ class _OptimumReached(Exception):  # noqa: N818 - a signal, not an error
     """A served *feasible* point priced the objective at `-inf`.
 
     Raised inside `_Best.observe`, the single funnel both evaluation seams pass through,
-    and caught by the loop. Unlike `_BudgetExhausted` it arrives after a batch
+    and caught by the loop. Unlike `_BatchRefused` it arrives after a batch
     was served and charged, and it leaves an answer behind instead of naming a
     gate: the run stops on that point, so `fun` is `-inf` and `status` is
     `"unbounded"`. Nothing is left to unwind - a batch raises before any point is
@@ -400,7 +400,7 @@ class _Budget:
     per value+gradient pass) and the value-only pass the same way on its own
     (`n_f_points` / `n_f_batches`). `stop` reads only the run's three
     predicates, so a counted batch can still be refused by the gate like any
-    other serve. That refusal is a signal (`_BudgetExhausted`), never a flag
+    other serve. That refusal is a signal (`_BatchRefused`), never a flag
     stored here. The counts live in `work` (`Work`), frozen and replaced on each
     charge.
 
@@ -478,7 +478,7 @@ class _Budget:
         Asked at the loop head before every iteration with the ledger as it
         stands, and again before each served batch (fused or value-only) with
         the ledger that batch would produce, where a stop becomes the
-        `_BudgetExhausted` signal. None while work may go on; otherwise the
+        `_BatchRefused` signal. None while work may go on; otherwise the
         first closed gate, named - the horizon outranks the clock, which
         outranks the caller's gate.
 
@@ -639,12 +639,12 @@ class _Evaluator:
         }
 
     def _charge_gated(self, batch_size: int, *, fused: bool) -> None:
-        """Charge one batch the gate allows, or raise `_BudgetExhausted`.
+        """Charge one batch the gate allows, or raise `_BatchRefused`.
 
         The gate is asked for the ledger the batch would leave, before anything
         is charged: a batch is served whole or not at all, and the ledger it
         judged is the one committed rather than a second derivation of it.
-        Raises `_BudgetExhausted` when the gate refuses, before the batch is
+        Raises `_BatchRefused` when the gate refuses, before the batch is
         evaluated.
 
         Args:
@@ -652,13 +652,13 @@ class _Evaluator:
             fused: Which pair of counters the calling seam moves.
 
         Raises:
-            _BudgetExhausted: When a stop names a closed gate.
+            _BatchRefused: When a stop names a closed gate.
 
         """
         after = self._budget.after(batch_size, fused=fused)
         reason = self._budget.stop(after)
         if reason is not None:
-            raise _BudgetExhausted(reason)
+            raise _BatchRefused(reason)
         self._budget.commit(after)
 
     def _report(
@@ -698,7 +698,7 @@ class _Evaluator:
             ``(f_vals, g_batch)``.
 
         Raises:
-            _BudgetExhausted: When the gate refuses the batch.
+            _BatchRefused: When the gate refuses the batch.
 
         """
         self._charge_gated(x_batch.shape[0], fused=True)
@@ -728,7 +728,7 @@ class _Evaluator:
             Their objective values, as host floats.
 
         Raises:
-            _BudgetExhausted: When the gate refuses the batch.
+            _BatchRefused: When the gate refuses the batch.
 
         """
         eval_f = self._eval_f
@@ -878,7 +878,7 @@ class _Paths:
         starts = self._restart_starts(restarting)
         winners = self._step_winners(stepping)
         # One batch over both halves, keyed by path so neither is re-paired by
-        # position. A refusal (`_BudgetExhausted`) cuts the iteration short with
+        # position. A refusal (`_BatchRefused`) cuts the iteration short with
         # nothing placed - this is the only batch it serves. A point that arrived
         # already graded (a run without the seam) passes straight through
         # `settle` without being served again.

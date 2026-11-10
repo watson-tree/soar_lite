@@ -138,7 +138,8 @@ class GlobalModel(Protocol):
 
         Called right after a batch is served, in the engine's coordinates and
         before anything is decided on it: `x` is the batch's rows, `f` their
-        values (Python floats - the same values the run compares) and `g` their
+        values (Python floats - the same values the run compares, and one host
+        transfer per batch rather than a device sync per row) and `g` their
         gradients, or `None` for a batch served for its values alone. A point
         may arrive twice - a step's trial is served for its value first and for
         its gradient later if it wins - so a model keyed on coordinates sees the
@@ -302,7 +303,10 @@ gradients afterwards, together in one fused batch.
 # The two halves of a `GlobalModel`, as the components that call them see them.
 # The model itself never crosses into `_Evaluator` or `_Paths`: each takes the
 # one method it uses, so neither holds a god object whose other half it ignores.
-# `ObserveFn` is the command that folds a served batch into the evidence;
+# `ObserveFn` is the command that folds a served batch into the evidence; the
+# values arrive as host floats, one per point, because the run's own bookkeeping
+# compares and records them one row at a time - a batch then costs one host
+# transfer instead of a device sync per row.
 # `ProposeFn` is the query for fresh starts, handed the run's box because the
 # box is the engine's and a model carries none.
 ObserveFn: TypeAlias = Callable[[jnp.ndarray, list[float], jnp.ndarray | None], None]
