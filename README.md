@@ -84,9 +84,15 @@ and a `status`.
 
 ## Results
 
-Each method gets the same objective, the same seeds and the same batch budget.
-A curve is best-so-far, the line a median over 20 seeds and the band its Q1-Q3
-spread. Click a panel for the full size.
+Each method gets the same objective, the same seeds and the same batch budget -
+but not the same tuning effort, and that difference runs in Adam's favour.
+Adam's learning rate is picked per problem from a log grid (the `lr` sweep), so
+it enters each panel at its own best rate. soar-lite has no learning rate to
+pick; the `n_paths` and `mu` settings below are the same on every panel, not
+retuned per problem. Where soar-lite still comes out ahead, the win is read as a
+win over a tuned baseline, not over a default one. A curve is best-so-far, the
+line a median over 20 seeds and the band its Q1-Q3 spread. Click a panel for
+the full size.
 
 [![The two real inverse problems, best-so-far against batches served](docs/figures/headline-batches.png)](docs/figures/headline-batches.png)
 
