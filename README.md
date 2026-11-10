@@ -123,11 +123,11 @@ is where the diagonal preconditioner's limit shows. The secant damps where the
 gradient reverses sign, so the local solver settles in the nearest well and has
 no mechanism for crossing a ridge into a better one; multimodal reach is the
 global layer's job - more paths and restarts do the exploring - not the local
-solver's. Read that way, the ordering is set early and every arm parks: the
-`mu=0.9` arm never improves on its own start, on any seed, and the wider arm's
-lead is its sixteen starts rather than a faster descent. The trace records
-best-so-far alone, so what the path did between its evaluations is not something
-this record says.
+solver's. Read that way, the ordering is set early and every arm parks. The
+`mu=0.9` arm never improves on its own start, on any seed - its trace stores
+best-so-far alone, so whether that arm climbed, stalled or oscillated between
+evaluations is not something this record says. The wider arm's lead is its
+sixteen starts rather than a faster descent.
 
 [![One physics measured in two unit systems, with no retuning](docs/figures/invariance-units.png)](docs/figures/invariance-units.png)
 
