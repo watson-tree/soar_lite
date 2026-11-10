@@ -5,7 +5,7 @@ searches
 
     eval_f_g(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
     eval_f(x (M,d)) -> (f_vals (M,), feas (M,)|None)      # optional
-    budget_check() -> bool
+    budget_check(work: Work) -> bool
     domain -> the run's box as a `Domain`, required: every proposal is clipped
         into it, and its `d` is the run's dimension
     n_paths -> the run's width, the engine's own structure
@@ -61,6 +61,7 @@ from soar_lite.engine import (
     PathPoint,
     Pending,
     ServeTrials,
+    Work,
     n_path_schedule,
 )
 from soar_lite.engine.schedule import _argmin_finite
@@ -188,16 +189,17 @@ class Recorder:
         self.all_f_vals.extend(float(v) for v in f_vals)
         return f_vals, None
 
-    def limit_check(self, limit: int) -> Callable[[], bool]:
-        """Return a batch-level budget_check() False once `limit` evals served.
+    def limit_check(self, limit: int) -> Callable[[Work], bool]:
+        """Return a batch-level budget_check False once `limit` points were served.
 
         The core consults it before each batch (and once at the head of each
-        iteration), it reads the evals already served, and the terminal batch
-        therefore over-runs by less than one batch width.
+        iteration), so the terminal batch over-runs by less than one batch width.
+        It reads the run's own ledger rather than keeping a tally of its own, so
+        the count it gates on is the one the report will carry.
         """
 
-        def check() -> bool:
-            return self.evals < limit
+        def check(work: Work) -> bool:
+            return work.n_f_g_points < limit
 
         return check
 
@@ -529,7 +531,7 @@ def test_feasible_only_best() -> None:
         evals += int(theta.shape[0])
         return f_vals, grads, feas
 
-    def budget_check() -> bool:
+    def budget_check(_work: Work) -> bool:
         return evals < 600
 
     res = n_path_schedule(
@@ -641,7 +643,7 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
         eval_f_g,
         **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(6)),
         max_iters=5,
-        budget_check=lambda: served[0] < 40,
+        budget_check=lambda _work: served[0] < 40,
         local_solver=HalfStep(),
     )
     assert res.fun == 0.01, res.fun
@@ -708,7 +710,7 @@ def test_a_dead_path_never_widens_a_batch() -> None:
         x0=flock(n_paths),
         global_model=AskSpy(inner),
         max_iters=n_iterations + 1,
-        budget_check=lambda: len(widths) < 100,
+        budget_check=lambda _work: len(widths) < 100,
         local_solver=HalfStep(),
         restart_stalled=False,
     )
@@ -1032,7 +1034,7 @@ def test_an_unbounded_box_is_really_unbounded() -> None:
         n_paths=4,
         domain=box_free,
         global_model=FixedModel(starts),  # starts near the well
-        budget_check=lambda: True,
+        budget_check=lambda _work: True,
         max_iters=40,
         local_solver=HalfStep(),
     )
@@ -1357,7 +1359,7 @@ def test_flock_reports_where_each_path_stopped() -> None:
         Recorder(quad),
         **flock_kwargs(starts, unit_domain(2)),
         max_iters=1,
-        budget_check=lambda: False,
+        budget_check=lambda _work: False,
         restart_stalled=False,
     )
     assert empty.status == "budget_exhausted", empty.status

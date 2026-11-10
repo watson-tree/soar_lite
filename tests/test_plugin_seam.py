@@ -207,7 +207,7 @@ def test_injected_solver_is_driven() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(0)),
-        budget_check=lambda: True,
+        budget_check=lambda _work: True,
         max_iters=2,  # iteration 0 places the flock, then one step
         local_solver=solver,
     )
@@ -227,7 +227,7 @@ def test_give_up_stalls_a_path() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(1)),
-        budget_check=lambda: True,
+        budget_check=lambda _work: True,
         max_iters=2,  # the flock, then the single stalled iteration
         local_solver=solver,
     )
@@ -260,7 +260,7 @@ def test_an_unusable_start_is_refused_before_it_seeds_the_method() -> None:
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(3)),
-        budget_check=lambda: True,
+        budget_check=lambda _work: True,
         max_iters=2,  # the flock, then the iteration that finds nothing live
         local_solver=solver,
     )
@@ -304,7 +304,7 @@ def test_the_gate_counts_g_batches_not_f_only_draws() -> None:
             eval_f_g,
             eval_f=eval_f,
             **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(7)),
-            budget_check=lambda: billed < limit,
+            budget_check=lambda _work: billed < limit,
             max_iters=20,  # not the binding stop: the gate closes first
             local_solver=StubSolver(),
         )
@@ -356,7 +356,7 @@ def test_the_gate_is_asked_before_a_value_only_batch_too() -> None:
         eval_f_g,
         eval_f=eval_f,
         **flock_kwargs(flock(2), unit_domain(), key=jax.random.PRNGKey(11)),
-        budget_check=lambda: f_calls < 2,
+        budget_check=lambda _work: f_calls < 2,
         max_iters=10,  # never the binding stop: the caller's gate closes first
         local_solver=RetryingSolver(retries=5),
     )
@@ -484,7 +484,7 @@ def test_reports_four_counts_on_two_axes() -> None:
         res = n_path_schedule(
             eval_f_g,
             **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(8)),
-            budget_check=lambda: True,
+            budget_check=lambda _work: True,
             max_iters=2,  # the flock plus one accepted trial
             local_solver=StubSolver(),
         )

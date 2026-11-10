@@ -56,8 +56,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # max_iters / time_limit must be given.
     time_limit: float | None = None,
     # Keyword-only and defaulted, like scipy's `callback`: an extra gate for a
-    # budget the engine cannot see (points, dollars, an external clock).
-    budget_check: Callable[[], bool] | None = None,
+    # budget the engine cannot see (points, dollars, an external clock). It is
+    # handed the run's `Work` so far, so the count it gates on is the one the
+    # report will carry.
+    budget_check: Callable[[Work], bool] | None = None,
     # Whether a stalled path is re-drawn. The stall itself is the engine's own
     # bit (`_Paths.stalled`); this knob only decides whether the model is then
     # asked for a fresh point.
@@ -115,9 +117,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     iteration serves one or more batches, so migrating a batch budget to
     `max_iters` can multiply the work done. `budget_check` is the caller's extra
     stop; it is asked at the loop head every iteration and again before each
-    served batch, so a batch is served whole and the caller's own count can pass
-    its budget by less than one batch. `NPathStatus` names what each of these
-    writes.
+    served batch, and it is handed the run's `Work` so far - the same counts the
+    report carries, so a gate never keeps a counter of its own. Asked per batch,
+    a gate on points can be passed by less than one batch. `NPathStatus` names
+    what each of these writes.
 
     `fun` is the true minimum over every feasible eval with a finite value -
     every served point when the objective reports no mask, only the points its
@@ -166,7 +169,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         time_limit: a wall-clock deadline in seconds (``None`` means none).
         budget_check: an extra gate for a budget the engine cannot see, asked at
             the loop head every iteration and again before each served batch.
-            Additional, not a horizon (``None`` means none).
+            It receives the run's `Work` so far, so it gates on the engine's own
+            counts rather than on a parallel tally. Additional, not a horizon
+            (``None`` means none).
         restart_stalled: whether a path the engine marks stalled (its method gave
             up, or its point was not usable) is re-drawn from the global model.
             ``False`` keeps the flock frozen; a fully stalled flock then ends the
@@ -375,7 +380,8 @@ class _Budget:
 
     Three predicates decide whether work may go on: the iteration horizon
     (`max_iters`), the wall-clock deadline (`time_limit`), and the caller's
-    extra gate (`budget_check`). `stop` asks all three as one query - at the
+    extra gate (`budget_check`), which reads the run's `Work`. `stop` asks all
+    three as one query - at the
     loop head every iteration, and again before each served batch - and names
     the reason it refuses. At least one of the first two is required at entry:
     they advance on their own and the engine can see them do it, while a
@@ -388,14 +394,16 @@ class _Budget:
     (`n_f_points` / `n_f_batches`). `stop` reads only the run's three
     predicates, so a counted batch can still be refused by the gate like any
     other serve. That refusal is a signal (`_BudgetExhausted`), never a flag
-    stored here.
+    stored here. The counts live in `work` (`Work`), frozen and replaced on each
+    charge; the gate is handed that same object, so what a gate reads is what
+    the report carries.
     """
 
     def __init__(
         self,
         max_iters: int | None,
         time_limit: float | None,
-        budget_check: Callable[[], bool] | None,
+        budget_check: Callable[[Work], bool] | None,
     ) -> None:
         self.max_iters = max_iters
         self.deadline = None if time_limit is None else time.monotonic() + time_limit
@@ -434,8 +442,8 @@ class _Budget:
         return self.deadline is not None and time.monotonic() >= self.deadline
 
     def gated(self) -> bool:
-        """Whether the caller's extra gate has closed."""
-        return self._gate is not None and not self._gate()
+        """Whether the caller's extra gate has closed, read over the work so far."""
+        return self._gate is not None and not self._gate(self.work)
 
     def stop(self) -> NPathStatus | None:
         """Name the reason work may not go on, or None while it may.

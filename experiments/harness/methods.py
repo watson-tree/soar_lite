@@ -80,9 +80,11 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
     The budget is `max_batches` **batches** - one eval of parallel evaluations,
     the axis a single chain pays one point per step on. The engine's own stop
     counts iterations, not batches, so the ceiling is held by a batch gate
-    (`budget_check`): a probe or a rejected trial batch costs one each, and
-    the run stops within one batch of it. `max_iters` is the horizon the
-    engine requires - deliberately non-binding, so it never ends the run first.
+    (`budget_check`), which is handed the run's `Work`: it reads the engine's own
+    count instead of keeping a parallel one, so the stop lands on the number the
+    report carries. The gate is asked before each batch, so the run stops on the
+    ceiling, not past it. `max_iters` is the horizon the engine requires -
+    deliberately non-binding, so it never ends the run first.
 
     `restart_stalled` is whether a path the engine marks stalled is re-drawn.
     The default mirrors the engine's (on), but every panel arm passes `False`:
@@ -101,13 +103,11 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
     """
     trace = Trace()
     n_points = 0
-    n_batches = 0
     best = math.nan  # no answer yet
 
     def eval_f_g(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        nonlocal n_points, n_batches, best
+        nonlocal n_points, best
         f, g, _ = problem.eval_f_g(x)
-        n_batches += 1
         n_points += int(x.shape[0])
         for v in f.tolist():
             # `v < nan` is False, so "no answer yet" needs naming: a nan-seeded
@@ -115,7 +115,7 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
             if math.isfinite(v) and (math.isnan(best) or v < best):
                 best = v
         trace.points.append(n_points)
-        trace.batches.append(n_batches)
+        trace.batches.append(len(trace.batches) + 1)
         trace.best.append(best)
         return f, g, None
 
@@ -133,7 +133,7 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
         domain=domain,
         x0=x0,
         max_iters=max_batches,
-        budget_check=lambda: n_batches < max_batches,
+        budget_check=lambda work: work.n_f_batches + work.n_f_g_batches < max_batches,
         local_solver=DiagonalPreconditioner(mu=mu),
         restart_stalled=restart_stalled,
         global_model=None if model is None else model(key),
