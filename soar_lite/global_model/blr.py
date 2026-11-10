@@ -33,7 +33,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.scipy.special import log_ndtr
 
-from soar_lite.domain import Bounds, Domain
+from soar_lite.domain import Domain
 from soar_lite.engine import GlobalModel
 from soar_lite.global_model.projection import (
     Projection,
@@ -55,18 +55,21 @@ call, and one that follows the gradient gets it alongside.
 """
 
 MinimizeFn: TypeAlias = Callable[
-    [AcquisitionFn, Bounds, int, jnp.ndarray],
+    [AcquisitionFn, Domain, int, jnp.ndarray],
     jnp.ndarray,
 ]
 """The inner minimizer `propose` hands its acquisition to.
 
-``minimize(acquisition, bounds, n_points, key)`` returns `n_points` local
-minimizers of the acquisition over `bounds`, one per row, shape
-``(n_points, d)``. The count comes before the seed: what to ask for is the
-caller's question, the key only supplies the randomness. The model checks the
-shape and raises ``ValueError`` on a wrong one; a row the inner run could not use
-may be all-``nan``, which the outer run treats as an unusable start and stalls
-that path on.
+``minimize(acquisition, domain, n_points, key)`` returns `n_points` local
+minimizers of the acquisition inside `domain`, one per row, shape
+``(n_points, d)``. The domain is the one the ask was handed, not a box
+re-derived from it: a caller that declared a `scale` or a sampler meant it for
+every draw inside that box, including the inner minimizer's own starts. The
+count comes before the seed: what to ask for is the caller's question, the key
+only supplies the randomness. The model checks the shape and raises
+``ValueError`` on a wrong one; a row the inner run could not use may be
+all-``nan``, which the outer run treats as an unusable start and stalls that
+path on.
 
 Injected by the composition root rather than imported, so this module never
 reaches back into the engine's scheduler - the engine already owns the descent
@@ -238,7 +241,7 @@ class BLRGlobalModel(GlobalModel):
             return self._acq_value_and_grad(projection, x, weights, cov, best)
 
         starts = jnp.asarray(
-            self._minimize(acquisition, domain.bounds, n_points, sub),
+            self._minimize(acquisition, domain, n_points, sub),
         )
         if starts.shape != (n_points, domain.d):
             msg = (

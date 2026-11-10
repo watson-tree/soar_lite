@@ -29,7 +29,6 @@ from scipy.optimize import minimize
 from experiments.harness.problems import Problem
 from soar_lite import (
     AcquisitionFn,
-    Bounds,
     DiagonalPreconditioner,
     Domain,
     GlobalModel,
@@ -145,7 +144,7 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
 
 def surrogate_minimize(
     objective: AcquisitionFn,
-    bounds: Bounds,
+    domain: Domain,
     n_points: int,
     key: jnp.ndarray,
 ) -> jnp.ndarray:
@@ -157,16 +156,16 @@ def surrogate_minimize(
     recipe the n_paths=1 arms use, so the acquisition is optimized by the method
     it will later drive. Restarts are off because each path has one job: reach
     the acquisition's local minimum from a uniform start. The starts come from
-    the default model's draw over the box, matching the outer run's own, and
-    each path stops at `_INNER_ITERS`; the whole cohort is served one batch per
-    iteration rather than by one run per start.
+    the domain's own draw, so they respect whatever the caller declared about
+    the box, and each path stops at `_INNER_ITERS`; the whole cohort is served
+    one batch per iteration rather than by one run per start.
 
     Args:
         objective: the acquisition to descend, `(M, d) -> ((M,), (M, d))`:
             values and their per-row gradients, the engine's `EvalFG` shape
             without the feasibility column.
-        bounds: the search box, the engine's `Bounds` (a `(d, 2)` array or
-            scipy-style pairs).
+        domain: the search box, as the ask declared it - the same object the
+            outer run clips into, `scale` and samplers included.
         n_points: how many local minimizers to return, one per row.
         key: the PRNG key the starts are drawn from.
 
@@ -174,7 +173,6 @@ def surrogate_minimize(
         A `(n_points, d)` array, one minimizer per row.
 
     """
-    domain = Domain(bounds)
 
     def eval_g(x_batch: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         f, g = objective(x_batch)

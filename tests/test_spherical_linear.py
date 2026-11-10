@@ -20,7 +20,6 @@ import pytest
 from soar_lite import (
     AcquisitionFn,
     BLRGlobalModel,
-    Bounds,
     Domain,
     IdentityProjection,
     Projection,
@@ -31,18 +30,17 @@ from soar_lite.global_model.blr import _log_h
 
 def _grid_minimize(
     objective: AcquisitionFn,
-    bounds: Bounds,
+    domain: Domain,
     n_points: int,
     key: jnp.ndarray,
 ) -> jnp.ndarray:
     """Stand in for the driver's inner minimizer with the best of a grid."""
-    box = jnp.asarray(bounds)
     grid_key, _ = jax.random.split(key)
     grid = jax.random.uniform(
         grid_key,
-        (512, box.shape[0]),
-        minval=box[:, 0],
-        maxval=box[:, 1],
+        (512, domain.d),
+        minval=domain.lo,
+        maxval=domain.hi,
     )
     values, _ = objective(grid)
     ranked = jnp.argsort(jnp.where(jnp.isfinite(values), values, jnp.inf))
@@ -51,13 +49,13 @@ def _grid_minimize(
 
 def _short_minimize(
     objective: AcquisitionFn,
-    bounds: Bounds,
+    domain: Domain,
     n_points: int,
     key: jnp.ndarray,
 ) -> jnp.ndarray:
     """Return fewer rows than asked, so the shape check has something to reject."""
     del objective, key
-    return jnp.zeros((max(n_points - 1, 0), jnp.asarray(bounds).shape[0]))
+    return jnp.zeros((max(n_points - 1, 0), domain.d))
 
 
 def _box(d: int = 2, half: float = 2.0) -> Domain:
@@ -223,6 +221,34 @@ def test_the_model_carries_no_box_of_its_own() -> None:
     assert roomy.shape == (2, 2)
     assert bool(jnp.all(jnp.abs(tight) <= 1.0)), tight.tolist()
     assert bool(jnp.all(jnp.abs(roomy) <= 100.0)), roomy.tolist()
+
+
+def test_the_minimizer_is_handed_the_box_the_ask_was_handed() -> None:
+    """One spelling of the box across the seam: the ask's own domain, not a copy.
+
+    The inner minimizer draws its own starts, so the `scale` the caller declared
+    has to reach it. A box re-derived from the bounds would drop it, and the
+    inner run would start in a length unit the caller never asked for.
+    """
+    handed: list[Domain] = []
+
+    def recording(
+        objective: AcquisitionFn,
+        domain: Domain,
+        n_points: int,
+        key: jnp.ndarray,
+    ) -> jnp.ndarray:
+        handed.append(domain)
+        return _grid_minimize(objective, domain, n_points, key)
+
+    model = BLRGlobalModel(minimize=recording, key=jax.random.PRNGKey(0))
+    _observe(model, 8)
+    box = Domain([(-2.0, 2.0)] * 2, scale=[3.0, 0.5])
+
+    model.propose(2, box)
+
+    assert handed[0] is box
+    assert [float(s) for s in handed[0].scale] == [3.0, 0.5]
 
 
 def test_leaving_the_projection_unset_is_the_bent_arm() -> None:
