@@ -246,8 +246,8 @@ Adam learning rate is **per-problem grid-tuned**: the pick is that sweep's
 argmin (ties to the smallest rate), so different problems land on different
 points of the grid rather than on one tuned constant, and on the diagonal
 quadratic the slowest rate costs more than fifty orders of magnitude against
-the pick. On that problem every rate from the sweep's second point through
-`1.0` sits on the quadratic's rounding floor, so the pick there is one point of
+the pick. On that problem every rate from `1e-2` through `1.0` sits on the
+quadratic's rounding floor, so the pick there is one point of
 a rounding tie rather than a strict argmin — the figure's diamond marks the
 pick, not a minimum. The grid and the picks live in
 `experiments/tuning/adam.json`, written by `--lr-sweep` and read by

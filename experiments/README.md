@@ -137,7 +137,10 @@ figure is always re-derivable and a trace never is. The unit is one
   together. That is what the axis is for, not a clipped result.
 - `figures/invariance/invariance.png` — panel 4, one physics in two unit systems,
   zero re-tune.
-- `figures/lr_sweep/lr_sweep.png` — the Adam grid sweep.
+- `figures/lr_sweep/lr_sweep.png` — the Adam grid sweep. Its y axis is the
+  sweep's own statistic, the **mean** over its two seeds: the same number the
+  pick takes its argmin of, so this figure keeps mean rather than the panels'
+  median.
 - `results/smoke/`, `figures/smoke/` — where `--quick` writes, one smoke run
   per panel. Same names as the record on purpose (it exercises the same code)
   in roots of its own, so checking the environment cannot overwrite it.

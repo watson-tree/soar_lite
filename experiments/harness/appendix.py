@@ -35,10 +35,10 @@ def run_lr_sweep(roots: Roots, n_seeds: int, max_batches: int) -> None:
     and it is manual, not adaptive.
 
     What that argmin is worth varies, and the figure is how a reader sees it.
-    On the diagonal quadratic every rate from the sweep's second point through
-    1.0 has already reached the quadratic's rounding floor, so the winner there
-    is decided by rounding, not by a rate difference. On the rotated quadratic
-    and the oscillator the curve is still falling at the grid edge, so a wider
+    On the diagonal quadratic every rate from 1e-2 through 1.0 has already
+    reached the quadratic's rounding floor, so the winner there is decided by
+    rounding, not by a rate difference. On the rotated quadratic and the
+    oscillator the curve is still falling at the grid edge, so a wider
     grid could move the pick; the compartment chain is the mirror case, an
     interior minimum sharp on both sides. On rastrigin the floor is flat across
     four of the grid's points and the pick sits a few percent below it: real,
@@ -102,7 +102,7 @@ def run_lr_sweep(roots: Roots, n_seeds: int, max_batches: int) -> None:
     fig.suptitle(
         "Adam lr sensitivity - C0 diamond = the pick the panels use (this "
         "sweep's argmin, ties to the smallest rate); on diag every rate from "
-        "1e-2 up is at the rounding floor; rot & oscillator pick at the grid "
+        "1e-2..1.0 is at the rounding floor; rot & oscillator pick at the grid "
         "edge; pk_chain is a sharp interior minimum; rastrigin's floor is "
         "within 5%",
     )
