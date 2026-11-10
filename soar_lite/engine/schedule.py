@@ -647,29 +647,6 @@ class _Evaluator:
             for i, point in decided.items()
         }
 
-    def _report(
-        self,
-        x_batch: jnp.ndarray,
-        f_vals: list[float],
-        g_batch: jnp.ndarray | None,
-        feas: jnp.ndarray | None,
-    ) -> None:
-        """Report one served batch to the run's two readers.
-
-        The model first: a feasible -inf below raises `_OptimumReached`, and the
-        batch was served and charged either way, so the model still sees it even
-        though the run keeps nothing else from that pass.
-
-        Args:
-            x_batch: The points the seam was handed.
-            f_vals: Their objective values, as host floats.
-            g_batch: Their gradients when the seam bought them, else None.
-            feas: The feasibility mask the seam reported, or None for all-feasible.
-
-        """
-        self._observe(x_batch, f_vals, g_batch)
-        self._best.observe(x_batch, f_vals, feas)
-
     def _serve_f_g(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
         """Serve one fused batch: the gradient comes with the value.
 
@@ -728,6 +705,29 @@ class _Evaluator:
         # again with `g` if it wins its step and `settle` buys the gradient.
         self._report(x_batch, f_vals, None, feas)
         return f_vals
+
+    def _report(
+        self,
+        x_batch: jnp.ndarray,
+        f_vals: list[float],
+        g_batch: jnp.ndarray | None,
+        feas: jnp.ndarray | None,
+    ) -> None:
+        """Report one served batch to the run's two readers.
+
+        The model first: a feasible -inf below raises `_OptimumReached`, and the
+        batch was served and charged either way, so the model still sees it even
+        though the run keeps nothing else from that pass.
+
+        Args:
+            x_batch: The points the seam was handed.
+            f_vals: Their objective values, as host floats.
+            g_batch: Their gradients when the seam bought them, else None.
+            feas: The feasibility mask the seam reported, or None for all-feasible.
+
+        """
+        self._observe(x_batch, f_vals, g_batch)
+        self._best.observe(x_batch, f_vals, feas)
 
 
 @dataclass
