@@ -133,22 +133,37 @@ panel.
 
 Two appendix panels, property demos rather than races:
 
-4. **Invariance — unit-rescaling consistency.** Run on the diag control:
+4. **Invariance — unit-rescaling consistency.** Run on the rotated quadratic:
    re-measure in two unit systems (here `x' = 10x`, see `INVARIANCE_SCALE` in
-   `harness/appendix.py`), **zero retune**. Claim is **outcome-level, not
-   trajectory-level**: the best-so-far-vs-cost curves overlap in both unit
-   systems, while Adam's separate (one system needs a different `α`). Exact
-   per-step covariance (`x̃=c·x ⇒ d̃=c²d, Δx̃=c·Δx`) is real but holds only for
-   the secant-based steady state: the **warmup step is by design not
-   unit-invariant** (a scalar `α` applied uniformly across mixed-unit
-   coords), so the first secant pair — and anything seeded by it — is not the
-   transformed pair. On the diagonal quadratic this
-   self-corrects in one step (`d` reads `1/Hᵢ` exactly, independent of the seed
-   pair's scale), so the diag control gives clean overlap; a general/multimodal
-   problem would **not** guarantee same basin, so never use one for this panel.
+   `harness/appendix.py`), **zero retune**. soar-lite's two best-so-far curves
+   overlap along the whole run; Adam's two separate, because one `lr` cannot be
+   right in both unit systems. Exact per-step covariance (`x̃=c·x ⇒ d̃=c²d,
+   Δx̃=c·Δx`) is real but holds only for the secant-based steady state: the
+   **warmup step is by design not unit-invariant** (a scalar `α` applied
+   uniformly across mixed-unit coordinates), so the first secant pair — and
+   anything seeded by it — is not the transformed pair.
+
+   The rotated quadratic is the control because it keeps that transient out of
+   the plotted curve and still leaves something to plot. Descent continues
+   across the whole budget, so the figure shows the steady state over hundreds
+   of points rather than a single plunge, and the warmup step on an
+   ill-conditioned rotated landscape overshoots enough to be worse than the
+   start, so best-so-far never records it: what is drawn is covariance alone.
+   The axis-aligned diagonal quadratic is the opposite case, and that is why it
+   was retired here: the warmup pair is asymmetric between the two unit systems
+   — the unit-stiffness factor `1 - aᵢ` against its scaled counterpart
+   `1 - aᵢ/c²` zeroes the soft coordinates in one system while leaving them
+   nearly in place in the other, and clips the stiff ones in both — so the two
+   systems reach the floor after a different number of steps. Their curves then
+   differ exactly where the transient is and meet only trivially, both at the
+   floor; clean at the step level, useless as a figure. A general/multimodal
+   problem stays excluded for both reasons: no same-basin guarantee, and no
+   visible steady state to compare.
+
    The exact claim is asserted at the step level (injected secant pair, as in
    `test_diag_step_scales_with_the_coordinate_unit`); the end-to-end claim is
-   asserted statistically. A *property demo*, not a race.
+   asserted statistically, and the panel now prints the drawn gap per method so
+   the assertion is re-derivable from a run. A *property demo*, not a race.
 5. **Adam lr sweep.** Log-scan of `lr` per problem, marking the panel pick
    (`experiments/tuning/adam.json`) — the evidence that soar-lite has no
    learning rate where Adam pays a grid. Emitted by `--lr-sweep`.

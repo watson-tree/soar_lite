@@ -28,7 +28,40 @@ Two entries (v2 and v3) also record wall clock. That is a property of the
 machine that ran them, not an expectation: no comparison here is made on time,
 and a re-run should reproduce the medians, not the hours.
 
-## 2026-11-11 — figure rule: the median is taken over the whole cohort
+## 2026-11-11 — invariance panel: the rotated quadratic replaces the diag control — CURRENT
+
+20 seeds x 3000 batches, base vs `x' = 10x`, zero retune, one panel re-run at
+`harness/appendix.py` with the control problem changed from the diagonal
+quadratic to the rotated one. The panel now prints the gap it draws: the maximum
+over the run of |log10 base - log10 x10| on the shared-grid cohort median is
+**0.044 decades for soar-lite** (`n_paths=1`, `mu=0`) and **1.863 decades for
+Adam**, which keeps one `lr` across both unit systems. Figure:
+`experiments/figures/invariance/invariance.png`, copied to
+`docs/figures/invariance-units.png`.
+
+**Why the control moved.** On the diagonal quadratic the two unit systems take a
+different number of steps to the floor: the serial arm ends base in 3 points and
+the rescaled system in 4, so at point 3 base reads `5.05e-28` while the rescaled
+system is still at `0.681` — 27 orders apart, in the only region where there is
+anything to see. The cause is the warm-up pair, which is asymmetric between the
+unit systems: the unit-stiffness factor `1 - aᵢ` sends the soft coordinates to
+zero while its scaled counterpart `1 - aᵢ/100` leaves them nearly in place, and
+both clip the stiff ones. The curves then meet only at the floor, which is the
+trivial half of the claim, and the figure argued against its own title.
+
+The rotated quadratic descends across the whole budget and its warm-up step
+overshoots an ill-conditioned rotated landscape enough to be worse than the
+start, so best-so-far never records it (no seed in either unit system improved
+on its start at the warm-up point, 20/20). What the figure draws is therefore
+steady-state covariance alone: soar-lite's two curves hug, Adam's split.
+
+Read against the 2026-10-28 entry's "unit-rescaling residual" section with
+care: that is a real measurement of the *retired* diag control, at the warm-up
+that still carried an Armijo backtrack, and it no longer describes what this
+panel draws. The end-to-end claim is still asserted statistically, and this
+panel writes no trace JSON: the two gaps above are printed by the run, not
+re-derivable from a shipped artifact.
+
 
 No trace was re-measured; every number in this file stands. What changed is how
 far each curve is drawn.

@@ -14,9 +14,9 @@ under that date.
 
 The set moves at once, in the commit that records the run, and only after
 every panel has been looked at. That is what makes the check meaningful: all
-eight files are compared against one record entry. Copied one at a time, each
-file is compared against nothing in particular, and the page slowly stops
-describing the run it names.
+eight files are compared against the record entries for that date. Copied one at
+a time, each file is compared against nothing in particular, and the page slowly
+stops describing the run it names.
 
 | file | panel | axis | budget |
 | --- | --- | --- | --- |
@@ -26,7 +26,7 @@ describing the run it names.
 | `smooth-points.png` | `smooth` | points | 20 seeds x 3000 |
 | `multimodal-batches.png` | `multimodal` — Rastrigin | batches | 20 seeds x 3000 |
 | `multimodal-points.png` | `multimodal` | points | 20 seeds x 3000 |
-| `invariance-units.png` | `invariance` — one physics, two unit systems | — | 20 seeds x 3000 |
+| `invariance-units.png` | `invariance` — rotated quadratic, one physics in two unit systems | — | 20 seeds x 3000 |
 | `lr-sweep.png` | Adam learning-rate grid | — | 2 seeds x 3000 per point |
 
 The sweep is the one panel whose y axis is a **mean**: it is the statistic the
