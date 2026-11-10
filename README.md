@@ -120,8 +120,21 @@ spread. Click a panel for the full size.
 non-convex compartment chain - on the batches axis: one batch is one parallel
 pass, the wall clock of a GPU setting, which is what this library is built for.
 20 seeds x 3000 batches. A wide `n_paths=16` arm is shown whole here and pays 16
-objective points per batch for it; the same runs on the points axis, where that
-width is charged per point, are in `experiments/RESULTS.md`.
+objective points per batch for it. It is not ahead on both axes: the same runs
+on the points axis, where that width is charged per point, are in
+[`docs/figures/`](docs/figures/).
+
+[![Two preconditioned quadratics, one where a diagonal metric is exact](docs/figures/smooth-batches.png)](docs/figures/smooth-batches.png)
+
+**Two quadratics, 100 dimensions each** - one diagonal and conditioned at `1e4`,
+where a per-coordinate estimate is exact, one rotated and conditioned at `1e6`,
+where it is not - on the batches axis. 20 seeds x 3000 batches.
+
+[![Rastrigin in 100 dimensions](docs/figures/multimodal-batches.png)](docs/figures/multimodal-batches.png)
+
+**A multimodal landscape** - Rastrigin in 100 dimensions, where the basin a run
+falls into decides how far it gets - on the batches axis. 20 seeds x 3000
+batches.
 
 [![One physics measured in two unit systems, with no retuning](docs/figures/invariance-units.png)](docs/figures/invariance-units.png)
 
@@ -130,17 +143,19 @@ nothing retuned: the per-coordinate secant overlaps, while a single global
 learning rate separates because the effective step rescales with the unit. 20
 seeds x 3000 batches.
 
-The panels not shown here (`smooth`, `multimodal`, the Adam lr sweep), the
-medians behind every curve and the caveats that qualify them are in
-`experiments/RESULTS.md`; what the comparison measures is in
-`experiments/DESIGN.md`. The commands that redraw these two panels are in
+Both axes of all four panels, and the Adam lr sweep, are in
+[`docs/figures/`](docs/figures/) - the points axis is the one that charges
+`n_paths=16` for its width, and it is worth a look before the batches axis is
+read as a ranking. The medians behind every curve and the caveats that qualify
+them are in `experiments/RESULTS.md`; what the comparison measures is in
+`experiments/DESIGN.md`. The commands that redraw the whole set are in
 [`docs/figures/README.md`](docs/figures/README.md).
 
 Those files are named by path rather than linked because the harness under
 `experiments/` is a benchmark sub-library, not a dependency: it imports
 soar-lite and cites this documentation, nothing in the package or these docs
 depends on it, and it ships in neither the wheel nor the sdist. The figures
-above are curated copies, so reading a result does not need the harness.
+above are a snapshot of one run, so reading a result does not need the harness.
 
 To run any panel yourself, open
 [`notebooks/run_panels.ipynb`](notebooks/run_panels.ipynb) (what the Colab badge
