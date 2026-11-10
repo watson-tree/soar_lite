@@ -1,10 +1,15 @@
 # Experiment design: `compare_baselines`
 
-The canonical reproducible comparison artifact. One script, three problem
-groups (`headline`, `smooth`, `multimodal`) plus two appendix panels
-(unit-rescaling invariance, Adam's lr sweep). This document is the lossless
-handoff: read it before touching `compare_baselines.py` so no settled detail is
-re-derived from memory.
+The canonical reproducible comparison artifact. One script, four panels
+(`headline`, `smooth`, `multimodal`, `invariance`) plus an appendix Adam lr
+sweep. This document is the lossless handoff: read it before touching
+`compare_baselines.py` so no settled detail is re-derived from memory.
+
+This document is a **current-state** document, not a record: it describes the
+harness as it stands, so a passage that stops being true is rewritten rather
+than appended to. A direction that was explored and dropped goes to
+`DEPRECATED.md`, which is where the record lives - including the shapes this
+file no longer describes.
 
 This document states no measured numbers. Every figure and table an experiment
 produced lives in `RESULTS.md`, tagged with the lineup and budget that produced
@@ -58,7 +63,10 @@ no panel arms it as a step.
 
 ## Problem set
 
-Three run groups plus two appendix panels, one role each:
+Four panels plus an appendix sweep, one role each. `headline`, `smooth` and
+`multimodal` are rosters measured over the record; `invariance` compares two
+problems as it draws, so it stores no trace; the lr sweep is a flag, not a
+panel.
 
 1. **Headline — the two real inverse problems.** Both mix physical units and
    both have a non-convex response; one is read in the frequency domain, the
@@ -323,9 +331,11 @@ settled against: the residual error is in the step's *direction*, not its length
 
 0. **Wait for explicit go-ahead before heavy coding.**
 1. Add experiment deps via a dependency group (`optax`, `matplotlib`).
-2. `experiments/harness/problems.py` — the three groups (`headline`, `smooth`,
-   `multimodal`) + the invariance and `all` builders, each problem
-   exposing the soar-lite seam `x_batch → (loss, grad, feas)`.
+2. `experiments/harness/problems.py` - one constructor per benchmark problem,
+each exposing the soar-lite seam `x_batch → (loss, grad, feas)`. Which problems
+make up a panel is the panel's business, not this module's: `panels.PANELS`
+holds the problem list and the arm roster per name, and `every_problem()` is the
+union a sweep iterates.
 3. `experiments/harness/methods.py` — one driver per arm (the rosters are in
    `Methods × panels`). The restart-model factory
    (`surrogate_minimize` + the identity / sphere projections) stays wired, but
