@@ -93,43 +93,19 @@ def refuse_other_budget(method: str, *, seeds: int, max_batches: int) -> None:
     """Refuse to rerecord over a file measured at another budget.
 
     The record is a committed input, so a quick sweep would replace real picks
-    with 1-seed ones. Same rule as a trace: replacing it has to be a deliberate
-    delete, not a side effect of typing the wrong flag.
-
-    Args:
-        method: The method whose record is about to be rewritten.
-        seeds: Seeds this run will measure.
-        max_batches: Batches this run will serve per arm.
-
-    Raises:
-        SystemExit: the record holds a different ``(seeds, max_batches)``, or it
-            cannot say what it holds. Nothing has been computed when this fires.
-
+    with 1-seed ones. Same rule as a trace - `refuse_recorded_budget` - and the
+    same budget reader; only the file is this module's own.
     """
-    path = _path(method)
-    if not path.is_file():
-        return
-    try:
-        record = _record(method)
-        on_disk = (int(record["seeds"]), int(record["max_batches"]))
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        msg = (
-            f"unreadable budget: {path} exists but does not say what budget it "
-            f"was measured at ({exc!r}), so this sweep cannot tell whether it "
-            f"would replace a record. Nothing was measured.\n"
-            f"  replacing the record on purpose: delete that file and rerun."
-        )
-        raise SystemExit(msg) from exc
-    if on_disk == (seeds, max_batches):
-        return
-    msg = (
-        f"budget conflict: {path} holds {on_disk[0]} seeds x {on_disk[1]} "
-        f"batches, this sweep asks for {seeds} x {max_batches}. Nothing was "
-        f"measured.\n"
-        f"  same budget: pass the same --seeds and --max-batches.\n"
-        f"  re-tuning on purpose: delete that file and rerun."
+    # Deferred: `record` imports `arms`, which imports this module for `pick`, so
+    # the two can only meet one way at import time.
+    from experiments.harness.record import budget_of, refuse_recorded_budget  # noqa: PLC0415
+
+    refuse_recorded_budget(
+        _path(method),
+        read=budget_of,
+        n_seeds=seeds,
+        max_batches=max_batches,
     )
-    raise SystemExit(msg)
 
 
 def _argmin(grid: list[float], fins: list[float]) -> float:

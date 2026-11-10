@@ -14,9 +14,10 @@ at its own directory (`roots_for` is the only place that names them).
 """
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
 from experiments.harness import problems
 from experiments.harness.arms import Arm
@@ -106,7 +107,7 @@ def load_arm(roots: Roots, problem_name: str, arm_key: str) -> Loaded | None:
     """
     try:
         payload = json.loads(roots.trace(problem_name, arm_key).read_text())
-        n_seeds, max_batches = _budget_of(payload["meta"])
+        n_seeds, max_batches = budget_of(payload["meta"])
         traces = [
             Trace(
                 points=s["points"],
@@ -121,21 +122,24 @@ def load_arm(roots: Roots, problem_name: str, arm_key: str) -> Loaded | None:
     return Loaded(traces=traces, seeds=n_seeds, max_batches=max_batches)
 
 
-def refuse_budget_change(
-    roots: Roots,
-    problem_name: str,
-    arm_key: str,
+BudgetReader: TypeAlias = Callable[[dict[str, Any]], tuple[int, int]]
+
+
+def refuse_recorded_budget(
+    path: Path,
     *,
+    read: BudgetReader,
     n_seeds: int,
     max_batches: int,
 ) -> None:
     """Stop before the compute if this file already holds another budget.
 
-    A trace file is named ``(problem, arm)``, which says nothing about the
-    budget it was measured at, so a run at another ``--seeds`` /
-    ``--max-batches`` would replace a record with numbers that no longer belong
-    to the entry it came from. The file *is* the record, so replacing it has to
-    be a deliberate delete rather than a side effect of typing the wrong flag.
+    A record's name says nothing about the budget it was measured at - a trace
+    is named ``(problem, arm)``, a tuning record by its method - so a run at
+    another ``--seeds`` / ``--max-batches`` would replace a record with numbers
+    that no longer belong to the entry it came from. The file *is* the record,
+    so replacing it has to be a deliberate delete rather than a side effect of
+    typing the wrong flag.
 
     Only a missing file may be written without asking. A file that exists but
     cannot say what it holds - truncated JSON, a missing key, no budget keys at
@@ -144,9 +148,9 @@ def refuse_budget_change(
     it", never "there is nothing here".
 
     Args:
-        roots: The namespace to read the existing trace from.
-        problem_name: The problem half of the file's identity.
-        arm_key: The arm half of the file's identity.
+        path: The file whose budget is at stake.
+        read: How this kind of record spells its budget, applied to the parsed
+            JSON. What it raises on a record that does not say is the refusal.
         n_seeds: Seeds this run will measure.
         max_batches: Batches this run will serve per method.
 
@@ -155,12 +159,11 @@ def refuse_budget_change(
             holds no readable budget. Nothing has been computed when this fires.
 
     """
-    path = roots.trace(problem_name, arm_key)
     if not path.exists():
         return
     shown = path.relative_to(HERE) if path.is_relative_to(HERE) else path
     try:
-        on_disk = _budget_of(json.loads(path.read_text())["meta"])
+        on_disk = read(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         msg = (
             f"unreadable budget: {shown} exists but does not say what budget it "
@@ -179,6 +182,34 @@ def refuse_budget_change(
         f"  replacing the record on purpose: delete that file and rerun."
     )
     raise SystemExit(msg)
+
+
+def refuse_budget_change(
+    roots: Roots,
+    problem_name: str,
+    arm_key: str,
+    *,
+    n_seeds: int,
+    max_batches: int,
+) -> None:
+    """Refuse a write over a trace measured at another budget.
+
+    A trace's identity is ``(problem, arm)``, so this entry point's own job is
+    finding the file and saying where its budget sits; the rule is
+    `refuse_recorded_budget`'s.
+
+    """
+    refuse_recorded_budget(
+        roots.trace(problem_name, arm_key),
+        read=_meta_budget,
+        n_seeds=n_seeds,
+        max_batches=max_batches,
+    )
+
+
+def _meta_budget(payload: dict[str, Any]) -> tuple[int, int]:
+    """Read a trace's budget from the ``meta`` block its problem and arm sit in."""
+    return budget_of(payload["meta"])
 
 
 def roots_for(namespace: str) -> Roots:
@@ -216,22 +247,23 @@ def roots_for(namespace: str) -> Roots:
     return Roots(RECORD_RESULTS / namespace, RECORD_FIGURES / namespace)
 
 
-def _budget_of(meta: dict[str, Any]) -> tuple[int, int]:
-    """Read a record's ``(seeds, batches)``, including records from before the rename.
+def budget_of(payload: dict[str, Any]) -> tuple[int, int]:
+    """Read a record's ``(seeds, batches)``, both kinds and both flag spellings.
 
-    Records written while the flag was ``--max-steps`` say what they measured
-    under that key. Reading them by the new name alone would make every old
-    trace look like a file with no budget - which is exactly the state the
-    guard refuses to touch, so the records would become unreplaceable by a run
-    at their own budget. The old key is read, and the next save writes the new
-    one.
+    A trace keeps them under ``meta`` and a tuning record at its top level, so
+    the caller descends into whichever block holds them before calling. Records
+    written while the flag was ``--max-steps`` say what they measured under that
+    key. Reading them by the new name alone would make every old trace look like
+    a file with no budget - which is exactly the state the guard refuses to
+    touch, so the records would become unreplaceable by a run at their own
+    budget. The old key is read, and the next save writes the new one.
 
     Raises:
-        KeyError: the meta holds neither name, i.e. it is not a record of a
+        KeyError: the payload holds neither name, i.e. it is not a record of a
             budget. The caller decides whether that is "no trace" (drawing) or
             a refusal (writing).
 
     """
-    if "max_batches" in meta:
-        return int(meta["seeds"]), int(meta["max_batches"])
-    return int(meta["seeds"]), int(meta["max_steps"])
+    if "max_batches" in payload:
+        return int(payload["seeds"]), int(payload["max_batches"])
+    return int(payload["seeds"]), int(payload["max_steps"])
