@@ -45,8 +45,12 @@ pip install 'jax==0.10.2' 'optax==0.2.8' 'matplotlib==3.11.2' 'scipy==1.17.1'
 pip install -e .
 ```
 
-The default sync pins the CPU JAX build. The canonical runs are GPU-shaped, so on
-a GPU box install the CUDA build matching your driver line alongside it —
+The default sync pins the CPU JAX build, and a CPU is a legitimate place to
+measure this: neither axis counts seconds — a batch is a batch on either backend
+— so the ordering in `RESULTS.md` says nothing about GPU hardware. The GPU-shaped
+thing is the **library**: on a GPU box a batch's wall clock barely grows as it
+widens, which is the whole reason the schedule is wide. To run it there, install
+the CUDA build matching your driver line alongside the CPU wheel —
 `uv pip install 'jax[cuda12]'` (or `'jax[cuda13]'`) — and note that a later
 `uv sync` restores the CPU wheel from the lock. JAX picks its backend from what is
 installed: to pin one inside the process, call

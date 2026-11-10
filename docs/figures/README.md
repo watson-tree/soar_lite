@@ -2,7 +2,9 @@
 
 The panels of `headline`, `smooth` and `multimodal`, both axes of each, plus
 `invariance` and the Adam lr sweep — copied whole out of `experiments/figures/`
-after the 2026-11-11 run.
+after the 2026-11-11 run, which was measured on CPU. Neither axis counts seconds,
+so the backend is not part of what these figures claim; what a batch costs on a
+GPU is the library's argument, not these curves' evidence.
 
 `experiments/figures/` is gitignored: a run writes there and the next run
 overwrites it. These copies are the only pictures that outlive the traces, and
