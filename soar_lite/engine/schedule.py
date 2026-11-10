@@ -320,17 +320,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             break
         budget.tick()  # counted after the body: only finished iterations
 
-    # Each path's point as the run ended, and its value. A path that never held
-    # a usable point has no point to report: it reads `nan` on both halves.
-    flock_x = jnp.stack(
-        [
-            jnp.full(domain.d, math.nan) if slot.point is None else slot.point.x
-            for slot in paths.flock
-        ]
-    )
-    flock_fun = jnp.asarray(
-        [math.nan if slot.point is None else slot.point.f for slot in paths.flock]
-    )
+    # Each path's point as the run ended, and its value.
+    flock_x, flock_fun = paths.held()
 
     return NPathResult(
         x=best.x,
@@ -880,6 +871,26 @@ class _Paths:
         settled = self.evaluator.settle({**starts, **winners})
         self._place({i: settled[i] for i in restarting}, restart=True)
         self._place({i: settled[i] for i in winners}, restart=False)
+
+    def held(self) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """Each path's held point as one row per path, `nan` where it holds none.
+
+        Both halves read `nan` for a path the run never placed, so "no point"
+        and "a point" stay one column each rather than needing a second channel
+        to tell them apart. Rows are neither filtered nor sorted: row `i` is
+        path `i`, whatever that path did.
+
+        Returns:
+            ``(flock_x, flock_fun)``: coordinates ``(n_paths, d)`` and values
+                ``(n_paths,)``.
+
+        """
+        points = [slot.point for slot in self.flock]
+        flock_x = jnp.stack(
+            [jnp.full(self.domain.d, math.nan) if p is None else p.x for p in points]
+        )
+        flock_fun = jnp.asarray([math.nan if p is None else p.f for p in points])
+        return flock_x, flock_fun
 
     def _restart_starts(self, restarting: list[int]) -> dict[int, Pending]:
         """Ask for one fresh start per restarting path, clipped into the run's box.
