@@ -10,9 +10,11 @@ they are a snapshot of **one** run. The lineup, the budget, the medians behind
 every curve and the caveats that qualify them are in `experiments/RESULTS.md`
 under that date.
 
-The set moves all at once, in the commit that records the run, and only after
-every panel has been looked at. One file at a time is how a figure ends up on a
-page that describes a different run; a set is checked against one record entry.
+The set moves at once, in the commit that records the run, and only after
+every panel has been looked at. That is what makes the check meaningful: all
+eight files are compared against one record entry. Copied one at a time, each
+file is compared against nothing in particular, and the page slowly stops
+describing the run it names.
 
 | file | panel | axis | budget |
 | --- | --- | --- | --- |
@@ -37,10 +39,13 @@ as `n_paths=1` and gets sixteen independent starts for that price.
 
 **Points** counts objective evaluations. Every path of the wide arm pays for its
 own point, so at equal points it has had sixteen times fewer iterations. This is
-the axis that charges width — and the wide arm is **not ahead on both axes**. It
-leads the batches axis on the two real problems; on the points axis it sits
-behind both single chains there at every point count where all three cohorts
-still have data. Neither axis is honest alone, which is why both are here.
+the axis that charges width, and on the two real problems it reverses the wide
+arm's lead: ahead of both single chains at the last batch the three cohorts
+share, behind both at the last point count they share. That reversal is the
+reason the axis is here, and it is not a property the method owns either way —
+on the rotated quadratic the wide arm is not the best arm even on batches. What
+a batch or a point is charged for decides the order, not the method.
+`experiments/RESULTS.md` has the numbers.
 
 Two shapes on the points figures are alignment, not missing data:
 
