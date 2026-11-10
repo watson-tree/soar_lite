@@ -10,7 +10,7 @@ import argparse
 import textwrap
 
 from experiments.harness import appendix, figures, panels, record
-from experiments.harness.panels import GROUPS, TRACELESS, selection
+from experiments.harness.panels import GROUPS, PANELS, selection
 from experiments.harness.record import Roots, refuse_budget_change
 
 
@@ -21,11 +21,7 @@ def _comma_set(text: str) -> frozenset[str] | None:
 
 
 def _refuse_undrawable_groups(groups: list[str]) -> None:
-    """Refuse a ``--groups`` name that no panel draws, before anything runs.
-
-    ``problems.build`` knows one group this does not: ``all``, which is the union
-    a sweep iterates, not a panel anyone can draw.
-    """
+    """Refuse a ``--groups`` name that no panel draws, before anything runs."""
     choices = ", ".join(GROUPS)
     for group in groups:
         if group not in GROUPS:
@@ -42,16 +38,16 @@ def _refuse_empty_selection(
 
     A filter matches by name, so a typo used to finish as a clean exit with no
     arm run at all - the one failure a re-measurement cannot show. The check
-    costs no batches: it reads the panels, never the objective. An unknown group
-    name surfaces here too, from `problems.build`.
+    costs no batches: it reads the panels, never the objective. Names are known
+    to be panels here: `_refuse_undrawable_groups` ran first.
 
-    A group that stores no per-arm traces (`TRACELESS`) selects nothing whatever
-    the filter says, so naming only those is refused on that ground rather than
-    as a mismatch.
+    A group with no roster (`Panel.arms` is None) selects nothing whatever the
+    filter says, so naming only those is refused on that ground rather than as
+    a mismatch.
     """
     if not (problems_filter or arms_filter):
         return
-    chosen = [group for group in groups if group not in TRACELESS]
+    chosen = [group for group in groups if PANELS[group].arms is not None]
     if not chosen:
         msg = (
             f"{'/'.join(groups)} writes no per-arm traces, so --problems and "
@@ -227,7 +223,7 @@ def main(argv: list[str] | None = None) -> Roots:
 
     if args.plot_only:
         for group in groups:
-            if group in TRACELESS:
+            if PANELS[group].arms is None:
                 print(
                     f"{group} writes no trace files: "
                     f"run --groups {group} without --plot-only",
@@ -240,8 +236,6 @@ def main(argv: list[str] | None = None) -> Roots:
     # A trace that holds another budget has to stop the run before the first arm
     # is measured, not on whichever arm happens to sit after a re-measured one.
     for group in groups:
-        if group in TRACELESS:
-            continue
         for prob, arm in selection(group, problems_filter, arms_filter):
             refuse_budget_change(
                 roots,
@@ -252,8 +246,9 @@ def main(argv: list[str] | None = None) -> Roots:
             )
 
     for group in groups:
-        if group == "invariance":
-            appendix.run_invariance(roots, n_seeds, max_batches)
+        panel = PANELS[group]
+        if panel.run is not None:
+            panel.run(roots, n_seeds, max_batches)
             continue
         print(f"[{group}] seeds={n_seeds} max_batches={max_batches}")
         panels.run_panel(

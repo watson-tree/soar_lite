@@ -17,7 +17,7 @@ from experiments.harness import problems, tuning
 from experiments.harness.arms import DEFAULT_MU, soar_arm
 from experiments.harness.figures import plot_cohort
 from experiments.harness.methods import run_adam
-from experiments.harness.panels import LABEL_SERIAL, STYLE_SERIAL
+from experiments.harness.panels import LABEL_SERIAL, STYLE_SERIAL, every_problem
 from experiments.harness.record import HERE, Roots
 
 INVARIANCE_SCALE = 10.0  # the second unit system re-measures x as x' = 10 x
@@ -49,7 +49,7 @@ def run_lr_sweep(roots: Roots, n_seeds: int, max_batches: int) -> None:
     """
     tuning.refuse_other_budget("adam", seeds=n_seeds, max_batches=max_batches)
     lr_grid = tuning.ADAM_GRID
-    probs = problems.build("all")
+    probs = every_problem()
     curves = {
         prob.name: [
             float(

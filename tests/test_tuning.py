@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from experiments.harness import problems, tuning
+from experiments.harness import panels, tuning
 
 
 def _artifact() -> dict[str, Any]:
@@ -29,7 +29,7 @@ def _curves() -> dict[str, dict[str, Any]]:
 
 def _roster() -> set[str]:
     """Every problem the harness builds."""
-    return {p.name for p in problems.build("all")}
+    return {p.name for p in panels.every_problem()}
 
 
 def test_every_problem_has_a_pick() -> None:

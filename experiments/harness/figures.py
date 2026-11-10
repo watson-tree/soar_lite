@@ -17,7 +17,7 @@ from matplotlib.axes import Axes
 
 from experiments.harness import problems
 from experiments.harness.methods import Trace
-from experiments.harness.panels import PANELS
+from experiments.harness.panels import PANELS, Roster
 from experiments.harness.record import HERE, Roots, load_arm
 
 Axis: TypeAlias = Literal["points", "batches"]
@@ -30,7 +30,12 @@ comparisons below still read it at run time, since `--groups` never reaches here
 
 def plot_panel(roots: Roots, panel: str) -> None:
     """Draw a panel from whatever arm files exist; a missing arm is skipped."""
-    probs = problems.build(panel)
+    panel_def = PANELS[panel]
+    arms = panel_def.arms
+    if arms is None:
+        # A panel that measures as it draws leaves no trace to read back.
+        return
+    probs = [build() for build in panel_def.problems]
     out_dir = roots.panel_dir(panel)
     out_dir.mkdir(parents=True, exist_ok=True)
     for axis in ("points", "batches"):
@@ -41,7 +46,7 @@ def plot_panel(roots: Roots, panel: str) -> None:
             squeeze=False,
         )
         for ax, prob in zip(axes[0], probs, strict=True):
-            drawn = _draw_problem(ax, roots, panel, prob, axis)
+            drawn = _draw_problem(ax, roots, arms, prob, axis)
             title = prob.description if drawn else "no trace files yet"
             ax.set_title(f"{prob.name}\n{title}", fontsize=9)
         fig.suptitle(
@@ -57,14 +62,12 @@ def plot_panel(roots: Roots, panel: str) -> None:
 def _draw_problem(
     ax: Axes,
     roots: Roots,
-    panel: str,
+    arms: Roster,
     prob: problems.Problem,
     axis: Axis,
 ) -> bool:
     """Draw one subplot; False when the arm files it needs are all absent."""
-    entries = [
-        (arm, load_arm(roots, prob.name, arm.key)) for arm in PANELS[panel](prob)
-    ]
+    entries = [(arm, load_arm(roots, prob.name, arm.key)) for arm in arms(prob)]
     present = [(arm, loaded) for arm, loaded in entries if loaded is not None]
     missing = [arm.key for arm, loaded in entries if loaded is None]
     if missing:

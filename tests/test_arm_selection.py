@@ -81,12 +81,11 @@ def test_a_legal_filter_selects_exactly_the_pair_it_names() -> None:
     ]
 
 
-@pytest.mark.parametrize("group", ["bogus", "all"])
-def test_an_undrawable_group_is_named_before_anything_runs(group: str) -> None:
-    """`all` is a real problem group, but it is a union to iterate, not a panel."""
-    message = _run("--groups", group)
+def test_an_unknown_group_is_named_before_anything_runs() -> None:
+    """A misspelled panel name is answered with the names that exist."""
+    message = _run("--groups", "bogus")
 
-    assert f"no group {group!r}" in message
+    assert "no group 'bogus'" in message
     assert "headline" in message
 
 

@@ -1,13 +1,17 @@
-"""Panels: rosters over arms, and the run that fills one.
+"""Panels: one table of names, and the run that fills one.
 
 A panel is a *roster over the record*, so re-measuring one arm rewrites exactly
-one file and every panel listing that arm picks the new numbers up. `selection`
-flattens a group name into the pairs it measures; `run_panel` measures exactly
-those pairs and writes one trace file each.
+one file and every panel listing that arm picks the new numbers up. Everything a
+name on the command line means is in `PANELS`: the problems it measures, the
+arms it measures them with, and - for the panel that compares as it draws and so
+stores no per-arm trace - the run that does it. `selection` flattens a name into
+the pairs it measures; `run_panel` measures exactly those pairs and writes one
+trace file each.
 """
 
 from collections.abc import Callable
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, TypeAlias
 
 import numpy as np
 
@@ -26,6 +30,26 @@ LABEL_MOMENTUM_09 = "soar-lite n_paths=1, mu=0.9 (Adam's window)"
 STYLE_SERIAL: dict[str, Any] = {"color": "C0", "lw": 2.0}
 STYLE_PARALLEL: dict[str, Any] = {"color": "C0", "lw": 2.0, "ls": "--"}
 STYLE_MOMENTUM_09: dict[str, Any] = {"color": "C1", "lw": 1.5}
+
+Build: TypeAlias = Callable[[], problems.Problem]
+Roster: TypeAlias = Callable[[problems.Problem], list[Arm]]
+Measure: TypeAlias = Callable[[Roots, int, int], None]
+
+
+@dataclass(frozen=True)
+class Panel:
+    """One name on the command line: its problems, and how they are measured.
+
+    `arms` and `run` are the two ways a panel measures, and a name carries one
+    of them. A roster panel has `arms` and stores one trace per pair; a panel
+    that compares two problems as it draws builds its own, so `problems` stays
+    empty and `run` is what measures it. A panel with no `arms` selects
+    nothing.
+    """
+
+    problems: tuple[Build, ...] = ()
+    arms: Roster | None = None
+    run: Measure | None = None
 
 
 def soar_ladder() -> list[Arm]:
@@ -74,16 +98,45 @@ def _drift_arms(prob: problems.Problem) -> list[Arm]:
     return [*soar_ladder(), adam_arm(prob)]
 
 
-PANELS: dict[str, Callable[[problems.Problem], list[Arm]]] = {
-    "headline": _preconditioning_arms,
-    "smooth": _preconditioning_arms,
-    "multimodal": _drift_arms,
-}
+def _appendix_invariance(roots: Roots, n_seeds: int, max_batches: int) -> None:
+    """Measure the unit-rescaling panel.
 
-# A panel that is not a roster over arms: it compares two problems, so it has no
-# (problem, arm) pairs to store and `main` runs it directly.
-TRACELESS: frozenset[str] = frozenset({"invariance"})
-GROUPS: tuple[str, ...] = (*PANELS, *sorted(TRACELESS))
+    Resolved at call time because `appendix` imports this module for the
+    ladder's labels, so the two modules can only meet in one direction at
+    import time.
+    """
+    from experiments.harness import appendix  # noqa: PLC0415 - the cycle, above
+
+    appendix.run_invariance(roots, n_seeds, max_batches)
+
+
+PANELS: dict[str, Panel] = {
+    "headline": Panel(
+        problems=(problems.oscillator_chain, problems.pk_chain),
+        arms=_preconditioning_arms,
+    ),
+    "smooth": Panel(
+        problems=(problems.diag_quadratic, problems.rotated_quadratic),
+        arms=_preconditioning_arms,
+    ),
+    "multimodal": Panel(problems=(problems.rastrigin,), arms=_drift_arms),
+    "invariance": Panel(run=_appendix_invariance),
+}
+GROUPS: tuple[str, ...] = tuple(PANELS)
+
+
+def every_problem() -> list[problems.Problem]:
+    """Every problem any panel measures, one per name, in panel order.
+
+    What the lr sweep runs over. No panel draws the whole set, and the sweep
+    needs it without a panel that would exist only to hold it.
+    """
+    built: dict[str, problems.Problem] = {}
+    for panel in PANELS.values():
+        for build in panel.problems:
+            prob = build()
+            built.setdefault(prob.name, prob)
+    return list(built.values())
 
 
 def run_panel(  # noqa: PLR0913 - roots, panel, budget and two filters
@@ -132,9 +185,12 @@ def selection(
     A filter matches by name and nothing more: a name the panel does not carry
     selects nothing here rather than raising, so the caller compares the result
     with the filters it passed and can refuse the run when it comes back empty.
+    Neither does a panel with no roster select anything - it stores no pairs.
     """
-    arms = PANELS[panel]
-    probs = problems.build(panel)
+    arms = PANELS[panel].arms
+    if arms is None:
+        return []
+    probs = [build() for build in PANELS[panel].problems]
     return [
         (prob, arm)
         for prob in probs

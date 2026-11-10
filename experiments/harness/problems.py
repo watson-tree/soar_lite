@@ -387,26 +387,3 @@ def pk_chain(
         ),
         x_star=theta_star,
     )
-
-
-def build(group: str) -> list[Problem]:
-    """Return the problems of one design group.
-
-    group: "smooth" (preconditioning), "multimodal" (descent rate), "headline"
-    (the two real inverse problems: mixed units and a non-convex response), or
-    "all" (the union of the three, one entry per problem).
-    """
-    groups = {
-        "headline": lambda: [oscillator_chain(), pk_chain()],
-        "smooth": lambda: [diag_quadratic(), rotated_quadratic()],
-        "multimodal": lambda: [rastrigin()],
-    }
-    if group == "all":
-        return [p for g in groups.values() for p in g()]
-    if group not in groups:
-        # The name arrives from `--groups`, which is argv and therefore a plain
-        # string: a typo has to be named here rather than surface as a KeyError.
-        choices = ", ".join(["all", *groups])
-        msg = f"unknown problem group {group!r}; pick one of {choices}"
-        raise SystemExit(msg)
-    return groups[group]()
