@@ -140,6 +140,9 @@ def plot_cohort(  # noqa: PLR0913 - one parameter per fact the call site decides
             passes the cut it shares across arms instead, so every curve on a
             subplot is sampled at the same positions.
 
+    The median is taken over the whole cohort, so the curve ends at the earliest
+    seed's stop rather than at the arm's last one: see the mask below.
+
     """
     if xmax is None:
         live = [t for t in traces if len(t.points) > 0]
@@ -160,7 +163,16 @@ def plot_cohort(  # noqa: PLR0913 - one parameter per fact the call site decides
         if len(t.points) > 0
     ]
     grid = np.unique(np.append(grid, [s for s in stops if s <= xmax]))
-    med, q1, q3 = _summary(_resample(traces, grid, axis))
+    resampled = _resample(traces, grid, axis)
+    # Draw a column only where every seed of the cohort is still running. A seed
+    # that stops leaves the sample, and a median over a shrinking sample can step
+    # up (the seeds that stall first are often the good ones) while no seed's own
+    # best-so-far ever rises - a tilted tail that is an artefact of who is left,
+    # not a result. The cost is a curve that stops at the cohort's first stop; the
+    # axis still runs to the panel's budget, so the arm is visible next to the
+    # ones that spent it.
+    complete = ~np.isnan(resampled).any(axis=0)
+    med, q1, q3 = _summary(np.where(complete, resampled, np.nan))
     ax.plot(grid, np.maximum(med, 1e-16), label=label, **style)
     ax.fill_between(
         grid,
@@ -177,7 +189,9 @@ def _resample(traces: list[Trace], grid: np.ndarray, axis: Axis) -> np.ndarray:
 
     Returns a ``(n_seeds, len(grid))`` array with NaN where a seed has no data
     (before its first batch and after it stops). Callers aggregate over the
-    seed axis so each aggregation (median, quartiles) lives in one place.
+    seed axis so each aggregation (median, quartiles) lives in one place, and
+    drop a column where any seed is empty - a median over whoever is left is a
+    different statistic, not the same one sampled further out.
 
     ``grid`` is the shared x-point set: each seed's step curve lives on its own
     x coordinates (different stop points, and n_paths shifts the batch axis), so

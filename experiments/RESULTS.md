@@ -28,7 +28,192 @@ Two entries (v2 and v3) also record wall clock. That is a property of the
 machine that ran them, not an expectation: no comparison here is made on time,
 and a re-run should reproduce the medians, not the hours.
 
-## 2026-11-08 — lineup v6 (`restart_stalled` off, restart-model panel retired) — CURRENT, NOT YET MEASURED
+## 2026-11-11 — figure rule: the median is taken over the whole cohort
+
+No trace was re-measured; every number in this file stands. What changed is how
+far each curve is drawn.
+
+**The tilt.** A seed's own best-so-far never rises - checked over all 480 traces,
+zero rising steps. The curve did: `_resample` leaves a seed's column empty after
+its run stops, and `nanmedian` took the median over whoever was left. So a seed
+that stopped early *left the sample*, and when the seeds that stall first are
+also the good ones, the median over the survivors steps up. On this measurement
+that is exactly the case: `pk_chain`'s serial arm stops on 7 of 20 seeds between
+batches 367 and 527, and those seeds end at 1.05e-7 and 5.01e-7 where the
+full-budget seeds end at 1.30e-3. Twenty of the 48 drawn curves carried a rising
+tail - both axes of 10 arms - worst 2.54x on `pk_chain`'s L-BFGS-B at batch 434,
+1.32x on that soar arm at batch 373, 1.30x on the diagonal quadratic's L-BFGS-B,
+1.17x on the oscillator's `mu=0.9` at batch 2649, and 1.01x-1.05x on rastrigin.
+
+**The rule.** A column is drawn only where every seed of the cohort is still
+running, so each curve now ends at its cohort's first stop and the band is the
+same twenty seeds throughout. Re-drawn, all 48 curves are monotone
+non-increasing. The price is the tail itself, and it is where the runs had
+already gone flat: `pk_chain` serial stops drawing at batch 367 (its median moves
+2.2e-5 to 2.13e-5 over the rest), `mu=0.9` at 760, the oscillator's `mu=0.9` at
+1973, rastrigin at 54 / 69 / 253, the diagonal quadratic at 3 / 264 (458 for
+L-BFGS-B), `pk_chain`'s L-BFGS-B at 76 and the oscillator's at 124. The rotated
+quadratic serves its whole budget on every arm and is untouched, as is every
+curve on a panel whose seeds all stop together or not at all.
+
+**What did not change.** The axis still runs to the panel's budget (`_cut`), so a
+short curve is visible next to the arms that spent theirs, and this file's final
+values stay the median of each seed's own endpoint - a different and stronger
+quantity than any common-batch median, which is why the tables never carried
+this artefact.
+
+Covered by `experiments/tests/test_figure_cut.py`, whose
+`test_the_median_is_taken_over_the_whole_cohort` pins it: a cohort of three
+seeds whose good one stops first draws to that stop and never rises.
+
+## 2026-11-11 — lineup v6, measured — CURRENT
+
+Budget 20 seeds x 3000 batches, panels `headline,smooth,multimodal,invariance`,
+at the code of this commit, on CPU. The 2026-11-08 entry below says what the
+lineup is; this one holds what it measured. Every file is new: a v5 key reads
+`...-mu0.63-restart-on`, a v6 key `...-mu0-restart-off`, so nothing below was
+carried over from an earlier entry.
+
+Wall clock ~56 min for the three roster panels plus the invariance re-run — this
+machine and this roster, which no longer carries the BLR panel; not an
+expectation.
+
+### The two headline problems
+
+| arm | median | Q1 | Q3 | worst seed | stopped early (seeds / at batches) |
+| --- | --- | --- | --- | --- | --- |
+| soar `n_paths=16`, mu=0 | 3.13e-7 | 5.56e-8 | 8.92e-7 | 2.44e-6 | all 3000 |
+| soar `n_paths=1`, mu=0.9 | 1.61e-5 | 4.04e-6 | 6.83e-5 | 5.36e-3 | 3/20 at 1973–2649 |
+| soar `n_paths=1`, mu=0 | 3.12e-5 | 8.61e-6 | 1.95e-4 | 1.49e-3 | all 3000 |
+| Adam `lr=2` | 7.52e-5 | 2.09e-5 | 7.06e-4 | 1.03e-2 | all 3000 |
+| L-BFGS-B | 7.32e-3 | 1.24e-3 | 2.34e-2 | 7.00e-2 | 20/20 at 124–1088 |
+
+`oscillator_n20_F20`, `headline`.
+
+| arm | median | Q1 | Q3 | worst seed | stopped early (seeds / at batches) |
+| --- | --- | --- | --- | --- | --- |
+| soar `n_paths=16`, mu=0 | 3.56e-7 | 2.31e-7 | 4.81e-7 | 1.58e-6 | all 3000 |
+| soar `n_paths=1`, mu=0 | 2.13e-5 | 3.79e-6 | 7.22e-5 | 1.30e-3 | 7/20 at 367–527 |
+| Adam `lr=0.1` | 2.51e-4 | 1.10e-4 | 7.34e-4 | 2.28e-3 | all 3000 |
+| soar `n_paths=1`, mu=0.9 | 3.14e-4 | 3.45e-5 | 3.48e-4 | 2.13 | 3/20 at 760–978 |
+| L-BFGS-B | 5.06e-3 | 3.46e-5 | 5.74e-1 | 6.17 | 20/20 at 76–1193 |
+
+`pk_chain_n21_d61`, `headline`.
+
+Median best-so-far along the budget (batches 100 / 300 / 1000 / 3000):
+
+| problem | arm | 100 | 300 | 1000 | 3000 |
+| --- | --- | --- | --- | --- | --- |
+| oscillator | soar `n_paths=16` | 3.67e-4 | 1.95e-5 | 7.55e-7 | 3.13e-7 |
+| oscillator | soar `n_paths=1`, mu=0 | 7.66e-3 | 7.97e-4 | 6.21e-5 | 3.12e-5 |
+| oscillator | Adam `lr=2` | 4.01e-2 | 1.84e-2 | 1.04e-3 | 7.52e-5 |
+| pk_chain | soar `n_paths=16` | 2.12e-4 | 5.65e-7 | 3.56e-7 | 3.56e-7 |
+| pk_chain | soar `n_paths=1`, mu=0 | 5.46e-3 | 2.18e-5 | 2.15e-5 | 2.13e-5 |
+| pk_chain | Adam `lr=0.1` | 2.47 | 9.02e-1 | 2.30e-2 | 2.51e-4 |
+
+### The smooth panel
+
+| arm | median | Q1 | Q3 | worst seed | stopped early (seeds / at batches) |
+| --- | --- | --- | --- | --- | --- |
+| Adam `lr=0.1` | 1.05e-51 | 1.34e-52 | 2.41e-51 | 5.30e-51 | all 3000 |
+| soar `n_paths=16`, mu=0 | 2.24e-28 | 1.80e-28 | 2.53e-28 | 3.36e-28 | 20/20 at 3 |
+| soar `n_paths=1`, mu=0 | 4.36e-28 | 3.29e-28 | 5.75e-28 | 9.75e-28 | 20/20 at 3 |
+| soar `n_paths=1`, mu=0.9 | 1.51e-8 | 1.23e-8 | 1.94e-8 | 2.43e-8 | 20/20 at 264–273 |
+| L-BFGS-B | 9.41e-8 | 7.57e-8 | 1.11e-7 | 3.86e-7 | 20/20 at 458–508 |
+
+`diag_quad_d100_cond10000`, `smooth`.
+
+| arm | median | Q1 | Q3 | worst seed | stopped early (seeds / at batches) |
+| --- | --- | --- | --- | --- | --- |
+| L-BFGS-B | 1.38e-4 | 9.49e-5 | 1.92e-4 | 6.00e-4 | all 3000 |
+| Adam `lr=2` | 4.99e-1 | 1.87e-1 | 1.24 | 4.44 | all 3000 |
+| soar `n_paths=1`, mu=0.9 | 25.1 | 21.3 | 29.9 | 36.5 | all 3000 |
+| soar `n_paths=16`, mu=0 | 50.2 | 47.7 | 56.9 | 67.3 | all 3000 |
+| soar `n_paths=1`, mu=0 | 90.3 | 67.6 | 110.7 | 151.2 | all 3000 |
+
+`rot_quad_d100_cond1e+06`, `smooth`.
+
+### The multimodal panel
+
+| arm | median | Q1 | Q3 | worst seed | stopped early (seeds / at batches) |
+| --- | --- | --- | --- | --- | --- |
+| soar `n_paths=16`, mu=0 | 745.2 | 706.9 | 784.8 | 839.7 | 20/20 at 69–89 |
+| Adam `lr=0.5` | 807.9 | 748.0 | 838.7 | 937.2 | all 3000 |
+| soar `n_paths=1`, mu=0 | 896.0 | 857.9 | 955.7 | 1060.0 | 20/20 at 54–81 |
+| soar `n_paths=1`, mu=0.9 | 1849.0 | 1815.0 | 1932.0 | 2021.0 | 20/20 at 253–259 |
+
+`rastrigin_d100`, `multimodal`, against `f* = 0`.
+
+### Annotations
+
+**The stop rule is visible in every trace, and it settles v6's open question the
+other way.** With `restart_stalled` off a fully stalled flock ends the run, so
+`stopped early` is where the knob costs budget: every seed of the diagonal
+quadratic (batch 3) and of rastrigin (batches 54–259), seven of the compartment
+chain's twenty serial seeds (from batch 367) and three of the oscillator's
+twenty `mu=0.9` seeds, and never the rotated quadratic or any Adam run. v6 left
+`pk_chain` unchecked on this point; it is checked now, and a stall does fire
+there. The seeds it takes are the *good* ones - they end at 1.05e-7, 5.01e-7
+- where the seeds that spend the whole budget end at 1.30e-3 - so symmetric
+stopping costs those seeds the rest of their run even though it leaves the arm's
+median where it is.
+
+**v6's rastrigin expectation does not hold.** That entry predicts a stall at
+~batch 700; measured, it fires on all 20 seeds between 54 and 81 (serial), 69
+and 89 (wide) and 253 and 259 (`mu=0.9`), two orders of magnitude earlier. The
+diagonal quadratic's first-batches stop is as v6 describes, and the rotated
+quadratic is the one measured problem where nothing stalls.
+
+**The multimodal ordering is set inside the first hundred batches.** The
+starting median is 1849 (1680 for the wide arm, whose sixteen starts include a
+better one). Adam is at 970 by batch 10, 827 by 30, 809 by 60 and 807.9 from
+batch 100 to 3000; the wide arm falls 865.6 -> 745.2 between batches 30 and 60
+and is flat afterwards; the serial arm reaches 896 by batch 60 and stops there.
+So the panel's spread is a *level* set early, not a rate sustained along the
+budget, and half of it is a stopping rule: Adam spends 2900 flat batches after
+its best is in, because it has no convergence test here.
+
+**`mu=0.9` never improves on the starting point on rastrigin.** On all 20 seeds
+the final value equals that seed's own start, exactly, after 254 batches of
+work: median final 1849.0 is the median start, Q1 1815, Q3 1932. On the same
+panel the wide arm's best-of-16 start is why it leads (745.2), and its 74
+batches buy it 745.2 against the serial arm's 896.0, not a longer descent.
+
+**The momentum trade carries both signs, on every panel that can read it.**
+Against the default `mu=0` at `n_paths=1`, the 0.9 arm is better on the
+oscillator (1.61e-5 vs 3.12e-5) and on the rotated quadratic (25.1 vs 90.3, 3.6x,
+the coupling it buys back), worse on the compartment chain (3.14e-4 vs 2.13e-5,
+15x) and worse on rastrigin. This is the same sign pattern the v3/v4 entries
+recorded at `mu=0.63`; what the v6 lineup adds is the default arm, so the trade
+is now read against momentum off rather than against another momentum level.
+
+**On the headline panel the gap is a rate gap, and Adam is still falling when
+the budget ends.** The serial arm ends 2.4x under Adam on the oscillator
+(3.12e-5 vs 7.52e-5) and 12x under it on the compartment chain (2.13e-5 vs
+2.51e-4); the wide arm ends 240x and 706x under Adam (3.13e-7, 3.56e-7), and
+100x / 60x under the serial arm. Adam is still descending steeply on the
+compartment chain at the end (2.30e-2 at batch 1000 -> 2.51e-4 at 3000), so this
+is a budget-limited rate gap, not a floor Adam cannot reach. The wide arm's
+headline curves are flat from batch 1000 on.
+
+**The diagonal quadratic is the panel where equal batches favour the baseline.**
+Soar-lite stops at batch 3 holding 4.36e-28 (serial) and 2.24e-28 (wide), while
+Adam spends all 3000 and ends at 1.05e-51 — and is at 1.90e-10 by batch 300 and
+2.73e-42 by batch 1000, so it crosses the chain's final value somewhere between
+the two, against three batches. That is the stopping rule and the figure's
+floor, not the algorithm: the curves are flat from batch 3 (soar) and 475
+(L-BFGS-B) and the only arm still moving at 3000 is Adam.
+
+**L-BFGS-B keeps its two roles.** It is the smooth panel's ceiling on both
+problems (1.38e-4 on the rotated quadratic, 9.41e-8 on the diagonal, best in
+each column) and it is not a ceiling on either real problem: it is the worst arm
+on the oscillator (7.32e-3, 9 of 20 seeds above 1e-2) and bimodal on the
+compartment chain (Q1 3.46e-5, better than Adam's median; median 5.06e-3; Q3
+0.574; 9 of 20 seeds above 1e-2, worst 6.17). The v4 reading — a full-memory
+serial line search with no per-coordinate scaling lands in a bad basin about
+half the time — reproduces on the same problem.
+
+## 2026-11-08 — lineup v6 (`restart_stalled` off, restart-model panel retired) — CURRENT, measured in the 2026-11-11 entry
 
 Two changes to what the harness runs. Nothing has been re-measured against
 either.
@@ -72,7 +257,13 @@ where the plunge landed, never beaten afterwards. `problems.ackley` is gone,
 `--groups multimodal` returns one problem, and the ackley readings below stay
 as the record of a retired problem. The reasoning is in `DEPRECATED.md`.
 
-## 2026-11-07 — lineup v5 (`mu` default back to 0) — SUPERSEDED by the v6 entry, which no run has measured yet
+**Note added 2026-11-11:** both changes have now been measured, and the numbers
+are in the entry above. Two statements here do not survive that run: the
+rastrigin stall fires at median batch 61 / 74 / 254, not at ~batch 700, and the
+`pk_chain` point is settled — its chains serve the whole 3000 batches, so the
+restart never fired there either.
+
+## 2026-11-07 — lineup v5 (`mu` default back to 0) — SUPERSEDED by the v6 entry
 
 `DiagonalPreconditioner`'s default `mu` moved from 0.63 back to 0. Every arm
 that takes the default re-keys with it (`...-mu0.63-...` → `...-mu0-...`), and
@@ -214,6 +405,12 @@ but the diagonal quadratic and rastrigin. Two consequences, both in the figure
 only: an early arm's last step is now sampled into the shared grid (without it
 the step that carried the run's answer was the one never drawn), and the cut it
 dictated is gone. No trace was re-measured and no number above changes.
+
+**Annotation, 2026-11-11 - the median is taken over the whole cohort.** The rule
+above decides where a curve *stops*; it left the median averaging whoever was
+still running, which let a curve tilt up as seeds stopped. A column is now drawn
+only where every seed of the cohort is alive, so each curve ends at its first
+stop. See the 2026-11-11 figure entry. Figure only: no number above changes.
 
 ## 2026-11-04 — lineup v3 supplement: the `mu=0.9` momentum arm
 

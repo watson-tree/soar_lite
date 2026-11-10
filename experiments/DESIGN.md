@@ -54,10 +54,14 @@ Every arm runs with `restart_stalled` **off**. A restart would hand soar-lite an
 advantage the baselines do not have: Adam and L-BFGS-B stop on their own
 criterion, while a stalled soar path that keeps re-drawing keeps spending
 budget. Off, a converged chain also just stops, so stopping is symmetric. A
-probe showed stalls fire only where a method converges into a basin — the
-diagonal quadratic (~step 4) and rastrigin (~batch 700) — never on the rotated
-quadratic or the oscillator, and on rastrigin a uniform re-draw
-provably never improves the best, so nothing is lost by turning it off. The
+probe showed a stall is where a method converges into a basin: it fires on every
+seed of the diagonal quadratic, in its first batches, and of rastrigin, within
+the first few hundred; on a minority of seeds on the compartment chain and the
+oscillator, late; and never on the rotated quadratic. On rastrigin a uniform
+re-draw provably never improves the best, so nothing is lost there, but on the
+two real problems a premature stop does cost the seeds it takes the rest of
+their run - that is the price of symmetric stopping, and it lands in the spread
+rather than in the ordering. The
 engine keeps the restart capability, and the harness keeps its public `model=`
 factory (`BLRGlobalModel`), for a future problem where a fitted restart pays;
 no panel arms it as a step.
@@ -300,7 +304,10 @@ contract in full.
     come from the batches column in `RESULTS.md`.
 - Seeds `N=20`; report **median, shaded [Q1, Q3]** (interquartile band), log-y,
   log x — mean ± std would model a skewed best-so-far spread as symmetric and
-  dip below the log axis.
+  dip below the log axis. The median is taken over the whole cohort, so a curve
+  ends at its first seed's stop: averaging whoever is still running would swap
+  the sample mid-curve and tilt the tail up when the seeds that stall first are
+  the good ones.
 - Outputs are split by kind. `experiments/results/` holds traces only, one file
   per **(problem, arm)**: `results/<problem>/<arm-key>.json` with that arm's raw
   per-seed trace (points, batches, best-so-far, final value).

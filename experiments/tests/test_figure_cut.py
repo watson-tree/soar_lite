@@ -81,6 +81,51 @@ def test_the_converged_arm_keeps_its_whole_trace() -> None:
     assert kept.best == [1.0, 1.0, 1.0]
 
 
+def test_the_median_is_taken_over_the_whole_cohort() -> None:
+    """A seed that stops early leaves the sample; the curve ends with it.
+
+    Here the seed that stops at batch 10 is also the good one, so a median over
+    whoever is still running would step up 3x after it leaves - while no seed's
+    own best-so-far ever rises.
+    """
+    good = Trace(
+        points=list(range(1, 11)),
+        batches=list(range(1, 11)),
+        best=[100.0 - 9.9 * i for i in range(10)],
+        fun=1.0,
+    )
+    slow = Trace(
+        points=list(range(1, 101)),
+        batches=list(range(1, 101)),
+        best=[100.0 - 0.9 * i for i in range(100)],
+        fun=10.0,
+    )
+    slower = Trace(
+        points=list(range(1, 101)),
+        batches=list(range(1, 101)),
+        best=[100.0 - 0.5 * i for i in range(100)],
+        fun=50.0,
+    )
+    fig, ax = plt.subplots()
+    try:
+        plot_cohort(
+            ax,
+            [good, slow, slower],
+            "batches",
+            label="three seeds",
+            style={"color": "C0"},
+            xmax=BUDGET,
+        )
+        drawn = np.asarray(ax.get_lines()[0].get_xydata(), dtype=float)
+        x, y = drawn[:, 0], drawn[:, 1]
+    finally:
+        plt.close(fig)
+
+    drawn_x, drawn_y = x[np.isfinite(y)], y[np.isfinite(y)]
+    assert drawn_x[-1] == pytest.approx(10.0)  # the cohort's first stop, not budget
+    assert np.all(np.diff(drawn_y) <= 0)  # no tilt from a shrinking sample
+
+
 def test_the_step_a_run_stopped_on_is_drawn() -> None:
     """The last step is an early run's answer, so the shared grid must sample it."""
     converged = Trace(

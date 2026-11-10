@@ -148,7 +148,8 @@ figure is always re-derivable and a trace never is. The unit is one
   run that must not touch the record.
 - Every curve plots the **median** best-so-far with the **[Q1, Q3] interquartile
   band** (not mean ± std — a skewed spread would read as symmetric and dip
-  below the log axis).
+  below the log axis), and only while every seed of that cohort is still
+  running, so a curve ends at its first seed's stop.
 
 The arm key is the file name and spells out the arm's whole configuration
 (`soar-sample-np1-mu0-restart-off`, `adam-lr0.1`, `lbfgs`), so a changed
