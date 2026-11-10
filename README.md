@@ -117,11 +117,17 @@ dropped off-diagonal curvature is the boundary the global side exists to cross.
 
 [![Rastrigin in 100 dimensions](docs/figures/multimodal-batches.png)](docs/figures/multimodal-batches.png)
 
-**A multimodal landscape** - Rastrigin in 100 dimensions, read as a level rather
-than a rate - on the batches axis. 20 seeds x 3000 batches. The ordering is set
-early and every arm parks. The `mu=0.9` arm never improves on its own start, on
-any seed - and the trace records best-so-far alone, so what the path did between
-its evaluations is not something this record says.
+**A multimodal landscape, read as a boundary** - Rastrigin in 100 dimensions, on
+the batches axis. 20 seeds x 3000 batches. It is not a race but a boundary: this
+is where the diagonal preconditioner's limit shows. The secant damps where the
+gradient reverses sign, so the local solver settles in the nearest well and has
+no mechanism for crossing a ridge into a better one; multimodal reach is the
+global layer's job - more paths and restarts do the exploring - not the local
+solver's. Read that way, the ordering is set early and every arm parks: the
+`mu=0.9` arm never improves on its own start, on any seed, and the wider arm's
+lead is its sixteen starts rather than a faster descent. The trace records
+best-so-far alone, so what the path did between its evaluations is not something
+this record says.
 
 [![One physics measured in two unit systems, with no retuning](docs/figures/invariance-units.png)](docs/figures/invariance-units.png)
 

@@ -24,8 +24,8 @@ stops describing the run it names.
 | `headline-points.png` | `headline` | points | 20 seeds x 3000 |
 | `smooth-batches.png` | `smooth` — diagonal quadratic, rotated quadratic | batches | 20 seeds x 3000 |
 | `smooth-points.png` | `smooth` | points | 20 seeds x 3000 |
-| `multimodal-batches.png` | `multimodal` — Rastrigin | batches | 20 seeds x 3000 |
-| `multimodal-points.png` | `multimodal` | points | 20 seeds x 3000 |
+| `multimodal-batches.png` | `multimodal` — Rastrigin, a boundary panel | batches | 20 seeds x 3000 |
+| `multimodal-points.png` | `multimodal` — Rastrigin, a boundary panel | points | 20 seeds x 3000 |
 | `invariance-units.png` | `invariance` — rotated quadratic, one physics in two unit systems | — | 20 seeds x 3000 |
 | `lr-sweep.png` | Adam learning-rate grid | — | 2 seeds x 3000 per point |
 
