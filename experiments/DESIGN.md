@@ -347,12 +347,6 @@ union a sweep iterates.
    quadratic (soar-lite n_paths=1 vs Adam) before running everything.
 6. `experiments/README.md` — run instructions, written alongside the code.
 
-## Open TODOs (release hygiene, outside this experiment)
-
-- Fill LICENSE copyright holder; pyproject `authors` + `[project.urls]`.
-- Switch notebook install source git → PyPI; add Open-in-Colab badge after
-  publication.
-
 ## Risks and known limitations
 
 - **The headline is not the funnel.** The headline problems' "multimodality" is
