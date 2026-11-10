@@ -5,8 +5,9 @@ repo_url: https://github.com/watson-tree/soar_lite
 repo_name: watson-tree/soar_lite
 docs_dir: docs
 
-# `docs/figures/README.md` is written for the GitHub file view and links out of
-# `docs_dir` to `experiments/`; it is not a site page.
+# `docs/figures/README.md` is maintenance notes for the copies the root README
+# shows; it is not a page a reader of these docs needs, so it is not in the nav.
+# It cites `experiments/` by path only, so nothing here points out of `docs_dir`.
 exclude_docs: |
   figures/README.md
 

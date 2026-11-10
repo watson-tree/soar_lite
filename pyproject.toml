@@ -62,9 +62,11 @@ docs = ["mkdocs", "mkdocstrings[python]"]
 exp = ["matplotlib", "optax", "scipy"]
 
 [tool.pytest.ini_options]
-# Tests live in tests/; without this a future test_ file in experiments/ or
-# docs/ would be collected too.
-testpaths = ["tests"]
+# The library's self-checks live in tests/, the harness's in experiments/tests/.
+# The harness is a sub-library with its own record, so its tests travel with it;
+# listing both keeps one command as the gate, and keeps a future test_ file in
+# docs/ out of it.
+testpaths = ["tests", "experiments/tests"]
 
 [tool.ruff]
 target-version = "py311"
@@ -82,6 +84,8 @@ ignore = [
 # print is the experiment scripts' output and the __main__ fallback, not library code
 "experiments/**" = ["T201"]
 "tests/**" = ["S101", "T201"]
+# the harness's self-checks are still tests: plain asserts, and their own output
+"experiments/tests/**" = ["S101", "T201"]
 # the docs build hook is not part of the distribution; no package boundary to hang it on
 "docs/**" = ["INP001"]
 # notebook cells are glue a reader runs, not library code: they print their own

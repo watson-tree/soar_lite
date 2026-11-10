@@ -132,9 +132,15 @@ seeds x 3000 batches.
 
 The panels not shown here (`smooth`, `multimodal`, the Adam lr sweep), the
 medians behind every curve and the caveats that qualify them are in
-[`experiments/RESULTS.md`](experiments/RESULTS.md); what the comparison measures
-is in [`experiments/DESIGN.md`](experiments/DESIGN.md). The commands that redraw
-these two panels are in [`docs/figures/README.md`](docs/figures/README.md).
+`experiments/RESULTS.md`; what the comparison measures is in
+`experiments/DESIGN.md`. The commands that redraw these two panels are in
+[`docs/figures/README.md`](docs/figures/README.md).
+
+Those files are named by path rather than linked because the harness under
+`experiments/` is a benchmark sub-library, not a dependency: it imports
+soar-lite and cites this documentation, nothing in the package or these docs
+depends on it, and it ships in neither the wheel nor the sdist. The figures
+above are curated copies, so reading a result does not need the harness.
 
 To run any panel yourself, open
 [`notebooks/run_panels.ipynb`](notebooks/run_panels.ipynb) (what the Colab badge

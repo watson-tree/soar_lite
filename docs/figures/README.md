@@ -2,9 +2,10 @@
 
 Curated copies, not build output. `experiments/figures/` is where a run writes
 its panels and is gitignored, so a file lands here only when someone picks it.
-The record behind each one — budget, lineup, medians — is
-[`experiments/RESULTS.md`](../../experiments/RESULTS.md); this page only says
-which command redraws it.
+The record behind each one — budget, lineup, medians — is in
+`experiments/RESULTS.md`, named by path rather than linked: the harness is a
+sub-library outside this site, and no page here points into it. This page only
+says which command redraws each one.
 
 | file | panel | budget |
 | --- | --- | --- |

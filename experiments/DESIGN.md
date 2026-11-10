@@ -8,7 +8,8 @@ sweep. This document is the lossless handoff: read it before touching
 This document is a **current-state** document, not a record: it describes the
 harness as it stands, so a passage that stops being true is rewritten rather
 than appended to. A direction that was explored and dropped goes to
-`../DEPRECATED.md`, which is where the record lives - including the shapes this
+`../DEPRECATED.md`; an experiment that is no longer run goes to `DEPRECATED.md`
+next to this file. Between them the record lives - including the shapes this
 file no longer describes.
 
 This document states no measured numbers. Every figure and table an experiment
@@ -124,7 +125,7 @@ panel.
    oscillation keeps turning the gradient: the panel reads the descent rate
    there, not where a chain stops. One problem, not a sample of two — Ackley
    was retired from this group because no arm on it ever took a step (see
-   `../DEPRECATED.md`).
+   `DEPRECATED.md`).
 
 Two appendix panels, property demos rather than races:
 
@@ -181,7 +182,7 @@ asserted up front.
 
 A third side used to close that line: gradient-free multimodal relief (Ackley),
 where the gradient says nothing about where to move next. It is no longer a
-panel — it discriminated nothing (see Risks, and `../DEPRECATED.md` for the
+panel — it discriminated nothing (see Risks, and `DEPRECATED.md` for the
 readings). The conclusion it demonstrated is stated here rather than drawn: from
 a regular start, no first-order method reaches the funnel.
 
@@ -371,7 +372,7 @@ union a sweep iterates.
   that regime and the engine keeps a restart knob for it, so the extra
   complexity would buy nothing. That blind spot was demonstrated on Ackley,
   where every arm froze at its starting plateau — which is why it is retired
-  (`../DEPRECATED.md`); rastrigin is the multimodal problem that remains, and
+  (`DEPRECATED.md`); rastrigin is the multimodal problem that remains, and
   `RESULTS.md` holds its numbers.
 
 The banded-coupling question — whether the diagonal approximation's

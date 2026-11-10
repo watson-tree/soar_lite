@@ -8,9 +8,25 @@ thin shell over the harness in `harness/`: `record` (the per-arm files), `arms`
 draw) and `cli` (flags and the run). Three more sit under those: `methods` (the
 drivers that spend the budget), `problems` (the benchmark set) and `tuning` (the
 recorded Adam picks). Nothing outside `harness/` measures anything.
-That is the whole directory: code in `harness/`, and beside it the three
-documents plus the two output trees `results/` and `figures/`.
-This file is the run-book; `RESULTS.md` is the ledger of what past runs measured.
+
+That is the whole directory: code in `harness/`, its self-checks in `tests/`,
+and beside them the four documents plus the two output trees `results/` and
+`figures/`. This file is the run-book; `RESULTS.md` is the ledger of what past
+runs measured, and `DEPRECATED.md` is the record of the experiments retired
+from it.
+
+## Where this sits
+
+A benchmark sub-library, not a dependency. It imports `soar_lite` and cites
+`docs/explanation/how-it-works.md`; nothing in `soar_lite/`, `docs/` or the root
+`README.md` links back in, and neither the wheel nor the sdist ships this
+directory. Its one entry point is `compare_baselines.py`; its record stays in
+the files next to this one.
+
+One consequence is worth knowing before changing anything here: the repo's
+pytest gate runs these tests too, since `testpaths` covers both trees. A harness
+change breaks the same command a library change does, and the tests travel with
+the directory if it is ever extracted.
 
 ## Prerequisites
 

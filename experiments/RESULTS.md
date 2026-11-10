@@ -1,7 +1,10 @@
 # Measurement record: `compare_baselines`
 
 Every number these panels have produced lives here, in reverse chronological
-order, each entry tagged with the lineup and the budget that produced it.
+order, each entry tagged with the lineup and the budget that produced it. The
+one exception is the pre-2026-10 probe sweeps, which measured a knob set the
+code no longer carries; those are not measurements of a lineup and live with the
+other retired experiments in `DEPRECATED.md`.
 `DESIGN.md` says what the panels *are* and what they are meant to show; it
 states no measured numbers, so nothing there can age in place.
 
@@ -20,6 +23,10 @@ Three rules:
 Unless a table says otherwise it holds **medians**, the statistic the figures
 plot. The harness's stdout line is `final mean best` — mean, not median, and
 not comparable with the tables below.
+
+Two entries (v2 and v3) also record wall clock. That is a property of the
+machine that ran them, not an expectation: no comparison here is made on time,
+and a re-run should reproduce the medians, not the hours.
 
 ## 2026-11-08 — lineup v6 (`restart_stalled` off, restart-model panel retired) — CURRENT, NOT YET MEASURED
 
@@ -63,7 +70,7 @@ reads the identical `mu` arms as "no step taken": the traces serve a point on
 every batch, so steps were taken, and the freeze is in the best-so-far — set
 where the plunge landed, never beaten afterwards. `problems.ackley` is gone,
 `--groups multimodal` returns one problem, and the ackley readings below stay
-as the record of a retired problem. The reasoning is in `../DEPRECATED.md`.
+as the record of a retired problem. The reasoning is in `DEPRECATED.md`.
 
 ## 2026-11-07 — lineup v5 (`mu` default back to 0) — SUPERSEDED by the v6 entry, which no run has measured yet
 
@@ -472,37 +479,9 @@ Not re-measured under v2: the invariance panel writes no JSON and prints no
 numbers, so these floors remain a reading of that run, not a value anyone can
 re-derive from a shipped artifact.
 
-## pre-2026-10 — step-length calibration sweeps — NOT REPRODUCIBLE
+## pre-2026-10 — step-length calibration sweeps — moved
 
-Budget: mixed and ad hoc (the grid sweep was 300 batches, 3 seeds; the `alpha0`
-damping sweep is not recorded at that detail). **The code path is gone**: the
-`alpha0` sweep driver no longer exists in `compare_baselines.py`, so these
-numbers cannot be re-measured by the current script, only cited.
-
-These numbers were measured on the engine as it stood before the 0.1.0
-refactor. They are the evidence behind an architectural verdict — the residual
-error is in the *direction* `-d ⊙ g`, not its length — so a stale number does
-not retract the verdict; treat any figure here as a floor on effort, not as a
-reproducible result. The abandoned direction itself — why it was tried, and why
-it was dropped — is recorded in `../DEPRECATED.md`.
-
-- **`n_alpha` grid** (300 batches, 3 seeds, rotated `cond=1e6` d=100):
-  `n_alpha` larger is strictly worse — `n_paths=1` at `backtrack=0.5`:
-  `1285 → 4220 → 7382 → 12535`. `backtrack` then also mattered at `n_alpha=1`
-  (`1285 → 1056` at 0.1) because it shrank the **warm-up Armijo** backtrack — a
-  different first step (path shift), not a grid effect. That sweep predates the
-  removal of the warm-up guard: with neither a guard nor a grid at `n_alpha=1`,
-  `backtrack` is now inert there and only sets the grid's spacing.
-- **`alpha0` damping** (the "small step along the wrong direction might pay"
-  hypothesis, `alpha0 ∈ {0.125, 0.25, 0.5, 1.0, 2.0}`, `n_paths ∈ {1,16}`,
-  rot+diag): damping is strictly worse on the rotated case
-  (`1285 → 1976 → 3211 → 5356`) and `alpha0 > 1` is catastrophic (`8e5`); on
-  diag, `1.0` is the one-shot win (`3.5e-65` in 20 points) and any damping only
-  slows it.
-
-Scope: these sweeps ran on **one landscape** (the rotated and diagonal
-quadratics), which isolates the off-diagonal direction error. Measured for
-rotation coupling only; that the headline's interaction coupling is equally
-immune is an analogy from this, not a separate measurement. Silent on the
-diagonal part of the error, where the per-coordinate secant is itself a biased
-curvature estimate — unmeasured, and deliberately left open in `../DEPRECATED.md`.
+That entry measured a knob set the current code no longer has (`alpha0` damping,
+the `n_alpha` grid), so it was never a measurement of a lineup. It now sits with
+the other retired experiments in `DEPRECATED.md`, where the sweeps and the
+Ackley problem are the two records of things this harness no longer runs.
