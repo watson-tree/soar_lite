@@ -78,8 +78,8 @@ its value. Do not read it as a row of `flock_x`: the flock is the points the
 paths hold at one moment, one per path, so `flock_x` is the flock as the run
 ended, and the best point may be one a path has left behind. The answer is
 spelled the way a point spells it, `x` and `f`, and the flock pair prefixes those
-same two names with `flock_`; the extra fields are four work counts (points and
-batches, with and without a gradient) and a `status`.
+same two names with `flock_`; the extra fields are `work` (the four counts, which
+also read flat on the result), `n_iters`, and a `status`.
 
 ## Results
 
@@ -170,20 +170,24 @@ Two plugin seams — extension points you can swap — under one engine that
 schedules the work, and nothing beyond JAX and the standard library.
 
 - **The engine, `n_path_schedule`** — runs the `n_paths` paths in lockstep and
-  owns the domain, the shared horizon (`max_iters`), and the restart schedule: a
-  path stalls when its `propose` answers `None` or its point fails the finite
-  gate, and the engine redraws it — `restart_stalled` on — from a fresh point.
+  owns the domain, the run's gates (`max_iters` and `time_limit`, plus the
+  caller's `budget_check`), and the restart schedule: a path stalls when its
+  `propose` answers `None` or its point fails the finite gate, and the engine
+  redraws it — a path that holds a point needs `restart_stalled` on, while a
+  path that holds none is always redrawn — from a fresh point.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
   from successive gradients, no matrix and no scalar learning rate to tune. It
   takes one whole step, read by no value; a method that does enumerate
   candidates names its own winner, and the engine settles that winner alone.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
-  the record of everything evaluated so far. `SampleGlobalModel` draws from the
-  domain; `BLRGlobalModel` is a Bayesian surrogate for the same contract.
+  the run's evidence sink; it also places iteration 0's flock when `x0` is left
+  `None`. `SampleGlobalModel` ignores the evidence and draws from the domain;
+  `BLRGlobalModel` accumulates it into a Bayesian surrogate for the same
+  contract.
 
-The two seams are keyword arguments: pass `local_solver=` or `global_model=` to
-replace either.
+The two plugin seams are keyword arguments: pass `local_solver=` or
+`global_model=` to replace either.
 
 What ships is not a general-purpose toolkit but a small set of defaults picked by
 judgment — which is what `-lite` signals. They are aimed at scientific numerical
