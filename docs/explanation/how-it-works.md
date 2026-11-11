@@ -423,11 +423,11 @@ owes its `f` and `g`, and handed to `settle` together with the iteration's step
 winners, so a restart start never buys a gradient batch of its own. With the
 value-only seam connected the merge is even tighter: the restart start's value
 is deferred and bought once in the same fused batch. An unusable start (`f` or `g`
-not finite) does not land, and the path stays `stalled` — re-drawn next
-iteration
-when `restart_stalled` is on, or regardless of that flag when the path holds no
-point at all. It never becomes the point the path holds, so "where this path
-stands" cannot be polluted by a degenerate point.
+not finite) does not land, and the path stays `stalled` — so it is re-drawn next
+iteration under the rule in
+[Stalled is the only path state](#stalled-is-the-only-path-state). It never
+becomes the point the path holds, so "where this path stands" cannot be polluted
+by a degenerate point.
 
 ## The engine
 
@@ -462,10 +462,10 @@ Cost):
    Nothing owed (no starts, and winners already carrying their gradient) means
    no batch is issued here and the counters do not move.
 6. **Landing**: `_place` commits each usable point and calls that channel's
-   hook — a start goes through `restart` (unusable leaves it `stalled`: re-drawn
-   next iteration when `restart_stalled` is on, and regardless of that flag when
-   it holds no point) and a winner through `step` (unusable is `stalled`, no
-   `step`).
+   hook — a start goes through `restart` (unusable leaves it `stalled`, re-drawn
+   next iteration under the rule in
+   [Stalled is the only path state](#stalled-is-the-only-path-state)) and a
+   winner through `step` (unusable is `stalled`, no `step`).
 
 The redraw set and the cohort are disjoint, so "decide everything, then buy
 together" and "decide one at a time, then buy" are the same schedule.
