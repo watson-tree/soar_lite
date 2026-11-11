@@ -367,10 +367,10 @@ class _AllStalled(Exception):  # noqa: N818 - a signal, not an error
 
     Raised inside `_Paths.move` when no path restarts and every path is stalled
     - only reachable with `restart_stalled=False`, since a stalled path restarts
-    otherwise. Nothing can un-stall a path but `_restart`, which only ever sees
-    the restarting paths, so the state is terminal: the iteration would serve
-    nothing, and repeating it would idle out the horizon. The run stops on it,
-    naming the state in `status`.
+    otherwise. Nothing can un-stall a path but `_Paths._place(restart=True)`,
+    which only ever sees the restarting paths, so the state is terminal: the
+    iteration would serve nothing, and repeating it would idle out the horizon.
+    The run stops on it, naming the state in `status`.
     """
 
 
@@ -448,7 +448,7 @@ class _Budget:
         reason = self._refusal(after)
         if reason is not None:
             raise _BatchRefused(reason)
-        self._commit(after)
+        self._book(after)
 
     def tick(self) -> None:
         """Record one completed iteration. The caller ticks only finished ones."""
@@ -479,7 +479,7 @@ class _Budget:
             n_f_points=work.n_f_points + batch_size,
         )
 
-    def _commit(self, work: Work) -> None:
+    def _book(self, work: Work) -> None:
         """Charge a batch the gate allowed: the ledger becomes the one it judged."""
         self.work = work
 
@@ -941,7 +941,7 @@ class _Paths:
 
         Nothing is committed here but the stall bit: a path ends this iteration
         stalled exactly when its method named no winner, or when the winner turns
-        out not to be usable (`_step` decides that). A stalled path is never in
+        out not to be usable (`_step_winners` decides that). A stalled path is never in
         `stepping`: the engine asks nothing more of it until a restart re-draws
         it.
         """

@@ -6,8 +6,8 @@ holds the `Projection` geometries its features are read through. Both implement
 the engine's `GlobalModel` protocol, which stays in `engine/contracts.py`
 because the engine owns its seams.
 
-`soar_lite/domain.py` - the box these models draw from and carry as their
-`domain` - deliberately stays outside this package: the engine reads that same
+`soar_lite/domain.py` - the box these models draw from on every ask -
+deliberately stays outside this package: the engine reads that same
 object for its clip, so the domain is a shared leaf, not a member of the model
 family.
 """

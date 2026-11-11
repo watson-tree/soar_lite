@@ -317,7 +317,7 @@ class DiagonalPreconditioner(LocalSolver):
         state = self._state[i]
         if state.warm_up:
             return state.p.x + state.alpha * (-state.p.g)
-        diag = self._diag(i, state.p.g)
+        diag = self._d_for(i, state.p.g)
         return state.p.x + state.alpha * (-diag * state.m)
 
     def _stationary(self, i: int, domain: Domain) -> bool:
@@ -363,7 +363,7 @@ class DiagonalPreconditioner(LocalSolver):
         )
         return bool(jnp.linalg.norm(g_free) <= self.tau_rel * jnp.linalg.norm(state.g0))
 
-    def _diag(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
+    def _d_for(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
         """Return the per-coordinate inverse curvature d_i for path i at gradient g."""
         # λ anchors to the current gradient's own magnitude, so a coordinate
         # with no usable secant (y_i = 0) still steps instead of 0/0. It is a

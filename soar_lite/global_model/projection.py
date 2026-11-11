@@ -168,7 +168,7 @@ class SphereProjection(Projection):
         # Validate before building: the geometry knobs are this constructor's,
         # the domain was validated when it was made.
         self.mask = _check_mask(mask, domain.d)
-        kappa_v = _check_kappa(kappa)
+        kappa_validated = _check_kappa(kappa)
         super().__init__(domain)
         # The global lengthscale is what makes the projection dimension-free: a
         # bent dimension's reference radius, divided by `glob_ls`, is
@@ -184,7 +184,7 @@ class SphereProjection(Projection):
             1.0,
         )
         tied = jnp.sum(jnp.where(self.mask, radius * radius, 0.0))
-        self.glob_ls = jnp.sqrt(kappa_v * tied)
+        self.glob_ls = jnp.sqrt(kappa_validated * tied)
 
     def features(self, x: jnp.ndarray) -> jnp.ndarray:
         """Return the ``(M, d + 1)`` feature rows for ``(M, d)`` coordinates.
@@ -253,9 +253,6 @@ def _check_mask(
     given = jnp.asarray(mask)
     if given.ndim != 1:
         msg = f"mask must be a 1-D selector, got shape {given.shape}"
-        raise ValueError(msg)
-    if given.shape[0] == 0:
-        msg = "mask must project at least one dimension"
         raise ValueError(msg)
     if given.dtype != jnp.bool_:
         msg = f"mask must be a boolean selector, got dtype {given.dtype}"

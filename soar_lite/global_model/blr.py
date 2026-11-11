@@ -149,8 +149,8 @@ class BLRGlobalModel(GlobalModel):
         """
         self._projection_factory = projection_factory
         self._minimize = minimize
-        self._var_prior = _check_finite_positive("var_prior", var_prior)
-        self._noise = _check_finite_positive("noise", noise)
+        self._var_prior = _check_finite_positive(var_prior, "var_prior")
+        self._noise = _check_finite_positive(noise, "noise")
         self._key = key
         # Folded per batch, not per row: every ask walks this list once, and one
         # element per served batch instead of one per point keeps that walk cheap
@@ -164,9 +164,9 @@ class BLRGlobalModel(GlobalModel):
         # they say over the kept rows - their sum, their squared deviation about
         # that sum's mean, the smallest - and the count is what each is read
         # against.
-        self._n = 0
+        self._count = 0
         self._sum = 0.0
-        self._m2 = 0.0
+        self._sq_dev = 0.0
         self._min = math.inf
 
     def observe(
@@ -215,7 +215,7 @@ class BLRGlobalModel(GlobalModel):
         if bool(keep.any()):
             self._xs.append(rows[keep])
             self._fs.append(values[keep])
-            self._fold_moments(values[keep])
+            self._fold_stats(values[keep])
 
     def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
         """Return `n_points` restart points: a draw until a fit is possible.
@@ -243,13 +243,13 @@ class BLRGlobalModel(GlobalModel):
         if not self._can_fit():
             return domain.draw(sub, n_points)
         weights, cov = self._posterior(projection)
-        best = self._standardize(jnp.asarray(self._min))
+        best_fun = self._standardize(jnp.asarray(self._min))
 
         # shortcut: the minimizers are independent, so a flat acquisition can
         # return a cluster on one face. Upgrade to greedy conditioning on the
         # points already picked when a cohort asks for many at once.
         def acquisition(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-            return self._acq_value_and_grad(projection, x, weights, cov, best)
+            return self._acq_value_and_grad(projection, x, weights, cov, best_fun)
 
         starts = jnp.asarray(
             self._minimize(acquisition, domain, n_points, sub),
@@ -307,13 +307,13 @@ class BLRGlobalModel(GlobalModel):
         equal values: both leave nothing to divide by and no improvement to
         measure against.
         """
-        return self._n > 1 and self._m2 > 0
+        return self._count > 1 and self._sq_dev > 0
 
     def _values(self) -> jnp.ndarray:
         """Return every kept value, in the order the batches were folded in."""
         return jnp.concatenate(self._fs)
 
-    def _fold_moments(self, kept: jnp.ndarray) -> None:
+    def _fold_stats(self, kept: jnp.ndarray) -> None:
         """Merge one batch's count, sum, spread and minimum into the fit's.
 
         Chan's parallel merge, so each batch's spread is measured against its own
@@ -326,22 +326,24 @@ class BLRGlobalModel(GlobalModel):
         batch = np.asarray(kept, dtype=np.float64)
         count = batch.size
         batch_mean = float(batch.mean())
-        batch_m2 = float(((batch - batch_mean) ** 2).sum())
-        total = self._n + count
-        delta = batch_mean - (self._sum / self._n if self._n else 0.0)
+        batch_sq_dev = float(((batch - batch_mean) ** 2).sum())
+        total = self._count + count
+        delta = batch_mean - (self._sum / self._count if self._count else 0.0)
         self._sum += float(batch.sum())
-        self._m2 = self._m2 + batch_m2 + delta**2 * self._n * count / total
-        self._n = total
+        self._sq_dev = (
+            self._sq_dev + batch_sq_dev + delta**2 * self._count * count / total
+        )
+        self._count = total
         self._min = min(self._min, float(batch.min()))
 
-    def _moments(self) -> tuple[float, float]:
+    def _center_spread(self) -> tuple[float, float]:
         """Return the fit's value center and spread, both as Python floats.
 
         Both are read off the same pair of sums - center is the kept values'
         mean, spread their population standard deviation - so neither field
         carries a normalization the other does not.
         """
-        return self._sum / self._n, math.sqrt(self._m2 / self._n)
+        return self._sum / self._count, math.sqrt(self._sq_dev / self._count)
 
     def _standardize(self, f: jnp.ndarray) -> jnp.ndarray:
         """Return `f` on the fit's standardized scale.
@@ -351,7 +353,7 @@ class BLRGlobalModel(GlobalModel):
         reached once `_can_fit` found a non-zero spread, so the divisor is never
         zero and needs no floor.
         """
-        center, spread = self._moments()
+        center, spread = self._center_spread()
         return (f - center) / spread
 
     def _posterior(self, projection: Projection) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -371,17 +373,17 @@ class BLRGlobalModel(GlobalModel):
         here: the spread divides outside the sum, the center scales the column
         sums.
         """
-        gram, cross, colsum = self._fold_gram(projection)
+        gram, cross, colsum = self._fold_products(projection)
         precision = (
             gram / self._noise
             + jnp.eye(gram.shape[0], dtype=gram.dtype) / self._var_prior
         )
         cov = jnp.linalg.inv(precision)
-        center, spread = self._moments()
+        center, spread = self._center_spread()
         weights = cov @ ((cross - center * colsum) / spread) / self._noise
         return weights, cov
 
-    def _fold_gram(
+    def _fold_products(
         self,
         projection: Projection,
     ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -422,7 +424,7 @@ class BLRGlobalModel(GlobalModel):
         x: jnp.ndarray,
         weights: jnp.ndarray,
         cov: jnp.ndarray,
-        best: jnp.ndarray,
+        best_fun: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Return ``-log EI`` and its per-row gradient at ``(M, d)`` rows.
 
@@ -435,7 +437,7 @@ class BLRGlobalModel(GlobalModel):
 
         def scalar(row: jnp.ndarray) -> jnp.ndarray:
             mean, sigma = self._posterior_at(projection, row[None, :], weights, cov)
-            z = (best - mean[0]) / sigma[0]
+            z = (best_fun - mean[0]) / sigma[0]
             return -(jnp.log(sigma[0]) + _log_h(z))
 
         return jax.vmap(jax.value_and_grad(scalar))(x)
@@ -471,7 +473,7 @@ def _log_h(z: jnp.ndarray) -> jnp.ndarray:
     )
 
 
-def _check_finite_positive(name: str, value: float) -> float:
+def _check_finite_positive(value: float, name: str) -> float:
     """Return `value` unchanged, refusing a non-finite or non-positive knob."""
     if not math.isfinite(value) or value <= 0.0:
         msg = f"{name} must be a finite positive number, got {value!r}"

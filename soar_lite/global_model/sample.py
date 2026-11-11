@@ -2,7 +2,7 @@
 
 One of the engine's two plugin concretes, beside `local_solver.py`
 (`DiagonalPreconditioner`): it implements the engine's `GlobalModel` contract,
-which stays in `engine.py` because the engine owns its evaluation seams. It
+which stays in `engine/contracts.py` because the engine owns its evaluation seams. It
 carries no box of its own: the run's one `Domain` is handed to `propose` at
 every ask, so this class holds nothing but the key. A restart with no model to
 ask is a restart the engine has nowhere to take; the run's flock is not this

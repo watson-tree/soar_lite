@@ -149,9 +149,9 @@ class Domain:
                 entries long.
 
         """
-        self.lo, self.hi = _normalize_bounds(bounds)
+        self.lo, self.hi = _check_bounds(bounds)
         # The dimension is what `bounds` declares: read it off the argument, not
-        # off `lo`/`hi`, which `_normalize_bounds` just derived from it.
+        # off `lo`/`hi`, which `_check_bounds` just derived from it.
         self.d = len(bounds)
         self.bounds = bounds
         self.scale = _check_scale(scale, self.d)
@@ -261,7 +261,7 @@ def _check_samplers(
     return given
 
 
-def _normalize_bounds(bounds: Bounds) -> tuple[jnp.ndarray, jnp.ndarray]:
+def _check_bounds(bounds: Bounds) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Reject a malformed box and normalize it to ``(lo, hi)``, in one pass.
 
     Both spellings are read the same way: one `(lb, ub)` pair per dim, or a
