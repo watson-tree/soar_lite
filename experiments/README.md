@@ -156,7 +156,7 @@ figure is always re-derivable and a trace never is. The unit is one
   running, so a curve ends at its first seed's stop.
 
 The arm key is the file name and spells out the arm's whole configuration
-(`soar-sample-np1-mu0-restart-off`, `adam-lr0.1`, `lbfgs`), so a changed
+(`soar_lite-sample-n_paths1-mu0-restart-off`, `adam-lr0.1`, `lbfgs`), so a changed
 default or a changed lr is a new key and a new file: the old trace stays as a
 record of the old configuration instead of being silently overwritten.
 
@@ -193,7 +193,7 @@ Re-measuring one arm is a filter on that same identity:
 # rewrite exactly one file, leave the rest of the panel alone
 uv run --group exp python -m experiments.compare_baselines \
     --groups smooth --problems diag_quad_d100_cond10000 \
-    --arms soar-sample-np1-mu0-restart-off --seeds 20 --max-batches 3000
+    --arms soar_lite-sample-n_paths1-mu0-restart-off --seeds 20 --max-batches 3000
 
 # rebuild every figure from the files, no re-run
 uv run --group exp python -m experiments.compare_baselines --plot-only

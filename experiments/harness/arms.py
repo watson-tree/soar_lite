@@ -1,7 +1,7 @@
 """Arm identity, runners and presentation: what to run, and how to draw it.
 
 The arm key spells out the arm's whole configuration
-(`soar-sample-np1-mu0-restart-off`), never a path through a default it could
+(`soar_lite-sample-n_paths1-mu0-restart-off`), never a path through a default it could
 have inherited. An engine default moving therefore changes the key and the file
 path: the old trace stays as a record of the old configuration.
 """
@@ -64,7 +64,7 @@ def soar_arm(  # noqa: PLR0913 - one keyword per attribute the key must name
 ) -> Arm:
     """Build one soar-lite arm, its key derived from exactly these attributes."""
     key = (
-        f"soar-{model}-np{n_paths}-mu{mu:g}"
+        f"soar_lite-{model}-n_paths{n_paths}-mu{mu:g}"
         f"-restart-{'on' if restart_stalled else 'off'}"
     )
 

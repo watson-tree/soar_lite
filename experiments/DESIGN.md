@@ -363,7 +363,7 @@ contract in full.
   gap. The invariance panel writes no trace — it is re-run (fast) rather than
   re-plotted.
 - The arm key spells out the arm's whole configuration
-  (`soar-sample-np1-mu0-restart-off`, `adam-lr0.1`, `lbfgs`) instead of
+  (`soar_lite-sample-n_paths1-mu0-restart-off`, `adam-lr0.1`, `lbfgs`) instead of
   leaning on a default. An engine default moving therefore changes the key and
   so the path: the old trace survives as a record of the old configuration, and
   a rerun cannot overwrite a measurement whose meaning has changed. The arms

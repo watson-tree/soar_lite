@@ -28,4 +28,4 @@ def test_the_ladder_names_distinct_arm_files() -> None:
 
 def test_the_default_arm_is_the_momentum_off_arm() -> None:
     """`mu=0` in the default arm's key, so the class default is what it claims."""
-    assert harness.soar_ladder()[0].key == "soar-sample-np1-mu0-restart-off"
+    assert harness.soar_ladder()[0].key == "soar_lite-sample-n_paths1-mu0-restart-off"
