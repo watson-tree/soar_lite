@@ -295,7 +295,7 @@ consumes the gradient difference `y` on its own, hiding the second-order units
 inside a step length, and evaluates `g` at a look-ahead point, which the
 propose-then-evaluate protocol cannot do.
 
-**The default is `μ = 0`, and the knob is the caller's prior.** What a gradient
+**The default is `μ = 0`, and the knob is the caller's judgment.** What a gradient
 memory buys is a property of two things the preconditioner cannot see:
 
 - **The scaled spectrum.** Memory trades overshoot along steep directions
@@ -313,7 +313,7 @@ memory buys is a property of two things the preconditioner cannot see:
   fp32 evaluation, an average over samples — is the case a memory is *for*.
   A deterministic, well-resolved objective is not.
 
-Zeroing both priors is the default: no memory. That is also the branch that
+Zeroing both is the default: no memory. That is also the branch that
 keeps a descending direction, so the default is the assumption-free one rather
 than a tuned compromise. A caller who knows their spectrum, or their noise,
 picks `μ` on purpose, from that knowledge rather than from a number here.

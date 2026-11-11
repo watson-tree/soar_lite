@@ -239,10 +239,10 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             ...     max_iters=30,
             ... )
 
-            >>> result.x          # ≈ (3, 3)
+            >>> result.x          # ≈ [3., 3.]
             Array([3., 3.], dtype=float32)
 
-            >>> result.f           # exact here: the explicit x0 reaches (3, 3)
+            >>> result.f           # exact here: the explicit x0 reaches [3., 3.]
             0.0
 
         A per-point scalar can be wrapped into this shape with `pointwise`.

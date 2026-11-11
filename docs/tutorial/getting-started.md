@@ -182,10 +182,10 @@ The status says only why the loop stopped, never that it converged: it is
 horizon counts iterations, not work. The four paths get close to the minimizer
 within a few iterations, and every later stop is a fresh start: by default
 (`restart_stalled=True`) a stalled path reloads a draw from the global model each
-time its own stopping test fires, so the flock — the points the paths hold — keeps
-working until the horizon.
-Ask for the frozen version instead and the same run ends much sooner: with
-`restart_stalled=False` a converged path is parked for good — it holds its point
+time its own stopping test fires or a non-usable point stalls it, so the flock —
+the points the paths hold — keeps working until the horizon.
+Ask for `restart_stalled=False` instead and the same run ends much sooner: with
+it a stalled path is parked for good — it holds its point
 and still counts toward `best`, but never moves again — and once every path is
 parked the run has nothing left to do and stops with status `all_stalled`. The
 four counters of §3 report what either run actually served, which is why the
@@ -220,7 +220,7 @@ criterion the search met.
 The flock pair is not a ranking: `flock_x` and `flock_f` are each path's
 held point as the run ended, one row per path, unsorted and unfiltered by
 feasibility — the value is the one that path stopped on, not a fresh
-evaluation, so a path frozen by `restart_stalled=False` reports the value it
+evaluation, so a path parked under `restart_stalled=False` reports the value it
 stalled with. Nothing gets you the flock of an earlier iteration, and `x`/`f`
 need not be a row of this one: the best point may come from a path that was
 restarted afterwards.
@@ -236,7 +236,7 @@ restarted afterwards.
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given. `0` is legal: nothing is placed, so `n_iters` is `0` and every `flock_x` row and `flock_f` entry is `nan` |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
 | `budget_check` | an extra gate for a budget the engine cannot see, asked each iteration and before every batch; handed the run's `Work`, so it reads the engine's own counts |
-| `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` freezes the flock, and the run ends on `all_stalled` once every path parks |
+| `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` parks the flock, and the run ends on `all_stalled` once every path parks |
 | `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
 | `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic; ignored when `global_model` is supplied, since that model owns its key |
@@ -261,7 +261,7 @@ Five gotchas worth knowing up front:
   single path that stops where it stalled.
 - **The horizon counts iterations, not work.** What one iteration costs is the
   method's business: it serves the redraw starts plus however many trials the
-  method's own line search serves, and a flock with nothing left to do ends the
+  method enumerates, and a flock with nothing left to do ends the
   run (`all_stalled`) instead of entering a batchless iteration. So `max_iters`
   is a deterministic stop, not a cost estimate: read the counters for what the
   run actually did, and pass the deadline (`time_limit`) if wall-clock is what

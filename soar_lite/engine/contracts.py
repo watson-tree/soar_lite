@@ -640,7 +640,7 @@ def pointwise(
             [ 2. 26.] [ True False]
             >>> print(g[0])             # per row, 2*(x - 2)
             [-2. -2.]
-            >>> print(eval_f(x)[1])     # the value-only sibling agrees
+            >>> print(eval_f(x)[1])     # the value-only mask agrees
             [ True False]
 
         The mask is a boolean because `feasible` returns one; 0/1 is the other

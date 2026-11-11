@@ -17,8 +17,8 @@ but it never descends that acquisition itself: how to descend it is the engine's
 business, so the model receives it as an injected `minimize` — the parameter's
 name, typed `MinimizeFn`, with signature
 `(acquisition, domain, n_points, key) -> (n_points, d)`. The domain is the one
-the outer ask carried, not a box re-derived from it, so the `scale` and samplers
-you declared reach the inner run's own draws. The acquisition is
+the outer run's `propose` call carried, not a box re-derived from it, so the
+`scale` and samplers you declared reach the inner run's own draws. The acquisition is
 `(M, d) -> ((M,), (M, d))` (value and gradient, no feasibility column) and `key`
 is a fresh subkey of the model's own key, split for this call alone.
 
