@@ -147,6 +147,11 @@ class GlobalModel(Protocol):
 
     Implementing this pair is the whole extension point; a projection is a
     utility a `propose` may read, not part of the contract.
+
+    The smallest implementation is `SampleGlobalModel` below - `observe` keeps
+    nothing, `propose` answers with the domain's own draw - so a model that fits
+    something is that shape with a fit added: `BLRGlobalModel` keeps what it was
+    handed and answers from its posterior once it has enough.
     """
 
     def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
@@ -232,6 +237,54 @@ class LocalSolver(Protocol):
     every placement, `propose` once per iteration for the paths that step, `step`
     once per committed step - so they trust their arguments: this Protocol is the
     whole contract.
+
+    Example:
+        A whole method - fixed-step gradient descent, one point per path, no
+        trials read - which is enough to converge, because the engine pays for
+        the gradient this method never asks for:
+
+            >>> import jax.numpy as jnp
+            >>> from soar_lite import Domain, Pending, n_path_schedule
+
+            >>> class FixedStep:
+            ...     def __init__(self, rate=0.25):
+            ...         self.rate, self._point = rate, {}
+            ...     def restart(self, i, point):
+            ...         self._point[i] = point
+            ...     def step(self, i, point):
+            ...         self._point[i] = point
+            ...     def propose(self, idxs, domain, serve_trials):
+            ...         del serve_trials          # this method reads no trials
+            ...         return {
+            ...             i: Pending(
+            ...                 jnp.clip(
+            ...                     self._point[i].x - self.rate * self._point[i].g,
+            ...                     domain.lo,
+            ...                     domain.hi,
+            ...                 ),
+            ...                 None,
+            ...                 None,
+            ...             )
+            ...             for i in idxs
+            ...         }
+
+            >>> result = n_path_schedule(
+            ...     lambda x: (jnp.sum((x - 3.0) ** 2, axis=1), 2.0 * (x - 3.0), None),
+            ...     n_paths=2,
+            ...     domain=Domain([(-5.0, 5.0), (-5.0, 5.0)]),
+            ...     x0=jnp.array([[-1.0, -1.0], [1.0, 1.0]]),
+            ...     max_iters=40,
+            ...     local_solver=FixedStep(),
+            ... )
+            >>> bool(jnp.allclose(result.x, 3.0, atol=1e-2))
+            True
+
+        Both halves are owed because `Pending` was handed `None` for each, so
+        the winner reaches `step` with a gradient the engine bought in `settle`.
+        A method that reads its candidates through `serve_trials` hands each
+        winner back with `f` set instead, and the same batch settles only the
+        gradient.
+
     """
 
     def restart(self, i: int, point: PathPoint) -> None:
@@ -412,6 +465,38 @@ class NPathResult:
     on its own initiative only for an objective with no floor or for a flock in
     which every path stalled with restarts off - and ``f`` is the best over
     *feasible* points only.
+
+    Example:
+        Reading a finished run - the answer, then the flock, then why it
+        stopped:
+
+            >>> import jax.numpy as jnp
+            >>> from soar_lite import Domain, n_path_schedule
+
+            >>> result = n_path_schedule(
+            ...     lambda x: (jnp.sum(x**2, axis=1), 2.0 * x, None),
+            ...     n_paths=3,
+            ...     domain=Domain([(-4.0, 4.0), (-4.0, 4.0)]),
+            ...     x0=jnp.full((3, 2), 2.0),
+            ...     max_iters=20,
+            ... )
+
+            >>> result.status              # why it stopped
+            'max_iters'
+            >>> float(result.f)            # the answer
+            0.0
+            >>> result.flock_x.shape, result.flock_f.shape
+            ((3, 2), (3,))
+            >>> int(result.n_iters)        # iterations, not batches
+            20
+
+        ``x`` and ``f`` are the best recorded feasible point, which is not
+        necessarily a row of ``flock_x``: the path that found it may have been
+        restarted afterwards. Read ``flock_*`` for "where did each path end up"
+        and ``x``/``f`` for the answer. The cost side is `work`, which counts
+        points and batches per seam; the four flat counts on the result are its
+        aliases.
+
     """
 
     x: jnp.ndarray
@@ -529,6 +614,32 @@ def pointwise(
         The two evaluation seam shapes `n_path_schedule` takes, as a pair.
             ``eval_f_g`` a fused ``(f, g, feas)`` batch, ``eval_f`` its
             value-only ``(f, feas)`` sibling.
+
+    Example:
+        Both seams for an objective restricted to the half-plane ``x[0] >= 0``:
+
+            >>> import jax.numpy as jnp
+            >>> from soar_lite import pointwise
+
+            >>> eval_f_g, eval_f = pointwise(
+            ...     lambda x: jnp.sum((x - 2.0) ** 2),
+            ...     feasible=lambda x: x[0] >= 0.0,
+            ... )
+
+            >>> x = jnp.array([[1.0, 1.0], [-3.0, 1.0]])
+            >>> f, g, mask = eval_f_g(x)
+
+            >>> print(f, mask)          # the second row is infeasible
+            [ 2. 26.] [ True False]
+            >>> print(g[0])             # per row, 2*(x - 2)
+            [-2. -2.]
+            >>> print(eval_f(x)[1])     # the value-only sibling agrees
+            [ True False]
+
+        The mask is a boolean because `feasible` returns one; 0/1 is the other
+        spelling both seams accept. Nothing here drops the infeasible row - it
+        was evaluated, and its value is what priced it - so the run reads the
+        mask when it decides what to report.
 
     """
 
