@@ -78,14 +78,28 @@ class Pending:
     g: jnp.ndarray | None
 
     def value(self) -> float:
-        """Return the served value, or raise if this point was never read."""
+        """Return the served value, or raise if this point was never read.
+
+        Raises:
+            RuntimeError: When the row carries no value. Every row
+                `serve_trials` serves has one, so this is a `Pending` built
+                somewhere else rather than a caller asking too early.
+
+        """
         if self.f is None:
             msg = "Pending is missing its f"
             raise RuntimeError(msg)
         return self.f
 
     def point(self) -> PathPoint:
-        """Return this point as a `PathPoint`, or raise if either half is owed."""
+        """Return this point as a `PathPoint`, or raise if either half is owed.
+
+        Raises:
+            RuntimeError: When a half is still owed - a value-only trial that
+                has not been through `settle`, or a row whose value was never
+                served at all.
+
+        """
         if self.f is None or self.g is None:
             missing = "f" if self.f is None else "g"
             msg = f"Pending is missing its {missing}"
@@ -98,7 +112,10 @@ ServeTrials: TypeAlias = Callable[[jnp.ndarray], list[Pending]]
 
 What each row carries follows the run's seams - the value alone when ``eval_f``
 is connected, both halves when it is not. It is what `LocalSolver.propose`
-receives in place of the caller's own function.
+receives in place of the caller's own function. The batch is ``(M, d)`` rows and
+the list comes back in that row order, though nothing has to rely on it: each
+`Pending` carries its own ``x``, so a winner is paired with its trial by the
+point rather than by an index the method kept.
 """
 
 
@@ -325,9 +342,11 @@ NPathStatus: TypeAlias = Literal[
 
 The three gates, in the order they are checked: ``"max_iters"`` (the iteration
 horizon), ``"time_limit"`` (the wall-clock deadline), ``"budget_exhausted"``
-(the caller's extra batch gate). Then the two early endings: ``"unbounded"``
-(a feasible point evaluated to ``-inf``) and ``"all_stalled"`` (no
-path can move and ``restart_stalled`` is off).
+(the caller's extra batch gate). The first one that holds is the one reported,
+so a last iteration that reaches the horizon as the deadline passes reports
+``"max_iters"``. Then the two early endings: ``"unbounded"`` (a feasible point
+evaluated to ``-inf``) and ``"all_stalled"`` (no path can move and
+``restart_stalled`` is off).
 """
 
 

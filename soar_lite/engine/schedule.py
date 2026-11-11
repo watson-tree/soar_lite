@@ -154,11 +154,13 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         x0: the caller's flock: one start per path, shape ``(n_paths, d)``,
             placed by iteration 0 exactly where given and never used again.
             ``None`` draws the flock from the global model like any other
-            restart. Validated at the entry: a start outside the declared box
-            raises rather than clips, so a start the caller authored is never
-            silently relocated. It still passes the same finite gate as any
-            start, so a non-finite value or gradient there is refused rather
-            than placed.
+            restart; with nothing observed yet, both shipped models answer that
+            ask with the domain's own draw, so iteration 0 is a draw from
+            `domain` when `x0` is left out. Validated at the entry: a start
+            outside the declared box raises rather than clips, so a start the
+            caller authored is never silently relocated. It still passes the
+            same finite gate as any start, so a non-finite value or gradient
+            there is refused rather than placed.
         eval_f: the objective's value half alone, same ``x`` rows, returning
             ``(f: (M,), feas: (M,) | None)``. ``None`` means every served trial
             takes its gradient in the same fused pass; supplying it lets a
@@ -171,18 +173,27 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         max_iters: the run's horizon in iterations (``None`` leaves it to
             ``time_limit``); a run needs at least one of the two. ``0`` is
             legal: the loop's first stop query holds, so nothing is placed,
-            ``n_iters`` is ``0`` and every ``flock_x`` row is ``nan``.
-        time_limit: a wall-clock deadline in seconds (``None`` means none).
+            ``n_iters`` is ``0`` and every ``flock_x`` row and every ``flock_f``
+            entry is ``nan``.
+        time_limit: a wall-clock deadline in seconds (``None`` means none),
+            asked at the loop head and again before every batch, so a method
+            that enumerates is cut at its next trial rather than at the
+            iteration's end. The question comes before the batch is served, so
+            a single long call can still take the run past the deadline by one
+            batch.
         budget_check: an extra gate for a budget the engine cannot see, asked at
-            the loop head every iteration and again before each served batch. It
-            receives the run's `Work`, so it gates on the engine's own counts
-            rather than on a parallel tally. Before a batch it is handed the
-            ledger that batch would leave, and a batch it refuses is never
-            charged, so ``<=`` is the idiom on any count: ``work.n_f_points <=
-            ceiling`` stops within one batch width of the ceiling instead of
-            crossing it. At the loop head, with no batch pending, it is handed
-            the ledger as it stands. Additional, not a horizon (``None`` means
-            none).
+            the loop head every iteration and again before each served batch.
+            Both are per batch, not per iteration: the value-only batches a step
+            fires through its trial hook are asked like any other, so an
+            enumeration that turns ten times is asked ten times, and a refusal
+            there ends the run. It receives the run's `Work`, so it gates on the
+            engine's own counts rather than on a parallel tally. Before a batch
+            it is handed the ledger that batch would leave, and a batch it
+            refuses is never charged, so ``<=`` is the idiom on any count:
+            ``work.n_f_points <= ceiling`` stops within one batch width of the
+            ceiling instead of crossing it. At the loop head, with no batch
+            pending, it is handed the ledger as it stands. Additional, not a
+            horizon (``None`` means none).
         restart_stalled: whether a path the engine marks stalled (its method gave
             up, or its point was not usable) is re-drawn from the global model.
             ``False`` keeps a stalled path that holds a point frozen; a path
