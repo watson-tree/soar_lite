@@ -210,11 +210,12 @@ so `precon` cannot be estimated and the direction is `−g₀`; once the first
 default `μ = 0` (see [Momentum](#momentum)). `alpha0` is the one knob either
 phase reads.
 
-`DiagonalPreconditioner` reads no value at all: both phases take **one whole
-step, read by no value** — warm-up commits `x − α0·g₀` and steady state commits
-`x − α0·precon⊙m` — so neither runs a line search nor compares against its start. Its
-`propose` serves no trial and names its proposal as the winner, and the
-iteration's one fused `settle` batch is the whole price of the step.
+`DiagonalPreconditioner` consults no value: both phases take **one whole step**
+— warm-up commits `x − α0·g₀` and steady state commits `x − α0·precon⊙m` — so
+neither runs a line search nor compares against its start. Value and gradient
+still arrive together in the iteration's one fused `settle` batch, which is the
+whole price of the step; the value is recorded, and no step decision reads it.
+Its `propose` serves no trial and names its proposal as the winner.
 
 A method that does want to compare takes the same seam further and pays for it
 itself: it calls `serve_trials` for as many candidates as its own rule needs, per
@@ -328,11 +329,12 @@ along `g` —
 and that component is exactly what damps zigzag, cancels overshoot, and
 accumulates progress in flat regions.
 The invariant also buys nothing where no line search runs: a descent direction
-only promises that a small enough step decreases `f`, while this method takes one whole step, value and gradient read together,
-compared against no start, and clipped to the box as its only correction. Convergence rests on best-so-far accounting plus restarts
-and stalls, not on every step descending; a caller who wants the guarantee can
-leave `μ` at its default, shrink `alpha0`, or run a line search outside the
-engine.
+only promises that a small enough step decreases `f`, while this method takes
+one whole step — value and gradient read together, compared against no start,
+and clipped to the box as its only correction. Convergence rests on best-so-far
+accounting plus restarts and stalls, not on every step descending; a caller who
+wants the guarantee can leave `μ` at its default, shrink `alpha0`, or run a line
+search outside the engine.
 
 **The cost is real.** Near an optimum `g → 0` while `m` decays on the `1/(1−μ)`
 window, so `μ·m_{k−1}` can outweigh `g_k` and the direction is carried off by old
@@ -486,9 +488,8 @@ A winner is a `Pending` point, and what it carries says what the step read. A
 gradient is still owed and `settle` buys it in the iteration's fused batch (on
 the fused seam the trial brought the gradient too, and nothing is owed). An
 **unread** winner carries `x` alone: the method named its proposal without
-reading anything — one whole step, value and gradient read together — exactly what
-`DiagonalPreconditioner` does — so both halves are owed and both arrive in that
-same batch.
+reading anything, so both halves are owed and both arrive in that same batch —
+exactly what `DiagonalPreconditioner` does.
 
 Which of the two a method sends is its own business. The engine stocks
 `serve_trials`, calls `propose` once, and settles whatever comes back, so the
