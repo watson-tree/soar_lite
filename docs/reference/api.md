@@ -46,6 +46,9 @@ committed point, a `Pending` is one still owed a half.
 ::: soar_lite.NPathResult
 ::: soar_lite.Work
 ::: soar_lite.NPathStatus
+    options:
+      show_attribute_values: true
+      show_signature_annotations: false
 ::: soar_lite.PathPoint
 ::: soar_lite.Pending
 
@@ -58,7 +61,13 @@ sampler a caller injects.
 
 ::: soar_lite.Domain
 ::: soar_lite.Bounds
+    options:
+      show_attribute_values: true
+      show_signature_annotations: false
 ::: soar_lite.DrawFn
+    options:
+      show_attribute_values: true
+      show_signature_annotations: false
 
 ## Evaluation seams
 
@@ -67,8 +76,17 @@ default, the value-only half a caller may add, and the trial hook the engine
 hands a step in place of the caller's own function.
 
 ::: soar_lite.EvalFG
+    options:
+      show_attribute_values: true
+      show_signature_annotations: false
 ::: soar_lite.EvalF
+    options:
+      show_attribute_values: true
+      show_signature_annotations: false
 ::: soar_lite.ServeTrials
+    options:
+      show_attribute_values: true
+      show_signature_annotations: false
 
 ## Local solvers
 
@@ -91,7 +109,13 @@ the callable it injects to minimize it.
 ::: soar_lite.SampleGlobalModel
 ::: soar_lite.BLRGlobalModel
 ::: soar_lite.AcquisitionFn
+    options:
+      show_attribute_values: true
+      show_signature_annotations: false
 ::: soar_lite.MinimizeFn
+    options:
+      show_attribute_values: true
+      show_signature_annotations: false
 
 ## Projections
 
@@ -102,5 +126,8 @@ toward the pole, `IdentityProjection` reads them as they are, and a
 
 ::: soar_lite.Projection
 ::: soar_lite.ProjectionFactory
+    options:
+      show_attribute_values: true
+      show_signature_annotations: false
 ::: soar_lite.SphereProjection
 ::: soar_lite.IdentityProjection

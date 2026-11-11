@@ -28,7 +28,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import ndtr, ndtri
 
-Bounds: TypeAlias = Sequence["tuple[float | None, float | None]"] | jnp.ndarray
+Bounds: TypeAlias = Sequence[tuple[float | None, float | None]] | jnp.ndarray
 """The search box in scipy's spelling, which `Domain` normalizes.
 
 One ``(lb, ub)`` pair per dimension, where either side of the pair - the lower

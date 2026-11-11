@@ -294,7 +294,7 @@ class LocalSolver(Protocol):
 
 EvalFG: TypeAlias = Callable[
     [jnp.ndarray],
-    "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None]",
+    tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray | None],
 ]
 """The objective as one fused pass: the one seam a run must supply.
 
@@ -309,7 +309,7 @@ a point infeasible and 1 marks it feasible; any other value is refused rather
 than read as truthiness.
 """
 
-EvalF: TypeAlias = Callable[[jnp.ndarray], "tuple[jnp.ndarray, jnp.ndarray | None]"]
+EvalF: TypeAlias = Callable[[jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray | None]]
 """The objective's value half alone, for a caller that also holds one.
 
 Same ``x`` rows in, ``(f: (M,), feas: (M,) | None)`` out. Feasibility is
