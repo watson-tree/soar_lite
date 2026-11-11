@@ -43,7 +43,7 @@ def pointwise(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     return jnp.sum((theta - 0.25) ** 2, axis=-1), 2.0 * (theta - 0.25)
 
 
-def evaluator() -> tuple[
+def recording_eval_f_g() -> tuple[
     Callable[[jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, None]],
     list[tuple[int, int]],
 ]:
@@ -202,7 +202,7 @@ class RecordingModel:
 def test_injected_solver_is_driven() -> None:
     """The engine calls the injected method, never its default."""
     k = 3
-    eval_f_g, shapes = evaluator()
+    eval_f_g, shapes = recording_eval_f_g()
     solver = StubSolver()
     res = n_path_schedule(
         eval_f_g,
@@ -222,7 +222,7 @@ def test_injected_solver_is_driven() -> None:
 def test_give_up_stalls_a_path() -> None:
     """A "give_up" verdict stalls that path at once: no further trial for it."""
     k = 3
-    eval_f_g, shapes = evaluator()
+    eval_f_g, shapes = recording_eval_f_g()
     solver = StubSolver(give_up=True)
     res = n_path_schedule(
         eval_f_g,
@@ -345,7 +345,7 @@ def test_the_gate_is_asked_before_a_value_only_batch_too() -> None:
     follows it, while asking per batch cuts the step at the second.
     """
     f_calls = 0
-    eval_f_g, _shapes = evaluator()
+    eval_f_g, _shapes = recording_eval_f_g()
 
     def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:
         nonlocal f_calls
@@ -371,7 +371,7 @@ def test_the_gate_is_asked_before_a_value_only_batch_too() -> None:
 def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
     """No gate passed at all (the keyword defaults to None): the horizon only."""
     k = 2
-    eval_f_g, shapes = evaluator()
+    eval_f_g, shapes = recording_eval_f_g()
     res = n_path_schedule(
         eval_f_g,
         **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(4)),
@@ -480,7 +480,7 @@ def test_reports_four_counts_on_two_axes() -> None:
     """
 
     def run(k: int) -> tuple[int, int, int, int]:
-        eval_f_g, _shapes = evaluator()
+        eval_f_g, _shapes = recording_eval_f_g()
         res = n_path_schedule(
             eval_f_g,
             **flock_kwargs(flock(k), unit_domain(), key=jax.random.PRNGKey(8)),
@@ -765,7 +765,7 @@ def test_an_unjudged_step_never_buys_an_f_only_ruling() -> None:
     k = 2
 
     def run(solver: StubSolver) -> tuple[int, int, int, int, int]:
-        eval_f_g, _shapes = evaluator()
+        eval_f_g, _shapes = recording_eval_f_g()
         f_only_widths: list[int] = []
 
         def eval_f(x: jnp.ndarray) -> tuple[jnp.ndarray, None]:

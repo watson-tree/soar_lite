@@ -35,7 +35,7 @@ split is why this suite can pin the engine's batch accounting at all: with no
 half-bounded one - so a declared unbounded side is a prior the domain already
 states, not a wiring error. There is no `domain=None`: the box is a required
 argument, so an unbounded run spells its unbounded sides in the `Domain`.
-`test_plugin_seam.py`'s evaluator is that composed form.
+`test_plugin_seam.py`'s `recording_eval_f_g` is that composed form.
 
 Every run below plants its flock through `flock_kwargs`, i.e. through the
 entry's `x0`: the engine places exactly the starts it is handed and asks no
@@ -661,13 +661,13 @@ def test_the_best_skips_nonfinite_values() -> None:
     assert _argmin_finite([math.nan, math.inf]) is None
 
 
-def test_a_dead_path_never_widens_a_batch() -> None:
+def test_a_not_finite_path_never_widens_a_batch() -> None:
     """A row that never holds a point never widens a batch past one point.
 
     Row 0 is served non-finite values forever, so it never becomes a point: it
     joins no cohort and contributes no winner, and iteration 0's flock is
     therefore the run's only fused batch - every later batch carries exactly one
-    point, the live row's alone. The dead row is not idle, and this test does not
+    point, the live row's alone. The not-finite row is not idle, and this test does not
     claim it is: holding no point, it is owed a fresh start every iteration, and
     that start is one of those width-1 batches. What it never does is make the
     live row's batches wider, which is the cost pinned here.
@@ -700,10 +700,10 @@ def test_a_dead_path_never_widens_a_batch() -> None:
         d = theta - 0.7
         f_vals = jnp.sum(d**4 + d**2, axis=1)
         grads = 4.0 * d**3 + 2.0 * d
-        dead = jnp.arange(theta.shape[0]) == 0  # row 0 never comes back finite
+        not_finite = jnp.arange(theta.shape[0]) == 0  # row 0 never comes back finite
         return (
-            jnp.where(dead, jnp.inf, f_vals),
-            jnp.where(dead[:, None], jnp.nan, grads),
+            jnp.where(not_finite, jnp.inf, f_vals),
+            jnp.where(not_finite[:, None], jnp.nan, grads),
             None,
         )
 
@@ -722,12 +722,12 @@ def test_a_dead_path_never_widens_a_batch() -> None:
     assert widths[0] == n_paths, widths  # iteration 0 serves the whole flock
     assert all(w == 1 for w in widths[1:]), widths  # then the live path alone
     # The flock is the entry's `x0`, so the model is never asked for it: every
-    # ask is the dead row's single re-draw, never merged into the live row's
+    # ask is the not-finite row's single re-draw, never merged into the live row's
     # batch.
     assert asks == [1] * n_iterations, asks
 
 
-def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
+def test_a_not_finite_start_is_redrawn_without_asking_the_rule() -> None:
     """A path holding no point is owed a start: the engine draws one, unasked.
 
     Iteration 0's only batch is all-NaN, so the path holds no point - an empty
@@ -736,11 +736,11 @@ def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
     a start whatever the knob says. Nothing else could recover it, and gating it
     on the knob would leave iteration 0 with nothing to place, so the difference
     is not a policy choice. The re-draw comes from the global model, whose second
-    answer is a uniform point over the box, and that start descends: the dead row
+    answer is a uniform point over the box, and that start descends: the not-finite row
     costs one batch, not the run.
     """
 
-    def make_evaluator() -> Callable[
+    def make_eval_f_g() -> Callable[
         [jnp.ndarray],
         tuple[jnp.ndarray, jnp.ndarray, None],
     ]:
@@ -758,7 +758,7 @@ def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
 
     def run(*, restart_stalled: bool) -> NPathResult:
         return n_path_schedule(
-            make_evaluator(),
+            make_eval_f_g(),
             **flock_kwargs(flock(1), unit_domain(), key=jax.random.PRNGKey(0)),
             max_iters=20,
             local_solver=DiagonalPreconditioner(),
@@ -962,13 +962,13 @@ def test_the_domain_is_the_runs_only_authority_on_d() -> None:
         return jnp.sum((theta - 0.7) ** 2), 2.0 * (theta - 0.7)
 
     starts = jax.random.logistic(jax.random.PRNGKey(4), (2, 3))
-    box_free = Domain([(None, None)] * 3)
+    unbounded_domain = Domain([(None, None)] * 3)
 
     rec = Recorder(quad)
     res = n_path_schedule(
         rec,
         n_paths=2,
-        domain=box_free,
+        domain=unbounded_domain,
         global_model=FixedModel(starts),
         budget_check=rec.limit_check(60),
         max_iters=3,
@@ -1031,12 +1031,12 @@ def test_an_unbounded_box_is_really_unbounded() -> None:
         return jnp.sum((x - 3.0) ** 2, axis=-1), 2.0 * (x - 3.0), None
 
     starts = jax.random.logistic(jax.random.PRNGKey(5), (4, 1)) + 3.0
-    box_free = Domain([(None, None)])
+    unbounded_domain = Domain([(None, None)])
 
     res = n_path_schedule(
         eval_f_g,
         n_paths=4,
-        domain=box_free,
+        domain=unbounded_domain,
         global_model=FixedModel(starts),  # starts near the well
         budget_check=lambda _work: True,
         max_iters=40,

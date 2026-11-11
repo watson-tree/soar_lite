@@ -72,7 +72,7 @@ def nan_at_bowl_floor(x: jnp.ndarray) -> jnp.ndarray:
 class Script:
     """A `LocalSolver` that walks a caller's script, one call at a time.
 
-    `moves` is consumed by `propose` in call order, one entry per path, so a test
+    `candidates` is consumed by `propose` in call order, one entry per path, so a test
     states a step as the list it already is: a number is a raw candidate for that
     path, and ``None`` is its method's stopping test firing.
 
@@ -87,16 +87,16 @@ class Script:
     needs about the commit, and neither requires reading the path's own state.
     """
 
-    def __init__(self, moves: list[float | None], *, serve: bool = False) -> None:
+    def __init__(self, candidates: list[float | None], *, serve: bool = False) -> None:
         """Keep the script, and start with nothing handed over.
 
         Args:
-            moves: one raw candidate per path per `propose` call, in call order.
+            candidates: one raw candidate per path per `propose` call, in call order.
             serve: whether a candidate is read for its value before it is
                 returned.
 
         """
-        self._moves = list(moves)
+        self._candidates = list(candidates)
         self._serve = serve
         self.got: list[PathPoint] = []
         self.served: list[float] = []
@@ -118,11 +118,11 @@ class Script:
         del domain  # the script never clips: it states a candidate, not a box
         out: dict[int, Pending | None] = {}
         for i in idxs:
-            move = self._moves.pop(0)
-            if move is None:
+            candidate = self._candidates.pop(0)
+            if candidate is None:
                 out[i] = None
                 continue
-            x = jnp.asarray([move])
+            x = jnp.asarray([candidate])
             if self._serve:
                 (read,) = serve_trials(x[None, :])
                 self.served.append(read.value())

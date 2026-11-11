@@ -780,7 +780,7 @@ class _Paths:
         self,
         n_paths: int,
         domain: Domain,
-        evaluator: _EvalSeams,
+        eval_seams: _EvalSeams,
         propose: ProposeFn,
         local_solver: LocalSolver,
         *,
@@ -796,7 +796,7 @@ class _Paths:
         # The collaborators this state machine drives. Held rather than handed
         # in per call: every method below uses at least one of them, and a step
         # would otherwise thread them only to pass them straight back.
-        self.eval_seams = evaluator
+        self.eval_seams = eval_seams
         self.propose = propose
         self.local_solver = local_solver
         # The caller's flock, handed over for the run's first move and consumed

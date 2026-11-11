@@ -319,8 +319,8 @@ class DiagonalPreconditioner(LocalSolver):
         state = self._state[i]
         if state.warmup:
             return state.point.x + state.alpha * (-state.point.g)
-        diag = self._d_for(i, state.point.g)
-        return state.point.x + state.alpha * (-diag * state.m)
+        d = self._d_for(i, state.point.g)
+        return state.point.x + state.alpha * (-d * state.m)
 
     def _stationary(self, i: int, domain: Domain) -> bool:
         """Return whether path i's projected gradient has hit its floor.
