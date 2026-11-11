@@ -5,10 +5,10 @@
 
 A JAX optimizer for objectives that are differentiable but expensive to
 evaluate. What matters is how many evaluations a run needs, not how long each one
-takes: a single call can take seconds, so every choice here aims at needing fewer
+takes. A single call can take seconds, so every choice here aims at needing fewer
 of them. The caller passes value and gradient together, so there is no Hessian to
-assemble and no second-order system to solve — each coordinate carries its own
-step length in place of a second-order system.
+assemble and no second-order system to solve: each coordinate carries its own
+step length instead.
 
 **Use it when** the objective is differentiable, one evaluation costs real time
 or money, and the search space is moderate- to high-dimensional.
@@ -21,11 +21,10 @@ the reasoning.
 
 A run moves `n_paths` paths in lockstep, each following its own descent.
 Iteration 0 is the exception on the schedule — it places them, serving one batch
-of starts before any step is taken (the engine's move logic itself needs no
-special case: a path with no point simply restarts). After that an iteration is
-usually one fused pass — a single call returning value and gradient for every
-served point — unless the method enumerates candidates, which spends trial
-batches of its own first and one fused batch settling the winner (see
+of starts before any step is taken. After that an iteration is usually one fused
+pass, a single call returning value and gradient for every served point, unless
+the method enumerates candidates, which spends trial batches of its own first and
+one fused batch settling the winner (see
 [How it works](docs/explanation/how-it-works.md)). On a
 GPU a wider batch barely costs more wall-clock than a narrow one, which is why
 the engine is built around batched evaluations; on a CPU the same run works,
@@ -39,12 +38,13 @@ pip install soar-lite 'jax[cuda12]'   # GPU: CUDA 12 driver
 pip install soar-lite 'jax[cuda13]'   # GPU: CUDA 13 driver
 ```
 
-`soar-lite` declares plain `jax` (the CPU build) so an install never needs a GPU,
-and holds no GPU-specific code — only the JAX backend differs. The CUDA build is a
-JAX extra, so the CUDA version is your choice, not one this package pins. JAX
-picks its backend from what is installed; to pin one inside a process, call
-`jax.config.update("jax_platform_name", "cpu")` — or `"cuda"` — before any JAX
-work.
+Requires Python 3.11 or newer; the distribution is `soar-lite`, the import
+`soar_lite`. It declares plain `jax` (the CPU build) so an install never needs a
+GPU, and holds no GPU-specific code — only the JAX backend differs. The CUDA
+build is a JAX extra, so the CUDA version is your choice, not one this package
+pins. JAX picks its backend from what is installed; to pin one inside a process,
+call `jax.config.update("jax_platform_name", "cpu")` — or `"cuda"` — before any
+JAX work.
 
 ## Minimal run
 
@@ -173,14 +173,15 @@ schedules the work, and nothing beyond JAX and the standard library.
   owns the domain, the run's gates (`max_iters` and `time_limit`, plus the
   caller's `budget_check`), and the restart schedule: a path stalls when its
   `propose` answers `None` or its point fails the finite gate, and the engine
-  redraws it — a path that holds a point needs `restart_stalled` on, while a
-  path that holds none is always re-drawn — from a fresh point.
+  redraws it from a fresh point. A stalled path that holds a point is re-drawn
+  only with `restart_stalled` on; one that holds none is always re-drawn.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a per-coordinate inverse-curvature
   scale re-estimated from successive gradients, no matrix and no scalar
-  learning rate to tune. It takes one whole step, value and gradient read
-  together; a method that does enumerate
-  candidates names its own winner, and the engine settles that winner alone.
+  learning rate to tune; a momentum `mu` (0 by default) blends the gradient
+  with its own history. It takes one whole step, value and gradient read
+  together; a method that does enumerate candidates names its own winner, and
+  the engine settles that winner alone.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
   the run's evidence sink; it also places iteration 0's flock when `x0` is left
   `None`. `SampleGlobalModel` ignores the evidence and draws from the domain;
