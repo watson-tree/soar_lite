@@ -88,73 +88,22 @@ class DiagonalPreconditioner(LocalSolver):
     Each coordinate carries its own effective inverse curvature d_i, of
     dimension [x]²/[f], estimated from the magnitude ratio of one secant
     (s = x_k - x_{k-1}, y = g_k - g_{k-1}), and the step is Δx_i = -d_i·g_i.
-    Two equivalent spellings, picked by ``moment`` (default "rms"):
-
-        "abs": S₁ = EMA(|s|), Y₁ = EMA(|y|), d = S₁/max(Y₁, λ)
-        "rms": S₂ = EMA(s²), Y₂ = EMA(y²), d = √(S₂/max(Y₂, λ))
-
-    Both are unit-invariant: scaling x by c scales d by c² and the step by c,
-    while scaling f by c_f scales d by 1/c_f and leaves the step alone.
-
-    The floor λ = θ·|g_i| ("abs") or θ·g_i² ("rms"), θ dimensionless, is
-    anchored to the *current* gradient, so a flat-but-not-converged coordinate
-    (y → 0 while g ≠ 0) still gets a finite step; a converged coordinate is
-    caught by the stopping test instead. It joins via ``max``, so λ only guards
-    Y → 0 and never deflates a curvature-dominated coordinate.
-    d ≥ 0 by construction, so at ``mu = 0`` -d⊙g descends and the plain step
-    needs no acceptance test. It is a *diagonal* preconditioner, not a diagonal
-    Newton: coupling Σ_{j≠i} Hᵢⱼ·sⱼ lands inside |y_i| and makes the secant
-    ratio depend on the step's direction; the EMA spans a few steps so ``d``
-    tracks the underlying curvature instead of that direction. Where a path
-    keeps one direction the smooth only lags it; on a diagonal problem no
-    coupling enters, each pair already reads 1/Hᵢᵢ exactly, and ``beta = 0``
-    reads the newest secant.
-
-    With ``mu > 0`` the direction is the *current* momentum,
-    ``m = (1 - mu)·g + mu·m_prev``, where ``m_prev`` is an EMA of the past
-    steps' start gradients (window ≈ ``1/(1-mu)``; the current step's gradient
-    enters only once that step has committed, blended in by ``step``). At ``mu = 0``
-    it degenerates to ``g`` exactly. This is the unprojected heavy-ball direction;
-    being unprojected, it withdraws the descent-direction guarantee, so
-    convergence rests on the engine's best-so-far bookkeeping and restart.
-
-    ``beta`` defaults to a window of about 2.7 steps (0.63); ``mu`` defaults to
-    0, no memory. The window that helps a direction belongs to how far the
-    curvatures spread once ``d`` has taken the per-coordinate scale out (and to
-    the shape of that spread, not only its widest ratio), and to how noisy the
-    objective is - neither is knowable from inside the solver, so the default is
-    the branch that assumes neither, and it is also the branch that keeps the
-    descent guarantee stated above. A caller who knows their spectrum, or whose
-    objective is noisy (fp32 evaluation, a simulation, a sampled average), sets
-    ``mu`` accordingly; there is no window to copy from here. It is not a repair
-    for the diagonal approximation either: momentum re-shapes the iteration
-    along the direction ``d`` already gives, and the dropped off-diagonal
-    curvature stays dropped. The two smooths stay two knobs - ``beta`` smooths
-    the ratio that sets the step's scale, ``mu`` smooths the direction - because
-    the two histories are different quantities.
-
-    Two phases, one step mechanic. Every step takes the full proposal at
-    ``alpha0`` along its own direction, and ``step`` records the committed step.
-    The phases differ only in the direction: the warm-up (the first step) has no
-    secant pair yet, so it descends along -g from ``alpha0``, and afterwards the
-    direction is -d⊙m.
+    Every step takes the full proposal at ``alpha0`` along its own direction,
+    and ``step`` records the committed step. The two phases differ only in the
+    direction: the warm-up - the first step after a restart, with no secant pair
+    yet - descends along -g, and every later step along -d⊙m.
 
     A path whose stopping test holds describes no step: ``propose`` answers
     ``None`` for it and the engine stalls it, so a converged path is not stepped
-    off its stationary point.
+    off its stationary point. The test is on the projected gradient,
+    ‖P g‖ ≤ τ_rel·‖g_0‖, with the components whose descent direction points out
+    of the box dropped at a wall - which is how a constrained minimum sitting on
+    a wall reports done rather than stationary.
 
-    The stopping test is a projected-gradient test, ‖P g‖ ≤ τ_rel·‖g_0‖: at a
-    wall the components whose descent direction points out of the box are
-    dropped (a constrained minimum sits on a wall with a nonzero gradient), and
-    the rest is
-    tested. That is how a path reports that it is done. The norm rather than a
-    per-coordinate test keeps one flat coordinate from pinning a path alive (or
-    one huge-start coordinate from declaring it dead), and keeps τ_rel
-    dimensionless.
-
-    The derivation behind both spellings - the secant equation read one
-    coordinate at a time, and why no matrix is stored - is the explanation
-    page's local-step section ([how it works](../explanation/how-it-works.md)).
+    Why the ratio is a per-coordinate magnitude rather than a matrix, why the
+    two moment spellings agree, what the floor is anchored to, and what ``beta``
+    and ``mu`` buy: the explanation page's local-step section
+    ([how it works](../explanation/how-it-works.md)).
 
     References:
         - Conn et al. (2000), *Trust region methods* (SIAM) — the textbook

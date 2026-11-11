@@ -118,13 +118,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     reproduces the same run on any machine - but it is not a cost bound: one
     iteration serves one or more batches, so migrating a batch budget to
     `max_iters` can multiply the work done. `budget_check` is the caller's extra
-    stop; it is asked at the loop head every iteration and again before each
-    served batch, and it is handed the run's `Work` - the same counts the report
-    carries, so a gate never keeps a counter of its own. Before a batch it is
-    handed the ledger that batch would leave, and the batch is charged only if
-    the gate allows it, so a gate on points is one the run cannot pass: it stops
-    at or below the ceiling, within one batch width of it. `NPathStatus` names
-    what each of these writes.
+    stop, asked of the engine's own ledger rather than kept beside it, and it is
+    additional: a run is complete with a horizon alone. `NPathStatus` names what
+    each of these writes.
 
     `f` is the true minimum over every feasible eval with a finite value -
     every served point when the objective reports no mask, only the points its
