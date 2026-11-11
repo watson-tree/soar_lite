@@ -99,8 +99,9 @@ class BLRGlobalModel(GlobalModel):
     sits - and it is built from the domain that ask hands in. So the model
     carries the recipe and not a box: one instance asked inside a different box
     has no stale geometry and no second normalization drifting behind it. What
-    this class adds on top is the value fit and the acquisition that descends it;
-    the feature width is read off `features`, so any projection width fits.
+    this class adds on top is the value fit and the acquisition the injected
+    `minimize` descends; the feature width is read off `features`, so any
+    projection width fits.
 
     The projection is optional. Left unset, the bent arm is the default, because
     that is the reference model - the one whose geometry cures the corner-seeking
@@ -132,7 +133,8 @@ class BLRGlobalModel(GlobalModel):
                 ``None`` (the default) is `SphereProjection` with its own
                 defaults, the reference model's center-biased bend. Called once
                 per `propose`, so the geometry is always the box that ask was
-                handed, and `Projection`'s own constructor validates the domain.
+                handed, and the domain was already validated by `Domain`'s own
+                constructor.
             minimize: the acquisition's inner optimizer, shape ``MinimizeFn``.
                 Supplied by the caller: this model holds the recipe and calls
                 it, and never picks one itself.
@@ -228,7 +230,7 @@ class BLRGlobalModel(GlobalModel):
         injected `minimize`'s local
         minimizers of ``-log EI`` over the box; the log form keeps the
         acquisition's gradient alive where the raw improvement has decayed to
-        zero.
+        zero. It hands `minimize` a fresh subkey, split from the model's key.
 
         Raises:
             ValueError: If `n_points` is below one, or if `minimize` returns

@@ -178,7 +178,7 @@ class LocalSolver(Protocol):
     `f⋆`, and the gradient purchase - and the method owns the search: direction,
     step size, acceptance, **and how many points a step looks at**. A step is one
     ``propose`` call, so a method that wants a trial grid or a line search runs
-    it inside that call: the engine hands ``propose`` the run's value-only seam
+    it inside that call: the engine hands ``propose`` the run's trial hook
     (``serve_trials``) and serves whatever the method asks for. Runs end on the
     caller's horizon, not on the method. All state is per path, lives inside the
     instance, and is opaque to the engine - implementers index it by path ``i``.
@@ -236,7 +236,7 @@ class LocalSolver(Protocol):
         """Answer one step for each path in ``idxs``: its winner, or ``None``.
 
         One call covers every path that steps this iteration, so a method that
-        wants a trial grid proposes the whole flock's samples in one batch
+        wants a trial grid proposes the cohort's samples in one batch
         rather than once per path. The answer is keyed by the indices asked, and
         ``None`` means the method declines to name a winner: its stopping test
         holds, or the trials it read left it nothing usable to pick. Either way
@@ -248,7 +248,7 @@ class LocalSolver(Protocol):
         the path's next point and calls ``step`` - unless it is not `is_usable`, in
         which case the path stalls and ``step`` is never called.
 
-        ``serve_trials`` is the run's value-only evaluation hook. Every call
+        ``serve_trials`` is the run's trial hook. Every call
         serves one batch and reports it to the run's best and to the global
         model, exactly as a fused batch is reported, so a method may call it as
         freely as its enumeration needs. With no ``eval_f`` seam the same call

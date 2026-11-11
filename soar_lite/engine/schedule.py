@@ -86,8 +86,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     `local_solver` owns direction, step size, acceptance, and the enumeration
     inside a step, keeping its per-path state inside itself. `restart_stalled`
     is one flag on top of them:
-    **when** a path stalls is the local solver's own stopping test, **whether**
-    it is then re-drawn is `restart_stalled`, and **where** the new start lands
+    **when** a path stalls is the local solver's own stopping test or the finite
+    commit gate refusing its point, **whether** it is then re-drawn is
+    `restart_stalled`, and **where** the new start lands
     is `global_model.propose`, so the engine needs no restart rule of its own.
     The flag is on by default, because with restarts off, a stalled path just
     idles.
@@ -122,8 +123,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     carries, so a gate never keeps a counter of its own. Before a batch it is
     handed the ledger that batch would leave, and the batch is charged only if
     the gate allows it, so a gate on points is one the run cannot pass: it stops
-    within one batch width below the ceiling. `NPathStatus` names what each of
-    these writes.
+    at or below the ceiling, within one batch width of it. `NPathStatus` names
+    what each of these writes.
 
     `f` is the true minimum over every feasible eval with a finite value -
     every served point when the objective reports no mask, only the points its
@@ -184,8 +185,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             none).
         restart_stalled: whether a path the engine marks stalled (its method gave
             up, or its point was not usable) is re-drawn from the global model.
-            ``False`` keeps the flock frozen; a fully stalled flock then ends the
-            run with ``status="all_stalled"``.
+            ``False`` keeps a stalled path that holds a point frozen; a path
+            holding no point is still re-drawn. A fully stalled flock then ends
+            the run with ``status="all_stalled"``.
         global_model: the restart-point source and the run's evidence sink.
             ``None`` builds a `SampleGlobalModel`, which fits nothing and draws
             from ``domain``.
@@ -233,7 +235,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             >>> result.x          # ≈ (3, 3)
             Array([3., 3.], dtype=float32)
 
-            >>> result.f           # its objective value
+            >>> result.f           # exact here: the explicit x0 reaches (3, 3)
             0.0
 
         A per-point scalar can be wrapped into this shape with `pointwise`.

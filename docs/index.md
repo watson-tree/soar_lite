@@ -87,7 +87,8 @@ schedules the work, and nothing beyond JAX and the standard library.
   owns the domain, the run's gates (`max_iters` and `time_limit`, plus the
   caller's `budget_check`), and the restart schedule: a path stalls when its
   `propose` answers `None` or its point fails the finite gate, and the engine
-  redraws it — `restart_stalled` on — from a fresh point.
+  redraws it — a path that holds a point needs `restart_stalled` on, while a
+  path that holds none is always redrawn — from a fresh point.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
   from successive gradients, no matrix and no scalar learning rate to tune. It
@@ -99,8 +100,8 @@ schedules the work, and nothing beyond JAX and the standard library.
   `BLRGlobalModel` accumulates it into a Bayesian surrogate for the same
   contract.
 
-The two seams are keyword arguments: pass `local_solver=` or `global_model=` to
-replace either.
+The two plugin seams are keyword arguments: pass `local_solver=` or
+`global_model=` to replace either.
 
 What ships is not a general-purpose toolkit but a small set of defaults picked by
 judgment — which is what `-lite` signals. They are aimed at scientific numerical
