@@ -650,6 +650,7 @@ def test_diag_knobs_out_of_range_are_rejected() -> None:
         {"beta": 1.0},
         {"theta": -1.0},
         {"tau_rel": 0.0},
+        {"tau_rel": 1.0},
         {"alpha0": 0.0},
     ):
         assert next(iter(bad)) in rejects(**bad), bad

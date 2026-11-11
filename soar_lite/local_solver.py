@@ -151,7 +151,7 @@ class DiagonalPreconditioner(LocalSolver):
             alpha0: direction multiplier every path is armed at, > 0; the two
                 phases read it in different units (see above).
             tau_rel: relative gradient-norm stopping threshold, tested against
-                ``‖g_0‖``, > 0.
+                ``‖g_0‖``, in (0, 1).
 
         """
         for name, value, ok, want in (
@@ -159,7 +159,7 @@ class DiagonalPreconditioner(LocalSolver):
             ("mu", mu, 0.0 <= mu < 1.0, "in [0, 1)"),
             ("theta", theta, theta >= 0.0, ">= 0"),
             ("alpha0", alpha0, alpha0 > 0.0, "> 0"),
-            ("tau_rel", tau_rel, tau_rel > 0.0, "> 0"),
+            ("tau_rel", tau_rel, 0.0 < tau_rel < 1.0, "in (0, 1)"),
         ):
             if not ok:
                 msg = f"{name} must be {want}, got {value!r}"
@@ -289,9 +289,10 @@ class DiagonalPreconditioner(LocalSolver):
 
         The anchor is ``g_0``, the gradient at the path's cold start, so the test
         at the start itself reads ‖g_0‖ ≤ τ·‖g_0‖ and holds only for a
-        zero-gradient one. Read off the record's own point - the step's start,
-        the point ``propose`` would step from - so the test and the step can
-        never read different points.
+        zero-gradient one - which is why the constructor keeps τ below one. Read
+        off the record's own point - the step's start, the point ``propose``
+        would step from - so the test and the step can never read different
+        points.
 
         That anchor is deliberately not projected: it is the start's full
         gradient, wall reaction included. The test is relative to the start's
