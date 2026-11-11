@@ -18,16 +18,13 @@ scrambled starts plus a quasi-Newton method find the answer cheaply, that costs
 you less. See [when this fits](docs/explanation/how-it-works.md#when-this-fits) for
 the reasoning.
 
-A run moves `n_paths` paths in lockstep, each following its own descent.
-Iteration 0 is the exception on the schedule — it places them, serving one batch
-of starts before any step is taken. After that an iteration is usually one fused
-pass, a single call returning value and gradient for every served point, unless
-the method enumerates candidates, which spends trial batches of its own first and
-one fused batch settling the winner (see
-[How it works](docs/explanation/how-it-works.md)). On a
-GPU a wider batch barely costs more wall-clock than a narrow one, which is why
-the engine is built around batched evaluations; on a CPU the same run works,
-just without that saving.
+A run moves `n_paths` paths in lockstep, each following its own descent; an
+iteration is usually one fused pass, a single call returning value and gradient
+for every served point, unless the method enumerates candidates, which spends
+trial batches of its own first and one fused batch settling the winner (see
+[How it works](docs/explanation/how-it-works.md)). On a GPU a wider batch barely
+costs more wall-clock than a narrow one, which is why the engine is built around
+batched evaluations; on a CPU the same run works, just without that saving.
 
 ## Install
 
@@ -74,11 +71,9 @@ print(result.f)  # f ≈ 3e-5
 `x` is the best point the run evaluated, shape `(d,)`, and `f` is its value: the
 argmin over the feasible points that were served. The flock is the points the
 paths hold at one moment, one per path, so `flock_x` is the flock as the run
-ended; the best point need not be one of its rows, since the path that found it
-may have been restarted afterwards. The result names the answer `x` and `f`, and
-the flock pair prefixes those same two names with `flock_`;
-the extra fields are `work` (the four counts, which also read flat on the
-result), `n_iters`, and a `status`.
+ended. The result names the answer `x` and `f`, and the flock pair prefixes those
+same two names with `flock_`; the extra fields are `work` (the four counts, which
+also read flat on the result), `n_iters`, and a `status`.
 
 ## Results
 
