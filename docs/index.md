@@ -84,19 +84,20 @@ Two plugin seams — extension points you can swap — under one engine that
 schedules the work, and nothing beyond JAX and the standard library.
 
 - **The engine, `n_path_schedule`** — runs the `n_paths` paths in lockstep and
-  owns the domain, the run's gates (`max_iters`, `time_limit`), and the restart
-  schedule: a path stalls when its `propose` answers `None` or its point fails
-  the finite gate, and the engine redraws it — `restart_stalled` on — from a
-  fresh point.
+  owns the domain, the run's gates (`max_iters` and `time_limit`, plus the
+  caller's `budget_check`), and the restart schedule: a path stalls when its
+  `propose` answers `None` or its point fails the finite gate, and the engine
+  redraws it — `restart_stalled` on — from a fresh point.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
   from successive gradients, no matrix and no scalar learning rate to tune. It
   takes one whole step, read by no value; a method that does enumerate
   candidates names its own winner, and the engine settles that winner alone.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
-  the record of everything evaluated so far; it also places iteration 0's flock
-  when `x0` is left `None`. `SampleGlobalModel` draws from the domain;
-  `BLRGlobalModel` is a Bayesian surrogate for the same contract.
+  the run's evidence sink; it also places iteration 0's flock when `x0` is left
+  `None`. `SampleGlobalModel` ignores the evidence and draws from the domain;
+  `BLRGlobalModel` accumulates it into a Bayesian surrogate for the same
+  contract.
 
 The two seams are keyword arguments: pass `local_solver=` or `global_model=` to
 replace either.

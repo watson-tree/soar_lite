@@ -354,7 +354,8 @@ A restart has one job: give a stopped path a new start. That start is either
 drawn straight from the `Domain` (`SampleGlobalModel`, the default) or pointed at
 by a surrogate fitted on the samples already served (`BLRGlobalModel`, Bayesian
 linear regression). The default is the former: drawing a point costs one row in
-the next batch and fits nothing, so its cost is independent of the dimension.
+the next batch and fits nothing, so its model cost is independent of the
+dimension.
 The sweet spot of a local method is the landscape where `d` (the step scale) is
 right, and restarts there should be rare anyway; keeping a surrogate ready for
 it trades global-side cost for a crutch most runs never lean on.
@@ -428,11 +429,13 @@ stands" cannot be polluted by a degenerate point.
 ### One iteration
 
 An iteration first puts the paths in path-index order, then serves its batches in
-that order — one fused `settle` batch (step 5), preceded by whatever trial
-batches its steps serve out of `serve_trials` (see Cost):
+that order — a fused `settle` batch when anything is still owed (step 5),
+preceded by whatever trial batches its steps serve out of `serve_trials` (see
+Cost):
 
-1. **Redraw set**: paths that hold no point (iteration 0's whole flock when no
-   `x0` was handed in) or that are `stalled` with `restart_stalled` on.
+1. **Redraw set**: paths that hold no point — iteration 0's whole flock, always,
+   since the placement is one start per path whether it comes from `x0` or from
+   the model — or that are `stalled` with `restart_stalled` on.
 2. **Cohort**: the paths that are neither redrawn nor `stalled`. A stopped path
    is asked nothing — not even a step that would answer `None` — so a method
    cannot un-stall a path the engine has already stopped; its last usable point
@@ -447,10 +450,12 @@ batches its steps serve out of `serve_trials` (see Cost):
 4. **Steps**: the cohort asks `local_solver.propose(idxs, domain,
    serve_trials)` once, for the whole cohort, producing each path's winner or
    `None`.
-5. **One `settle` batch**: redraw starts first, then the step winners in path
-   order; the **same** batch buys the halves still owed — each read winner's
-   gradient when the `eval_f` seam served it value-only, and both halves of
-   anything named unread or drawn as a start.
+5. **The `settle` batch** (issued only when something is still owed): redraw
+   starts first, then the step winners in path order; the same batch buys the
+   halves still owed — each read winner's gradient when the `eval_f` seam served
+   it value-only, and both halves of anything named unread or drawn as a start.
+   Nothing owed (no starts, and winners already carrying their gradient) means
+   no batch is issued here and the counters do not move.
 6. **Landing**: `_place` commits each usable point and calls that channel's
    hook — a start goes through `restart` (unusable leaves it `stalled`: redrawn
    next iteration when `restart_stalled` is on, and regardless of that flag when
@@ -596,7 +601,9 @@ the outcome:
 ### The stop gates
 
 `max_iters` is the engine's own horizon, counted in **iterations** (iteration 0 is
-the iteration that places the flock). It is a deterministic stop, not a cost proxy:
+the iteration that places the flock). `max_iters=0` stops at the first loop-head
+ask, before that placement, so nothing is placed and `n_iters` stays 0. It is a
+deterministic stop, not a cost proxy:
 how many batches an iteration serves is decided by the method and the evaluation
 seam, from the batch that redraws starts to the method's trial batches.
 `time_limit` is the wall-clock version of the same thing, for callers who cannot

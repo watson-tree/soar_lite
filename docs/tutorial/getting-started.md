@@ -284,9 +284,10 @@ whether your objective is really parallel:
   batches.
 - **On a CPU.** Batches run mostly serially, so the point count is the honest axis,
   and width spreads the same point budget thinner across paths instead of speeding
-  anything up. The flock advances in lockstep — every path takes one step an
-  iteration — so at a fixed point budget each path gets about `1/n_paths` of the
-  steps a single path would, and best-of-`n_paths` only shrinks the spread
+  anything up. The flock advances in lockstep — every path gets one move an
+  iteration (a redraw or a step; a stalled path moves nowhere) — so at a fixed
+  point budget each path gets about `1/n_paths` of the steps a single path
+  would, and best-of-`n_paths` only shrinks the spread
   across starts; it cannot put the missing steps back. Whenever the budget runs
   out before a path converges — the regime this library is for — that lost depth
   dominates, and a single path ends better per point than a wide one.

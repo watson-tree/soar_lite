@@ -155,7 +155,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             ``None`` draws the flock from the global model like any other
             restart. Validated at the entry: a start outside the declared box
             raises rather than clips, so a start the caller authored is never
-            silently relocated.
+            silently relocated. It still passes the same finite gate as any
+            start, so a non-finite value or gradient there is refused rather
+            than placed.
         eval_f: the objective's value half alone, same ``x`` rows, returning
             ``(f: (M,), feas: (M,) | None)``. ``None`` means every served trial
             takes its gradient in the same fused pass; supplying it lets a

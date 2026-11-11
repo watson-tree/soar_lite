@@ -5,9 +5,11 @@ One of the engine's two plugin concretes, beside `local_solver.py`
 which stays in `engine/contracts.py` because the engine owns its evaluation seams. It
 carries no box of its own: the run's one `Domain` is handed to `propose` at
 every ask, so this class holds nothing but the key. A restart with no model to
-ask is a restart the engine has nowhere to take; the run's flock is not this
-class's business - a caller that chooses its starts hands them to
-`n_path_schedule` as `x0`, and the engine places them without asking any model.
+ask is a restart the engine has nowhere to take. A caller's chosen flock is not
+this class's business - it hands its starts to `n_path_schedule` as `x0`, and
+the engine places them without asking any model. With `x0` left `None`, iteration
+0's flock is this class's business: the engine asks it for that placement, like
+any other restart.
 Import direction is one-way - this module reads the engine's types and the
 `Domain` it samples, and the engine binds this class lazily inside
 `n_path_schedule` - so neither import is circular.
