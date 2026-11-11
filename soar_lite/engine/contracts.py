@@ -415,9 +415,9 @@ class Work:
     """What one run billed, on two axes that never mix.
 
     Four counts instead of scipy's single ``nfev``. Which evaluation seam served
-    the work decides the pair: ``n_f_points`` and ``n_f_batches`` for the
-    value-only seam, ``n_f_g_points`` and ``n_f_g_batches`` for the fused one.
-    Points are the serial cost and batches the parallel wall-clock cost. Which
+    the work decides the pair: ``n_f_g_batches`` and ``n_f_g_points`` for the
+    fused one, ``n_f_batches`` and ``n_f_points`` for the value-only seam.
+    Batches are the parallel wall-clock cost and points the serial one. Which
     axis a comparison reads is the caller's business; a run handed no ``eval_f``
     seam reports zero on both f counts.
 
@@ -439,17 +439,17 @@ class Work:
     an iteration is not a batch.
     """
 
-    n_f_points: int
-    """Value-only points served (the ``eval_f`` seam)."""
-
-    n_f_batches: int
-    """Value-only batches served (the ``eval_f`` seam)."""
+    n_f_g_batches: int
+    """Fused batches served: the parallel wall-clock count."""
 
     n_f_g_points: int
     """Fused points served: the serial-cost count."""
 
-    n_f_g_batches: int
-    """Fused batches served: the parallel wall-clock count."""
+    n_f_batches: int
+    """Value-only batches served (the ``eval_f`` seam)."""
+
+    n_f_points: int
+    """Value-only points served (the ``eval_f`` seam)."""
 
 
 @dataclass
@@ -540,8 +540,8 @@ class NPathResult:
     work: Work
     """The work the run billed, per seam and per axis; see `Work`.
 
-    The single home of the four counts: the `n_f_points`, `n_f_batches`,
-    `n_f_g_points` and `n_f_g_batches` attributes below are read-only aliases
+    The single home of the four counts: the `n_f_g_batches`, `n_f_g_points`,
+    `n_f_batches` and `n_f_points` attributes below are read-only aliases
     for its fields.
     """
 
@@ -556,14 +556,9 @@ class NPathResult:
     """Why the run stopped; see `NPathStatus`."""
 
     @property
-    def n_f_points(self) -> int:
-        """Value-only points served; `Work.n_f_points`, read flat."""
-        return self.work.n_f_points
-
-    @property
-    def n_f_batches(self) -> int:
-        """Value-only batches served; `Work.n_f_batches`, read flat."""
-        return self.work.n_f_batches
+    def n_f_g_batches(self) -> int:
+        """Fused batches served; `Work.n_f_g_batches`, read flat."""
+        return self.work.n_f_g_batches
 
     @property
     def n_f_g_points(self) -> int:
@@ -571,9 +566,14 @@ class NPathResult:
         return self.work.n_f_g_points
 
     @property
-    def n_f_g_batches(self) -> int:
-        """Fused batches served; `Work.n_f_g_batches`, read flat."""
-        return self.work.n_f_g_batches
+    def n_f_batches(self) -> int:
+        """Value-only batches served; `Work.n_f_batches`, read flat."""
+        return self.work.n_f_batches
+
+    @property
+    def n_f_points(self) -> int:
+        """Value-only points served; `Work.n_f_points`, read flat."""
+        return self.work.n_f_points
 
 
 def pointwise(

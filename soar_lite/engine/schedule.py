@@ -398,9 +398,9 @@ class _Meter:
     tell a gate that closes from one that never does.
 
     The counters are pure reports, not caps, and not one of them gates: the
-    fused pass counts on its pair (`n_f_g_points` / `n_f_g_batches`, one batch
+    fused pass counts on its pair (`n_f_g_batches` / `n_f_g_points`, one batch
     per value+gradient pass) and the value-only pass the same way on its own
-    (`n_f_points` / `n_f_batches`). `_refusal` reads only the run's three
+    (`n_f_batches` / `n_f_points`). `_refusal` reads only the run's three
     predicates, so a counted batch can still be refused by the gate like any
     other serve. That refusal is a signal (`_BatchRefused`), never a flag
     stored here. The counts live in `work` (`Work`), frozen and replaced on each
@@ -421,7 +421,7 @@ class _Meter:
     ) -> None:
         self._max_iters = max_iters
         self._deadline = None if time_limit is None else time.monotonic() + time_limit
-        self.work = Work(n_f_points=0, n_f_batches=0, n_f_g_points=0, n_f_g_batches=0)
+        self.work = Work(n_f_g_batches=0, n_f_g_points=0, n_f_batches=0, n_f_points=0)
         self.n_iters = 0
         self._gate = budget_check
 

@@ -45,7 +45,7 @@ last pair of points. The entry contract is first-order: the caller supplies the
 value and the gradient together, so a zero-order objective does not fit — every
 point on a path must carry a finite gradient as well as a finite value.
 
-Work is reported in two currencies, served points and batches, because one
+Work is reported in two currencies, served batches and points, because one
 evaluation serves a whole batch (see [Cost](#cost-two-evaluation-seams-two-rulers)).
 
 ## The local step: a diagonal preconditioner
@@ -671,16 +671,16 @@ holds more:
 
 | Ruler | Counts | Answers |
 | --- | --- | --- |
-| `points` | **points** served (a batch counts its actual number of points) | serial efficiency: how much improvement one point buys |
 | `batches` | **batches** served (a batch counts as 1) | parallel efficiency: how much improvement one call buys |
+| `points` | **points** served (a batch counts its actual number of points) | serial efficiency: how much improvement one point buys |
 
 The engine has two evaluation seams (`eval_f_g`, a fused batch; `eval_f`, values
 only), each with a pair of counts, so `result.work` carries four:
 
 | Field | Counts |
 | --- | --- |
-| `n_f_g_points` / `n_f_g_batches` | points / batches of fused batches |
-| `n_f_points` / `n_f_batches` | points / batches of value-only work |
+| `n_f_g_batches` / `n_f_g_points` | batches / points of fused batches |
+| `n_f_batches` / `n_f_points` | batches / points of value-only work |
 
 **Both pairs are recorded** — "billed" means "actually served". A caller may
 bring a value-only `eval_f`, and that half's work is reported honestly;

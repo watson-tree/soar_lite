@@ -203,10 +203,10 @@ coordinates, `f` for the value — and prefixes the flock's own pair with `flock
 | `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path never held a usable point |
 | `flock_f` | each path's held value, `(n_paths,)`; `nan` where the path never held a usable point |
 | `work` | a `Work`: the single home of the four counts below |
-| `n_f_g_points` | fused points billed — the serial-cost count |
 | `n_f_g_batches` | fused batches billed, one per `eval_f_g` call — the parallel-cost count |
-| `n_f_points` | value-only points billed (the `eval_f` seam) |
+| `n_f_g_points` | fused points billed — the serial-cost count |
 | `n_f_batches` | value-only batches billed (the `eval_f` seam) |
+| `n_f_points` | value-only points billed (the `eval_f` seam) |
 | `n_iters` | engine iterations completed (iteration 0 places the flock); one iteration may serve several batches |
 | `status` | `max_iters`, `time_limit`, `budget_exhausted`, `unbounded` or `all_stalled` |
 
