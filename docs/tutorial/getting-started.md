@@ -119,7 +119,7 @@ is not a value to compare but the answer, so the run stops at once with
 the answer you want but a sign the objective was handed a point outside its real
 domain, mark those points infeasible with `pointwise`'s `feasible` predicate,
 and the short-circuit never fires: an infeasible `-inf` is skipped like any other
-non-finite value. Narrowing the domain's sides instead masks nothing — the engine
+non-finite value. Narrowing the domain's sides is not a substitute: the engine
 clips into the box, so such a point is never served at all.
 
 `pointwise` differentiates with `jax.value_and_grad`, and that is where the
