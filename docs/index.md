@@ -4,8 +4,8 @@ A JAX optimizer for objectives that are differentiable but expensive to
 evaluate. What matters is how many evaluations a run needs, not how long each one
 takes: a single call can take seconds, so every choice here aims at needing fewer
 of them. The caller passes value and gradient together, so there is no Hessian to
-assemble and no second-order system to solve — each coordinate gets its own step
-length instead.
+assemble and no second-order system to solve — each coordinate carries its own
+step length in place of a second-order system.
 
 **Use it when** the objective is differentiable, one evaluation costs real time
 or money, and the search space is moderate- to high-dimensional.
@@ -73,8 +73,8 @@ print(result.f)  # f ≈ 3e-5
 argmin over the feasible points that were served. The flock is the points the
 paths hold at one moment, one per path, so `flock_x` is the flock as the run
 ended; the best point need not be one of its rows, since the path that found it
-may have been restarted afterwards. The answer is spelled the way a point spells
-it, `x` and `f`, and the flock pair prefixes those same two names with `flock_`;
+may have been restarted afterwards. The result names the answer `x` and `f`, and
+the flock pair prefixes those same two names with `flock_`;
 the extra fields are `work` (the four counts, which also read flat on the
 result), `n_iters`, and a `status`.
 
@@ -88,11 +88,12 @@ schedules the work, and nothing beyond JAX and the standard library.
   caller's `budget_check`), and the restart schedule: a path stalls when its
   `propose` answers `None` or its point fails the finite gate, and the engine
   redraws it — a path that holds a point needs `restart_stalled` on, while a
-  path that holds none is always redrawn — from a fresh point.
+  path that holds none is always re-drawn — from a fresh point.
 - **The local method, `LocalSolver`** — one path's descent step,
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
   from successive gradients, no matrix and no scalar learning rate to tune. It
-  takes one whole step, read by no value; a method that does enumerate
+  takes one whole step, value and gradient read together; a method that does
+  enumerate
   candidates names its own winner, and the engine settles that winner alone.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
   the run's evidence sink; it also places iteration 0's flock when `x0` is left

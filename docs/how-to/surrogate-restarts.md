@@ -3,17 +3,20 @@
 This page continues [the tutorial](../tutorial/getting-started.md)'s example:
 `eval_f_g` and `domain` below are the ones built there.
 
-The job is one function: it takes the acquisition `BLRGlobalModel` builds and
-returns the points to restart from — local minima of `-log EI`. The obvious way
-to descend it is to hand the engine back to itself: one restart-free run whose
-width is the number of minimizers you want, read off `flock_x`.
+The job is one function: it takes the acquisition `BLRGlobalModel` builds — its
+score for how promising a point looks, here `-log EI` — and returns the points to
+restart from: the local minima of that score. The obvious way to descend it is to
+hand the engine back to itself: one restart-free run (that is,
+`restart_stalled=False`) whose width is the number of minimizers you want, read
+off `flock_x`.
 
 `BLRGlobalModel` fits its posterior and builds its own `-log EI` acquisition,
-but it never descends that acquisition itself: the descent recipe belongs to the
-engine, so the model receives it as an injected `minimize`, a `MinimizeFn` with
-signature `(acquisition, domain, n_points, key) -> (n_points, d)`. The domain is
-the one your ask was handed, not a box re-derived from it, so the `scale` and
-samplers you declared reach the inner run's own draws. The acquisition is
+but it never descends that acquisition itself: how to descend it is the engine's
+business, so the model receives it as an injected `minimize` — the parameter's
+name, typed `MinimizeFn`, with signature
+`(acquisition, domain, n_points, key) -> (n_points, d)`. The domain is the one
+the outer ask carried, not a box re-derived from it, so the `scale` and samplers
+you declared reach the inner run's own draws. The acquisition is
 `(M, d) -> ((M,), (M, d))` (value and gradient, no feasibility column) and `key`
 is a fresh subkey of the model's own key, split for this call alone.
 
@@ -21,7 +24,8 @@ The projection is the other knob — it supplies the prior the model fits.
 `SphereProjection` keeps the posterior variance bounded far from data;
 `IdentityProjection`, also in `soar_lite`, passes the raw coordinates through,
 so its variance grows with distance toward the box corners. Default to the first
-unless you have a reason not to.
+unless you have a reason not to. `projection_factory` takes the class, not an
+instance: the model calls it with the `domain`, once per `propose`.
 
 ```python
 # eval_f_g and domain come from the tutorial's §1.2
@@ -95,8 +99,8 @@ time. Five things keep it honest:
 
 `INNER_ITERS` is an upper bound, not a convergence test. A path that settles
 stops there, so an inner run whose flock settles early ends on `all_stalled`
-before reaching it; 40 is a cap with room to spare rather than an iteration
-count. Raise it if the outer run keeps restarting paths that barely moved.
+before reaching it; 40 is a cap with room to spare, not an iteration count to aim
+at. Raise it if the outer run keeps restarting paths that barely moved.
 
 `MinimizeFn` and both projections are in the [API Reference](../reference/api.md),
 with their exact signatures and defaults.

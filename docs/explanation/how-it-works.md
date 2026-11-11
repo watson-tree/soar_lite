@@ -329,9 +329,8 @@ along `g` —
 and that component is exactly what damps zigzag, cancels overshoot, and
 accumulates progress in flat regions.
 The invariant also buys nothing where no line search runs: a descent direction
-only promises that a small enough step decreases `f`, while this method takes one
-whole step, read by no value, compared against no start, and clipped to the box
-as its only correction. Convergence rests on best-so-far accounting plus restarts
+only promises that a small enough step decreases `f`, while this method takes one whole step, value and gradient read together,
+compared against no start, and clipped to the box as its only correction. Convergence rests on best-so-far accounting plus restarts
 and stalls, not on every step descending; a caller who wants the guarantee can
 leave `μ` at its default, shrink `alpha0`, or run a line search outside the
 engine.
@@ -374,7 +373,8 @@ keeps them in three different places, none answering for another:
 - **Whether**: `restart_stalled`, a boolean knob, default `True`. While it is
   off, a stopped path stays stopped — `stalled` is still recorded, it still
   occupies its slot, and its last usable point stays in the run's best — only
-  the path itself stops moving; while it is on, it is redrawn on the next iteration.
+  the path itself stops moving; while it is on, it is re-drawn on the next
+  iteration.
 - **Where**: `global_model.propose(n_points, domain)`, the engine's second
   plugin point.
 
@@ -384,7 +384,7 @@ The split is deliberate: *when* is already stated by the method's stopping test,
 there is nothing in between to compare, and no third mechanism needs to weigh
 the two alternatives.
 
-### Two arms
+### Two restart arms: sampling and surrogate
 
 **The sampling arm (default).** `SampleGlobalModel` fits nothing: `observe` is a
 no-op, and `propose` just returns draws from `Domain.draw` — uniform on a bounded
@@ -419,7 +419,8 @@ owes its `f` and `g`, and handed to `settle` together with the iteration's step
 winners, so a restart start never buys a gradient batch of its own. With the
 value-only seam connected the merge is even tighter: the restart start's value
 is deferred and bought once in the same fused batch. An unusable start (`f` or `g`
-not finite) does not land, and the path stays `stalled` — redrawn next iteration
+not finite) does not land, and the path stays `stalled` — re-drawn next
+iteration
 when `restart_stalled` is on, or regardless of that flag when the path holds no
 point at all. It never becomes the point the path holds, so "where this path
 stands" cannot be polluted by a degenerate point.
@@ -436,7 +437,7 @@ Cost):
 1. **Redraw set**: paths that hold no point — iteration 0's whole flock, always,
    since the placement is one start per path whether it comes from `x0` or from
    the model — or that are `stalled` with `restart_stalled` on.
-2. **Cohort**: the paths that are neither redrawn nor `stalled`. A stopped path
+2. **Cohort**: the paths that are neither re-drawn nor `stalled`. A stopped path
    is asked nothing — not even a step that would answer `None` — so a method
    cannot un-stall a path the engine has already stopped; its last usable point
    stays in the run's best.
@@ -457,7 +458,7 @@ Cost):
    Nothing owed (no starts, and winners already carrying their gradient) means
    no batch is issued here and the counters do not move.
 6. **Landing**: `_place` commits each usable point and calls that channel's
-   hook — a start goes through `restart` (unusable leaves it `stalled`: redrawn
+   hook — a start goes through `restart` (unusable leaves it `stalled`: re-drawn
    next iteration when `restart_stalled` is on, and regardless of that flag when
    it holds no point) and a winner through `step` (unusable is `stalled`, no
    `step`).
@@ -486,7 +487,7 @@ A winner is a `Pending` point, and what it carries says what the step read. A
 gradient is still owed and `settle` buys it in the iteration's fused batch (on
 the fused seam the trial brought the gradient too, and nothing is owed). An
 **unread** winner carries `x` alone: the method named its proposal without
-reading anything — one whole step, read by no value — exactly what
+reading anything — one whole step, value and gradient read together — exactly what
 `DiagonalPreconditioner` does — so both halves are owed and both arrive in that
 same batch.
 
@@ -520,8 +521,8 @@ start with finite `f` but a non-finite gradient would look usable on the value
 alone, yet the gradient is what the next secant reads — one NaN is enough to
 poison that coordinate's magnitude EMA permanently. Such a start is treated as
 a dead start and is `stalled` on arrival; `restart_stalled` decides whether a
-path that holds a point is redrawn, and a path holding none is redrawn either
-way (see [stalled is the only path state](#stalled-is-the-only-path-state)).
+path that holds a point is re-drawn, and a path holding none is re-drawn either
+way (see [Stalled is the only path state](#stalled-is-the-only-path-state)).
 
 ### The current point is state, not an argument
 
@@ -564,22 +565,22 @@ is non-finite, nothing is committed and the path is `stalled`. That makes
 `step` the single commit point: a landing point the method is told about is
 never taken back.
 
-### stalled is the only path state
+### Stalled is the only path state
 
 `stalled` means the path took no step this iteration; redrawing a stalled path is
 `restart_stalled`'s separate decision, one layer up. The flag is written in two
 places: inside the step — `propose` answering `None` — and by the commit gate,
 which refuses a non-finite start or winner. A refused start **does not** become
 the point the path holds, the slot that always means "where this path stands" —
-so an unusable start stays `stalled` — redrawn next iteration when
+so an unusable start stays `stalled` — re-drawn next iteration when
 `restart_stalled` is on, or regardless of that flag when the path holds no
 point — rather than being clipped or forced into a degenerate point.
 
 `stalled` and "has no point" are two different things, and only the latter is
 outside `restart_stalled`'s control. A path starts with no point at all, holding
 nothing to be read (iteration 0 uses it to make every path go through one
-redraw), so it is always redrawn. A refused point is a stall, and
-`restart_stalled` decides whether it is redrawn — but a refused start leaves a
+redraw), so it is always re-drawn. A refused point is a stall, and
+`restart_stalled` decides whether it is re-drawn — but a refused start leaves a
 path that held nothing still holding nothing, so the no-point rule is asked
 first and the flag never sees that case. In short: `restart_stalled` governs a
 path that had a point to keep.

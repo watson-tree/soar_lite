@@ -299,7 +299,7 @@ class LocalSolver(Protocol):
 
         Called by the engine each time it places a path on a point: once at
         initialization, and again on every redraw — of a stalled path with
-        `restart_stalled` on, or of a path that holds no point, which is redrawn
+        `restart_stalled` on, or of a path that holds no point, which is re-drawn
         either way. The engine has one way to place a path, so
         a method need not tell "first" from "again" - both drop its per-path
         state to the cold one. One of the two calls that hand a point over, so

@@ -199,7 +199,7 @@ coordinates, `f` for the value — and prefixes the flock's own pair with `flock
 | Field | Meaning |
 | --- | --- |
 | `x` | argmin over the served points that were feasible with a finite value — a feasible `-inf` names itself — in the coordinates you handed the engine |
-| `f` | its value: the best finite feasible value, `nan` when no feasible point had one, `-inf` if the objective has no floor |
+| `f` | its value: the best feasible value, `nan` when no feasible point had a finite one, `-inf` when the objective has no floor |
 | `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path never held a usable point |
 | `flock_f` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |
 | `work` | a `Work`: the single home of the four counts below |
@@ -265,13 +265,13 @@ Four gotchas worth knowing up front:
   run (`all_stalled`) instead of entering a batchless iteration. So `max_iters`
   is a deterministic stop, not a cost estimate: read the counters for what the
   run actually did, and pass the deadline (`time_limit`) if wall-clock is what
-  you care about. An external budget derived from batches or points, checked
-  through `budget_check`, is a ceiling the engine cannot cross: before each
-  batch the gate is handed the `Work` that batch would leave, and the batch is
-  charged only if the gate allows it. Write the comparison with `<=` — the
-  count already includes the batch — and remember that a batch is served whole
-  or not at all, so the run meets the ceiling from below, within one batch
-  width of it.
+  you care about.
+    - **A point or batch budget through `budget_check` is a ceiling the engine
+      cannot cross.** Before each batch the gate is handed the `Work` that batch
+      would leave, and the batch is charged only if the gate allows it.
+    - **Write the comparison with `<=`.** The count already includes the batch,
+      and a batch is served whole or not at all, so the run meets the ceiling
+      from below, within one batch width of it.
 
 ## 5. What a batch and a point cost
 
@@ -325,14 +325,14 @@ To replace one outright, implement its protocol and pass the instance:
 - **`LocalSolver`** — the search method: `restart`, `propose`, `step`. You own
   direction, step size, acceptance, how many candidates a step looks at and the
   clip of your own step into the domain; the engine owns the horizon, the finite
-  gate and the one fused batch that settles what a step keeps. `propose` gets the
-  cohort's indices, the run's
-  `domain` and `serve_trials`, and answers a winner (a `Pending` point, read or
-  unread) or `None` to stop that path. With `eval_f` connected a trial is read
-  for its value alone, never for its gradient; without it the same call brings
-  both. `restart` is the only cold-start call, so it runs at
-  initialization and after every restart; `step` is the only place a landed step
-  is announced.
+  gate and the one fused batch that settles what a step keeps.
+  - `propose` gets the cohort's indices, the run's `domain` and `serve_trials`,
+    and answers a winner (a `Pending` point, read or unread) or `None` to stop
+    that path. With `eval_f` connected a trial is read for its value alone, never
+    for its gradient; without it the same call brings both.
+  - `restart` is the only cold-start call, so it runs at initialization and after
+    every restart.
+  - `step` is the only place a landed step is announced.
 - **`GlobalModel`** — the restart-point source and evidence sink: `observe`,
   `propose`. The shipped pair is `SampleGlobalModel` (draws starts from the
   domain, fits nothing — the default) and `BLRGlobalModel` (fits a Bayesian
