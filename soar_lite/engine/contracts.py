@@ -74,8 +74,15 @@ class Pending:
     """
 
     x: jnp.ndarray
+    """Coordinates, shape ``(d,)``, in the run's coordinates."""
+
     f: float | None
+    """The value served with it, or ``None`` while the value is still owed."""
+
     g: jnp.ndarray | None
+    """The gradient, shape ``(d,)``, or ``None`` while the gradient is still
+    owed - a fused pass serves both halves at once, a value-only trial serves
+    ``f`` alone."""
 
     def value(self) -> float:
         """Return the served value, or raise if this point was never read.
