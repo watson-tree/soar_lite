@@ -107,9 +107,9 @@ gradient has a `nan` somewhere still can become `best`: the run reports that poi
 even though no path ever stands on it. A path commits more strictly: a point is
 `is_usable` only when its value *and* every gradient component are finite, because the
 next step is proposed from `-g` and the secant is built from gradient differences.
-A point that is
-not `is_usable` stalls its path in place — re-drawn by default, parked under
-`restart_stalled=False` (see §2). The run carries on.
+A point that is not `is_usable` stalls its path in place. A path that holds a
+point is re-drawn by default and parked under `restart_stalled=False` (see §2);
+a path holding none is re-drawn either way. The run carries on.
 
 `-inf` is the one case to decide yourself. A *feasible* point priced at `-inf`
 is not a value to compare but the answer, so the run stops at once with
@@ -200,6 +200,7 @@ coordinates, `f` for the value — and prefixes the flock's own pair with `flock
 | `f` | its value: the best finite feasible value, `nan` when no feasible point had one, `-inf` if the objective has no floor |
 | `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path never held a usable point |
 | `flock_f` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |
+| `work` | a `Work`: the single home of the four counts below |
 | `n_f_g_points` | fused points billed — the serial-cost count |
 | `n_f_g_batches` | fused batches billed, one per `eval_f_g` call — the parallel-cost count |
 | `n_f_points` | value-only points billed (the `eval_f` seam) |
@@ -229,10 +230,10 @@ restarted afterwards.
 | `n_paths` | engine width: paths advanced in lockstep each iteration |
 | `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
 | `x0` | the flock's start, one point per path `(n_paths, d)`: placed by iteration 0 exactly where you ask, and it must lie inside `domain` — an outside row is refused, not clipped; `None` lets the global model draw it — hand it in when runs have to be compared on the same starts |
-| `eval_f` | the optional value-only seam: points in, f values out, no gradient — pass it to save budget, omit it in a fused-only comparison |
+| `eval_f` | the optional value-only seam: points in, `(f, feas?)` out, no gradient — pass it to save budget, omit it in a fused-only comparison |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
-| `budget_check` | an extra gate for a budget the engine cannot see, checked each iteration and before every billed batch; it is handed the run's `Work`, so it reads the engine's own counts instead of keeping a parallel tally |
+| `budget_check` | an extra gate for a budget the engine cannot see, checked each iteration and before every batch it serves; it is handed the run's `Work`, so it reads the engine's own counts instead of keeping a parallel tally |
 | `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` freezes the flock, and the run ends on `all_stalled` once every path parks |
 | `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
 | `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
@@ -272,8 +273,8 @@ Four gotchas worth knowing up front:
 
 ## 5. What a batch and a point cost
 
-The two result fields answer different questions, and which one matters depends
-on whether your objective is really parallel:
+The two axes answer different questions, and which one matters depends on
+whether your objective is really parallel:
 
 - **On a GPU.** A batch's wall-clock barely grows as it widens, so measure
   progress in batches: `n_paths` set to the device's parallel limit makes the

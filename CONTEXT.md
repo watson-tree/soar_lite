@@ -28,8 +28,9 @@ keeps its row whether or not it holds a usable point (`flock_f` is `nan` there),
 so a flock always has `n_paths` of them. A *batch* is a set of points too and is
 deliberately a different one: it is the work a single pass serves — a step's
 trials, or the settle set of redraw starts plus winners — so it holds no point
-for an idle path and is not the state. Iteration 0 places the flock from `x0`;
-the engine's copy is the flock as the run ended.
+for an idle path and is not the state. Iteration 0 places the flock from `x0`
+where one was handed in, and otherwise from the global model; the engine's copy
+is the flock as the run ended.
 _Avoid_: the set of paths, population, ensemble, all the paths
 
 **iteration**:
@@ -96,8 +97,10 @@ parked — still counted, still readable for `best` — but never moved again. A
 turn of the loop with every path parked that way is `all_stalled` — reachable
 only when `restart_stalled` is off, since with it on a stalled path is re-drawn
 rather than parked: no path can move and none is owed a start, so the run stops.
-A path with no point at all is a redraw that ignores `restart_stalled`: it is
-the machine's own initial state, not a stall.
+A path with no point at all is a redraw that ignores `restart_stalled`: the
+machine's own initial state is not a stall. A start refused while the path held
+nothing sets the bit anyway, but the no-point rule is asked first, so the flag
+never sees that case.
 _Avoid_: paused, idle, dead
 
 ### Evaluation
@@ -192,8 +195,9 @@ _Avoid_: initialization step
 The engine's second seam, owner of *where* a redrawn path starts. It observes
 every served batch (`observe(x, f, g?)`) and answers `propose(n, domain)` with
 `n` fresh starts. The default `SampleGlobalModel` fits nothing: it draws starts
-from the `domain`. The run's first flock is not its business — the entry's `x0`
-states it directly. `BLRGlobalModel`
+from the `domain`. An `x0` the caller hands the entry states the first flock
+directly and the model is not asked; with `x0=None` it draws that flock too, as
+iteration 0's one ask. `BLRGlobalModel`
 fits a Bayesian linear posterior and proposes the local minimum of `-log EI` —
 EI there is an acquisition function deciding *where is worth trying*, not a
 restart decision.
@@ -206,9 +210,10 @@ default), the stalled path is re-drawn by the global model next iteration; off,
 it stays parked, and a flock that is all parked is a deadlock — the run ends on
 `all_stalled` rather than idling to its horizon. It is orthogonal to *when* (the
 local method's own stopping test) and *where* (the global model). A run that
-never restarts needs no model:
+never restarts needs no model of its own:
 `restart_stalled=False` with the default `SampleGlobalModel` is pure descent
-from the initial flock.
+from the initial flock — the model runs once, drawing that flock, when `x0` is
+left `None`, and never again.
 _Avoid_: restart check, reset decision
 
 **settle**:

@@ -221,8 +221,9 @@ class LocalSolver(Protocol):
         """Seed path i's state from a fresh start point (its one cold start).
 
         Called by the engine each time it places a path on a point: once at
-        initialization, and again on every redraw of a stalled path, which
-        needs `restart_stalled` on. The engine has one way to place a path, so
+        initialization, and again on every redraw — of a stalled path with
+        `restart_stalled` on, or of a path that holds no point, which is redrawn
+        either way. The engine has one way to place a path, so
         a method need not tell "first" from "again" - both drop its per-path
         state to the cold one. One of the two calls that hand a point over, so
         a method that steps from a point keeps this one.
@@ -237,8 +238,10 @@ class LocalSolver(Protocol):
         One call covers every path that steps this iteration, so a method that
         wants a trial grid proposes the whole flock's samples in one batch
         rather than once per path. The answer is keyed by the indices asked, and
-        ``None`` means the path's own stopping test holds: the engine stalls it
-        where it stands, serving nothing and committing nothing.
+        ``None`` means the method declines to name a winner: its stopping test
+        holds, or the trials it read left it nothing usable to pick. Either way
+        the engine stalls the path where it stands, serving nothing and
+        committing nothing.
 
         A non-``None`` entry is the step's winner, held as a `Pending`. The
         engine promotes it by buying the halves still owed, then commits it as

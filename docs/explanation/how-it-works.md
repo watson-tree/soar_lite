@@ -419,7 +419,7 @@ winners, so a restart start never buys a gradient batch of its own. With the
 value-only seam connected the merge is even tighter: the restart start's value
 is deferred and bought once in the same fused batch. An unusable start (`f` or `g`
 not finite) does not land, and the path stays `stalled` — redrawn next iteration
-when `restart_stalled` is on, or whatever that flag says when the path holds no
+when `restart_stalled` is on, or regardless of that flag when the path holds no
 point at all. It never becomes the point the path holds, so "where this path
 stands" cannot be polluted by a degenerate point.
 
@@ -452,9 +452,10 @@ batches its steps serve out of `serve_trials` (see Cost):
    gradient when the `eval_f` seam served it value-only, and both halves of
    anything named unread or drawn as a start.
 6. **Landing**: `_place` commits each usable point and calls that channel's
-   hook — a start goes through `restart` (unusable leaves it `stalled`, redrawn
-   next iteration when `restart_stalled` is on) and a winner through `step`
-   (unusable is `stalled`, no `step`).
+   hook — a start goes through `restart` (unusable leaves it `stalled`: redrawn
+   next iteration when `restart_stalled` is on, and regardless of that flag when
+   it holds no point) and a winner through `step` (unusable is `stalled`, no
+   `step`).
 
 The redraw set and the cohort are disjoint, so "decide everything, then buy
 together" and "decide one at a time, then buy" are the same schedule.
@@ -566,8 +567,8 @@ places: inside the step — `propose` answering `None` — and by the commit gat
 which refuses a non-finite start or winner. A refused start **does not** become
 the point the path holds, the slot that always means "where this path stands" —
 so an unusable start stays `stalled` — redrawn next iteration when
-`restart_stalled` is on — rather than being clipped or forced into a degenerate
-point.
+`restart_stalled` is on, or regardless of that flag when the path holds no
+point — rather than being clipped or forced into a degenerate point.
 
 `stalled` and "has no point" are two different things, and only the latter is
 outside `restart_stalled`'s control. A path starts with no point at all, holding
@@ -676,8 +677,10 @@ only), each with a pair of counts, so a result carries four fields:
 **Both pairs are recorded** — "billed" means "actually served". A caller may
 bring a value-only `eval_f`, and that half's work is reported honestly;
 otherwise the serial ruler would erase `f`'s cost entirely in a run with the
-value-only seam connected. The counts report and do not budget: the budget's
-`stop` query never reads them.
+value-only seam connected. The counts report and do not budget: not one of them
+stops a run on its own. The stop query reads three predicates (the horizon, the
+clock, the caller's gate), and only that last one is the caller's own code —
+the `budget_check` is handed the `Work` and may read any of the four counts.
 
 **How many batches an iteration spends is decided by the step and by the
 evaluation seam**:
