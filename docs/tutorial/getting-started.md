@@ -41,7 +41,7 @@ You write one function, the per-point scalar; `pointwise` builds the batch from
 it — `vmap` of `jax.value_and_grad` for the fused seam, the function the engine
 calls once per batch.
 
-It returns two. The second is the plain forward pass, the optional value-only
+The call returns two callables. The second is the plain forward pass, the optional value-only
 seam: pass it as `eval_f=eval_f` to serve a step's trials for their value alone
 (§4). Hand-writing `∂f/∂x` is safe for a sum of squares, but elsewhere it is an
 easy way to introduce a sign or a scale error. Without `feasible`, the third slot
@@ -59,8 +59,8 @@ preference:
   a per-point predicate that returns `True` where the point is allowed. A point
   masked `False` is still served — its f value and gradient come back normally
   and are used — but it never becomes the best. So `result.f` is a minimum
-  over feasible points only, and is `nan` when no feasible point carried a
-  finite value.
+  over feasible points only: `nan` when no feasible point carried a finite
+  value, `-inf` when one priced the objective there (§1.3).
   The mask is read as 0/1, booleans included (`True == 1`): a `1` marks the
   point feasible, a `0` infeasible, and any other value — a signed margin, a
   `NaN` — raises a `ValueError` instead of being read.
@@ -199,9 +199,9 @@ coordinates, `f` for the value — and prefixes the flock's own pair with `flock
 | Field | Meaning |
 | --- | --- |
 | `x` | argmin over the served points that were feasible with a finite value — a feasible `-inf` names itself — in the coordinates you handed the engine |
-| `f` | its value: the best feasible value, `nan` when no feasible point had a finite one, `-inf` when the objective has no floor |
+| `f` | its value: the best feasible value, `nan` when no feasible point had a finite one and none priced it at `-inf`, `-inf` when one did |
 | `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path never held a usable point |
-| `flock_f` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |
+| `flock_f` | each path's held value, `(n_paths,)`; `nan` where the path never held a usable point |
 | `work` | a `Work`: the single home of the four counts below |
 | `n_f_g_points` | fused points billed — the serial-cost count |
 | `n_f_g_batches` | fused batches billed, one per `eval_f_g` call — the parallel-cost count |
@@ -233,7 +233,7 @@ restarted afterwards.
 | `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
 | `x0` | the flock's start, one point per path `(n_paths, d)`; iteration 0 places it exactly where given, so runs compared on the same starts share it. `None` lets the global model draw. An outside row is refused, not clipped |
 | `eval_f` | the optional value-only seam: points in, `(f, feas?)` out, no gradient — pass it to save budget, omit it in a fused-only comparison |
-| `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
+| `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given. `0` is legal: nothing is placed, so `n_iters` is `0` and every `flock_x` row and `flock_f` entry is `nan` |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
 | `budget_check` | an extra gate for a budget the engine cannot see, asked each iteration and before every batch; handed the run's `Work`, so it reads the engine's own counts |
 | `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` freezes the flock, and the run ends on `all_stalled` once every path parks |
@@ -241,7 +241,7 @@ restarted afterwards.
 | `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic; ignored when `global_model` is supplied, since that model owns its key |
 
-Four gotchas worth knowing up front:
+Five gotchas worth knowing up front:
 
 - **Sides may be unbounded.** A `Domain` side of `(None, None)` draws from
   `N(0, scale²)`, a half-side draws the same normal truncated, and any side can
@@ -266,12 +266,12 @@ Four gotchas worth knowing up front:
   is a deterministic stop, not a cost estimate: read the counters for what the
   run actually did, and pass the deadline (`time_limit`) if wall-clock is what
   you care about.
-    - **A point or batch budget through `budget_check` is a ceiling the engine
-      cannot cross.** Before each batch the gate is handed the `Work` that batch
-      would leave, and the batch is charged only if the gate allows it.
-    - **Write the comparison with `<=`.** The count already includes the batch,
-      and a batch is served whole or not at all, so the run meets the ceiling
-      from below, within one batch width of it.
+- **A point or batch budget through `budget_check` is a ceiling the engine
+  cannot cross.** Before each batch the gate is handed the `Work` that batch
+  would leave, and the batch is charged only if the gate allows it. Write the
+  comparison with `<=`: the count already includes the batch, and a batch is
+  served whole or not at all, so the run meets the ceiling from below, within
+  one batch width of it.
 
 ## 5. What a batch and a point cost
 
@@ -326,7 +326,8 @@ To replace one outright, implement its protocol and pass the instance:
   direction, step size, acceptance, how many candidates a step looks at and the
   clip of your own step into the domain; the engine owns the horizon, the finite
   gate and the one fused batch that settles what a step keeps.
-  - `propose` gets the cohort's indices, the run's `domain` and `serve_trials`,
+  - `propose` gets the cohort (the indices of every path stepping this
+    iteration, one call for all of them), the run's `domain` and `serve_trials`,
     and answers a winner (a `Pending` point, read or unread) or `None` to stop
     that path. With `eval_f` connected a trial is read for its value alone, never
     for its gradient; without it the same call brings both.
@@ -336,7 +337,7 @@ To replace one outright, implement its protocol and pass the instance:
 - **`GlobalModel`** — the restart-point source and evidence sink: `observe`,
   `propose`. The shipped pair is `SampleGlobalModel` (draws starts from the
   domain, fits nothing — the default) and `BLRGlobalModel` (fits a Bayesian
-  linear posterior and proposes the `-log EI` minimum).
+  linear posterior and proposes the `-log EI` minimizers).
 
 Both protocols are documented in the [API Reference](../reference/api.md), which
 is the contract to code against.
@@ -347,8 +348,10 @@ own acquisition — the engine inside the engine — is a separate job, and has
 
 ## 7. Next
 
+[Surrogate restarts](../how-to/surrogate-restarts.md) is the one advanced page:
+fitting a model on the evidence, and descending the acquisition it proposes.
 [How it works](../explanation/how-it-works.md) is the derivation: why the
 denominator floor is anchored to the gradient, the cost counters, and what this
 library does and does not take from SOAR.
-[Surrogate restarts](../how-to/surrogate-restarts.md) is the one advanced page:
-fitting a model on the evidence, and descending the acquisition it proposes.
+[API Reference](../reference/api.md) is the contract for every name, generated
+from the docstrings: start there when you have a name and need its signature.

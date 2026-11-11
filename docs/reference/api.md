@@ -22,7 +22,8 @@ path, hence `n_paths` of them; `flock_x` is the flock as the run ended.
 
 **What gets evaluated.** A **point** is one candidate: coordinates and the value
 there, with the gradient once it has been bought; the point a path commits -
-coordinates, value and gradient - is a `PathPoint`. A **fused pass** is one call
+coordinates, value and gradient - is a `PathPoint`. A **batch** is the `(M, d)`
+points one call serves. A **fused pass** is one call
 that returns value and gradient together. A **trial** is one point a step looks
 at, served through `serve_trials`: when `eval_f` is connected a trial costs its
 value alone, and without it every trial is itself a fused pass. A **step** is
@@ -35,14 +36,17 @@ adds one fused pass however many trials it read. A winner that does not survive
 that batch's finite check, or that was read as non-finite, stalls the path rather
 than being committed.
 
-**The seams.** A **seam** - a hook, in the usual callback sense - is a function
-the engine calls through, named by what it carries: the two **evaluation seams**
-are `eval_f_g` (the fused pass) and `eval_f` (value only), and the two **plugin
-seams** are `LocalSolver` and `GlobalModel`. An **arm** is one variant of a
-plugin, and an **ask** is one `propose` call.
+**The seams.** A **seam** is a name the engine calls through, named by what it
+carries: an **evaluation seam** is a function handed in (`eval_f_g`, the fused
+pass, and `eval_f`, value only), while a **plugin seam** is a protocol whose
+methods the engine calls (`LocalSolver`, `GlobalModel`). An **arm** is one
+variant of a plugin, an **ask** is one `propose` call, and a **cohort** is the
+set of paths one call covers - the stepping paths for the method's `propose`,
+the restarting ones for the model's.
 
 Names with an entry below are exported from `soar_lite`. The words *settle*,
-*owed*, *arm* and *ask* are this page's vocabulary for how the engine works -
+*owed*, *arm*, *ask* and *cohort* are this page's vocabulary for how the engine
+works -
 there is no such import.
 
 

@@ -193,7 +193,8 @@ The two plugin seams are keyword arguments: pass `local_solver=` or
 What ships is not a general-purpose toolkit but a small set of defaults picked by
 judgment — which is what `-lite` signals. They are aimed at scientific numerical
 optimization, where the variables carry physical units and the objective's scale
-is rarely yours to pick: once the first secant pair exists the step is
+is rarely yours to pick: once the first secant pair exists — two successive
+evaluations — the step is
 invariant to rescaling of the objective, so one set of knobs serves any units,
 and nobody has to non-dimensionalize the problem by hand first. The warm-up step
 is the exception — its whole-step length is still chosen for the units in play.

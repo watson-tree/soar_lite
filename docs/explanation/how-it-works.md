@@ -239,7 +239,7 @@ the direction's units differ.
 
 A path stops when `‖P g‖ ≤ τ_rel·‖g₀‖`, where `P` drops the components on a
 bound whose descent direction points out of the box, `τ_rel` is unitless and
-defaults to `1e-6`, and
+defaults to `1e-6` (a `DiagonalPreconditioner` knob, not a schedule one), and
 `g₀` is the gradient at the path's current start, reset at each restart, and it
 is **not** projected: the test is relative to the start's overall scale rather
 than to each component's own, so the start's wall reaction stays in the
@@ -402,7 +402,7 @@ bigger; the surrogate arm below is what pays for a fit.
 
 **The surrogate arm.** `BLRGlobalModel` fits a Bayesian linear posterior on the
 samples already served (features given by an injected `Projection`), and
-`propose` returns the local minimum of `−log EI` (expected improvement) found
+`propose` returns the local minimizers of `−log EI` (expected improvement) found
 inside the domain by `MinimizeFn`. Until `observe` has given the posterior a
 spread to standardize by, `propose` has nothing to fit and answers with the
 domain's own draw, never calling `minimize` — see
@@ -675,7 +675,7 @@ holds more:
 | `batches` | **batches** served (a batch counts as 1) | parallel efficiency: how much improvement one call buys |
 
 The engine has two evaluation seams (`eval_f_g`, a fused batch; `eval_f`, values
-only), each with a pair of counts, so a result carries four fields:
+only), each with a pair of counts, so `result.work` carries four:
 
 | Field | Counts |
 | --- | --- |
@@ -714,7 +714,7 @@ axis one evaluation is one parallel call's cost, and only then does
 language removes fixed overhead but cannot change the structural "how many points
 one evaluation must serve".
 
-Stopping is recorded in iterations, and the four fields report rather than
+Stopping is recorded in iterations, and the four counts report rather than
 budget: `batches` is a different quantity from `max_iters`, so "how many batches a
 full horizon spent" must be read from `n_*_batches`, never by using `max_iters` as
 a cost number. **Never mix them**: one table or one plot uses one axis and must
@@ -815,7 +815,7 @@ results. The citation is for attribution and to locate the difference.
   Society for Industrial and Applied Mathematics.
   [doi.org/10.1137/1.9780898719857](https://doi.org/10.1137/1.9780898719857).
   The textbook account of the secant equation `B s = y` and the SR1 update,
-  whose diagonal degeneration is the ratio above.
+  whose diagonal degeneration is [the secant ratio](#the-secant-ratio).
 - Mathesen, L., Pedrielli, G., Ng, S. H., & Zabinsky, Z. B. (2021). Stochastic
   optimization with adaptive restart: A framework for integrated local and
   global learning. *Journal of Global Optimization, 79*(1), 87–110.

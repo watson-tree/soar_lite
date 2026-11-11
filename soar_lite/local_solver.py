@@ -149,8 +149,9 @@ class DiagonalPreconditioner(LocalSolver):
                 gradient, in [0, 1).
             theta: gradient-norm floor coefficient (``λ = θ·|g_i|`` for "abs",
                 ``θ·g_i²`` for "rms"), >= 0.
-            alpha0: direction multiplier every path is armed at, > 0; the two
-                phases read it in different units (see above).
+            alpha0: direction multiplier every path is armed at, > 0; one knob,
+                two units - a fraction of the natural step in steady state, and
+                ``[x]²/[f]`` in the warm-up, where the direction is ``-g``.
             tau_rel: relative gradient-norm stopping threshold, tested against
                 ``‖g_0‖``, in (0, 1).
 

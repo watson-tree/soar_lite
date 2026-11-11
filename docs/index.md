@@ -107,7 +107,8 @@ The two plugin seams are keyword arguments: pass `local_solver=` or
 What ships is not a general-purpose toolkit but a small set of defaults picked by
 judgment — which is what `-lite` signals. They are aimed at scientific numerical
 optimization, where the variables carry physical units and the objective's scale
-is rarely yours to pick: once the first secant pair exists the step is
+is rarely yours to pick: once the first secant pair exists — two successive
+evaluations — the step is
 invariant to rescaling of the objective, so one set of knobs serves any units,
 and nobody has to non-dimensionalize the problem by hand first. The warm-up step
 is the exception — its whole-step length is still chosen for the units in play.
@@ -126,11 +127,11 @@ where the two depart.
 - **[Surrogate restarts](how-to/surrogate-restarts.md)** — when `BLRGlobalModel`
   is in play and its acquisition function has to be descended by the engine
   itself.
-- **[API Reference](reference/api.md)** — when you have a name and need its
-  contract; generated from the docstrings.
 - **[How it works](explanation/how-it-works.md)** — when you want the reasons:
   the derivation behind the local step, how cost is counted, and how this library
   departs from SOAR.
+- **[API Reference](reference/api.md)** — when you have a name and need its
+  contract; generated from the docstrings.
 
 ## Citing
 
