@@ -1,8 +1,9 @@
 """The default local solver: diagonal secant preconditioning (first order).
 
 `DiagonalPreconditioner` descends along ``-d ⊙ m``, where the per-coordinate
-scale ``d`` is the magnitude ratio of one secant pair (|Δx|/|Δy| in ``abs``
-mode, √(Δx²/Δy²) in ``rms`` mode), smoothed over the path's history. With
+scale ``d`` is the magnitude ratio of one secant pair, smoothed over the path's
+history - ``abs`` averages |Δx| and |Δy|, ``rms`` averages Δx² and Δy² and takes
+the root of their ratio. With
 ``mu > 0`` the direction ``m`` is the current momentum, an unprojected blend of
 the gradient and its own history; at ``mu = 0`` it is the bare gradient ``g``.
 It implements the engine's `LocalSolver` contract and owns only direction, step

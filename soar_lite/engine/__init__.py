@@ -3,11 +3,11 @@
 This package is two modules behind one facade.
 `soar_lite.engine.contracts` is what a plugin author reads: the two plugin
 contracts (`LocalSolver`, `GlobalModel`), the data they exchange (`PathPoint`,
-`Pending`, `NPathResult`, `NPathStatus`), the evaluation-seam aliases, and
-`pointwise`. `soar_lite.engine.schedule` is the machine: the `n_path_schedule`
-loop and the four private holders a run's state lives in. This module re-exports
-the public half, so `from soar_lite.engine import LocalSolver` names the contract
-without a caller knowing which file holds it.
+`Pending`, `Work`, `NPathResult`, `NPathStatus`), the evaluation-seam aliases,
+and `pointwise`. `soar_lite.engine.schedule` is the machine: the
+`n_path_schedule` loop and the four private holders a run's state lives in.
+This module re-exports the public half, so `from soar_lite.engine import
+LocalSolver` names the contract without a caller knowing which file holds it.
 
 The dependency direction is one-way - plugins import these types, never the
 reverse:

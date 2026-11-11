@@ -1,10 +1,10 @@
 """The plugin contracts, the data they exchange, and the evaluation seams.
 
 `LocalSolver` and `GlobalModel` are the two seams a caller plugs into;
-`PathPoint`, `Pending` and the evaluation-seam aliases are what crosses them; and
-`NPathResult` with `NPathStatus` is the other half of the same exchange, what the
-caller reads back. `pointwise` builds both evaluation seams from one per-point
-objective.
+`PathPoint`, `Pending`, `Work` and the evaluation-seam aliases are what crosses
+them; and `NPathResult` with `NPathStatus` is the other half of the same
+exchange, what the caller reads back. `pointwise` builds both evaluation seams
+from one per-point objective.
 
 The machine depends on these types, never the reverse: nothing here imports
 `soar_lite.engine.schedule`. The package facade re-exports both halves, so a

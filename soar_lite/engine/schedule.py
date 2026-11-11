@@ -838,9 +838,9 @@ class _Paths:
         moves it deferred. A run without the seam serves everything fused and
         reaches `settle` already carrying both halves.
 
-        The two halves touch disjoint paths, and every call into a collaborator
-        is per path, so deciding all moves before placing any is the same
-        schedule as placing each as it is decided.
+        The two halves touch disjoint paths, and no decision reads a point
+        placed this iteration, so deciding all moves before placing any is the
+        same schedule as placing each as it is decided.
 
         A flock with nothing left to do ends the run instead of idling: when no
         path restarts and every path is stalled, `_AllStalled` is raised before
@@ -947,10 +947,9 @@ class _Paths:
         and `settle` buys the rest.
 
         Nothing is committed here but the stall bit: a path ends this iteration
-        stalled exactly when its method named no winner, or when the winner turns
-        out not to be usable (`_step_winners` decides that). A stalled path is never in
-        `stepping`: the engine asks nothing more of it until a restart re-draws
-        it.
+        stalled exactly when its method named no winner, or when `_place` refuses
+        the winner as unusable. A stalled path is never in `stepping`: the engine
+        asks nothing more of it until a restart re-draws it.
         """
         if not stepping:
             # Every path restarted this iteration: nothing steps.
