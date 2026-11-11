@@ -234,9 +234,7 @@ Published at <https://watson-tree.github.io/soar_lite/>.
 
 ## Contributing
 
-[`CONTRIBUTING.md`](CONTRIBUTING.md) holds the checks a change has to pass
-(pytest, ruff, pyright, `mkdocs build --strict`), the sync contract between these
-two front doors, and where the benchmark suite lives.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Citing
 
