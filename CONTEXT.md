@@ -49,6 +49,24 @@ counted, so a refused placement reports `n_iters = 0` and a refused first
 step `n_iters = 1`.
 _Avoid_: round (retired), epoch, iterations (as a name for the count)
 
+**redraw set**:
+The paths an iteration gives a fresh start: every path holding no point — always,
+whatever `restart_stalled` says, which is how iteration 0 places the flock and
+how a refused start eventually gets replaced — plus every stalled path when the
+knob is on. Its size is what the engine asks the model for, one start per path,
+so iteration 0 is the whole flock and a later one is only the paths that
+stalled. Iteration 0 with an `x0` is the one redraw set whose starts the caller
+supplied: `x0` is consumed there and no model is asked.
+_Avoid_: restart list, restart batch
+
+**cohort**:
+The paths that step this iteration: neither in the redraw set nor stalled. One
+`local_solver.propose` call is handed exactly this set, so a method never sees a
+path the engine has stopped — not even a step that would answer `None`. It is
+not the flock, and not just the redraw set's complement: a path parked by
+`restart_stalled=False` belongs to neither, and sits out while the rest moves.
+_Avoid_: the flock, active paths
+
 **best**:
 The run's running best, a single `f`/`x`: the best *feasible* point — the
 run's reported answer, and what `NPathResult` calls `f`/`x`. The engine is the
