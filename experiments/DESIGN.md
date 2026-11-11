@@ -163,11 +163,11 @@ Two appendix panels, property demos rather than races:
    re-measure in two unit systems (here `x' = 10x`, see `INVARIANCE_SCALE` in
    `harness/appendix.py`), **zero retune**. soar-lite's two best-so-far curves
    overlap along the whole run; Adam's two separate, because one `lr` cannot be
-   right in both unit systems. Exact per-step covariance (`x̃=c·x ⇒ d̃=c²d,
-   Δx̃=c·Δx`) is real but holds only for the secant-based steady state: the
-   **warmup step is by design not unit-invariant** (a scalar `α` applied
-   uniformly across mixed-unit coordinates), so the first secant pair — and
-   anything seeded by it — is not the transformed pair.
+   right in both unit systems. Exact per-step covariance (`x̃=c·x ⇒
+   precon↦c²·precon, Δx̃=c·Δx`) is real but holds only for the secant-based
+   steady state: the **warmup step is by design not unit-invariant** (a scalar
+   `α` applied uniformly across mixed-unit coordinates), so the first secant
+   pair — and anything seeded by it — is not the transformed pair.
 
    The rotated quadratic is the control because it keeps that transient out of
    the plotted curve and still leaves something to plot. Descent continues

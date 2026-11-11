@@ -90,10 +90,10 @@ schedules the work, and nothing beyond JAX and the standard library.
   redraws it — a path that holds a point needs `restart_stalled` on, while a
   path that holds none is always re-drawn — from a fresh point.
 - **The local method, `LocalSolver`** — one path's descent step,
-  `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
-  from successive gradients, no matrix and no scalar learning rate to tune. It
-  takes one whole step, value and gradient read together; a method that does
-  enumerate
+  `DiagonalPreconditioner` by default: a per-coordinate inverse-curvature
+  scale re-estimated from successive gradients, no matrix and no scalar
+  learning rate to tune. It takes one whole step, value and gradient read
+  together; a method that does enumerate
   candidates names its own winner, and the engine settles that winner alone.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
   the run's evidence sink; it also places iteration 0's flock when `x0` is left

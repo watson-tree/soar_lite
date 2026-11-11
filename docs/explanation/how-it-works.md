@@ -27,9 +27,8 @@ from outside.
 The objective is called in batches: given a batch of points `x` of shape
 `(M, d)` — `M` points, `d` coordinates — it returns `f` of shape `(M,)`, `∇f`
 of shape `(M, d)`, and optionally a feasibility mask of shape `(M,)`, `None`
-meaning all feasible. (`d` is the dimension here; *The local step* reuses `d`
-for the per-coordinate step scale, flagged where the two meet.) The goal is to
-minimize `f` over the feasible points. Infeasible points are still served, and
+meaning all feasible. The goal is to minimize `f` over the feasible points.
+Infeasible points are still served, and
 their gradients still drive the paths: the mask decides only what may become the
 final answer.
 
@@ -62,13 +61,12 @@ Quasi-Newton starts from the **secant equation** `B s = y`, with `B ≈ H`,
 dropping the coupling (that is, assuming `yᵢ = Bᵢᵢ sᵢ`) gives directly
 
 ```text
-Bᵢᵢ = yᵢ / sᵢ        ⇒        dᵢ := 1/Bᵢᵢ ≈ sᵢ / yᵢ
+Bᵢᵢ = yᵢ / sᵢ        ⇒        preconᵢ := 1/Bᵢᵢ ≈ sᵢ / yᵢ
 ```
 
-`dᵢ` is the observed displacement over the observed change in gradient on that
-coordinate, with units `[x]²/[f]`, independent per coordinate — `d` here is the
-step scale, not the dimension of the batch shape `(M, d)` (see
-[The contract](#the-contract-one-objective-value-and-gradient)). The ratio as
+`preconᵢ` is the observed displacement over the observed change in gradient on
+that coordinate, with units `[x]²/[f]`, independent per coordinate — the
+per-coordinate inverse curvature. The ratio as
 written can come out negative when `sᵢ` and `yᵢ` disagree in sign, which is
 why the sign is discarded first: the magnitudes `|s|` and `|y|` are what get
 smoothed below, never `|s/y|`. (The same quantity follows from the diagonal
@@ -81,8 +79,8 @@ secant pair, not on the ratio itself**:
 
 | Variant | Numerator | Denominator | Inverse curvature | Step |
 | --- | --- | --- | --- | --- |
-| `"abs"` (mean magnitude) | `S₁ = EMA(|s|)` | `Y₁ = EMA(|y|)` | `d = S₁ / max(Y₁, λ)` | `Δx = −d ⊙ g` |
-| `"rms"` (root mean square, default) | `S₂ = EMA(s²)` | `Y₂ = EMA(y²)` | `d = √(S₂ / max(Y₂, λ))` | `Δx = −d ⊙ g` |
+| `"abs"` (mean magnitude) | `S₁ = EMA(|s|)` | `Y₁ = EMA(|y|)` | `precon = S₁ / max(Y₁, λ)` | `Δx = −precon ⊙ g` |
+| `"rms"` (root mean square, default) | `S₂ = EMA(s²)` | `Y₂ = EMA(y²)` | `precon = √(S₂ / max(Y₂, λ))` | `Δx = −precon ⊙ g` |
 
 `λ` in both denominators is the per-coordinate floor, defined in
 [The floor](#the-floor-a-guard-on-the-denominator).
@@ -95,27 +93,27 @@ rate, and the default `β = 0.63` is about 2.7 steps (`β = 0` keeps none, so on
 pair decides). Magnitudes rather than the
 signed `sᵢ` or `yᵢ` are used to keep the estimate strictly positive: a signed
 value drifts, and a pair of opposite-sign differences can drive it through zero
-— flipping `d`'s sign or blowing it up — while smoothing `|s|` and `|y|` keeps
-`d ≥ 0`, which is what keeps the step descending. Why there is a window at
-all — what it buys and what it costs — is [Smoothing](#smoothing).
+— flipping `precon`'s sign or blowing it up — while smoothing `|s|` and `|y|`
+keeps `precon ≥ 0`, which is what keeps the step descending. Why there is a
+window at all — what it buys and what it costs — is [Smoothing](#smoothing).
 
-The step then takes `Δx = −diag(B)⁻¹ g = −d ⊙ g`. What this does is change the
-direction from a **gradient-like quantity** into a **displacement-like
+The step then takes `Δx = −diag(B)⁻¹ g = −precon ⊙ g`. What this does is change
+the direction from a **gradient-like quantity** into a **displacement-like
 quantity**. `−g` has units `[f]/[x]`; using it directly as a displacement means
 that when you magnify a coordinate (`x̃ = c·x`) the gradient shrinks (`g̃ = g/c`),
 so the step shrinks instead of growing — the scale runs backwards. Multiplying
-by `d` supplies the missing `1/H`. It is one element-wise multiply by `d` (a
-ratio per coordinate), with no matrix, no linear solve, and no scalar learning
-rate.
+by `precon` supplies the missing `1/H`. It is one element-wise multiply by
+`precon` (a ratio per coordinate), with no matrix, no linear solve, and no
+scalar learning rate.
 
 Everything above steps along the bare gradient `g` — the quasi-Newton form just
 reconstructed. The step can also carry a momentum, the gradient EMA
 `m = (1−μ)·g + μ·m_{k−1}` with `μ ∈ [0,1)`; at `μ = 0` that is `m = g` and
-nothing above changes. Because `d ≥ 0` by construction (absolute value or
-square, then a positive floor), `(−d⊙g)·(−g) ≥ 0` holds coordinate-wise, so a
-preconditioned gradient-like direction is a descent direction, and at `μ = 0`
-the direction is a guaranteed descent direction — no acceptance test is needed,
-though the whole step may still fail to decrease `f`.
+nothing above changes. Because `precon ≥ 0` by construction (absolute value or
+square, then a positive floor), `(−precon⊙g)·(−g) ≥ 0` holds coordinate-wise,
+so a preconditioned gradient-like direction is a descent direction, and at
+`μ = 0` the direction is a guaranteed descent direction — no acceptance test is
+needed, though the whole step may still fail to decrease `f`.
 With `μ > 0` the direction is the momentum and that guarantee is gone — see
 [Momentum](#momentum), where the loss of that guarantee is deliberate — but the
 closer `μ` is to zero, the more nearly the direction still descends. The default
@@ -135,17 +133,17 @@ stability, and the two sides are:
   The same true `Hᵢᵢ` therefore comes back higher on one step and lower on the
   next, purely because the path turned; that step-to-step wobble carries no
   information about the curvature. An EMA spanning a few steps averages the
-  wobble out and leaves `d` steadier. On a rotated quadratic, where the
+  wobble out and leaves `precon` steadier. On a rotated quadratic, where the
   direction turns hard every step, this is `β`'s whole effect.
 - **Currentness.** Where the true curvature changes along the path — a
   non-quadratic landscape — every pair's reading is honest, and blending older
   pairs re-weights the estimate toward points the path has left behind. There
-  the window is pure lag: it flattens the path of `d`, but the shape it flattens
+  the window is pure lag: it flattens the path of `precon`, but the shape it flattens
   is the real terrain, not a coupling artifact.
 
 On a diagonal quadratic neither side applies — each pair reads `1/Hᵢᵢ` exactly
 and nothing varies — so `β` is there neutral. `β = 0` is the currentness end of
-the range `[0, 1)`: `d` reads only the newest accepted secant. `β` defaults to
+the range `[0, 1)`: `precon` reads only the newest accepted secant. `β` defaults to
 0.63 (a window of about 2.7 steps) — a plain default, with no deeper tuning
 behind the number. (`μ` shapes the *direction* — see [Momentum](#momentum) — and
 `β` the *scale*; the scale reads the raw gradient difference `g_k − g_{k−1}`,
@@ -154,18 +152,18 @@ never the smoothed `m`, so the two knobs never feed each other.)
 ### Unit invariance, and why there is no scalar learning rate
 
 Rescaling a coordinate, `x̃ = c·x`, rescales the secant to `s̃ = c·s` and the
-gradient to `g̃ = g/c` (hence `ỹ = y/c`), so `d̃ = s̃/ỹ = (c·s)/(y/c) = c²·d`,
-and the step follows it:
+gradient to `g̃ = g/c` (hence `ỹ = y/c`), so `precon` scales by `c²`, and the
+step follows it:
 
 ```text
-Δx̃ = −d̃ ⊙ g̃ = −(c²·d) ⊙ (g/c) = −c·(d ⊙ g) = c·Δx
+Δx̃ = −(c²·precon) ⊙ (g/c) = −c·(precon ⊙ g) = c·Δx
 ```
 
 Rescaling the value, `f̃ = c_f·f`, leaves `s` alone and scales `g̃ = c_f·g`, so
-`d̃ = s/ỹ = s/(c_f·y) = d/c_f`, and the step is unchanged:
+`precon` shrinks by `c_f`, and the step is unchanged:
 
 ```text
-Δx̃ = −(d/c_f) ⊙ (c_f·g) = −d ⊙ g = Δx
+Δx̃ = −(precon/c_f) ⊙ (c_f·g) = −precon ⊙ g = Δx
 ```
 
 That is exactly the scaling a step carrying physical units should have, and it
@@ -181,23 +179,23 @@ can be right for all coordinates at once. (The warm-up step is the one exception
 
 `λ = θ·|gᵢ|` for `"abs"` (units `[f]/[x]`) or `λ = θ·gᵢ²` for `"rms"` (units
 `[f]²/[x]²`), with `θ ≥ 0` unitless (default `1e-3`; `θ = 0` turns the floor
-off, so `d = S/Y` has nothing catching a vanishing `Y`), and the denominator is
+off, so `precon = S/Y` has nothing catching a vanishing `Y`), and the denominator is
 `max(Y, λ)`. It is anchored to the **current gradient** rather than to the first
 secant `y₀` or the current value `|f_k|`: the floor has to vanish with `g`, not
 with `y`. A flat but unconverged coordinate (`y → 0` while `g ≠ 0`) still gets a
 finite step, and a genuinely converged coordinate (`g → 0`) is caught by the
 stopping test before the division ever repeats at `g ≈ 0`.
 
-Anchoring to `g` is safe because the step then multiplies `d` and `g`
-element-wise. When `Y` bottoms out, `d` is `1/|g|` up to constants — `S₁/(θ·|g|)`
-in `"abs"`, `√(S₂/(θ·gᵢ²))` in `"rms"` — and the full step `−d ⊙ g` reduces to
-`−(S₁/θ)·sign(g)` or `−(√S₂/√θ)·sign(g)`: a finite `[x]`-valued move in the
-direction of `−sign(g)`. The `g` inside the floor cancels the `g` it is
-multiplied by, which is why anchoring to `g` cannot make the step explode as
-`g → 0`. The floor is a **guard**: it only touches `d` where `Y < λ`; everywhere
-else `d = S/Y` stands, and how aggressive the step should be stays with the
-separate knob `alpha0` (whole-step damping, default `1`) — a
-`DiagonalPreconditioner` parameter, not a schedule one — see
+Anchoring to `g` is safe because the step then multiplies `precon` and `g`
+element-wise. When `Y` bottoms out, `precon` is `1/|g|` up to constants —
+`S₁/(θ·|g|)` in `"abs"`, `√(S₂/(θ·gᵢ²))` in `"rms"` — and the full step
+`−precon ⊙ g` reduces to `−(S₁/θ)·sign(g)` or `−(√S₂/√θ)·sign(g)`: a finite
+`[x]`-valued move in the direction of `−sign(g)`. The `g` inside the floor
+cancels the `g` it is multiplied by, which is why anchoring to `g` cannot make
+the step explode as `g → 0`. The floor is a **guard**: it only touches `precon`
+where `Y < λ`; everywhere else `precon = S/Y` stands, and how aggressive the
+step should be stays with the separate knob `alpha0` (whole-step damping,
+default `1`) — a `DiagonalPreconditioner` parameter, not a schedule one — see
 [The warm-up step](#the-warm-up-step). A line search is not a knob either: a
 method that wants one enumerates trials itself and names the winner (see
 [the step channel](#the-step-channel-trials-a-winner-or-no-winner)).
@@ -207,13 +205,14 @@ method that wants one enumerates trials itself and names the winner (see
 Warm-up and steady state share the **same step mechanism**: take the full
 proposal along the current direction, and let `step` record the committed step.
 The two phases differ only in the **direction**: warm-up has no secant pair yet,
-so `d` cannot be estimated and the direction is `−g₀`; once the first `(s, y)`
-exists it becomes `−d⊙m` — the momentum, equal to `g` at the default `μ = 0` (see
-[Momentum](#momentum)). `alpha0` is the one knob either phase reads.
+so `precon` cannot be estimated and the direction is `−g₀`; once the first
+`(s, y)` exists it becomes `−precon⊙m` — the momentum, equal to `g` at the
+default `μ = 0` (see [Momentum](#momentum)). `alpha0` is the one knob either
+phase reads.
 
 `DiagonalPreconditioner` reads no value at all: both phases take **one whole
 step, read by no value** — warm-up commits `x − α0·g₀` and steady state commits
-`x − α0·d⊙m` — so neither runs a line search nor compares against its start. Its
+`x − α0·precon⊙m` — so neither runs a line search nor compares against its start. Its
 `propose` serves no trial and names its proposal as the winner, and the
 iteration's one fused `settle` batch is the whole price of the step.
 
@@ -227,7 +226,7 @@ cheaper position.
 
 One exception to unit invariance: the warm-up step is **not** unit-invariant.
 `alpha0` is a bare number, but its effective units depend on the phase. In
-the steady state `d⊙m` is already a displacement, so `alpha0` reads as a
+the steady state `precon⊙m` is already a displacement, so `alpha0` reads as a
 fraction of the natural step. In the warm-up `−g₀` is a gradient-like quantity
 (`x̃ = c·x` gives `g̃ = g/c`, so magnifying a coordinate shrinks its gradient),
 so here `alpha0` effectively carries `[x]²/[f]` — at the default `alpha0 = 1`
@@ -285,7 +284,7 @@ m_k = (1−μ)·g_k + μ·m_{k−1},        m_k = g_k when μ = 0
 direction = m_k
 ```
 
-`m` has the units of `g`, so `d⊙m` is still displacement-like and the switch
+`m` has the units of `g`, so `precon⊙m` is still displacement-like and the switch
 costs nothing in units. It is the unprojected heavy-ball direction
 (`m_k = g_k + μ(m_{k−1} − g_k)`), and it is not Nesterov's method: Nesterov
 consumes the gradient difference `y` on its own, hiding the second-order units
@@ -297,7 +296,7 @@ memory buys is a property of two things the preconditioner cannot see:
 
 - **The scaled spectrum.** Memory trades overshoot along steep directions
   against slow progress along flat ones, so the window that helps is set by how
-  far the curvatures spread *after* `d` has taken the per-coordinate scale out —
+  far the curvatures spread *after* `precon` has taken the per-coordinate scale out —
   the conditioning the iteration actually feels, not the one `f` has on its
   own. A wide spread wants a long window, a spectrum already near one scale
   wants none, and the ideal damping follows the *shape* of that spread as well
@@ -316,15 +315,15 @@ than a tuned compromise. A caller who knows their spectrum, or their noise,
 picks `μ` on purpose, from that knowledge rather than from a number here.
 
 **`μ` does not repair the diagonal approximation.** It adds no off-diagonal
-curvature, changes no `d`, and cannot turn a wrong direction into a right one;
-what it changes is the iteration's *response* along the direction `d` already
+curvature, changes no `precon`, and cannot turn a wrong direction into a right one;
+what it changes is the iteration's *response* along the direction `precon` already
 gives. Where the off-diagonal part of `H` is dropped, it stays dropped —
 recovering it is what the global side is for, and nothing on the local side
 stands in for it.
 
 **It is not projected, and it does not preserve a descent direction.** Projecting
-`m` onto `g`'s orthogonal complement under the metric weighted by `d` would give
-the invariant `⟨d⊙(g+m⊥), g⟩ > 0`, at the price of removing the component of `m`
+`m` onto `g`'s orthogonal complement under the metric weighted by `precon` would give
+the invariant `⟨precon⊙(g+m⊥), g⟩ > 0`, at the price of removing the component of `m`
 along `g` —
 and that component is exactly what damps zigzag, cancels overshoot, and
 accumulates progress in flat regions.
@@ -355,7 +354,7 @@ by a surrogate fitted on the samples already served (`BLRGlobalModel`, Bayesian
 linear regression). The default is the former: drawing a point costs one row in
 the next batch and fits nothing, so its model cost is independent of the
 dimension.
-The sweet spot of a local method is the landscape where `d` (the step scale) is
+The sweet spot of a local method is the landscape where `precon` (the step scale) is
 right, and restarts there should be rare anyway; keeping a surrogate ready for
 it trades global-side cost for a crutch most runs never lean on.
 
@@ -730,7 +729,7 @@ reads the same counters off a worked result.
   diversity of `n_paths` paths plus `restart_stalled` re-drawing fresh starts —
   from the domain, or from a fitted surrogate where one is wired in.
 - The per-coordinate estimate ignores the coupling term `Σ_{j≠i} Hᵢⱼ sⱼ`; since
-  `yᵢ = Σ_j Hᵢⱼ sⱼ`, the off-diagonal entries stay inside `|yᵢ|` and make `d` a
+  `yᵢ = Σ_j Hᵢⱼ sⱼ`, the off-diagonal entries stay inside `|yᵢ|` and make `precon` a
   biased estimate of `1/Hᵢᵢ` (the stronger the coupling, the bigger the bias —
   typically under-stepping, more stable and slower, though the terms can also
   cancel). That is "safe" traded for "potentially fast".

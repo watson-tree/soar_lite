@@ -206,7 +206,7 @@ def _warmup(
 
 
 def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
-    """Quadratic f = ½Σhᵢxᵢ²: the warm-up secant gives d = 1/h, so the step hits 0."""
+    """Quadratic f = ½Σhᵢxᵢ²: warm-up secant gives precon = 1/h, so the step hits 0."""
     h = jnp.array([2.0, 4.0, 8.0])
     x0 = jnp.ones(3)
 
@@ -222,7 +222,7 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     # the secant is exact at any length on a quadratic, so the overshoot costs
     # one point rather than a backtrack walk.
     _warmup(solver, quad)
-    # The warm-up ends re-armed at a full step: the next proposal is x - d·g,
+    # The warm-up ends re-armed at a full step: the next proposal is x - precon·g,
     # and alpha only ever multiplies it.
     assert solver._state[0].alpha == 1.0
     assert not solver._state[0].is_warmup
@@ -250,7 +250,7 @@ def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
 
 
 def test_diag_step_scales_with_the_coordinate_unit() -> None:
-    """Invariant: x̃ = c·x ⇒ d̃ = c²·d and Δx̃ = c·Δx, on one scaled secant.
+    """Invariant: x̃ = c·x ⇒ precon ↦ c²·precon and Δx̃ = c·Δx, on one scaled secant.
 
     Pinned on `propose` with an injected secant pair, not through a warm-up: the
     warm-up step is deliberately *not* coordinate-invariant (its direction is
@@ -285,14 +285,14 @@ def test_diag_gradient_floor_carries_a_flat_secant() -> None:
     x1 = p.x - g  # the full step, committed as proposed
     trial = PathPoint(x=x1, f=0.5, g=g)  # g unchanged ⇒ y = 0
     solver.step(0, trial)
-    # d_i = |s_i|/(√θ·|g_i|) = |g_i|/(√θ·|g_i|) = 1/√θ = 100 for both dims.
+    # precon_i = |s_i|/(√θ·|g_i|) = |g_i|/(√θ·|g_i|) = 1/√θ = 100 for both dims.
     assert is_close(proposed(solver).x, x1 - 100.0 * g, 1e-9)
     step = proposed(solver).x - x1
-    assert float(jnp.vdot(step, g)) < 0.0  # d > 0 ⇒ always a descent direction
+    assert float(jnp.vdot(step, g)) < 0.0  # precon > 0 ⇒ always a descent direction
 
 
 def test_diag_floor_is_a_floor_not_an_addend() -> None:
-    """Set den = max(Y, λ), not Y + λ: λ never deflates a curvature-dominated d.
+    """Set den = max(Y, λ), not Y + λ: λ never deflates a curvature-dominated estimate.
 
     At the crossover Y = λ the two spellings differ by exactly √2, so a secant
     engineered onto that point makes the assert pick the max form out
@@ -310,7 +310,7 @@ def test_diag_floor_is_a_floor_not_an_addend() -> None:
     solver.step(0, trial)
     lam = theta * jnp.square(g1)
     assert is_close(solver._state[0].y_ema, lam, 1e-12)  # secant sits on the crossover
-    # max floor: d = √(S/max(Y, λ)) = √(g0²/θg1²) = (1+√θ)/√θ per coordinate.
+    # max floor: precon = √(S/max(Y, λ)) = √(g0²/θg1²) = (1+√θ)/√θ per coordinate.
     step = proposed(solver).x - trial.x
     scale = (1.0 + math.sqrt(theta)) / math.sqrt(theta)
     assert is_close(step, -scale * g1, 1e-9)
@@ -407,13 +407,13 @@ def _solver_with_secant(
 
 
 def _direction(solver: DiagonalPreconditioner) -> jnp.ndarray:
-    """Return the proposed direction d⊙m, with the alpha multiplier divided out."""
+    """Return the proposed direction precon⊙m, with the alpha multiplier divided out."""
     state = solver._state[0]
     return (state.point.x - proposed(solver).x) / state.alpha
 
 
 def test_diag_momentum_is_the_committed_gradient_blend() -> None:
-    """The direction is -d⊙m with m = (1-mu)·g + mu·m_prev, unprojected.
+    """The direction is -precon⊙m with m = (1-mu)·g + mu·m_prev, unprojected.
 
     No projection means the descent gain on g is *not* pinned to the plain
     step's: the blend adds ``mu·m_prev`` wherever the history helps or opposes
@@ -424,14 +424,16 @@ def test_diag_momentum_is_the_committed_gradient_blend() -> None:
     mu = 0.5
     plain, _ = _solver_with_secant(0.0, g)
     mom, _ = _solver_with_secant(mu, g)
-    d_plain = _direction(plain)  # d⊙g, alpha divided out
-    d_mom = _direction(mom)
-    d = d_plain / g  # per-coordinate d; both solvers blend the same secant
+    dir_plain = _direction(plain)  # precon⊙g, alpha divided out
+    dir_mom = _direction(mom)
+    precon = dir_plain / g  # per-coordinate scale; both solvers blend the same secant
     m_prev = g - Y_MOM  # restart seeded m with the step start's gradient
-    assert is_close(d_mom, d * ((1.0 - mu) * g + mu * m_prev), 1e-12)
-    assert not is_close(d_mom, d_plain, 1e-9)  # the momentum really was blended in
+    assert is_close(dir_mom, precon * ((1.0 - mu) * g + mu * m_prev), 1e-12)
+    assert not is_close(dir_mom, dir_plain, 1e-9)  # the momentum really was blended in
     # Unprojected: the gain is free to move off the plain step's value.
-    assert not is_close(float(jnp.vdot(d_mom, g)), float(jnp.vdot(d_plain, g)), 1e-9)
+    assert not is_close(
+        float(jnp.vdot(dir_mom, g)), float(jnp.vdot(dir_plain, g)), 1e-9
+    )
 
 
 def test_diag_propose_never_writes_the_momentum() -> None:
@@ -488,25 +490,25 @@ def test_diag_mu_zero_leaves_no_history_behind() -> None:
     assert jnp.array_equal(solver._state[0].m, landed.g)
 
 
-def test_diag_momentum_moves_only_where_d_has_support() -> None:
-    """The step is zero where d = 0, however much history that coordinate holds.
+def test_diag_momentum_moves_only_where_precon_has_support() -> None:
+    """The step is zero where precon = 0, however much history that coordinate holds.
 
-    There is no projection and no ``<g,g>_d == 0`` special case under the
-    current-momentum blend: the step is ``-alpha·d⊙m``, so a coordinate with
-    d = 0 contributes nothing even when the history is live there. The history
-    does reach a coordinate with d > 0 but g = 0 - heavy-ball's flat-direction
+    There is no projection and no ``<g,g>_precon == 0`` special case under the
+    current-momentum blend: the step is ``-alpha·precon⊙m``, so a coordinate with
+    precon = 0 contributes nothing even when the history is live there. The history
+    does reach a coordinate with precon > 0 but g = 0 - heavy-ball's flat-direction
     build-up - which is why the blend is not a pure rotation of the plain step.
     """
     start = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 0.5]))
     solver = DiagonalPreconditioner(mu=0.5, theta=0.0)
     solver.restart(0, start)
-    # y = [-1, 0] against s = [1, 0] leaves d = [1, 0]; g lives on coordinate 1.
+    # y = [-1, 0] against s = [1, 0] leaves precon = [1, 0]; g lives on coordinate 1.
     at = PathPoint(x=start.x + jnp.array([1.0, 0.0]), f=0.5, g=jnp.array([0.0, 0.5]))
     solver.step(0, at)  # m = ½·start.g + ½·at.g, live on coordinate 0
     assert is_close(solver._state[0].m, 0.5 * start.g + 0.5 * at.g, 1e-12)
     step = at.x - proposed(solver).x
-    assert is_close(step[1], 0.0, 1e-12)  # d = 0 there: no step, history or not
-    assert not is_close(step[0], 0.0, 1e-12)  # d > 0 and history live: it moves
+    assert is_close(step[1], 0.0, 1e-12)  # precon = 0 there: no step, history or not
+    assert not is_close(step[0], 0.0, 1e-12)  # precon > 0 and history live: it moves
 
 
 def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:

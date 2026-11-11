@@ -1,7 +1,7 @@
 """The default local solver: diagonal secant preconditioning (first order).
 
-`DiagonalPreconditioner` descends along ``-d ⊙ m``, where the per-coordinate
-scale ``d`` is the magnitude ratio of one secant pair, smoothed over the path's
+`DiagonalPreconditioner` descends along ``-precon ⊙ m``, where the per-coordinate
+scale ``precon`` is the magnitude ratio of one secant pair, smoothed over the path's
 history - ``abs`` averages |Δx| and |Δy|, ``rms`` averages Δx² and Δy² and takes
 the root of their ratio. With
 ``mu > 0`` the direction ``m`` is the current momentum, an unprojected blend of
@@ -86,13 +86,13 @@ class _PathState:
 class DiagonalPreconditioner(LocalSolver):
     """Per-coordinate secant magnitude ratio with a gradient-norm floor.
 
-    Each coordinate carries its own effective inverse curvature d_i, of
+    Each coordinate carries its own effective inverse curvature precon_i, of
     dimension [x]²/[f], estimated from the magnitude ratio of one secant
-    (s = x_k - x_{k-1}, y = g_k - g_{k-1}), and the step is Δx_i = -d_i·g_i.
+    (s = x_k - x_{k-1}, y = g_k - g_{k-1}), and the step is Δx_i = -precon_i·g_i.
     Every step takes the full proposal at ``alpha0`` along its own direction,
     and ``step`` records the committed step. The two phases differ only in the
     direction: the warm-up - the first step after a restart, with no secant pair
-    yet - descends along -g, and every later step along -d⊙m.
+    yet - descends along -g, and every later step along -precon⊙m.
 
     A path whose stopping test holds describes no step: ``propose`` answers
     ``None`` for it and the engine stalls it, so a converged path is not stepped
@@ -126,7 +126,7 @@ class DiagonalPreconditioner(LocalSolver):
         """Store the knobs; per-path state is seeded by restart.
 
         ``alpha0`` multiplies the step's direction, and the two phases give that
-        multiplier different units. In the steady state ``-d⊙m`` is already a
+        multiplier different units. In the steady state ``-precon⊙m`` is already a
         displacement, so ``alpha0`` reads as a fraction of the natural step. In
         the warm-up the direction is ``-g``, a gradient-like ``[f]/[x]``
         quantity, so ``alpha0`` carries ``[x]²/[f]`` there and no unit
@@ -142,7 +142,7 @@ class DiagonalPreconditioner(LocalSolver):
             moment: which magnitude ratio to smooth, ``"abs"`` (mean of |s|,
                 |y|) or ``"rms"`` (mean of s², y²).
             beta: EMA decay for the secant-magnitude smooth (window ≈ 1/(1-β)
-                steps), in [0, 1); 0 keeps no history, so ``d`` reads the
+                steps), in [0, 1); 0 keeps no history, so ``precon`` reads the
                 newest accepted secant.
             mu: EMA decay of the gradient history blended into the direction,
                 ``(1 - mu)·g + mu·m_prev``; 0 (the default) leaves the bare
@@ -249,7 +249,7 @@ class DiagonalPreconditioner(LocalSolver):
         the hook unused and lets `settle` buy the gradient. That is also why
         every proposal comes back with both halves owed: nothing was read.
 
-        Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x + alpha·(-d⊙m).
+        Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x + alpha·(-precon⊙m).
         Steps from the point the record holds - `restart` placed it and `step`
         moved it - so the step's start is not passed in a second time. ``m`` is
         the history ``step`` left behind: the EMA over the gradients at
@@ -269,8 +269,8 @@ class DiagonalPreconditioner(LocalSolver):
         state = self._state[i]
         if state.is_warmup:
             return state.point.x + state.alpha * (-state.point.g)
-        d = self._d_for(i, state.point.g)
-        return state.point.x + state.alpha * (-d * state.m)
+        precon = self._precon(i, state.point.g)
+        return state.point.x + state.alpha * (-precon * state.m)
 
     def _is_stationary(self, i: int, domain: Domain) -> bool:
         """Return whether path i's projected gradient has hit its floor.
@@ -316,22 +316,22 @@ class DiagonalPreconditioner(LocalSolver):
         )
         return bool(jnp.linalg.norm(g_free) <= self.tau_rel * jnp.linalg.norm(state.g0))
 
-    def _d_for(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
-        """Return the per-coordinate inverse curvature d_i for path i at gradient g."""
+    def _precon(self, i: int, g: jnp.ndarray) -> jnp.ndarray:
+        """Return path i's per-coordinate inverse curvature at gradient g."""
         # λ anchors to the current gradient's own magnitude, so a coordinate
         # with no usable secant (y_i = 0) still steps instead of 0/0. It is a
         # floor (max), not an addend: where Y ≥ λ the estimate is the faithful
-        # S/Y ratio, and λ only caps d below that.
+        # S/Y ratio, and λ only caps the estimate below that.
         floor = self.theta * (jnp.abs(g) if self.moment == "abs" else jnp.square(g))
         state = self._state[i]
         den = jnp.maximum(state.y_ema, floor)
         # den_i == 0 means y_i = 0 *and* g_i = 0: no curvature information and
         # already stationary in i, so step nowhere there rather than NaN. One
-        # guard is enough - `where` is a total select and d is never
+        # guard is enough - `where` is a total select and precon is never
         # differentiated, so an inf/nan in the unselected lane cannot leak
         # anywhere; a derivative of this line would see it, so revisit then.
-        d = jnp.where(den > 0.0, state.s_ema / den, 0.0)
-        return jnp.sqrt(d) if self.moment == "rms" else d
+        precon = jnp.where(den > 0.0, state.s_ema / den, 0.0)
+        return jnp.sqrt(precon) if self.moment == "rms" else precon
 
     def _blended_secant(
         self, state: _PathState, s: jnp.ndarray, y: jnp.ndarray

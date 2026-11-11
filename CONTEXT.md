@@ -215,15 +215,15 @@ evidence the local method reads.
 _Avoid_: gradient difference, step pair
 
 **diagonal preconditioner**:
-The local method itself: a per-coordinate step-size estimate read off the
-secant pair, applied as `-d ⊙ m` where `m` is the momentum (a blend of the
-gradient and its history; the bare gradient `g` at `mu = 0`). No matrix, no
+The local method itself: a per-coordinate inverse-curvature estimate read off
+the secant pair, applied as `-precon ⊙ m` where `m` is the momentum (a blend of
+the gradient and its history; the bare gradient `g` at `mu = 0`). No matrix, no
 linear solve, no scalar learning rate.
 _Avoid_: diagonal Newton (it is a biased `1/H` estimate, not Newton)
 
 **floor (λ)**:
-The guard that keeps a coordinate's step-size denominator positive when its
-secant denominator vanishes (a flat but unconverged coordinate).
+The guard that keeps a coordinate's denominator positive when the secant
+vanishes (a flat but unconverged coordinate).
 _Avoid_: epsilon, addend, regularizer
 
 **warmup**:
