@@ -4,23 +4,26 @@
 stalls. This page explains the method: what each piece computes, why it is built
 that way, and which trade-offs it accepts.
 
-A short vocabulary runs through everything below: a **path** is one descent —
-one current point plus its solver state; the **flock** is the `n_paths`
-current points taken together as the run's state at one moment (one point per
-path); a
-**batch** is the `(M, d)` points one call serves, and a **point** is one row of
-it; a path's **warm-up** is its first step (no secant pair yet) and **steady
-state** is every step after one exists.
+The terms below recur throughout:
 
-Two interfaces supply the method names used below: `propose(n_points, domain)`
-and `observe` belong to `GlobalModel`, while `restart`, `propose(idxs, domain,
-serve_trials)` and `step` belong to `LocalSolver` — two different `propose`
-methods, each called with its own arguments. One name is neither: `settle` is the
-fused batch that closes an iteration, where every half the iteration's steps and
-restarts still owe is bought together; `_place` is the engine's own landing
-half, run once per channel, and is what calls the method's `restart(i, p)` or
-`step(i, p)`. Those two are internal, explained where they run, and not callable
-from outside.
+- **path** — one descent: one current point plus its solver state.
+- **flock** — the `n_paths` current points taken together as the run's state at
+  one moment, one point per path.
+- **batch** — the `(M, d)` points one call serves; a **point** is one row of it.
+- **warm-up** / **steady state** — a path's first step (no secant pair yet) and
+  every step after one exists.
+
+Two interfaces supply the method names used below, and each has a `propose`
+called with different arguments:
+
+- `GlobalModel` — `propose(n_points, domain)` and `observe`.
+- `LocalSolver` — `restart`, `propose(idxs, domain, serve_trials)` and `step`.
+
+`settle` belongs to neither: it is the fused batch that closes an iteration,
+where every half the iteration's steps and restarts still owe is bought
+together. `_place` is the engine's own landing half, run once per channel, and is
+what calls the method's `restart(i, p)` or `step(i, p)`. Those two are internal,
+explained where they run, and not callable from outside.
 
 ## The contract: one objective, value and gradient
 
@@ -211,7 +214,7 @@ default `μ = 0` (see [Momentum](#momentum)). `alpha0` is the one knob either
 phase reads.
 
 `DiagonalPreconditioner` consults no value: both phases take **one whole step**
-— warm-up commits `x − α0·g₀` and steady state commits `x − α0·precon⊙m` — so
+— warm-up commits `x − alpha0·g₀` and steady state commits `x − alpha0·precon⊙m` — so
 neither runs a line search nor compares against its start. Value and gradient
 still arrive together in the iteration's one fused `settle` batch, which is the
 whole price of the step; the value is recorded, and no step decision reads it.
@@ -263,7 +266,7 @@ The test reads `g`, not the direction's momentum `m`. A stop is a claim about th
 objective, so making it depend on the solver's history would let the same `(x,
 g)` stop or run depending on how the path arrived: momentum that lags a gradient
 which has already turned inward would declare a point done while a descent step
-is still available. At the default `mu = 0` the two vectors coincide and the
+is still available. At the default `μ = 0` the two vectors coincide and the
 distinction is invisible.
 
 The norm is used rather than a per-coordinate `|gᵢ| ≤ τ_rel·|g₀,ᵢ|`: that test
@@ -601,6 +604,11 @@ the outcome:
 
 ### The stop gates
 
+The engine exposes three public stops — `max_iters`, `time_limit`, and the
+caller's `budget_check`. The `stop` / `admit` / `tick` surface and
+`_BatchRefused` described below belong to the engine's private `_Meter`; no
+plugin calls them.
+
 `max_iters` is the engine's own horizon, counted in **iterations** (iteration 0 is
 the iteration that places the flock). `max_iters=0` stops at the first loop-head
 ask, before that placement, so nothing is placed and `n_iters` stays 0. It is a
@@ -760,47 +768,52 @@ its own citation request names a 2018 manuscript submitted for publication under
 this title, with two authors — the journal article above is the same title in
 its published form, with four. `-lite` means this package implements only the
 minimal version of that skeleton: restart starts come from a `GlobalModel`. The
-details differ:
+details differ.
 
-- **Three parts become two.** SOAR strings a surrogate model, an acquisition
-  rule (which start is worth buying next), and a local method into one framework.
-  This package folds the surrogate and the acquisition into the one `GlobalModel`
-  contract (`observe` plus `propose`), so the acquisition is half of a plugin
-  seam, not a third part on its own — "where is still worth trying", never a
-  restart decision — and two plugin seams remain: the global model and the local
-  solver, both chosen for the medium-to-high dimension this library targets. The
-  fold is what permits the default arm: once surrogate and acquisition share one
-  contract, an arm that fits nothing and simply draws satisfies it too, with no
-  acquisition to speak of.
-- The **global model** ships two arms: the default
-  `SampleGlobalModel` — the model-free arm above — fits nothing and draws from
-  the `Domain` with a plain per-dimension sampler, uniform on a bounded side and
-  `N(0, scale²)` on a free one, independent points rather than a low-discrepancy
-  sequence because the mid-to-high regime is the target. The surrogate arm
-  `BLRGlobalModel` fits a Bayesian linear posterior on projected coordinates —
-  inverse-stereographic by default (`SphereProjection`), `IdentityProjection` the
-  injectable alternate for a task whose optimum sits on a boundary — and that
-  geometry cures the corner-seeking pathology a Euclidean RBF Gaussian-process
-  posterior falls into in high dimension. What the bend adds is a prior that the
-  optimum is interior: a linear head gets a bowl under it, an RBF a compactified
-  metric weighted toward the center, and both are that one prior, so the cure is
-  the prior's — on a task whose optimum sits on a corner the ranking inverts,
-  which is what `IdentityProjection` is for (Tripp 2026). `propose` returns the
-  local minimum of
-  `−log EI`. It is a fixed-hyperparameter port of Doumont et al. 2026. EI carries
-  no acquisition hyperparameters of its own and is strong in practice, but
-  choosing it as the default acquisition is a personal prior,
-  not something the skeleton requires. SOAR's own default surrogate is that
-  Gaussian process, the part of its design least suited to medium-to-high
-  dimension.
-- The default local method is the coordinate-wise secant-ratio preconditioner,
-  first-order: the caller supplies the value and the gradient together, with no
-  full Hessian, no full curvature model, and no direct solve of second-order
-  information. A zero-order objective does not fit either — every point on a
-  path must carry a finite gradient, and value-plus-gradient is the entry
-  contract. A derivative-free fallback (a finite-difference gradient, say) would
-  reverse that contract rather than extend it, so it is a decision to argue for,
-  not a default to add.
+### Three parts become two
+
+SOAR strings a surrogate model, an acquisition rule (which start is worth buying
+next), and a local method into one framework. This package folds the surrogate
+and the acquisition into the one `GlobalModel` contract (`observe` plus
+`propose`), so the acquisition is half of a plugin seam, not a third part on its
+own — "where is still worth trying", never a restart decision — and two plugin
+seams remain: the global model and the local solver, both chosen for the
+medium-to-high dimension this library targets. The fold is what permits the
+default arm: once surrogate and acquisition share one contract, an arm that fits
+nothing and simply draws satisfies it too, with no acquisition to speak of.
+
+### The global model ships two arms
+
+The default `SampleGlobalModel` — the model-free arm above — fits nothing and
+draws from the `Domain` with a plain per-dimension sampler, uniform on a bounded
+side and `N(0, scale²)` on a free one, independent points rather than a
+low-discrepancy sequence because the mid-to-high regime is the target. The
+surrogate arm `BLRGlobalModel` fits a Bayesian linear posterior on projected
+coordinates — inverse-stereographic by default (`SphereProjection`),
+`IdentityProjection` the injectable alternate for a task whose optimum sits on a
+boundary — and that geometry cures the corner-seeking pathology a Euclidean RBF
+Gaussian-process posterior falls into in high dimension. What the bend adds is a
+prior that the optimum is interior: a linear head gets a bowl under it, an RBF a
+compactified metric weighted toward the center, and both are that one prior, so
+the cure is the prior's — on a task whose optimum sits on a corner the ranking
+inverts, which is what `IdentityProjection` is for (Tripp 2026). `propose`
+returns the local minimizers of `−log EI`. It is a fixed-hyperparameter port of
+Doumont et al. 2026. EI carries no acquisition hyperparameters of its own and is
+strong in practice, but choosing it as the default acquisition is a personal
+prior, not something the skeleton requires. SOAR's own default surrogate is that
+Gaussian process, the part of its design least suited to medium-to-high
+dimension.
+
+### The local method is first-order
+
+The default local method is the coordinate-wise secant-ratio preconditioner,
+first-order: the caller supplies the value and the gradient together, with no
+full Hessian, no full curvature model, and no direct solve of second-order
+information. A zero-order objective does not fit either — every point on a path
+must carry a finite gradient, and value-plus-gradient is the entry contract. A
+derivative-free fallback (a finite-difference gradient, say) would reverse that
+contract rather than extend it, so it is a decision to argue for, not a default
+to add.
 
 This package's **core agrees** with SOAR — the global side and the local method
 each have their own job, joined by the adaptive restart process — while the
