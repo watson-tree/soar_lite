@@ -227,7 +227,9 @@ reasons behind the local step, and the generated API reference.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Local setup, the checks a change must pass, and the naming conventions are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md): `uv sync --all-groups` installs JAX, the
+dev tools and the docs build, and `uv run python -m pytest` runs the suite.
 
 ## Citing
 
@@ -236,3 +238,7 @@ the entry is `CITATION.cff` at the repository root, which is what GitHub's
 *Cite this repository* button reads. Its `version` field names the release this
 tree is at, so pin the citation to the version you ran — a result then names the
 code that produced it.
+
+## License
+
+MIT - see [`LICENSE`](LICENSE).
