@@ -72,14 +72,14 @@ print(result.x)  # x ≈ [3. 3]
 print(result.f)  # f ≈ 3e-5
 ```
 
-`x` is the best point the run evaluated, shape `(d,)` — the argmin over the
-feasible points that were served, a feasible `-inf` naming itself — and `f` is
-its value. Do not read it as a row of `flock_x`: the flock is the points the
+`x` is the best point the run evaluated, shape `(d,)`, and `f` is its value: the
+argmin over the feasible points that were served. The flock is the points the
 paths hold at one moment, one per path, so `flock_x` is the flock as the run
-ended, and the best point may be one a path has left behind. The answer is
-spelled the way a point spells it, `x` and `f`, and the flock pair prefixes those
-same two names with `flock_`; the extra fields are `work` (the four counts, which
-also read flat on the result), `n_iters`, and a `status`.
+ended; the best point need not be one of its rows, since the path that found it
+may have been restarted afterwards. The answer is spelled the way a point spells
+it, `x` and `f`, and the flock pair prefixes those same two names with `flock_`;
+the extra fields are `work` (the four counts, which also read flat on the
+result), `n_iters`, and a `status`.
 
 ## Results
 

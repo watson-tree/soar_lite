@@ -37,14 +37,16 @@ def squares(x):  # one point (d,) in, one scalar out
 eval_f_g, eval_f = pointwise(squares)
 ```
 
-`pointwise` `vmap`s `jax.value_and_grad` for the fused seam — the function the
-engine calls, once per batch — and the plain forward pass for the optional
-value-only seam (the second return value), so the only function you write is the
-per-point scalar. Hand-writing `∂f/∂x` is safe for a sum of squares, but
-elsewhere it is an easy way to introduce a sign or a scale error. That second
-return is the seam §4 uses: pass it as `eval_f=eval_f` to serve a step's trials
-for their value alone. Without `feasible`, the third slot is still there, as `None`
-— the same `None` the hand-written seam in §1.3 returns.
+You write one function, the per-point scalar; `pointwise` builds the batch from
+it — `vmap` of `jax.value_and_grad` for the fused seam, the function the engine
+calls once per batch.
+
+It returns two. The second is the plain forward pass, the optional value-only
+seam: pass it as `eval_f=eval_f` to serve a step's trials for their value alone
+(§4). Hand-writing `∂f/∂x` is safe for a sum of squares, but elsewhere it is an
+easy way to introduce a sign or a scale error. Without `feasible`, the third slot
+is still there, as `None` — the same `None` the hand-written seam in §1.3
+returns.
 
 ### 1.2 Constraints
 
@@ -157,8 +159,8 @@ keyword is a `TypeError` from the signature, and giving neither stop is a
 
 `eval_f` is optional: hand it in when the method enumerates trials for their
 values alone; §4 says when that saves budget. The default solver reads no trial
-at all — it takes one whole step and reads no value — so this run never calls it.
-It is passed here only to show where it goes.
+at all — it takes one whole step, whose value and gradient arrive together — so
+this run never calls `eval_f`. It is passed here only to show where it goes.
 
 ```python
 from soar_lite import n_path_schedule
@@ -229,11 +231,11 @@ restarted afterwards.
 | --- | --- |
 | `n_paths` | engine width: paths advanced in lockstep each iteration |
 | `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
-| `x0` | the flock's start, one point per path `(n_paths, d)`: placed by iteration 0 exactly where you ask, and it must lie inside `domain` — an outside row is refused, not clipped; `None` lets the global model draw it — hand it in when runs have to be compared on the same starts |
+| `x0` | the flock's start, one point per path `(n_paths, d)`; iteration 0 places it exactly where given, so runs compared on the same starts share it. `None` lets the global model draw. An outside row is refused, not clipped |
 | `eval_f` | the optional value-only seam: points in, `(f, feas?)` out, no gradient — pass it to save budget, omit it in a fused-only comparison |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
-| `budget_check` | an extra gate for a budget the engine cannot see, checked each iteration and before every batch it serves; it is handed the run's `Work`, so it reads the engine's own counts instead of keeping a parallel tally |
+| `budget_check` | an extra gate for a budget the engine cannot see, asked each iteration and before every batch; handed the run's `Work`, so it reads the engine's own counts |
 | `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` freezes the flock, and the run ends on `all_stalled` once every path parks |
 | `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
 | `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |

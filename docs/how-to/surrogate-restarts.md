@@ -3,17 +3,19 @@
 This page continues [the tutorial](../tutorial/getting-started.md)'s example:
 `eval_f_g` and `domain` below are the ones built there.
 
+The job is one function: it takes the acquisition `BLRGlobalModel` builds and
+returns the points to restart from — local minima of `-log EI`. The obvious way
+to descend it is to hand the engine back to itself: one restart-free run whose
+width is the number of minimizers you want, read off `flock_x`.
+
 `BLRGlobalModel` fits its posterior and builds its own `-log EI` acquisition,
 but it never descends that acquisition itself: the descent recipe belongs to the
 engine, so the model receives it as an injected `minimize`, a `MinimizeFn` with
-signature `(acquisition, domain, n_points, key) -> (n_points, d)`. The
-domain is the one your ask was handed, not a box re-derived from it, so the
-`scale` and samplers you declared reach the inner run's own draws. The
-acquisition is `(M, d) -> ((M,), (M, d))` (value and gradient, no feasibility
-column) and `key` is a fresh subkey of the model's own key, split for this call
-alone. The natural answer is to hand the engine back to itself: one restart-free
-run whose width is the number of minimizers you want. Read the minimizers off
-`flock_x`.
+signature `(acquisition, domain, n_points, key) -> (n_points, d)`. The domain is
+the one your ask was handed, not a box re-derived from it, so the `scale` and
+samplers you declared reach the inner run's own draws. The acquisition is
+`(M, d) -> ((M,), (M, d))` (value and gradient, no feasibility column) and `key`
+is a fresh subkey of the model's own key, split for this call alone.
 
 The projection is the other knob — it supplies the prior the model fits.
 `SphereProjection` keeps the posterior variance bounded far from data;
