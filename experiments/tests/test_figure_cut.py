@@ -144,7 +144,7 @@ def test_the_step_a_run_stopped_on_is_drawn() -> None:
             style={"color": "C0"},
             xmax=BUDGET,
         )
-        drawn = ax.get_lines()[0].get_ydata()
+        drawn = np.asarray(ax.get_lines()[0].get_ydata(), dtype=float)
     finally:
         plt.close(fig)
 
