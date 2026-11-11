@@ -2,8 +2,8 @@
 
 `n_path_schedule` validates a run's arguments, drives the loop and assembles the
 report. A run's state lives in four private holders, one per state family:
-`_Evaluator` (the two seams and what each charges), `_Paths` (the n-path state
-machine), `_Best` (the run's best, `f⋆`), and `_Budget` (the stop meter and the
+`_EvalSeams` (the two seams and what each charges), `_Paths` (the n-path state
+machine), `_Best` (the run's best, `f⋆`), and `_Meter` (the stop meter and the
 work report).
 
 The types it drives come from `soar_lite.engine.contracts`, and the two concrete
@@ -263,15 +263,15 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # The run's one box, and the only place it is read for the clip; the
     # dimension comes with it.
     d = domain.d
-    budget = _Budget(max_iters, time_limit, budget_check)
+    meter = _Meter(max_iters, time_limit, budget_check)
     best = _Best(d)
-    # Each component gets the one half of the model it calls, not the object: an
-    # evaluator folds evidence, a path stepper asks for starts, and neither has
+    # Each component gets the one half of the model it calls, not the object: the
+    # eval seams fold evidence, a path stepper asks for starts, and neither has
     # any business holding the other's method.
-    evaluator = _Evaluator(
+    eval_seams = _EvalSeams(
         eval_f_g,
         eval_f,
-        budget=budget,
+        meter=meter,
         best=best,
         observe=global_model.observe,
     )
@@ -280,7 +280,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     paths = _Paths(
         n_paths,
         domain,
-        evaluator,
+        eval_seams,
         global_model.propose,
         local_solver,
         restart_stalled=restart_stalled,
@@ -292,7 +292,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         # The run's one stop query names its reason, asked before a new iteration
         # starts so the run never begins one it cannot finish. A refusal
         # mid-iteration arrives as _BatchRefused carrying the same reason.
-        status = budget.stop()
+        status = meter.stop()
         if status is not None:
             break
         try:
@@ -318,7 +318,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             # no batch was served this iteration, so it is not ticked.
             status = "all_stalled"
             break
-        budget.tick()  # counted after the body: only finished iterations
+        meter.tick()  # counted after the body: only finished iterations
 
     # Each path's point as the run ended, and its value.
     flock_x, flock_fun = paths.held()
@@ -328,8 +328,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         fun=best.fun,
         flock_x=flock_x,
         flock_fun=flock_fun,
-        work=budget.work,
-        n_iters=budget.n_iters,
+        work=meter.work,
+        n_iters=meter.n_iters,
         status=status,
     )
 
@@ -337,7 +337,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 class _BatchRefused(Exception):  # noqa: N818 - a signal, not an error
     """A serve was refused because a stop had closed, the reason carried along.
 
-    Raised only inside `n_path_schedule`, by `_Budget.admit` on the way into a
+    Raised only inside `n_path_schedule`, by `_Meter.admit` on the way into a
     batch, and caught by the loop. It carries the reason `_refusal` answered at
     the batch altitude, so the loop names the run's status without re-asking the
     query.
@@ -374,7 +374,7 @@ class _AllStalled(Exception):  # noqa: N818 - a signal, not an error
     """
 
 
-class _Budget:
+class _Meter:
     """The run's stop meter and work report.
 
     Three predicates decide whether work may go on: the iteration horizon
@@ -568,10 +568,10 @@ class _Best:
             self.x = x_batch[j]
 
 
-class _Evaluator:
+class _EvalSeams:
     """The run's evaluation seams, and what they charge and observe.
 
-    Every batch goes through two edges, each written once here: `_Budget.admit`
+    Every batch goes through two edges, each written once here: `_Meter.admit`
     charges it or refuses it before it is served (so a batch is served whole or
     not at all, and a refused one is neither charged nor paid for), and
     `_report` tells the run's two readers what it returned. The seam that served
@@ -583,7 +583,7 @@ class _Evaluator:
     model (which does not). That is the only place either is fed, so a batch
     nobody decides on is still reported. `settle` lives here too: it is where an
     iteration's deferred gradients are bought together, since this object owns
-    both the seam and the budget.
+    both the seam and the meter.
     """
 
     def __init__(
@@ -591,13 +591,13 @@ class _Evaluator:
         eval_f_g: EvalFG,
         eval_f: EvalF | None,
         *,
-        budget: _Budget,
+        meter: _Meter,
         best: _Best,
         observe: ObserveFn,
     ) -> None:
         self._eval_f_g = eval_f_g
         self._eval_f = eval_f
-        self._budget = budget
+        self._meter = meter
         self._best = best
         self._observe = observe
 
@@ -664,7 +664,7 @@ class _Evaluator:
             _BatchRefused: When the gate refuses the batch.
 
         """
-        self._budget.admit(x_batch.shape[0], fused=True)
+        self._meter.admit(x_batch.shape[0], fused=True)
         f_batch, g_batch, feas = self._eval_f_g(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
@@ -698,7 +698,7 @@ class _Evaluator:
         if eval_f is None:
             msg = "_serve_f requires eval_f"
             raise RuntimeError(msg)
-        self._budget.admit(x_batch.shape[0], fused=False)
+        self._meter.admit(x_batch.shape[0], fused=False)
         f_batch, feas = eval_f(x_batch)
         f_vals = f_batch.tolist()
         # No gradient in hand: the f half alone. The same point is reported
@@ -780,7 +780,7 @@ class _Paths:
         self,
         n_paths: int,
         domain: Domain,
-        evaluator: _Evaluator,
+        evaluator: _EvalSeams,
         propose: ProposeFn,
         local_solver: LocalSolver,
         *,
@@ -796,7 +796,7 @@ class _Paths:
         # The collaborators this state machine drives. Held rather than handed
         # in per call: every method below uses at least one of them, and a step
         # would otherwise thread them only to pass them straight back.
-        self.evaluator = evaluator
+        self.eval_seams = evaluator
         self.propose = propose
         self.local_solver = local_solver
         # The caller's flock, handed over for the run's first move and consumed
@@ -811,7 +811,7 @@ class _Paths:
         # stall bit are one path's state, read together by every restart
         # decision, and a step commits one path at a time (so a list, whose item
         # assignment is the commit, beats a stacked array).
-        self.flock: list[_Slot] = [_Slot() for _ in range(self.n_paths)]
+        self.slots: list[_Slot] = [_Slot() for _ in range(self.n_paths)]
 
     def move(self) -> None:
         """Take one iteration's move for every path, then settle what it deferred.
@@ -841,7 +841,7 @@ class _Paths:
         """
         restarting = [
             i
-            for i, slot in enumerate(self.flock)
+            for i, slot in enumerate(self.slots)
             if slot.point is None or (self.restart_stalled and slot.stalled)
         ]
         # Nothing is going to move again: no path restarts, and every path is
@@ -850,7 +850,7 @@ class _Paths:
         # beside a fully stalled flock is terminal - the iteration would serve
         # nothing. Only reachable with `restart_stalled=False`; the run ends here
         # rather than idling out the horizon.
-        if not restarting and all(slot.stalled for slot in self.flock):
+        if not restarting and all(slot.stalled for slot in self.slots):
             raise _AllStalled
         # Every path that did not restart and is not stalled. A stalled path is
         # left out rather than asked again: `restart_stalled` is its only way
@@ -858,7 +858,7 @@ class _Paths:
         # already stopped - the two would disagree about whether it is running.
         stepping = [
             i
-            for i, slot in enumerate(self.flock)
+            for i, slot in enumerate(self.slots)
             if i not in restarting and not slot.stalled
         ]
         starts = self._restart_starts(restarting)
@@ -868,7 +868,7 @@ class _Paths:
         # nothing placed - this is the only batch it serves. A point that arrived
         # already graded (a run without the seam) passes straight through
         # `settle` without being served again.
-        settled = self.evaluator.settle({**starts, **winners})
+        settled = self.eval_seams.settle({**starts, **winners})
         self._place({i: settled[i] for i in restarting}, restart=True)
         self._place({i: settled[i] for i in winners}, restart=False)
 
@@ -885,7 +885,7 @@ class _Paths:
                 ``(n_paths,)``.
 
         """
-        points = [slot.point for slot in self.flock]
+        points = [slot.point for slot in self.slots]
         flock_x = jnp.stack(
             [jnp.full(self.domain.d, math.nan) if p is None else p.x for p in points]
         )
@@ -949,12 +949,12 @@ class _Paths:
             # Every path restarted this iteration: nothing steps.
             return {}
         answers = self.local_solver.propose(
-            stepping, self.domain, self.evaluator.serve_trials
+            stepping, self.domain, self.eval_seams.serve_trials
         )
         winners: dict[int, Pending] = {}
         for i, answer in answers.items():
             if answer is None:
-                self.flock[i].stalled = True
+                self.slots[i].stalled = True
                 continue
             winners[i] = answer
         return winners
@@ -986,7 +986,7 @@ class _Paths:
         """
         notify = self.local_solver.restart if restart else self.local_solver.step
         for i, point in points.items():
-            slot = self.flock[i]
+            slot = self.slots[i]
             if not point.usable:
                 slot.stalled = True
                 continue

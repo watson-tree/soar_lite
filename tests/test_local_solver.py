@@ -72,7 +72,7 @@ def test_diag_warmup_is_one_gradient_step() -> None:
     solver = DiagonalPreconditioner()
     p = PathPoint(x=jnp.zeros(3), f=2.0, g=jnp.array([3.0, 0.0, 4.0]))
     solver.restart(0, p)
-    assert solver._state[0].warm_up
+    assert solver._state[0].warmup
     assert solver._state[0].alpha == 1.0
     pending = proposed(solver)
     assert close(pending.x, p.x + 1.0 * (-p.g), 1e-12)
@@ -84,7 +84,7 @@ def test_diag_warmup_is_one_gradient_step() -> None:
     # Committed exactly as proposed: the step need not beat the start's value.
     above = PathPoint(x=p.x - p.g, f=9.0, g=p.g)
     solver.step(0, above)
-    assert not solver._state[0].warm_up
+    assert not solver._state[0].warmup
     assert close(solver._state[0].s_ema, jnp.square(-p.g), 1e-12)
 
 
@@ -186,7 +186,7 @@ def test_propose_clips_its_own_step_into_the_domain() -> None:
     assert close(pending.x, jnp.array([0.0, 0.5]), 1e-12)
 
 
-def _warm_up(
+def _warmup(
     solver: DiagonalPreconditioner,
     quad: Callable[[jnp.ndarray], tuple[float, jnp.ndarray]],
 ) -> PathPoint:
@@ -219,13 +219,13 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     # alpha = 1 overshoots by a factor 25 (f = 215) and is committed anyway:
     # the secant is exact at any length on a quadratic, so the overshoot costs
     # one point rather than a backtrack walk.
-    _warm_up(solver, quad)
+    _warmup(solver, quad)
     # The warm-up ends re-armed at a full step: the next proposal is x - d·g,
     # and alpha only ever multiplies it.
     assert solver._state[0].alpha == 1.0
-    assert not solver._state[0].warm_up
+    assert not solver._state[0].warmup
     # y = h·s ⇒ √(S/Y) = 1/h ⇒ Δx = -(1/h)·h·x₁ = -x₁, the Newton step. The step
-    # is taken from the point `step` left the path on, which is what `_warm_up`
+    # is taken from the point `step` left the path on, which is what `_warmup`
     # committed.
     assert close(proposed(solver).x, jnp.zeros(3), 1e-12)
 
@@ -243,7 +243,7 @@ def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
     p = PathPoint(x=x0, f=f0, g=g0)
     solver = DiagonalPreconditioner(theta=0.0, moment="abs", mu=0.0)
     solver.restart(0, p)
-    _warm_up(solver, quad)
+    _warmup(solver, quad)
     assert close(proposed(solver).x, jnp.zeros(3), 1e-12)
 
 
@@ -364,10 +364,10 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     solver.restart(0, p)
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
     solver.step(0, first)
-    assert not solver._state[0].warm_up
+    assert not solver._state[0].warmup
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
     solver.restart(0, fresh)
-    assert solver._state[0].warm_up
+    assert solver._state[0].warmup
     assert close(solver._state[0].g0, fresh.g, 1e-12)
     assert close(solver._state[0].s_ema, jnp.zeros(2), 1e-12)
     assert solver._state[0].alpha == 1.0  # the warm-up length is re-armed too

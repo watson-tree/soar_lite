@@ -249,7 +249,9 @@ class BLRGlobalModel(GlobalModel):
         # return a cluster on one face. Upgrade to greedy conditioning on the
         # points already picked when a cohort asks for many at once.
         def acquisition(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-            return self._acq_value_and_grad(projection, x, weights, cov, best_fun)
+            return self._acquisition_value_and_grad(
+                projection, x, weights, cov, best_fun
+            )
 
         starts = jnp.asarray(
             self._minimize(acquisition, domain, n_points, sub),
@@ -418,7 +420,7 @@ class BLRGlobalModel(GlobalModel):
         var = self._noise + jnp.einsum("ij,jk,ik->i", features, cov, features)
         return mean, jnp.sqrt(var)
 
-    def _acq_value_and_grad(
+    def _acquisition_value_and_grad(
         self,
         projection: Projection,
         x: jnp.ndarray,

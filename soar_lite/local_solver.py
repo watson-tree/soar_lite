@@ -47,7 +47,7 @@ class _PathState:
     p: PathPoint
     # no pair in hand yet: set by `restart`, cleared by the first committed step,
     # so `propose` descends along -g and that first `step` seeds outright
-    warm_up: bool
+    warmup: bool
     # the curvature estimate: seeded by `restart`, blended once per committed step
     s_ema: jnp.ndarray
     y_ema: jnp.ndarray
@@ -65,7 +65,7 @@ class _PathState:
         """Return the state a path cold-starts at from p: no secant, nothing in it."""
         return cls(
             p=p,
-            warm_up=True,
+            warmup=True,
             s_ema=jnp.zeros_like(p.g),
             y_ema=jnp.zeros_like(p.g),
             m=p.g,
@@ -255,7 +255,7 @@ class DiagonalPreconditioner(LocalSolver):
         (Δx, Δg) for the curvature, and the gradient at the point arrived at for
         the momentum. The first call after a restart is the warm-up pair and
         seeds the secant EMAs outright; later calls blend at beta - the record's
-        ``warm_up`` is that same first-step marker, cleared here. This is also
+        ``warmup`` is that same first-step marker, cleared here. This is also
         where a step is re-armed: a winner the engine refuses never reaches
         here, so the method is left untouched rather than half-reset.
         """
@@ -271,7 +271,7 @@ class DiagonalPreconditioner(LocalSolver):
         self._state[i] = replace(
             state,
             p=p,
-            warm_up=False,
+            warmup=False,
             s_ema=s_ema,
             y_ema=y_ema,
             m=m,
@@ -315,7 +315,7 @@ class DiagonalPreconditioner(LocalSolver):
 
     def _propose(self, i: int) -> jnp.ndarray:
         state = self._state[i]
-        if state.warm_up:
+        if state.warmup:
             return state.p.x + state.alpha * (-state.p.g)
         diag = self._d_for(i, state.p.g)
         return state.p.x + state.alpha * (-diag * state.m)
@@ -395,7 +395,7 @@ class DiagonalPreconditioner(LocalSolver):
             s_mag, y_mag = jnp.abs(s), jnp.abs(y)
         else:
             s_mag, y_mag = jnp.square(s), jnp.square(y)
-        if state.warm_up:
+        if state.warmup:
             return s_mag, y_mag
         return (
             self.beta * state.s_ema + (1.0 - self.beta) * s_mag,

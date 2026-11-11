@@ -300,7 +300,7 @@ gradients afterwards, together in one fused batch.
 """
 
 # The two halves of a `GlobalModel`, as the components that call them see them.
-# The model itself never crosses into `_Evaluator` or `_Paths`: each takes the
+# The model itself never crosses into `_EvalSeams` or `_Paths`: each takes the
 # one method it uses, so neither holds a god object whose other half it ignores.
 # `ObserveFn` is the command that folds a served batch into the evidence; the
 # values arrive as host floats, one per point, because the run's own bookkeeping

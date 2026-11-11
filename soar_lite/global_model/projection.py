@@ -171,7 +171,7 @@ class SphereProjection(Projection):
         kappa_validated = _check_kappa(kappa)
         super().__init__(domain)
         # The global lengthscale is what makes the projection dimension-free: a
-        # bent dimension's reference radius, divided by `glob_ls`, is
+        # bent dimension's reference radius, divided by `global_lengthscale`, is
         # `1/sqrt(kappa)` in total, so `d` raises the features' typical radius
         # without ever pushing the farthest point past the pole. A bounded
         # dimension's radius is half its width in `scale` units; an unbounded
@@ -184,7 +184,7 @@ class SphereProjection(Projection):
             1.0,
         )
         tied = jnp.sum(jnp.where(self.mask, radius * radius, 0.0))
-        self.glob_ls = jnp.sqrt(kappa_validated * tied)
+        self.global_lengthscale = jnp.sqrt(kappa_validated * tied)
 
     def features(self, x: jnp.ndarray) -> jnp.ndarray:
         """Return the ``(M, d + 1)`` feature rows for ``(M, d)`` coordinates.
@@ -196,7 +196,7 @@ class SphereProjection(Projection):
         coordinate, so a linear head reads them as a plain linear trend.
         """
         z = (x - self.domain.center) / self.domain.scale
-        bent = z[:, self.mask] / self.glob_ls
+        bent = z[:, self.mask] / self.global_lengthscale
         sq = jnp.sum(bent * bent, axis=-1, keepdims=True)
         sphere = jnp.concatenate([2.0 * bent, sq - 1.0], axis=-1) / (sq + 1.0)
         return jnp.concatenate([sphere, z[:, ~self.mask]], axis=-1)

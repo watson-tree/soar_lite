@@ -271,7 +271,7 @@ def test_the_acquisition_gradient_is_the_jacobian_diagonal() -> None:
 
     The acquisition's rows are independent, so its ``m x m`` Jacobian is
     diagonal. This checks the `vmap`-of-`value_and_grad` gradient of
-    `_acq_value_and_grad` against forward AD of the batch form written out
+    `_acquisition_value_and_grad` against forward AD of the batch form written out
     here - an independent pass down the same math - so a row or shape mixup
     in the reverse-mode path shows up as a mismatch.
     """
@@ -288,7 +288,7 @@ def test_the_acquisition_gradient_is_the_jacobian_diagonal() -> None:
         z = (best - mean) / sigma
         return -(jnp.log(sigma) + _log_h(z))
 
-    value, grad = model._acq_value_and_grad(projection, xs, weights, cov, best)
+    value, grad = model._acquisition_value_and_grad(projection, xs, weights, cov, best)
     jac = jax.jacfwd(values)(xs)
     diagonal = jnp.stack([jac[i, i] for i in range(xs.shape[0])])
 
@@ -490,7 +490,7 @@ def test_an_identity_projection_accepts_an_unbounded_side_too() -> None:
 
 
 def test_a_uniform_scale_cancels_out_of_the_projection() -> None:
-    """Keep the ratio-only semantics: `glob_ls` divides a uniform scale back out."""
+    """Keep the ratio-only semantics: `global_lengthscale` divides a scale back out."""
     bounds = jnp.asarray([[-2.0, 2.0]] * 3)
     xs = jnp.asarray([[-1.9, 0.4, 1.1]])
     assert jnp.allclose(
@@ -507,7 +507,7 @@ def test_the_global_lengthscale_holds_the_far_corner_at_one_over_kappa(d: int) -
     far = (
         (jnp.ones(d) - projection.domain.center)
         / projection.domain.scale
-        / projection.glob_ls
+        / projection.global_lengthscale
     )
     assert float(jnp.sum(far * far)) == pytest.approx(1.0 / 0.25, rel=1e-6)
 
