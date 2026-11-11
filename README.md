@@ -4,11 +4,10 @@
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/watson-tree/soar_lite/blob/main/notebooks/run_panels.ipynb)
 
 A JAX optimizer for objectives that are differentiable but expensive to
-evaluate. What matters is how many evaluations a run needs, not how long each one
-takes. A single call can take seconds, so every choice here aims at needing fewer
-of them. The caller passes value and gradient together, so there is no Hessian to
-assemble and no second-order system to solve: each coordinate carries its own
-step length instead.
+evaluate. Each call can take seconds, so what matters is how many evaluations a
+run needs, and every choice here aims at needing fewer. The caller passes value
+and gradient together, so there is no Hessian to assemble and no second-order
+system to solve: each coordinate carries its own step length instead.
 
 **Use it when** the objective is differentiable, one evaluation costs real time
 or money, and the search space is moderate- to high-dimensional.
