@@ -49,31 +49,6 @@ counted, so a refused placement reports `n_iters = 0` and a refused first
 step `n_iters = 1`.
 _Avoid_: round (retired), epoch, iterations (as a name for the count)
 
-**step**:
-One move along a single path: propose → (trial)× → a winner, or none (`None`).
-Each path takes at most one move per iteration — a step, or a redraw start; a
-step consumes zero or more trials. The method lands it through `step(i, point)`: the
-engine hands back the settled `PathPoint` `(x, f, g)` the path now stands at, so
-the method moves the matching state forward. The **method** named the winner in
-`propose`; the engine bought its owed halves in *settle* and commits here, so
-`step` is the only commit and the only place a method may advance its model — a
-secant pair is a move that was taken, and only this callback is told one was. It
-is never called for a winner the engine refused (not usable) or for a path whose
-stopping test held.
-_Avoid_: update, move; accept, commit (as names for this handoff)
-
-**trial**:
-One served proposal within a step — one row of a batch the method reads through
-`serve_trials`. What a trial carries is the seam's business: with `eval_f`
-connected it is the coords and value alone — the winner's gradient is bought
-later (see *settle*), so a method that needs a gradient to rule needs the fused
-seam — and without `eval_f` the same call serves the fused pair, gradient
-included. There is no engine-side cap: the method's own stopping test (or its
-own trial budget) ends the enumeration, one batch per `serve_trials` call. A
-step that reads no trial — a single full proposal, like the shipped method's —
-serves none at all.
-_Avoid_: line-search round (retired)
-
 **best**:
 The run's running best, a single `f`/`x`: the best *feasible* point — the
 run's reported answer, and what `NPathResult` calls `f`/`x`. The engine is the
@@ -103,6 +78,21 @@ nothing sets the bit anyway, but the no-point rule is asked first, so the flag
 never sees that case.
 _Avoid_: paused, idle, dead
 
+**domain** (type `Domain`):
+The object that carries everything the engine knows about the search space: the
+per-dimension `(lb, ub)` sides (either may be unbounded), the per-dimension
+`scale` the draws use, and the injected per-dimension samplers. It is the sole
+authority on the dimension `d`, and every point the run serves lies inside it:
+the engine clips the starts it draws, and a method clips its own step. Bounds
+are data, never a unit-cube assumption.
+_Avoid_: box (the box is only the bounded-sides part of the domain)
+
+**sampler**:
+The injected per-dimension callable that draws starts; the default is uniform on
+a bounded side and normal on a free side. The *domain* remains the sole
+authority on `d`.
+_Avoid_: initializer, prior (as a name for the *callable*)
+
 ### Evaluation
 
 **batch**:
@@ -118,6 +108,17 @@ ones. Once settled it is a `PathPoint`: the `x`/`f`/`g` triple a path commits,
 assembled only once both halves exist (see *settle*), so a point that arrived
 fused travels on as one object rather than three arrays.
 _Avoid_: query, sample, evaluation (retired)
+
+**settle**:
+The iteration's one fused batch that buys whatever a kept point still owes, and
+the only place a produced `Pending` becomes a settled `PathPoint`. A redraw start
+and a winner the method never read owe both halves and take f and g from this
+one pass; a winner the method read through `serve_trials` owes only its gradient
+when the `eval_f` seam served it value-only — with no such seam the same call
+served the fused pair, so the winner already carries both and passes through as
+it stands, never served twice. Everything is bought before anything is placed,
+so nothing commits before it is settled.
+_Avoid_: commit batch, gradient round
 
 **four counters** (`n_f_g_points` / `n_f_g_batches` / `n_f_points` / `n_f_batches`, all four in one `Work`):
 The run's reported work, on two axes and two seams. `points` counts billed
@@ -164,6 +165,31 @@ feasible and quietly promoted a point into the answer.
 _Avoid_: validity mask
 
 ### Local method
+
+**step**:
+One move along a single path: propose → (trial)× → a winner, or none (`None`).
+Each path takes at most one move per iteration — a step, or a redraw start; a
+step consumes zero or more trials. The method lands it through `step(i, point)`: the
+engine hands back the settled `PathPoint` `(x, f, g)` the path now stands at, so
+the method moves the matching state forward. The **method** named the winner in
+`propose`; the engine bought its owed halves in *settle* and commits here, so
+`step` is the only commit and the only place a method may advance its model — a
+secant pair is a move that was taken, and only this callback is told one was. It
+is never called for a winner the engine refused (not usable) or for a path whose
+stopping test held.
+_Avoid_: update, move; accept, commit (as names for this handoff)
+
+**trial**:
+One served proposal within a step — one row of a batch the method reads through
+`serve_trials`. What a trial carries is the seam's business: with `eval_f`
+connected it is the coords and value alone — the winner's gradient is bought
+later (see *settle*), so a method that needs a gradient to rule needs the fused
+seam — and without `eval_f` the same call serves the fused pair, gradient
+included. There is no engine-side cap: the method's own stopping test (or its
+own trial budget) ends the enumeration, one batch per `serve_trials` call. A
+step that reads no trial — a single full proposal, like the shipped method's —
+serves none at all.
+_Avoid_: line-search round (retired)
 
 **secant pair**:
 The `(Δx, Δg)` between two consecutive points of one path — the only curvature
@@ -216,17 +242,6 @@ from the initial flock — the model runs once, drawing that flock, when `x0` is
 left `None`, and never again.
 _Avoid_: restart check, reset decision
 
-**settle**:
-The iteration's one fused batch that buys whatever a kept point still owes, and
-the only place a produced `Pending` becomes a settled `PathPoint`. A redraw start
-and a winner the method never read owe both halves and take f and g from this
-one pass; a winner the method read through `serve_trials` owes only its gradient
-when the `eval_f` seam served it value-only — with no such seam the same call
-served the fused pair, so the winner already carries both and passes through as
-it stands, never served twice. Everything is bought before anything is placed,
-so nothing commits before it is settled.
-_Avoid_: commit batch, gradient round
-
 ### Cost model
 
 **horizon (`max_iters`)**:
@@ -262,18 +277,3 @@ served whole or not at all. At the loop head it is handed the ledger as it
 stands. It exists for a budget the engine cannot see (points, wall-clock,
 dollars). It is an extra gate, never a horizon.
 _Avoid_: stopping budget
-
-**domain** (type `Domain`):
-The object that carries everything the engine knows about the search space: the
-per-dimension `(lb, ub)` sides (either may be unbounded), the per-dimension
-`scale` the draws use, and the injected per-dimension samplers. It is the sole
-authority on the dimension `d`, and every point the run serves lies inside it:
-the engine clips the starts it draws, and a method clips its own step. Bounds
-are data, never a unit-cube assumption.
-_Avoid_: box (the box is only the bounded-sides part of the domain)
-
-**sampler**:
-The injected per-dimension callable that draws starts; the default is uniform on
-a bounded side and normal on a free side. The *domain* remains the sole
-authority on `d`.
-_Avoid_: initializer, prior (as a name for the *callable*)
