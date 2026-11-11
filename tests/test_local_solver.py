@@ -32,7 +32,7 @@ from tests.flock import flock_kwargs
 jax.config.update("jax_enable_x64", val=True)
 
 
-def close(
+def is_close(
     a: jnp.ndarray | float,
     b: jnp.ndarray | float,
     tol: float = 1e-5,
@@ -41,7 +41,7 @@ def close(
     return bool(jnp.max(jnp.abs(a - b)) < tol)
 
 
-def wide(d: int) -> Domain:
+def wide_domain(d: int) -> Domain:
     """Return a box no number in this suite comes near, in `d` dimensions."""
     return Domain(jnp.tile(jnp.asarray([[-1e12, 1e12]]), (d, 1)))
 
@@ -58,7 +58,9 @@ def proposed(solver: DiagonalPreconditioner, i: int = 0) -> Pending:
     One path per call, in a box wide enough that the clip never bites: the tests
     that care about the clip pass their own box to `propose`.
     """
-    out = solver.propose([i], wide(int(solver._state[i].point.x.shape[0])), _unread)
+    out = solver.propose(
+        [i], wide_domain(int(solver._state[i].point.x.shape[0])), _unread
+    )
     pending = out[i]
     assert pending is not None, "the method named no winner"
     return pending
@@ -75,7 +77,7 @@ def test_diag_warmup_is_one_gradient_step() -> None:
     assert solver._state[0].is_warmup
     assert solver._state[0].alpha == 1.0
     pending = proposed(solver)
-    assert close(pending.x, p.x + 1.0 * (-p.g), 1e-12)
+    assert is_close(pending.x, p.x + 1.0 * (-p.g), 1e-12)
     # Both halves are owed: the method read nothing, so the engine's `settle`
     # buys this candidate's f and g in the same fused batch as everything else
     # the iteration produced.
@@ -85,7 +87,7 @@ def test_diag_warmup_is_one_gradient_step() -> None:
     above = PathPoint(x=p.x - p.g, f=9.0, g=p.g)
     solver.step(0, above)
     assert not solver._state[0].is_warmup
-    assert close(solver._state[0].s_ema, jnp.square(-p.g), 1e-12)
+    assert is_close(solver._state[0].s_ema, jnp.square(-p.g), 1e-12)
 
 
 def test_a_stationary_path_proposes_nothing() -> None:
@@ -103,7 +105,7 @@ def test_a_stationary_path_proposes_nothing() -> None:
     # `step`, not to the ask - what the stopping test reads is the path itself.
     floor = PathPoint(x=start.x - start.g, f=0.5, g=jnp.array([1e-9, -1e-9]))
     solver.step(0, floor)
-    assert solver.propose([0], wide(2), _unread) == {0: None}
+    assert solver.propose([0], wide_domain(2), _unread) == {0: None}
 
 
 def test_a_path_pinned_by_an_outward_gradient_is_stationary() -> None:
@@ -163,12 +165,12 @@ def test_propose_answers_the_whole_cohort_in_one_call() -> None:
     solver.restart(1, live)
     solver.step(1, PathPoint(x=live.x, f=0.5, g=jnp.array([1e-9, 1e-9])))
 
-    out = solver.propose([0, 1], wide(2), _unread)
+    out = solver.propose([0, 1], wide_domain(2), _unread)
 
     assert set(out) == {0, 1}
     assert out[1] is None  # path 1's stopping test holds
     assert out[0] is not None  # path 0 still steps
-    assert close(out[0].x, live.x - live.g, 1e-12)
+    assert is_close(out[0].x, live.x - live.g, 1e-12)
 
 
 def test_propose_clips_its_own_step_into_the_domain() -> None:
@@ -183,7 +185,7 @@ def test_propose_clips_its_own_step_into_the_domain() -> None:
     assert pending is not None
     # Only the out-of-bound coordinate is pinned to the wall: the clip is
     # per-coordinate, so the other one takes its step as usual.
-    assert close(pending.x, jnp.array([0.0, 0.5]), 1e-12)
+    assert is_close(pending.x, jnp.array([0.0, 0.5]), 1e-12)
 
 
 def _warmup(
@@ -227,7 +229,7 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     # y = h·s ⇒ √(S/Y) = 1/h ⇒ Δx = -(1/h)·h·x₁ = -x₁, the Newton step. The step
     # is taken from the point `step` left the path on, which is what `_warmup`
     # committed.
-    assert close(proposed(solver).x, jnp.zeros(3), 1e-12)
+    assert is_close(proposed(solver).x, jnp.zeros(3), 1e-12)
 
 
 def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
@@ -244,7 +246,7 @@ def test_diag_abs_step_is_newton_exact_on_a_quadratic() -> None:
     solver = DiagonalPreconditioner(theta=0.0, moment="abs", mu=0.0)
     solver.restart(0, p)
     _warmup(solver, quad)
-    assert close(proposed(solver).x, jnp.zeros(3), 1e-12)
+    assert is_close(proposed(solver).x, jnp.zeros(3), 1e-12)
 
 
 def test_diag_step_scales_with_the_coordinate_unit() -> None:
@@ -271,7 +273,7 @@ def test_diag_step_scales_with_the_coordinate_unit() -> None:
         return proposed(solver).x - best.x
 
     c = jnp.array([1e3, 1e-3])
-    assert close(step_under(c), c * step_under(jnp.ones(2)), 1e-9)
+    assert is_close(step_under(c), c * step_under(jnp.ones(2)), 1e-9)
 
 
 def test_diag_gradient_floor_carries_a_flat_secant() -> None:
@@ -284,7 +286,7 @@ def test_diag_gradient_floor_carries_a_flat_secant() -> None:
     trial = PathPoint(x=x1, f=0.5, g=g)  # g unchanged ⇒ y = 0
     solver.step(0, trial)
     # d_i = |s_i|/(√θ·|g_i|) = |g_i|/(√θ·|g_i|) = 1/√θ = 100 for both dims.
-    assert close(proposed(solver).x, x1 - 100.0 * g, 1e-9)
+    assert is_close(proposed(solver).x, x1 - 100.0 * g, 1e-9)
     step = proposed(solver).x - x1
     assert float(jnp.vdot(step, g)) < 0.0  # d > 0 ⇒ always a descent direction
 
@@ -307,13 +309,13 @@ def test_diag_floor_is_a_floor_not_an_addend() -> None:
     trial = PathPoint(x=p.x - g0, f=0.9, g=g1)  # committed unread; f is not read
     solver.step(0, trial)
     lam = theta * jnp.square(g1)
-    assert close(solver._state[0].y_ema, lam, 1e-12)  # secant sits on the crossover
+    assert is_close(solver._state[0].y_ema, lam, 1e-12)  # secant sits on the crossover
     # max floor: d = √(S/max(Y, λ)) = √(g0²/θg1²) = (1+√θ)/√θ per coordinate.
     step = proposed(solver).x - trial.x
     scale = (1.0 + math.sqrt(theta)) / math.sqrt(theta)
-    assert close(step, -scale * g1, 1e-9)
+    assert is_close(step, -scale * g1, 1e-9)
     # The additive form would propose 1/√2 of this; assert it does not.
-    assert not close(step, -scale / math.sqrt(2.0) * g1, 1e-9)
+    assert not is_close(step, -scale / math.sqrt(2.0) * g1, 1e-9)
 
 
 def test_diag_decay_blends_later_secants() -> None:
@@ -327,15 +329,15 @@ def test_diag_decay_blends_later_secants() -> None:
     first = PathPoint(x=x1, f=0.9, g=g1)
     solver.step(0, first)
     s1, y1 = x1 - p.x, g1 - g0
-    assert close(solver._state[0].s_ema, jnp.square(s1), 1e-12)
-    assert close(solver._state[0].y_ema, jnp.square(y1), 1e-12)
+    assert is_close(solver._state[0].s_ema, jnp.square(s1), 1e-12)
+    assert is_close(solver._state[0].y_ema, jnp.square(y1), 1e-12)
     s2, y2 = jnp.array([0.25, -0.5]), jnp.array([0.1, 0.2])
     second = PathPoint(x=x1 + s2, f=0.8, g=g1 + y2)
     solver.step(0, second)
     s_expect = 0.5 * jnp.square(s1) + 0.5 * jnp.square(s2)
     y_expect = 0.5 * jnp.square(y1) + 0.5 * jnp.square(y2)
-    assert close(solver._state[0].s_ema, s_expect, 1e-12)
-    assert close(solver._state[0].y_ema, y_expect, 1e-12)
+    assert is_close(solver._state[0].s_ema, s_expect, 1e-12)
+    assert is_close(solver._state[0].y_ema, y_expect, 1e-12)
 
 
 def test_diag_stops_only_when_the_gradient_norm_converged() -> None:
@@ -354,7 +356,7 @@ def test_diag_stops_only_when_the_gradient_norm_converged() -> None:
     assert proposed(solver)  # still stepping
     converged = PathPoint(x=partial.x, f=0.5, g=jnp.array([9e-4, 3e-4]))
     solver.step(0, converged)
-    assert solver.propose([0], wide(2), _unread) == {0: None}
+    assert solver.propose([0], wide_domain(2), _unread) == {0: None}
 
 
 def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
@@ -368,10 +370,10 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
     solver.restart(0, fresh)
     assert solver._state[0].is_warmup
-    assert close(solver._state[0].g0, fresh.g, 1e-12)
-    assert close(solver._state[0].s_ema, jnp.zeros(2), 1e-12)
+    assert is_close(solver._state[0].g0, fresh.g, 1e-12)
+    assert is_close(solver._state[0].s_ema, jnp.zeros(2), 1e-12)
     assert solver._state[0].alpha == 1.0  # the warm-up length is re-armed too
-    assert close(proposed(solver).x, fresh.x + 1.0 * (-fresh.g), 1e-12)
+    assert is_close(proposed(solver).x, fresh.x + 1.0 * (-fresh.g), 1e-12)
 
 
 # --- momentum blend (opt-in, mu > 0) ---
@@ -426,10 +428,10 @@ def test_diag_momentum_is_the_committed_gradient_blend() -> None:
     d_mom = _direction(mom)
     d = d_plain / g  # per-coordinate d; both solvers blend the same secant
     m_prev = g - Y_MOM  # restart seeded m with the step start's gradient
-    assert close(d_mom, d * ((1.0 - mu) * g + mu * m_prev), 1e-12)
-    assert not close(d_mom, d_plain, 1e-9)  # the momentum really was blended in
+    assert is_close(d_mom, d * ((1.0 - mu) * g + mu * m_prev), 1e-12)
+    assert not is_close(d_mom, d_plain, 1e-9)  # the momentum really was blended in
     # Unprojected: the gain is free to move off the plain step's value.
-    assert not close(float(jnp.vdot(d_mom, g)), float(jnp.vdot(d_plain, g)), 1e-9)
+    assert not is_close(float(jnp.vdot(d_mom, g)), float(jnp.vdot(d_plain, g)), 1e-9)
 
 
 def test_diag_propose_never_writes_the_momentum() -> None:
@@ -443,7 +445,7 @@ def test_diag_propose_never_writes_the_momentum() -> None:
     solver, at = _solver_with_secant(0.5, g)
     m_before = solver._state[0].m
     # `step` already blended the committed g into the seeded (g - y).
-    assert close(m_before, 0.5 * (at.g - Y_MOM) + 0.5 * at.g, 1e-12)
+    assert is_close(m_before, 0.5 * (at.g - Y_MOM) + 0.5 * at.g, 1e-12)
     first = proposed(solver).x
     assert jnp.array_equal(solver._state[0].m, m_before)  # propose wrote nothing
     second = proposed(solver).x
@@ -461,13 +463,13 @@ def test_diag_restart_drops_the_momentum_history() -> None:
     """
     g = jnp.array([0.5, -1.5])
     solver, at = _solver_with_secant(0.5, g)
-    assert close(solver._state[0].m, 0.5 * (at.g - Y_MOM) + 0.5 * at.g, 1e-12)
+    assert is_close(solver._state[0].m, 0.5 * (at.g - Y_MOM) + 0.5 * at.g, 1e-12)
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
     solver.restart(0, fresh)
-    assert close(solver._state[0].m, fresh.g, 1e-12)  # nothing crossed the restart
+    assert is_close(solver._state[0].m, fresh.g, 1e-12)  # nothing crossed the restart
     landed = PathPoint(x=fresh.x + S_MOM, f=0.5, g=fresh.g + Y_MOM)
     solver.step(0, landed)
-    assert close(solver._state[0].m, 0.5 * fresh.g + 0.5 * landed.g, 1e-12)
+    assert is_close(solver._state[0].m, 0.5 * fresh.g + 0.5 * landed.g, 1e-12)
 
 
 def test_diag_mu_zero_leaves_no_history_behind() -> None:
@@ -501,10 +503,10 @@ def test_diag_momentum_moves_only_where_d_has_support() -> None:
     # y = [-1, 0] against s = [1, 0] leaves d = [1, 0]; g lives on coordinate 1.
     at = PathPoint(x=start.x + jnp.array([1.0, 0.0]), f=0.5, g=jnp.array([0.0, 0.5]))
     solver.step(0, at)  # m = ½·start.g + ½·at.g, live on coordinate 0
-    assert close(solver._state[0].m, 0.5 * start.g + 0.5 * at.g, 1e-12)
+    assert is_close(solver._state[0].m, 0.5 * start.g + 0.5 * at.g, 1e-12)
     step = at.x - proposed(solver).x
-    assert close(step[1], 0.0, 1e-12)  # d = 0 there: no step, history or not
-    assert not close(step[0], 0.0, 1e-12)  # d > 0 and history live: it moves
+    assert is_close(step[1], 0.0, 1e-12)  # d = 0 there: no step, history or not
+    assert not is_close(step[0], 0.0, 1e-12)  # d > 0 and history live: it moves
 
 
 def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
@@ -532,7 +534,7 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
     # θ = 0 makes the post-warm-up step exactly Newton, so g = 0 after it and the
     # next `propose` answers `None` (the stopping test); the point is still the
     # best, which is what `f`/`x` report.
-    assert close(result.x, center, 1e-9)
+    assert is_close(result.x, center, 1e-9)
     assert result.f < 1e-12
 
 
@@ -618,13 +620,13 @@ def test_beta_zero_is_legal_and_reads_only_the_newest_secant() -> None:
     p = PathPoint(x=jnp.zeros(2), f=1.0, g=jnp.array([1.0, 1.0]))
     solver.restart(0, p)
     solver.step(0, PathPoint(x=p.x - p.g, f=0.0, g=2.0 * p.g))
-    assert close(solver._state[0].s_ema, jnp.square(p.g), 1e-12)
+    assert is_close(solver._state[0].s_ema, jnp.square(p.g), 1e-12)
     # A second, different pair replaces the first rather than blending into it.
     # Its start is the point the path now stands on, not one passed in again.
     q = solver._state[0].point
     solver.step(0, PathPoint(x=q.x - q.g, f=0.0, g=2.0 * q.g))
-    assert close(solver._state[0].s_ema, jnp.square(q.g), 1e-12)
-    assert close(solver._state[0].y_ema, jnp.square(q.g), 1e-12)
+    assert is_close(solver._state[0].s_ema, jnp.square(q.g), 1e-12)
+    assert is_close(solver._state[0].y_ema, jnp.square(q.g), 1e-12)
 
 
 def test_diag_knobs_out_of_range_are_rejected() -> None:

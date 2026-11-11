@@ -516,9 +516,9 @@ class _Best:
     - with no mask, every point is feasible. A NaN or +inf trial neither becomes
     `f⋆` nor displaces one: it carries no value to compare. A feasible -inf is
     not an improvement to weigh but the answer itself, so it ends the run
-    (`unbounded`) instead of entering a comparison. It starts at `nan` and stays
-    there until a finite feasible value arrives: `nan` is the "no answer" state,
-    which leaves `inf` free to mean a value an objective actually took.
+    instead of entering a comparison. It starts at `nan` and stays there until a
+    finite feasible value arrives: `nan` is the "no answer" state, which leaves
+    `inf` free to mean a value an objective actually took.
     """
 
     def __init__(self, d: int) -> None:
@@ -526,9 +526,6 @@ class _Best:
         # placeholder is already the right shape.
         self.x = jnp.full(d, math.nan)
         self.f = math.nan  # "no answer yet", not `inf`: a value may take it
-        # Set when a feasible point evaluated to -inf: the run has an
-        # answer that no later trial can beat, so it stops on it.
-        self.unbounded = False
 
     def observe(
         self,
@@ -555,7 +552,6 @@ class _Best:
         if j_floor is not None:
             self.f = -math.inf
             self.x = x_batch[j_floor]
-            self.unbounded = True
             raise _OptimumReached
         pos = _argmin_finite([f_vals[j] for j in candidates])
         if pos is None:  # nothing feasible served, or all of it non-finite

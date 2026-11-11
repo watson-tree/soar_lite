@@ -31,7 +31,7 @@ def _batch(n: int = 5) -> jnp.ndarray:
     return jnp.linspace(-1.5, 1.5, n)[:, None] * jnp.asarray([1.0, -1.0])[None, :]
 
 
-def _feasible(row: jnp.ndarray) -> jnp.ndarray:
+def _feasible_mask(row: jnp.ndarray) -> jnp.ndarray:
     """Return a per-point predicate, true on the inner disc."""
     return jnp.sum(row**2) < 2.0
 
@@ -54,13 +54,13 @@ def test_the_fused_half_is_the_per_row_value_and_grad() -> None:
 def test_feasibility_is_a_separate_per_point_vmap() -> None:
     """The mask is vmapped on its own, since it cannot ride inside the grad."""
     x = _batch()
-    eval_f_g, eval_f = pointwise(_objective, feasible=_feasible)
+    eval_f_g, eval_f = pointwise(_objective, feasible=_feasible_mask)
 
     _, _, feas = eval_f_g(x)
     assert feas is not None
     assert feas.shape == (x.shape[0],), feas.shape
     assert feas.dtype == jnp.bool_, feas.dtype
-    assert jnp.array_equal(feas, jax.vmap(_feasible)(x)), feas
+    assert jnp.array_equal(feas, jax.vmap(_feasible_mask)(x)), feas
     # The value-only half must report the same mask, not its own.
     _, feas_f = eval_f(x)
     assert feas_f is not None

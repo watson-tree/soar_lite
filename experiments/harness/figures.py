@@ -18,7 +18,7 @@ from matplotlib.axes import Axes
 from experiments.harness import problems
 from experiments.harness.methods import Trace
 from experiments.harness.panels import PANELS, Roster
-from experiments.harness.record import HERE, Loaded, Roots, load_arm
+from experiments.harness.record import HERE, LoadedArm, Roots, load_arm
 
 Axis: TypeAlias = Literal["points", "batches"]
 """The two cost units a panel can be drawn against.
@@ -220,7 +220,7 @@ def _summary(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return med, q1, q3
 
 
-def _cut(loads: list[Loaded], xcol: int) -> float:
+def _cut(loads: list[LoadedArm], xcol: int) -> float:
     """Return the x extent a panel shares: the shortest arm's, over its seeds.
 
     Arms that stopped before their batch budget are left out of the shortest:
@@ -228,18 +228,18 @@ def _cut(loads: list[Loaded], xcol: int) -> float:
     clip the ones still spending budget. A panel where every arm stopped early
     has no ruler but those, and falls back to all of them.
     """
-    served = [loaded for loaded in loads if _served_budget(loaded)]
+    served = [loaded for loaded in loads if has_served_budget(loaded)]
     return min(_extent(loaded, xcol) for loaded in served or loads)
 
 
-def _extent(loaded: Loaded, xcol: int) -> float:
+def _extent(loaded: LoadedArm, xcol: int) -> float:
     """Return the furthest ``xcol`` this arm reached, over every seed."""
     return max(
         float(t.as_arrays()[xcol].max()) for t in loaded.traces if len(t.points) > 0
     )
 
 
-def _served_budget(loaded: Loaded) -> bool:
+def has_served_budget(loaded: LoadedArm) -> bool:
     """Whether every seed reached the batch budget, i.e. did not stop early."""
     return all(
         len(t.batches) > 0 and t.batches[-1] >= loaded.max_batches

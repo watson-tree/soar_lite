@@ -31,25 +31,25 @@ STYLE_SERIAL: dict[str, Any] = {"color": "C0", "lw": 2.0}
 STYLE_PARALLEL: dict[str, Any] = {"color": "C0", "lw": 2.0, "ls": "--"}
 STYLE_MOMENTUM_09: dict[str, Any] = {"color": "C1", "lw": 1.5}
 
-Build: TypeAlias = Callable[[], problems.Problem]
+ProblemFactory: TypeAlias = Callable[[], problems.Problem]
 Roster: TypeAlias = Callable[[problems.Problem], list[Arm]]
-Measure: TypeAlias = Callable[[Roots, int, int], None]
+PanelMeasure: TypeAlias = Callable[[Roots, int, int], None]
 
 
 @dataclass(frozen=True)
 class Panel:
     """One name on the command line: its problems, and how they are measured.
 
-    `arms` and `run` are the two ways a panel measures, and a name carries one
+    `arms` and `measure` are the two ways a panel measures, and a name carries one
     of them. A roster panel has `arms` and stores one trace per pair; a panel
     that compares two problems as it draws builds its own, so `problems` stays
-    empty and `run` is what measures it. A panel with no `arms` selects
+    empty and `measure` is what measures it. A panel with no `arms` selects
     nothing.
     """
 
-    problems: tuple[Build, ...] = ()
+    problems: tuple[ProblemFactory, ...] = ()
     arms: Roster | None = None
-    run: Measure | None = None
+    measure: PanelMeasure | None = None
 
 
 def soar_ladder() -> list[Arm]:
@@ -120,7 +120,7 @@ PANELS: dict[str, Panel] = {
         arms=_preconditioning_arms,
     ),
     "multimodal": Panel(problems=(problems.rastrigin,), arms=_drift_arms),
-    "invariance": Panel(run=_appendix_invariance),
+    "invariance": Panel(measure=_appendix_invariance),
 }
 GROUPS: tuple[str, ...] = tuple(PANELS)
 

@@ -247,8 +247,8 @@ def main(argv: list[str] | None = None) -> Roots:
 
     for group in groups:
         panel = PANELS[group]
-        if panel.run is not None:
-            panel.run(roots, n_seeds, max_batches)
+        if panel.measure is not None:
+            panel.measure(roots, n_seeds, max_batches)
             continue
         print(f"[{group}] seeds={n_seeds} max_batches={max_batches}")
         panels.run_panel(

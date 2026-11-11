@@ -28,15 +28,15 @@ import matplotlib.pyplot as plt
 
 from experiments.harness.figures import _cut, _up_to, plot_cohort
 from experiments.harness.methods import Trace
-from experiments.harness.record import Loaded
+from experiments.harness.record import LoadedArm
 
 BUDGET = 300
 
 
-def _arm(n: int, *, points_per_batch: int = 1) -> Loaded:
+def _arm(n: int, *, points_per_batch: int = 1) -> LoadedArm:
     """One arm's single-seed trace, stopping after ``n`` batches."""
     batches = list(range(1, n + 1))
-    return Loaded(
+    return LoadedArm(
         traces=[
             Trace(
                 points=[i * points_per_batch for i in batches],

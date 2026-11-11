@@ -84,7 +84,6 @@ def test_best_counts_a_value_only_when_it_is_feasible_and_finite(
         assert math.isnan(best.f)
     else:
         assert best.f == best_f
-    assert best.unbounded is ends_run
     if math.isnan(best.f):
         assert bool(jnp.all(jnp.isnan(best.x)))  # no answer, no x to point at
 

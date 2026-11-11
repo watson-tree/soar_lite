@@ -31,7 +31,7 @@ RECORD_FIGURES = HERE / "figures"  # one directory per panel
 
 
 @dataclass(frozen=True)
-class Loaded:
+class LoadedArm:
     """One arm's traces as read back from disk, with the budget they ran at."""
 
     traces: list[Trace]
@@ -98,7 +98,7 @@ def save_arm(  # noqa: PLR0913 - one parameter per fact the file records
     return path
 
 
-def load_arm(roots: Roots, problem_name: str, arm_key: str) -> Loaded | None:
+def load_arm(roots: Roots, problem_name: str, arm_key: str) -> LoadedArm | None:
     """Read an arm's traces, or None when nothing readable is at this key.
 
     The key this reads is `f`, but a trace written before the value was spelled
@@ -124,7 +124,7 @@ def load_arm(roots: Roots, problem_name: str, arm_key: str) -> Loaded | None:
         ]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return Loaded(traces=traces, seeds=n_seeds, max_batches=max_batches)
+    return LoadedArm(traces=traces, seeds=n_seeds, max_batches=max_batches)
 
 
 BudgetReader: TypeAlias = Callable[[dict[str, Any]], tuple[int, int]]
