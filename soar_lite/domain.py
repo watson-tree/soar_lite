@@ -113,6 +113,20 @@ class Domain:
     width: jnp.ndarray
     """The box's width per dimension, ``(d,)``; zero where it is unbounded."""
 
+    bounded_dims: jnp.ndarray
+    """The dimensions with both sides finite, ``(d,)``.
+
+    `width` and `center` read off it, so a dimension outside it is zero in
+    both.
+    """
+
+    free_dims: jnp.ndarray
+    """The dimensions with neither side finite, ``(d,)``.
+
+    A dimension in neither mask is the half-bounded one, whose default draw
+    alone has a boundary to respect.
+    """
+
     def __init__(
         self,
         bounds: Bounds,
@@ -160,13 +174,13 @@ class Domain:
         # `width` is zero there and the center falls back to the origin - the
         # only center an unbounded dimension has, and `scale` the only length
         # a caller can state about it.
-        self.bounded = jnp.isfinite(self.lo) & jnp.isfinite(self.hi)
+        self.bounded_dims = jnp.isfinite(self.lo) & jnp.isfinite(self.hi)
         # Neither side finite. The half-bounded dimension - one side finite,
         # one not - is the remaining case, and the only one whose default draw
         # has a boundary to respect.
-        self.free = ~jnp.isfinite(self.lo) & ~jnp.isfinite(self.hi)
-        self.width = jnp.where(self.bounded, self.hi - self.lo, 0.0)
-        self.center = jnp.where(self.bounded, self.lo + self.width / 2.0, 0.0)
+        self.free_dims = ~jnp.isfinite(self.lo) & ~jnp.isfinite(self.hi)
+        self.width = jnp.where(self.bounded_dims, self.hi - self.lo, 0.0)
+        self.center = jnp.where(self.bounded_dims, self.lo + self.width / 2.0, 0.0)
 
     def draw(self, key: jnp.ndarray, n_points: int) -> jnp.ndarray:
         """Return ``(n_points, d)`` restart starts, one dimension at a time.
@@ -193,14 +207,14 @@ class Domain:
             sampler = self._samplers[j]
             if sampler is not None:
                 column = sampler(sub, n_points)
-            elif bool(self.bounded[j]):
+            elif bool(self.bounded_dims[j]):
                 column = jax.random.uniform(
                     sub,
                     (n_points,),
                     minval=self.lo[j],
                     maxval=self.hi[j],
                 )
-            elif bool(self.free[j]):
+            elif bool(self.free_dims[j]):
                 column = self.scale[j] * jax.random.normal(sub, (n_points,))
             else:
                 column = _truncated_normal(

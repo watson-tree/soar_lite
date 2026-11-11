@@ -101,15 +101,15 @@ class Script:
         self.got: list[PathPoint] = []
         self.served: list[float] = []
 
-    def restart(self, i: int, p: PathPoint) -> None:
+    def restart(self, i: int, point: PathPoint) -> None:
         """Keep the point the engine seeded path `i` with."""
         del i  # one path per run below: the index carries nothing extra
-        self.got.append(p)
+        self.got.append(point)
 
-    def step(self, i: int, p: PathPoint) -> None:
+    def step(self, i: int, point: PathPoint) -> None:
         """Keep the point the engine committed for path `i`."""
         del i
-        self.got.append(p)
+        self.got.append(point)
 
     def propose(
         self, idxs: list[int], domain: Domain, serve_trials: ServeTrials

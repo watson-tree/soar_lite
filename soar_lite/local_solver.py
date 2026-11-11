@@ -44,7 +44,7 @@ class _PathState:
     # where the path stands: `restart` places it and `step` moves it, nothing
     # else writes it - the two calls that pair with the engine's own two writes
     # to its copy, so the two can never disagree
-    p: PathPoint
+    point: PathPoint
     # no pair in hand yet: set by `restart`, cleared by the first committed step,
     # so `propose` descends along -g and that first `step` seeds outright
     warmup: bool
@@ -61,15 +61,15 @@ class _PathState:
     alpha: float
 
     @classmethod
-    def restarted(cls, p: PathPoint, alpha0: float) -> "_PathState":
-        """Return the state a path cold-starts at from p: no secant, nothing in it."""
+    def restarted(cls, point: PathPoint, alpha0: float) -> "_PathState":
+        """Return the cold-start state at ``point``: no secant, nothing in it."""
         return cls(
-            p=p,
+            point=point,
             warmup=True,
-            s_ema=jnp.zeros_like(p.g),
-            y_ema=jnp.zeros_like(p.g),
-            m=p.g,
-            g0=p.g,
+            s_ema=jnp.zeros_like(point.g),
+            y_ema=jnp.zeros_like(point.g),
+            m=point.g,
+            g0=point.g,
             alpha=alpha0,
         )
 
@@ -227,8 +227,8 @@ class DiagonalPreconditioner(LocalSolver):
         # One record per path, seeded by `restart`.
         self._state: dict[int, _PathState] = {}
 
-    def restart(self, i: int, p: PathPoint) -> None:
-        """Seed path i at p: warm-up armed at alpha0, g0 kept, no estimate yet.
+    def restart(self, i: int, point: PathPoint) -> None:
+        """Seed path i at point: warm-up armed at alpha0, g0 kept, no estimate yet.
 
         The engine's only cold start, so this runs at initialization and after
         every restart - the secant history never carries across one. The
@@ -239,14 +239,14 @@ class DiagonalPreconditioner(LocalSolver):
         """
         # alpha0 is a scalar multiplier; the warm-up direction -g carries the
         # coordinate scale itself
-        self._state[i] = _PathState.restarted(p, self.alpha0)
+        self._state[i] = _PathState.restarted(point, self.alpha0)
 
-    def step(self, i: int, p: PathPoint) -> None:
+    def step(self, i: int, point: PathPoint) -> None:
         """Take the step the engine just committed for path i.
 
-        ``p`` means what it means in `restart`: the point the path now stands
+        ``point`` means what it means in `restart`: the point the path now stands
         at, handed over once. The point it stepped from is the record's own, so
-        the pair the step observed is read entirely off (record, p).
+        the pair the step observed is read entirely off (record, point).
 
         Only the winner is taken in, never a trial the method's own enumeration
         rejected: a secant from a point the path never stood on would smear the
@@ -260,17 +260,19 @@ class DiagonalPreconditioner(LocalSolver):
         here, so the method is left untouched rather than half-reset.
         """
         state = self._state[i]
-        s_ema, y_ema = self._blended_secant(state, p.x - state.p.x, p.g - state.p.g)
+        s_ema, y_ema = self._blended_secant(
+            state, point.x - state.point.x, point.g - state.point.g
+        )
         # Read only now that the step has committed, and read from the point it
         # committed to: the gradient this step started from was already spent on
         # this step's direction, so the arriving one is the news. `restart`
         # seeds the descent with the start's own gradient, which is why every
         # step after it blends rather than seeding; at mu = 0 the blend keeps
         # only the arriving gradient, which is the default's bare direction.
-        m = self.mu * state.m + (1.0 - self.mu) * p.g
+        m = self.mu * state.m + (1.0 - self.mu) * point.g
         self._state[i] = replace(
             state,
-            p=p,
+            point=point,
             warmup=False,
             s_ema=s_ema,
             y_ema=y_ema,
@@ -316,9 +318,9 @@ class DiagonalPreconditioner(LocalSolver):
     def _propose(self, i: int) -> jnp.ndarray:
         state = self._state[i]
         if state.warmup:
-            return state.p.x + state.alpha * (-state.p.g)
-        diag = self._d_for(i, state.p.g)
-        return state.p.x + state.alpha * (-diag * state.m)
+            return state.point.x + state.alpha * (-state.point.g)
+        diag = self._d_for(i, state.point.g)
+        return state.point.x + state.alpha * (-diag * state.m)
 
     def _stationary(self, i: int, domain: Domain) -> bool:
         """Return whether path i's projected gradient has hit its floor.
@@ -351,7 +353,7 @@ class DiagonalPreconditioner(LocalSolver):
         forcing in the caller's units; it belongs in the scale.
         """
         state = self._state[i]
-        g, x = state.p.g, state.p.x
+        g, x = state.point.g, state.point.x
         # A component is pinned where its descent direction -g_i points out of
         # the box: g_i > 0 against the lower wall, g_i < 0 against the upper one.
         # Zeroing exactly those is the projection; every other component still has

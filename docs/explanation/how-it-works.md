@@ -485,7 +485,7 @@ reading anything — one whole step, read by no value — exactly what
 same batch.
 
 Which of the two a method sends is its own business. The engine stocks
-`serve_trials`, calls `propose` once, and grades whatever comes back, so the
+`serve_trials`, calls `propose` once, and settles whatever comes back, so the
 number of trials a step reads, the order it reads them in, and the rule that
 picks among them are all inside the method: a line search, a grid, an early
 exit, and the case of no comparison at all are one code path from where the

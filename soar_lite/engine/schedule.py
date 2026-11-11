@@ -606,7 +606,7 @@ class _EvalSeams:
 
         A trial's gradient is only wanted for the step's winner, so with the
         value-only seam each trial is served for its value alone and the winners are
-        graded once, together (`settle`). Without it a fused pass is the
+        settled once, together (`settle`). Without it a fused pass is the
         only way to a value, so every trial carries its gradient whether or not
         the method's own enumeration keeps it; `settle` then buys nothing.
         """
@@ -643,15 +643,15 @@ class _EvalSeams:
                 for pos, i in enumerate(owed)
             }
         return {
-            i: bought[i] if point.g is None else point.graded()
-            for i, point in decided.items()
+            i: bought[i] if pending.g is None else pending.point()
+            for i, pending in decided.items()
         }
 
     def _serve_f_g(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
         """Serve one fused batch: the gradient comes with the value.
 
         What is specific to this half is that the pass buys both, so its rows
-        come back graded; the gate, the charge and the two reports are the same
+        come back settled; the gate, the charge and the two reports are the same
         edges the value-only half goes through.
 
         Args:
@@ -760,9 +760,9 @@ class _Paths:
       list once and threads it to `_restart_starts` and to the complement both
       halves share.
     - An iteration decides on values and pays for gradients once: whatever the
-      value-only seam left ungraded - restart starts and step winners alike - is
-      bought in one batch before anything is placed, so nothing is committed
-      before it is graded.
+      value-only seam left owing a gradient - restart starts and step winners
+      alike - is bought in one batch before anything is placed, so nothing is
+      committed before it is settled.
     - A path is stalled when it did not move at all this iteration - its method
       gave up on every trial, or its fresh start or its winner was not usable. A
       stalled path does not step, so it serves nothing that iteration and the
@@ -829,7 +829,7 @@ class _Paths:
         wants. The gradients those decisions need are then bought together in one
         batch (`settle`), so an iteration adds one gradient pass however many
         moves it deferred. A run without the seam serves everything fused and
-        reaches `settle` already graded.
+        reaches `settle` already carrying both halves.
 
         The two halves touch disjoint paths, and every call into a collaborator
         is per path, so deciding all moves before placing any is the same
@@ -866,8 +866,8 @@ class _Paths:
         # One batch over both halves, keyed by path so neither is re-paired by
         # position. A refusal (`_BatchRefused`) cuts the iteration short with
         # nothing placed - this is the only batch it serves. A point that arrived
-        # already graded (a run without the seam) passes straight through
-        # `settle` without being served again.
+        # already carrying both halves (a run without the seam) passes straight
+        # through `settle` without being served again.
         settled = self.eval_seams.settle({**starts, **winners})
         self._place({i: settled[i] for i in restarting}, restart=True)
         self._place({i: settled[i] for i in winners}, restart=False)
@@ -966,7 +966,7 @@ class _Paths:
         point - non-finite in either half - never becomes a path's point and the
         method is never told it landed. The path keeps the point it holds and is
         marked stalled, so `restart_stalled` alone decides whether it is re-drawn.
-        `settle` graded the point and this is its first read, so a non-finite
+        `settle` bought the point and this is its first read, so a non-finite
         value or gradient is refused here rather than at the seam.
 
         The channels differ in one thing: which hook is called. A restart resets

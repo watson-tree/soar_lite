@@ -62,7 +62,7 @@ class PathPoint:
 class Pending:
     """A produced point that `settle` has not promoted to a `PathPoint` yet.
 
-    Producing a point is one decision and grading it is one batch, so a point
+    Producing a point is one decision and settling it is one batch, so a point
     travels between them as this: each half is either served or still owed.
     Everything produced goes through here, and one batch promotes it, which keeps
     "does it still need g" a question about the point rather than about which
@@ -84,7 +84,7 @@ class Pending:
             raise RuntimeError(msg)
         return self.f
 
-    def graded(self) -> PathPoint:
+    def point(self) -> PathPoint:
         """Return this point as a `PathPoint`, or raise if either half is owed."""
         if self.f is None or self.g is None:
             missing = "f" if self.f is None else "g"
@@ -183,8 +183,8 @@ class LocalSolver(Protocol):
     caller's horizon, not on the method. All state is per path, lives inside the
     instance, and is opaque to the engine - implementers index it by path ``i``.
 
-    A path's point reaches the method in exactly two places: ``restart(i, p)``,
-    which places it, and ``step(i, p)``, which moves it. Both are the engine's
+    A path's point reaches the method in exactly two places: ``restart(i, point)``,
+    which places it, and ``step(i, point)``, which moves it. Both are the engine's
     own commit points, so a method that keeps the point it was handed holds the
     one the engine holds. A method that steps from a point must keep it, because
     no later call hands it back: ``propose`` reads the current point off the
@@ -217,7 +217,7 @@ class LocalSolver(Protocol):
     whole contract.
     """
 
-    def restart(self, i: int, p: PathPoint) -> None:
+    def restart(self, i: int, point: PathPoint) -> None:
         """Seed path i's state from a fresh start point (its one cold start).
 
         Called by the engine each time it places a path on a point: once at
@@ -257,17 +257,17 @@ class LocalSolver(Protocol):
         """
         ...
 
-    def step(self, i: int, p: PathPoint) -> None:
-        """Take the step the engine just committed: the path now stands at p.
+    def step(self, i: int, point: PathPoint) -> None:
+        """Take the step the engine just committed: the path now stands at point.
 
-        The engine's only call site is the commit of a usable winner, with ``p``
-        the graded point it committed, so the recorded step is always one that
-        was taken and can never disagree with the path. It is never called for a
-        point the engine refused (not `usable`) or for a path whose stopping
-        test held. ``p`` means what it means in ``restart``: the point the path
-        now stands at. The point it stepped from is the method's own record, not
-        an argument - the same rule that makes ``propose`` read its point
-        instead of being handed it.
+        The engine's only call site is the commit of a usable winner, with
+        ``point`` the settled point it committed, so the recorded step is always
+        one that was taken and can never disagree with the path. It is never
+        called for a point the engine refused (not `usable`) or for a path whose
+        stopping test held. ``point`` means what it means in ``restart``: the
+        point the path now stands at. The point it stepped from is the method's
+        own record, not an argument - the same rule that makes ``propose`` read
+        its point instead of being handed it.
         """
         ...
 

@@ -136,13 +136,13 @@ class HalfStep:
         """Start with no points: `restart` places them."""
         self.points: dict[int, PathPoint] = {}
 
-    def restart(self, i: int, p: PathPoint) -> None:
+    def restart(self, i: int, point: PathPoint) -> None:
         """Take the start the engine placed."""
-        self.points[i] = p
+        self.points[i] = point
 
-    def step(self, i: int, p: PathPoint) -> None:
+    def step(self, i: int, point: PathPoint) -> None:
         """Stand on the committed point; this method keeps no model."""
-        self.points[i] = p
+        self.points[i] = point
 
     def propose(
         self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
@@ -794,13 +794,13 @@ def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
             """Start with no point: `restart` places the first one."""
             self.points: dict[int, PathPoint] = {}
 
-        def restart(self, i: int, p: PathPoint) -> None:
+        def restart(self, i: int, point: PathPoint) -> None:
             """Take the start the engine placed."""
-            self.points[i] = p
+            self.points[i] = point
 
-        def step(self, i: int, p: PathPoint) -> None:
+        def step(self, i: int, point: PathPoint) -> None:
             """Take the point the engine committed."""
-            self.points[i] = p
+            self.points[i] = point
 
         def propose(
             self, idxs: list[int], domain: Domain, serve_trials: ServeTrials

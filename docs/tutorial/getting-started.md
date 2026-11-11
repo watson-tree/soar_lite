@@ -321,7 +321,7 @@ To replace one outright, implement its protocol and pass the instance:
 - **`LocalSolver`** — the search method: `restart`, `propose`, `step`. You own
   direction, step size, acceptance, how many candidates a step looks at and the
   clip of your own step into the domain; the engine owns the horizon, the finite
-  gate and the one fused batch that grades what a step keeps. `propose` gets the
+  gate and the one fused batch that settles what a step keeps. `propose` gets the
   cohort's indices, the run's
   `domain` and `serve_trials`, and answers a winner (a `Pending` point, read or
   unread) or `None` to stop that path. With `eval_f` connected a trial is read

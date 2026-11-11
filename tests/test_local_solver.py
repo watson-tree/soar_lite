@@ -58,7 +58,7 @@ def proposed(solver: DiagonalPreconditioner, i: int = 0) -> Pending:
     One path per call, in a box wide enough that the clip never bites: the tests
     that care about the clip pass their own box to `propose`.
     """
-    out = solver.propose([i], wide(int(solver._state[i].p.x.shape[0])), _unread)
+    out = solver.propose([i], wide(int(solver._state[i].point.x.shape[0])), _unread)
     pending = out[i]
     assert pending is not None, "the method named no winner"
     return pending
@@ -407,7 +407,7 @@ def _solver_with_secant(
 def _direction(solver: DiagonalPreconditioner) -> jnp.ndarray:
     """Return the proposed direction d⊙m, with the alpha multiplier divided out."""
     state = solver._state[0]
-    return (state.p.x - proposed(solver).x) / state.alpha
+    return (state.point.x - proposed(solver).x) / state.alpha
 
 
 def test_diag_momentum_is_the_committed_gradient_blend() -> None:
@@ -621,7 +621,7 @@ def test_beta_zero_is_legal_and_reads_only_the_newest_secant() -> None:
     assert close(solver._state[0].s_ema, jnp.square(p.g), 1e-12)
     # A second, different pair replaces the first rather than blending into it.
     # Its start is the point the path now stands on, not one passed in again.
-    q = solver._state[0].p
+    q = solver._state[0].point
     solver.step(0, PathPoint(x=q.x - q.g, f=0.0, g=2.0 * q.g))
     assert close(solver._state[0].s_ema, jnp.square(q.g), 1e-12)
     assert close(solver._state[0].y_ema, jnp.square(q.g), 1e-12)

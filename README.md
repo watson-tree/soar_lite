@@ -25,7 +25,7 @@ of starts before any step is taken (the engine's move logic itself needs no
 special case: a path with no point simply restarts). After that an iteration is
 usually one fused pass — a single call returning value and gradient for every
 served point — unless the method enumerates candidates, which spends trial
-batches of its own first and one fused batch grading the winner (see
+batches of its own first and one fused batch settling the winner (see
 [How it works](docs/explanation/how-it-works.md)). On a
 GPU a wider batch barely costs more wall-clock than a narrow one, which is why
 the engine is built around batched evaluations; on a CPU the same run works,
@@ -178,7 +178,7 @@ schedules the work, and nothing beyond JAX and the standard library.
   `DiagonalPreconditioner` by default: a step length per coordinate re-estimated
   from successive gradients, no matrix and no scalar learning rate to tune. It
   takes one whole step, read by no value; a method that does enumerate
-  candidates names its own winner, and the engine grades that winner alone.
+  candidates names its own winner, and the engine settles that winner alone.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
   the record of everything evaluated so far. `SampleGlobalModel` draws from the
   domain; `BLRGlobalModel` is a Bayesian surrogate for the same contract.

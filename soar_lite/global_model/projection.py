@@ -179,7 +179,7 @@ class SphereProjection(Projection):
         # dimensions only - a dimension the projection leaves out has no radius
         # to tie.
         radius = jnp.where(
-            domain.bounded,
+            domain.bounded_dims,
             domain.width / (2.0 * domain.scale),
             1.0,
         )

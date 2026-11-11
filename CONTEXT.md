@@ -51,8 +51,8 @@ _Avoid_: round (retired), epoch, iterations (as a name for the count)
 **step**:
 One move along a single path: propose → (trial)× → a winner, or none (`None`).
 Each path takes at most one move per iteration — a step, or a redraw start; a
-step consumes zero or more trials. The method lands it through `step(i, p)`: the
-engine hands back the graded `PathPoint` `(x, f, g)` the path now stands at, so
+step consumes zero or more trials. The method lands it through `step(i, point)`: the
+engine hands back the settled `PathPoint` `(x, f, g)` the path now stands at, so
 the method moves the matching state forward. The **method** named the winner in
 `propose`; the engine bought its owed halves in *settle* and commits here, so
 `step` is the only commit and the only place a method may advance its model — a
@@ -111,7 +111,7 @@ _Avoid_: group, lot, chunk
 
 **point**:
 One candidate — one row of a batch. The four counters (below) count the billed
-ones. Its graded form is `PathPoint`: the `x`/`f`/`g` triple a path commits,
+ones. Once settled it is a `PathPoint`: the `x`/`f`/`g` triple a path commits,
 assembled only once both halves exist (see *settle*), so a point that arrived
 fused travels on as one object rather than three arrays.
 _Avoid_: query, sample, evaluation (retired)
@@ -213,13 +213,13 @@ _Avoid_: restart check, reset decision
 
 **settle**:
 The iteration's one fused batch that buys whatever a kept point still owes, and
-the only place a produced `Pending` becomes a graded `PathPoint`. A redraw start
+the only place a produced `Pending` becomes a settled `PathPoint`. A redraw start
 and a winner the method never read owe both halves and take f and g from this
 one pass; a winner the method read through `serve_trials` owes only its gradient
 when the `eval_f` seam served it value-only — with no such seam the same call
 served the fused pair, so the winner already carries both and passes through as
 it stands, never served twice. Everything is bought before anything is placed,
-so nothing commits before it is graded.
+so nothing commits before it is settled.
 _Avoid_: commit batch, gradient round
 
 ### Cost model

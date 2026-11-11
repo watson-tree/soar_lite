@@ -80,14 +80,14 @@ class StubSolver:
         self.steps: list[int] = []
         self.points: dict[int, PathPoint] = {}
 
-    def restart(self, i: int, p: PathPoint) -> None:
+    def restart(self, i: int, point: PathPoint) -> None:
         """Record path i's cold start (the engine's only seed call)."""
-        self.points[i] = p
+        self.points[i] = point
         self.inited.append(i)
 
-    def step(self, i: int, p: PathPoint) -> None:
+    def step(self, i: int, point: PathPoint) -> None:
         """Record the committed step and stand on it; nothing else is kept."""
-        self.points[i] = p
+        self.points[i] = point
         self.steps.append(i)
 
     def _trial(self, idxs: list[int], domain: Domain) -> jnp.ndarray:
