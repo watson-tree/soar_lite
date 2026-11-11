@@ -700,10 +700,10 @@ def test_a_not_finite_path_never_widens_a_batch() -> None:
         d = theta - 0.7
         f_vals = jnp.sum(d**4 + d**2, axis=1)
         grads = 4.0 * d**3 + 2.0 * d
-        not_finite = jnp.arange(theta.shape[0]) == 0  # row 0 never comes back finite
+        finite_mask = jnp.arange(theta.shape[0]) != 0  # row 0 never comes back finite
         return (
-            jnp.where(not_finite, jnp.inf, f_vals),
-            jnp.where(not_finite[:, None], jnp.nan, grads),
+            jnp.where(~finite_mask, jnp.inf, f_vals),
+            jnp.where(~finite_mask[:, None], jnp.nan, grads),
             None,
         )
 

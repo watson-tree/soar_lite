@@ -61,7 +61,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # the report will carry once it says yes.
     budget_check: Callable[[Work], bool] | None = None,
     # Whether a stalled path is re-drawn. The stall itself is the engine's own
-    # bit (`_Paths.stalled`); this knob only decides whether the model is then
+    # bit (`_Slot.is_stalled`); this knob only decides whether the model is then
     # asked for a fresh point.
     restart_stalled: bool = True,
     # The two plugins, adjacent and in one order everywhere: where a restart
@@ -488,23 +488,23 @@ class _Meter:
 
         The horizon outranks the clock, which outranks the caller's gate.
         """
-        if self._full():
+        if self._is_full():
             return "max_iters"
-        if self._expired():
+        if self._is_expired():
             return "time_limit"
-        if self._gated(work):
+        if self._is_gated(work):
             return "budget_exhausted"
         return None
 
-    def _full(self) -> bool:
+    def _is_full(self) -> bool:
         """Whether the iteration horizon is reached."""
         return self._max_iters is not None and self.n_iters >= self._max_iters
 
-    def _expired(self) -> bool:
+    def _is_expired(self) -> bool:
         """Whether the wall-clock deadline has passed."""
         return self._deadline is not None and time.monotonic() >= self._deadline
 
-    def _gated(self, work: Work) -> bool:
+    def _is_gated(self, work: Work) -> bool:
         """Whether the caller's extra gate refuses the ledger it is handed."""
         return self._gate is not None and not self._gate(work)
 
@@ -738,14 +738,14 @@ class _Slot:
     the machine's own state, not a stall: such a path is re-drawn whatever
     `restart_stalled` says, which is how iteration 0 places the flock and how a
     refused start is eventually re-drawn. `_place` is the one writer that clears
-    `stalled`, so a re-drawn path cannot stay stalled.
+    `is_stalled`, so a re-drawn path cannot stay stalled.
 
-    `x` is not gated on finiteness - `usable` asks f and g only - so a point
+    `x` is not gated on finiteness - `is_usable` asks f and g only - so a point
     whose coordinates are `nan` is still a point the path holds.
     """
 
     point: PathPoint | None = None
-    stalled: bool = False
+    is_stalled: bool = False
 
 
 class _Paths:
@@ -767,7 +767,7 @@ class _Paths:
       gave up on every trial, or its fresh start or its winner was not usable. A
       stalled path does not step, so it serves nothing that iteration and the
       method's own state stands still.
-    - A start or a winner is committed only when it is `usable` - finite in both
+    - A start or a winner is committed only when it is `is_usable` - finite in both
       halves - one gate defined once on the point type.
     - A path holds a point or it does not. "No point" is a slot with no point
       on it, and a refused point is the other case: the path keeps the point it
@@ -804,7 +804,7 @@ class _Paths:
         # exactly one ask, where a model answers every later one.
         self._x0 = x0
         # A knob, not a collaborator: *when* a path restarts is read off
-        # `stalled` below, so the only thing left to decide is whether the
+        # `is_stalled` below, so the only thing left to decide is whether the
         # engine acts on it at all.
         self.restart_stalled = restart_stalled
         # One record per path, not a list per field: a path's point and its
@@ -842,7 +842,7 @@ class _Paths:
         restarting = [
             i
             for i, slot in enumerate(self.slots)
-            if slot.point is None or (self.restart_stalled and slot.stalled)
+            if slot.point is None or (self.restart_stalled and slot.is_stalled)
         ]
         # Nothing is going to move again: no path restarts, and every path is
         # stalled. `_place` is the only writer that clears a stall bit, and no
@@ -850,7 +850,7 @@ class _Paths:
         # beside a fully stalled flock is terminal - the iteration would serve
         # nothing. Only reachable with `restart_stalled=False`; the run ends here
         # rather than idling out the horizon.
-        if not restarting and all(slot.stalled for slot in self.slots):
+        if not restarting and all(slot.is_stalled for slot in self.slots):
             raise _AllStalled
         # Every path that did not restart and is not stalled. A stalled path is
         # left out rather than asked again: `restart_stalled` is its only way
@@ -859,7 +859,7 @@ class _Paths:
         stepping = [
             i
             for i, slot in enumerate(self.slots)
-            if i not in restarting and not slot.stalled
+            if i not in restarting and not slot.is_stalled
         ]
         starts = self._restart_starts(restarting)
         winners = self._step_winners(stepping)
@@ -954,7 +954,7 @@ class _Paths:
         winners: dict[int, Pending] = {}
         for i, answer in answers.items():
             if answer is None:
-                self.slots[i].stalled = True
+                self.slots[i].is_stalled = True
                 continue
             winners[i] = answer
         return winners
@@ -987,10 +987,10 @@ class _Paths:
         notify = self.local_solver.restart if restart else self.local_solver.step
         for i, point in points.items():
             slot = self.slots[i]
-            if not point.usable:
-                slot.stalled = True
+            if not point.is_usable:
+                slot.is_stalled = True
                 continue
-            slot.stalled = False  # a placed path is moving again
+            slot.is_stalled = False  # a placed path is moving again
             slot.point = point
             notify(i, point)
 
@@ -1054,7 +1054,7 @@ def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:
     if pts.shape[0] != n_paths:
         msg = f"x0 holds {pts.shape[0]} starts but n_paths is {n_paths}"
         raise ValueError(msg)
-    if not _all_finite(pts):
+    if not _is_all_finite(pts):
         row, dim = (int(v) for v in jnp.argwhere(~jnp.isfinite(pts))[0])
         msg = (
             f"x0 row {row} is {float(pts[row, dim]):.6g} in dimension {dim}, not finite"
@@ -1080,7 +1080,7 @@ def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:
     return pts
 
 
-def _all_finite(a: jnp.ndarray) -> bool:
+def _is_all_finite(a: jnp.ndarray) -> bool:
     """Report whether every component of an array is finite (all-or-nothing)."""
     return bool(jnp.all(jnp.isfinite(a)))
 

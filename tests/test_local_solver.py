@@ -72,7 +72,7 @@ def test_diag_warmup_is_one_gradient_step() -> None:
     solver = DiagonalPreconditioner()
     p = PathPoint(x=jnp.zeros(3), f=2.0, g=jnp.array([3.0, 0.0, 4.0]))
     solver.restart(0, p)
-    assert solver._state[0].warmup
+    assert solver._state[0].is_warmup
     assert solver._state[0].alpha == 1.0
     pending = proposed(solver)
     assert close(pending.x, p.x + 1.0 * (-p.g), 1e-12)
@@ -84,7 +84,7 @@ def test_diag_warmup_is_one_gradient_step() -> None:
     # Committed exactly as proposed: the step need not beat the start's value.
     above = PathPoint(x=p.x - p.g, f=9.0, g=p.g)
     solver.step(0, above)
-    assert not solver._state[0].warmup
+    assert not solver._state[0].is_warmup
     assert close(solver._state[0].s_ema, jnp.square(-p.g), 1e-12)
 
 
@@ -223,7 +223,7 @@ def test_diag_l2_step_is_newton_exact_on_a_quadratic() -> None:
     # The warm-up ends re-armed at a full step: the next proposal is x - d·g,
     # and alpha only ever multiplies it.
     assert solver._state[0].alpha == 1.0
-    assert not solver._state[0].warmup
+    assert not solver._state[0].is_warmup
     # y = h·s ⇒ √(S/Y) = 1/h ⇒ Δx = -(1/h)·h·x₁ = -x₁, the Newton step. The step
     # is taken from the point `step` left the path on, which is what `_warmup`
     # committed.
@@ -364,10 +364,10 @@ def test_diag_restart_rearms_the_warmup_and_reseeds_g0() -> None:
     solver.restart(0, p)
     first = PathPoint(x=p.x - p.g, f=0.5, g=jnp.array([0.5, 1.0]))
     solver.step(0, first)
-    assert not solver._state[0].warmup
+    assert not solver._state[0].is_warmup
     fresh = PathPoint(x=jnp.array([0.5, 0.5]), f=3.0, g=jnp.array([4.0, 8.0]))
     solver.restart(0, fresh)
-    assert solver._state[0].warmup
+    assert solver._state[0].is_warmup
     assert close(solver._state[0].g0, fresh.g, 1e-12)
     assert close(solver._state[0].s_ema, jnp.zeros(2), 1e-12)
     assert solver._state[0].alpha == 1.0  # the warm-up length is re-armed too
@@ -574,7 +574,7 @@ def test_a_winner_that_grades_to_nan_stalls_the_path() -> None:
     stationary and the method takes its step; from the second batch on every
     service answers NaN, so the fused batch that grades the winner refuses it.
     The method proposed a point, not a ruling, so the refusal is not its to make:
-    the engine's `usable` gate stalls the path, the frozen flock leaves it
+    the engine's `is_usable` gate stalls the path, the frozen flock leaves it
     stalled, and the run ends still holding the start it was given.
     """
     n_batches = [0]

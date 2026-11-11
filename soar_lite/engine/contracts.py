@@ -29,7 +29,7 @@ class PathPoint:
 
     The engine builds these and the local method receives them; a caller
     normally reads the run's outcome through `NPathResult` instead of
-    constructing one. A point is a candidate until `usable` passes, so a
+    constructing one. A point is a candidate until `is_usable` passes, so a
     non-finite half is allowed on a point that has not been committed.
     """
 
@@ -38,15 +38,15 @@ class PathPoint:
 
     f: float
     """The objective's value there. Finite for any point a path actually holds
-    (``usable`` gates the commit); a point still being considered may carry a
+    (``is_usable`` gates the commit); a point still being considered may carry a
     non-finite value."""
 
     g: jnp.ndarray
-    """The gradient there, shape ``(d,)``; finite under the same ``usable`` gate
+    """The gradient there, shape ``(d,)``; finite under the same ``is_usable`` gate
     as ``f`` - held points are finite, candidates need not be yet."""
 
     @property
-    def usable(self) -> bool:
+    def is_usable(self) -> bool:
         """Return whether this point may be committed as a path's point.
 
         Both halves must be finite, because both are carried forward: a
@@ -242,7 +242,7 @@ class LocalSolver(Protocol):
 
         A non-``None`` entry is the step's winner, held as a `Pending`. The
         engine promotes it by buying the halves still owed, then commits it as
-        the path's next point and calls ``step`` - unless it is not `usable`, in
+        the path's next point and calls ``step`` - unless it is not `is_usable`, in
         which case the path stalls and ``step`` is never called.
 
         ``serve_trials`` is the run's value-only evaluation hook. Every call
@@ -263,7 +263,7 @@ class LocalSolver(Protocol):
         The engine's only call site is the commit of a usable winner, with
         ``point`` the settled point it committed, so the recorded step is always
         one that was taken and can never disagree with the path. It is never
-        called for a point the engine refused (not `usable`) or for a path whose
+        called for a point the engine refused (not `is_usable`) or for a path whose
         stopping test held. ``point`` means what it means in ``restart``: the
         point the path now stands at. The point it stepped from is the method's
         own record, not an argument - the same rule that makes ``propose`` read

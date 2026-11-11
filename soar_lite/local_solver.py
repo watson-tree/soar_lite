@@ -47,7 +47,7 @@ class _PathState:
     point: PathPoint
     # no pair in hand yet: set by `restart`, cleared by the first committed step,
     # so `propose` descends along -g and that first `step` seeds outright
-    warmup: bool
+    is_warmup: bool
     # the curvature estimate: seeded by `restart`, blended once per committed step
     s_ema: jnp.ndarray
     y_ema: jnp.ndarray
@@ -65,7 +65,7 @@ class _PathState:
         """Return the cold-start state at ``point``: no secant, nothing in it."""
         return cls(
             point=point,
-            warmup=True,
+            is_warmup=True,
             s_ema=jnp.zeros_like(point.g),
             y_ema=jnp.zeros_like(point.g),
             m=point.g,
@@ -255,7 +255,7 @@ class DiagonalPreconditioner(LocalSolver):
         (Δx, Δg) for the curvature, and the gradient at the point arrived at for
         the momentum. The first call after a restart is the warm-up pair and
         seeds the secant EMAs outright; later calls blend at beta - the record's
-        ``warmup`` is that same first-step marker, cleared here. This is also
+        ``is_warmup`` is that same first-step marker, cleared here. This is also
         where a step is re-armed: a winner the engine refuses never reaches
         here, so the method is left untouched rather than half-reset.
         """
@@ -273,7 +273,7 @@ class DiagonalPreconditioner(LocalSolver):
         self._state[i] = replace(
             state,
             point=point,
-            warmup=False,
+            is_warmup=False,
             s_ema=s_ema,
             y_ema=y_ema,
             m=m,
@@ -310,19 +310,19 @@ class DiagonalPreconditioner(LocalSolver):
         del serve_trials  # single full step: nothing to rule, so nothing to read
         return {
             i: Pending(jnp.clip(self._propose(i), domain.lo, domain.hi), None, None)
-            if not self._stationary(i, domain)
+            if not self._is_stationary(i, domain)
             else None
             for i in idxs
         }
 
     def _propose(self, i: int) -> jnp.ndarray:
         state = self._state[i]
-        if state.warmup:
+        if state.is_warmup:
             return state.point.x + state.alpha * (-state.point.g)
         d = self._d_for(i, state.point.g)
         return state.point.x + state.alpha * (-d * state.m)
 
-    def _stationary(self, i: int, domain: Domain) -> bool:
+    def _is_stationary(self, i: int, domain: Domain) -> bool:
         """Return whether path i's projected gradient has hit its floor.
 
         The test is ``‖P g‖ ≤ τ_rel·‖g_0‖``: a component on a bound whose
@@ -397,7 +397,7 @@ class DiagonalPreconditioner(LocalSolver):
             s_mag, y_mag = jnp.abs(s), jnp.abs(y)
         else:
             s_mag, y_mag = jnp.square(s), jnp.square(y)
-        if state.warmup:
+        if state.is_warmup:
             return s_mag, y_mag
         return (
             self.beta * state.s_ema + (1.0 - self.beta) * s_mag,

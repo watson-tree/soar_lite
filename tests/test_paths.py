@@ -220,7 +220,7 @@ def test_a_winner_never_read_is_graded_by_one_fused_batch() -> None:
     run.move()
 
     assert float(held(run).x[0]) == pytest.approx(0.2)
-    assert not run.slots[0].stalled
+    assert not run.slots[0].is_stalled
     assert solver.got[-1] is held(run)  # stepped onto the very point the engine holds
     assert solver.served == []  # nothing was read on the way in
     # Its value was never served alone: the one batch that graded the winner
@@ -255,7 +255,7 @@ def test_a_named_stall_keeps_the_point_and_buys_nothing() -> None:
 
     run.move()  # the step, which the method declines to take
 
-    assert run.slots[0].stalled
+    assert run.slots[0].is_stalled
     # Where the path stood when its step failed is still where it stands: a
     # stalled path is not moved, and it is not re-drawn either.
     assert float(held(run).x[0]) == pytest.approx(start)
@@ -275,7 +275,7 @@ def test_an_unusable_winner_stalls_without_stepping() -> None:
 
     run.move()  # the step, whose winner grades to NaN
 
-    assert run.slots[0].stalled
+    assert run.slots[0].is_stalled
     assert float(held(run).x[0]) == pytest.approx(start)
     assert solver.got == [held(run)]  # the refused winner was never stepped
     # The winner was still served and charged: a refusal is about the point, not
@@ -313,7 +313,7 @@ def test_an_unusable_start_is_refused_rather_than_placed() -> None:
 
     run.move()
 
-    assert run.slots[0].stalled
+    assert run.slots[0].is_stalled
     assert run.slots[0].point is None
     # Refused before the method was told anything: it holds no point either.
     assert solver.got == []
@@ -327,7 +327,7 @@ def test_a_flock_with_nothing_left_to_do_ends_the_run() -> None:
     solver = Script([None])
     run, _, _ = placed(solver)
     run.move()
-    assert run.slots[0].stalled
+    assert run.slots[0].is_stalled
 
     with pytest.raises(_AllStalled):
         run.move()
@@ -343,7 +343,7 @@ def test_the_caller_flock_is_placed_in_one_batch() -> None:
 
     for i in range(3):
         assert float(held(run, i).x[0]) == pytest.approx(float(starts[i][0]))
-    assert [slot.stalled for slot in run.slots] == [False] * 3
+    assert [slot.is_stalled for slot in run.slots] == [False] * 3
     assert [float(point.x[0]) for point in solver.got] == pytest.approx(
         [float(start) for start in starts[:, 0]]
     )
@@ -359,7 +359,7 @@ def test_one_batch_grades_the_starts_and_the_winners_together() -> None:
     assert (meter.work.n_f_g_batches, meter.work.n_f_g_points) == (1, 2)
 
     run.move()  # path 0 declines, path 1 wins
-    assert run.slots[0].stalled
+    assert run.slots[0].is_stalled
     assert (meter.work.n_f_g_batches, meter.work.n_f_g_points) == (2, 3)
 
     run.move()  # path 0 is re-drawn, path 1 steps again
@@ -367,6 +367,6 @@ def test_one_batch_grades_the_starts_and_the_winners_together() -> None:
     # One batch, not two: the re-drawn start and the step winner were both owed
     # their gradient, so `settle` bought them together.
     assert (meter.work.n_f_g_batches, meter.work.n_f_g_points) == (3, 5)
-    assert not run.slots[0].stalled
+    assert not run.slots[0].is_stalled
     assert float(held(run, 0).x[0]) == pytest.approx(0.0)  # the restart row
     assert float(held(run, 1).x[0]) == pytest.approx(0.4)

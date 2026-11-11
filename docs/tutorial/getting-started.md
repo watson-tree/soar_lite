@@ -105,10 +105,10 @@ places trust differently: `best` reads `f` alone, while a path needs a finite
 points — so a `nan` or `+inf` value never becomes `best`, but a finite value whose
 gradient has a `nan` somewhere still can become `best`: the run reports that point
 even though no path ever stands on it. A path commits more strictly: a point is
-`usable` only when its value *and* every gradient component are finite, because the
+`is_usable` only when its value *and* every gradient component are finite, because the
 next step is proposed from `-g` and the secant is built from gradient differences.
 A point that is
-not `usable` stalls its path in place — re-drawn by default, parked under
+not `is_usable` stalls its path in place — re-drawn by default, parked under
 `restart_stalled=False` (see §2). The run carries on.
 
 `-inf` is the one case to decide yourself. A *feasible* point priced at `-inf`
