@@ -296,7 +296,7 @@ def test_budget_exhaustion_stops_everything() -> None:
 
 
 def test_fun_is_true_min_over_history() -> None:
-    """Pin that fun is the min over every finite f the seam returned.
+    """Pin that the reported `f` is the min over every finite value it served.
 
     Not the final point, not a compressed history.
     """
@@ -313,9 +313,9 @@ def test_fun_is_true_min_over_history() -> None:
         local_solver=HalfStep(),
     )
     assert rec.all_f_vals
-    assert res.fun == min(rec.all_f_vals)
+    assert res.f == min(rec.all_f_vals)
     # 0.7 is the true minimizer; the engine should land essentially on it
-    assert res.fun < 1e-8
+    assert res.f < 1e-8
 
 
 _TWO_WELL_SIGMA = 0.04
@@ -378,9 +378,9 @@ def test_k_start_beats_single_path_on_multimodal() -> None:
         budget_check=rec_1.limit_check(budget),
         local_solver=DiagonalPreconditioner(),
     )
-    assert res_1.fun > -3.0, res_1.fun  # stuck near local well (-2)
-    assert res_k.fun < -7.0, res_k.fun  # found the global well (-8)
-    assert res_k.fun < res_1.fun  # strictly better, equal budget
+    assert res_1.f > -3.0, res_1.f  # stuck near local well (-2)
+    assert res_k.f < -7.0, res_k.f  # found the global well (-8)
+    assert res_k.f < res_1.f  # strictly better, equal budget
 
 
 def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
@@ -439,9 +439,9 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
 
     frozen = run(restart_stalled=False)
     revived = run(restart_stalled=True)
-    assert frozen.fun == -2.0, frozen.fun  # nothing ever moved
+    assert frozen.f == -2.0, frozen.f  # nothing ever moved
     assert float(frozen.x[0]) == shallow
-    assert revived.fun == -8.0, revived.fun  # the model's re-draws landed deep
+    assert revived.f == -8.0, revived.f  # the model's re-draws landed deep
     assert float(revived.x[0]) == deep
 
 
@@ -469,7 +469,7 @@ def test_a_frozen_flock_that_fully_stalls_ends_the_run() -> None:
     assert frozen.status == "all_stalled"
     assert frozen.n_iters == 2, frozen  # the flock, then the one refused step
     assert frozen.n_f_g_batches < 50  # it stopped early, not on the horizon
-    assert frozen.fun == 0.0
+    assert frozen.f == 0.0
 
     revived = n_path_schedule(
         Recorder(quad),
@@ -504,11 +504,11 @@ def test_projected_descent_reaches_wall_optimum() -> None:
         budget_check=rec.limit_check(500),
         local_solver=HalfStep(),
     )
-    assert res.fun < 0.4, res.fun  # must slide near (1, 0), f=0.25
+    assert res.f < 0.4, res.f  # must slide near (1, 0), f=0.25
 
 
 def test_feasible_only_best() -> None:
-    """The reported best (`fun`) is the feasible min, never the raw min.
+    """The reported best (`f`) is the feasible min, never the raw min.
 
     f = (θ-0.2)^2 has its global min at θ=0.2, which the feas mask marks
     infeasible (θ <= 0.5); the best feasible design is θ=0.5+ (f 0.09). The
@@ -551,7 +551,7 @@ def test_feasible_only_best() -> None:
     # the raw min sits in the infeasible basin, below every feasible point
     assert min(all_f_vals) < min(feasible_f_vals)
     # the reported answer is the best feasible point, never the raw min
-    assert res.fun == min(feasible_f_vals)
+    assert res.f == min(feasible_f_vals)
     assert res.x[0] > thr  # the reported best lies on the feasible side
 
 
@@ -561,7 +561,7 @@ def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
     The objective has no floor above `floor`, and the four starts spread across
     the box, so iteration 0 serves one of them in that region. Monotone descent
     cannot beat -inf, so spending the horizon after it would be pure waste - and
-    dropping it from `fun` (`_argmin_finite` requires a finite value) would
+    dropping it from `f` (`_argmin_finite` requires a finite value) would
     report a larger value than the run had already served.
     """
     floor = 0.7
@@ -581,7 +581,7 @@ def test_a_feasible_minus_inf_ends_the_run_on_that_point() -> None:
         local_solver=HalfStep(),
     )
 
-    assert res.fun == -math.inf
+    assert res.f == -math.inf
     assert res.status == "unbounded"
     assert res.x[0] > floor  # the point that priced it, not a later one
     assert res.n_iters == 0  # stopped inside iteration 0: none completed
@@ -592,7 +592,7 @@ def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
 
     Same floor, but the mask puts it outside the feasible set, so the -inf
     points are served and must change nothing: the run keeps searching and
-    reports a finite feasible `fun`. Feasibility is what separates "an answer no
+    reports a finite feasible `f`. Feasibility is what separates "an answer no
     later trial can beat" from "a trial the caller cannot use", and it is the
     reason the stop lives in the engine rather than in the restart rule, which
     sees unfiltered group-min samples.
@@ -620,7 +620,7 @@ def test_an_infeasible_minus_inf_does_not_end_the_run() -> None:
 
     assert any(v == -math.inf for v in served), "no -inf point was ever served"
     assert res.status == "max_iters"
-    assert math.isfinite(res.fun)  # the answer stays on the feasible side
+    assert math.isfinite(res.f)  # the answer stays on the feasible side
     assert res.x[0] <= floor
 
 
@@ -650,12 +650,12 @@ def test_nan_first_candidate_does_not_mask_batch_min() -> None:
         budget_check=lambda _work: served[0] < 40,
         local_solver=HalfStep(),
     )
-    assert res.fun == 0.01, res.fun
+    assert res.f == 0.01, res.f
     assert bool(jnp.isfinite(res.x[0])), res.x
 
 
 def test_the_best_skips_nonfinite_values() -> None:
-    """`_argmin_finite` is how `fun` ignores the non-finite points it served."""
+    """`_argmin_finite` is how `f` ignores the non-finite points it served."""
     assert _argmin_finite([2.0, 1.0]) == 1
     assert _argmin_finite([math.nan, 0.01, math.inf]) == 1
     assert _argmin_finite([math.nan, math.inf]) is None
@@ -767,8 +767,8 @@ def test_a_dead_start_is_redrawn_without_asking_the_rule() -> None:
 
     # restart off is the control: a path with no point is re-drawn by the
     # engine's own "no point" rule either way, so both arms must survive.
-    assert math.isfinite(run(restart_stalled=False).fun)
-    assert math.isfinite(run(restart_stalled=True).fun)
+    assert math.isfinite(run(restart_stalled=False).f)
+    assert math.isfinite(run(restart_stalled=True).f)
 
 
 def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
@@ -911,7 +911,7 @@ def test_bounds_spellings_are_the_same_box() -> None:
             max_iters=10,
             local_solver=HalfStep(),
         )
-        return rec.all_f_vals, res.fun
+        return rec.all_f_vals, res.f
 
     f_vals_arr, fun_arr = run(unit_bounds(2))
     f_vals_pairs, fun_pairs = run([(0.0, 1.0)] * 2)
@@ -1043,7 +1043,7 @@ def test_an_unbounded_box_is_really_unbounded() -> None:
         local_solver=HalfStep(),
     )
     assert max(seen) > 1.0, seen  # a finite [0,1] box could not have gone there
-    assert res.fun < 1e-6, res.fun
+    assert res.f < 1e-6, res.f
 
 
 def test_out_of_range_knobs_are_rejected_at_the_entry() -> None:
@@ -1337,7 +1337,7 @@ def test_a_malformed_flock_is_refused_at_the_entry() -> None:
 
 
 def test_flock_reports_where_each_path_stopped() -> None:
-    """`flock_x`/`flock_fun` are each path's held point, nan where none arrived."""
+    """`flock_x`/`flock_f` are each path's held point, nan where none arrived."""
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         return jnp.sum((theta - 0.5) ** 2), 2.0 * (theta - 0.5)
@@ -1354,8 +1354,8 @@ def test_flock_reports_where_each_path_stopped() -> None:
     # and its values are those starts' values, not the best over feasible ones.
     assert res.flock_x.shape == (3, 2), res.flock_x.shape
     assert jnp.array_equal(res.flock_x, starts), res.flock_x
-    assert res.flock_fun.shape == (3,), res.flock_fun.shape
-    assert jnp.allclose(res.flock_fun, jnp.sum((starts - 0.5) ** 2, axis=1))
+    assert res.flock_f.shape == (3,), res.flock_f.shape
+    assert jnp.allclose(res.flock_f, jnp.sum((starts - 0.5) ** 2, axis=1))
 
     # A run whose gate is closed before the first batch has served no point for
     # any path: both halves are nan, not an empty or zero-filled row.
@@ -1369,7 +1369,7 @@ def test_flock_reports_where_each_path_stopped() -> None:
     assert empty.status == "budget_exhausted", empty.status
     assert empty.flock_x.shape == (3, 2), empty.flock_x.shape
     assert bool(jnp.all(jnp.isnan(empty.flock_x))), empty.flock_x
-    assert bool(jnp.all(jnp.isnan(empty.flock_fun))), empty.flock_fun
+    assert bool(jnp.all(jnp.isnan(empty.flock_f))), empty.flock_f
 
 
 if __name__ == "__main__":

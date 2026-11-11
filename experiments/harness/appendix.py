@@ -55,7 +55,7 @@ def run_lr_sweep(roots: Roots, n_seeds: int, max_batches: int) -> None:
             float(
                 np.mean(
                     [
-                        run_adam(prob, max_batches=max_batches, seed=s, lr=lr).fun
+                        run_adam(prob, max_batches=max_batches, seed=s, lr=lr).f
                         for s in range(n_seeds)
                     ],
                 ),

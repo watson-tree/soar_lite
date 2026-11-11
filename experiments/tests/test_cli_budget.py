@@ -145,6 +145,34 @@ def test_a_budget_conflict_stops_the_run_before_the_first_arm_is_measured(
         harness.main(["--groups", "smooth"])
 
 
+def test_a_trace_written_before_the_value_was_spelled_f_still_loads(
+    tmp_path: Path,
+) -> None:
+    """The legacy `fun` key is read, so a record made before the rename draws.
+
+    `load_arm` swallows a `KeyError` as "no trace": without the fallback every
+    recorded arm would silently draw as absent rather than fail.
+    """
+    path = tmp_path / "results" / "smooth" / "arm.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "meta": {"seeds": 1, "max_batches": 10},
+                "seeds": [
+                    {"points": [1], "batches": [1], "best": [2.0], "fun": 2.0},
+                ],
+            }
+        )
+    )
+    roots = record.Roots(results=tmp_path / "results", figures=tmp_path / "figures")
+
+    loaded = record.load_arm(roots, "smooth", "arm")
+
+    assert loaded is not None
+    assert loaded.traces[0].f == 2.0
+
+
 def test_quick_and_out_are_two_answers_to_one_question(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -243,15 +243,13 @@ class BLRGlobalModel(GlobalModel):
         if not self._can_fit():
             return domain.draw(sub, n_points)
         weights, cov = self._posterior(projection)
-        best_fun = self._standardize(jnp.asarray(self._min))
+        best_f = self._standardize(jnp.asarray(self._min))
 
         # shortcut: the minimizers are independent, so a flat acquisition can
         # return a cluster on one face. Upgrade to greedy conditioning on the
         # points already picked when a cohort asks for many at once.
         def acquisition(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-            return self._acquisition_value_and_grad(
-                projection, x, weights, cov, best_fun
-            )
+            return self._acquisition_value_and_grad(projection, x, weights, cov, best_f)
 
         starts = jnp.asarray(
             self._minimize(acquisition, domain, n_points, sub),
@@ -426,7 +424,7 @@ class BLRGlobalModel(GlobalModel):
         x: jnp.ndarray,
         weights: jnp.ndarray,
         cov: jnp.ndarray,
-        best_fun: jnp.ndarray,
+        best_f: jnp.ndarray,
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Return ``-log EI`` and its per-row gradient at ``(M, d)`` rows.
 
@@ -439,7 +437,7 @@ class BLRGlobalModel(GlobalModel):
 
         def scalar(row: jnp.ndarray) -> jnp.ndarray:
             mean, sigma = self._posterior_at(projection, row[None, :], weights, cov)
-            z = (best_fun - mean[0]) / sigma[0]
+            z = (best_f - mean[0]) / sigma[0]
             return -(jnp.log(sigma[0]) + _log_h(z))
 
         return jax.vmap(jax.value_and_grad(scalar))(x)

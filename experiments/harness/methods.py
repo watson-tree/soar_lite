@@ -50,7 +50,7 @@ class Trace:
     points: list[int] = field(default_factory=list)
     batches: list[int] = field(default_factory=list)
     best: list[float] = field(default_factory=list)
-    fun: float = math.nan  # final best; nan until a run has one to report
+    f: float = math.nan  # final best; nan until a run has one to report
 
     def as_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return (points, batches, best) as float arrays for aggregation."""
@@ -141,7 +141,7 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
         global_model=None if model is None else model(key),
         key=key,
     )
-    trace.fun = float(result.fun)
+    trace.f = float(result.f)
     return trace
 
 
@@ -226,7 +226,7 @@ def run_adam(problem: Problem, *, max_batches: int, seed: int, lr: float) -> Tra
         points=grid.tolist(),
         batches=grid.tolist(),
         best=values.tolist(),
-        fun=float(values[-1]),
+        f=float(values[-1]),
     )
 
 
@@ -247,7 +247,7 @@ def run_lbfgs(problem: Problem, *, max_batches: int, seed: int) -> Trace:
     n_points = 0
     best = math.nan  # no answer yet
 
-    def fun(x: np.ndarray) -> tuple[float, np.ndarray]:
+    def objective(x: np.ndarray) -> tuple[float, np.ndarray]:
         nonlocal n_points, best
         f, g, _ = problem.eval_f_g(jnp.asarray(x)[None, :])
         fval = float(f[0])
@@ -260,7 +260,7 @@ def run_lbfgs(problem: Problem, *, max_batches: int, seed: int) -> Trace:
         return fval, np.asarray(g[0])
 
     result = minimize(
-        fun,
+        objective,
         x0,
         jac=True,
         method="L-BFGS-B",
@@ -278,5 +278,5 @@ def run_lbfgs(problem: Problem, *, max_batches: int, seed: int) -> Trace:
         del trace.batches[max_batches:]
         del trace.best[max_batches:]
         best = trace.best[-1] if trace.best else math.nan
-    trace.fun = float(best) if math.isfinite(best) else float(result.fun)
+    trace.f = float(best) if math.isfinite(best) else float(result.fun)
     return trace

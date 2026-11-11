@@ -38,9 +38,9 @@ def test_the_lbfgs_arm_stops_at_its_budget() -> None:
 
 
 def test_the_reported_value_comes_from_the_kept_curve() -> None:
-    """Truncating must not leave `fun` describing the call that was cut."""
+    """Truncating must not leave `f` describing the call that was cut."""
     trace = run_lbfgs(
         problems.diag_quadratic(d=100, cond=1e4), max_batches=BUDGET, seed=0
     )
 
-    assert trace.fun == trace.best[-1]
+    assert trace.f == trace.best[-1]

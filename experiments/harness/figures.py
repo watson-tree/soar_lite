@@ -255,5 +255,5 @@ def _up_to(trace: Trace, axis: Axis, max_x: float) -> Trace:
         points=trace.points[:stop],
         batches=trace.batches[:stop],
         best=trace.best[:stop],
-        fun=trace.fun,
+        f=trace.f,
     )

@@ -56,7 +56,7 @@ preference:
 - **Every other constraint is the mask's job.** Pass `feasible` to `pointwise`:
   a per-point predicate that returns `True` where the point is allowed. A point
   masked `False` is still served — its f value and gradient come back normally
-  and are used — but it never becomes the best. So `result.fun` is a minimum
+  and are used — but it never becomes the best. So `result.f` is a minimum
   over feasible points only, and is `nan` when no feasible point carried a
   finite value.
   The mask is read as 0/1, booleans included (`True == 1`): a `1` marks the
@@ -171,8 +171,8 @@ result = n_path_schedule(
     max_iters=30,
     eval_f=eval_f,
 )
-print(result.x, result.fun, result.status)
-# x ≈ [3. 3], fun ≈ 3e-5, status = max_iters
+print(result.x, result.f, result.status)
+# x ≈ [3. 3], f ≈ 3e-5, status = max_iters
 ```
 
 The status says only why the loop stopped, never that it converged: it is
@@ -191,15 +191,15 @@ cost is read off them and not off `n_iters`.
 
 ## 3. Read the result
 
-`NPathResult` follows `scipy.optimize.OptimizeResult` where the concepts
-correspond:
+`NPathResult` spells its answer the way a point does — `x` for the
+coordinates, `f` for the value — and prefixes the flock's own pair with `flock_`:
 
 | Field | Meaning |
 | --- | --- |
 | `x` | argmin over the served points that were feasible with a finite value — a feasible `-inf` names itself — in the coordinates you handed the engine |
-| `fun` | its value: the best finite feasible value, `nan` when no feasible point had one, `-inf` if the objective has no floor |
+| `f` | its value: the best finite feasible value, `nan` when no feasible point had one, `-inf` if the objective has no floor |
 | `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path never held a usable point |
-| `flock_fun` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |
+| `flock_f` | each path's held value, `(n_paths,)`; `nan` where the path holds no usable point |
 | `n_f_g_points` | fused points billed — the serial-cost count |
 | `n_f_g_batches` | fused batches billed, one per `eval_f_g` call — the parallel-cost count |
 | `n_f_points` | value-only points billed (the `eval_f` seam) |
@@ -214,11 +214,11 @@ hand: `all_stalled` (the whole flock stalled with restarts off) and `unbounded`
 (a feasible point priced the objective at `-inf`). Neither of those two is a
 criterion the search met.
 
-The flock pair is not a ranking: `flock_x` and `flock_fun` are each path's
+The flock pair is not a ranking: `flock_x` and `flock_f` are each path's
 held point as the run ended, one row per path, unsorted and unfiltered by
 feasibility — the value is the one that path stopped on, not a fresh
 evaluation, so a path frozen by `restart_stalled=False` reports the value it
-stalled with. Nothing gets you the flock of an earlier iteration, and `x`/`fun`
+stalled with. Nothing gets you the flock of an earlier iteration, and `x`/`f`
 need not be a row of this one: the best point may come from a path that was
 restarted afterwards.
 

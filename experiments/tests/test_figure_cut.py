@@ -42,7 +42,7 @@ def _arm(n: int, *, points_per_batch: int = 1) -> Loaded:
                 points=[i * points_per_batch for i in batches],
                 batches=batches,
                 best=[1.0] * n,
-                fun=1.0,
+                f=1.0,
             ),
         ],
         seeds=1,
@@ -92,19 +92,19 @@ def test_the_median_is_taken_over_the_whole_cohort() -> None:
         points=list(range(1, 11)),
         batches=list(range(1, 11)),
         best=[100.0 - 9.9 * i for i in range(10)],
-        fun=1.0,
+        f=1.0,
     )
     slow = Trace(
         points=list(range(1, 101)),
         batches=list(range(1, 101)),
         best=[100.0 - 0.9 * i for i in range(100)],
-        fun=10.0,
+        f=10.0,
     )
     slower = Trace(
         points=list(range(1, 101)),
         batches=list(range(1, 101)),
         best=[100.0 - 0.5 * i for i in range(100)],
-        fun=50.0,
+        f=50.0,
     )
     fig, ax = plt.subplots()
     try:
@@ -132,7 +132,7 @@ def test_the_step_a_run_stopped_on_is_drawn() -> None:
         points=[1, 2, 3],
         batches=[1, 2, 3],
         best=[1e4, 1e4, 1e-28],
-        fun=1e-28,
+        f=1e-28,
     )
     fig, ax = plt.subplots()
     try:

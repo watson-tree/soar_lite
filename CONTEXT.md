@@ -24,7 +24,7 @@ _Avoid_: population size, swarm size
 **flock**:
 The paths' current points as one `(n_paths, d)` array: exactly one point per path,
 so a flock is the run's state at one moment, not the set of paths. Every path
-keeps its row whether or not it holds a usable point (`flock_fun` is `nan` there),
+keeps its row whether or not it holds a usable point (`flock_f` is `nan` there),
 so a flock always has `n_paths` of them. A *batch* is a set of points too and is
 deliberately a different one: it is the work a single pass serves — a step's
 trials, or the settle set of redraw starts plus winners — so it holds no point
@@ -74,12 +74,12 @@ serves none at all.
 _Avoid_: line-search round (retired)
 
 **best**:
-The run's running best, a single `fun`/`x`: the best *feasible* point — the
-run's reported answer, and what `NPathResult` calls `fun`/`x`. The engine is the
+The run's running best, a single `f`/`x`: the best *feasible* point — the
+run's reported answer, and what `NPathResult` calls `f`/`x`. The engine is the
 sole owner. It starts at `nan` and stays there while no finite feasible value
 has arrived, so `nan` means "no answer" and `inf` is never a sentinel - it is
 left to mean a value an objective actually took. A *feasible* `-inf` is not
-weighed but taken: the objective has no floor there, so it becomes `fun`/`x` and
+weighed but taken: the objective has no floor there, so it becomes `f`/`x` and
 ends the run with `status` `unbounded`; a `nan`, a `+inf` or an infeasible
 `-inf` changes nothing.
 _Avoid_: incumbent (retired), best-so-far, current optimum
@@ -152,7 +152,7 @@ _Avoid_: value oracle, cheap evaluator
 
 **feasibility mask**:
 The optional per-point boolean saying which served points may count toward the
-reported best (`fun`/`x`). It is
+reported best (`f`/`x`). It is
 read as 0/1 and nothing else: only `0` (or `False`) marks a point infeasible, so
 a mask holding anything else — a signed constraint margin, whose violated points
 are all negative, or a `nan` — is refused with a `ValueError` instead of being

@@ -5,7 +5,7 @@ There is no single owner of the "is this number usable" decision - `_Best`,
 gate each decide locally, on purpose, because each decides a different
 question. What they must agree on is the table, and the table is short:
 
-    value       feasible      becomes fun/x   ends the run
+    value       feasible      becomes f/x     ends the run
     finite      yes           yes             no
     finite      no            no              no
     +inf        any           no              no
@@ -13,7 +13,7 @@ question. What they must agree on is the table, and the table is short:
     -inf        yes           -inf            yes
     -inf        no            no              no
 
-"No answer" is `nan` in both fields: `fun` starts there and `x` is all-nan.
+"No answer" is `nan` in both fields: `f` starts there and `x` is all-nan.
 `inf` is left to mean a value an objective actually took, never a sentinel.
 
 A seventh dimension is not in that table because it is not a value: with the
@@ -46,7 +46,7 @@ jax.config.update("jax_enable_x64", val=True)
 
 
 @pytest.mark.parametrize(
-    ("f", "feasible", "fun", "ends_run"),
+    ("f", "feasible", "best_f", "ends_run"),
     [
         (1.0, True, 1.0, False),  # a plain answer
         (1.0, None, 1.0, False),  # no mask: every point counts as feasible
@@ -64,7 +64,7 @@ jax.config.update("jax_enable_x64", val=True)
 )
 def test_best_counts_a_value_only_when_it_is_feasible_and_finite(
     f: float,
-    fun: float,
+    best_f: float,
     *,
     feasible: bool | None,
     ends_run: bool,
@@ -80,12 +80,12 @@ def test_best_counts_a_value_only_when_it_is_feasible_and_finite(
     else:
         best.observe(x_batch, [f], feas)
 
-    if math.isnan(fun):
-        assert math.isnan(best.fun)
+    if math.isnan(best_f):
+        assert math.isnan(best.f)
     else:
-        assert best.fun == fun
+        assert best.f == best_f
     assert best.unbounded is ends_run
-    if math.isnan(best.fun):
+    if math.isnan(best.f):
         assert bool(jnp.all(jnp.isnan(best.x)))  # no answer, no x to point at
 
 
@@ -96,7 +96,7 @@ def test_a_mask_of_zero_and_one_flags_is_accepted() -> None:
         best.observe(jnp.array([[0.1], [0.9]]), [1.0, 2.0], mask)
         # Row 0 is the cheaper value and row 1 is the flagged one, so the read has
         # to follow the mask row by row rather than dropping the flagged points.
-        assert best.fun == 2.0
+        assert best.f == 2.0
 
 
 @pytest.mark.parametrize("flag", [math.nan, -2.0, 0.5, 2.0, 1e-12])
@@ -105,7 +105,7 @@ def test_a_mask_flag_that_is_not_zero_or_one_is_refused(flag: float) -> None:
     best = _Best(1)
     with pytest.raises(ValueError, match="feas mask"):
         best.observe(jnp.array([[0.25]]), [1.0], jnp.array([flag]))
-    assert math.isnan(best.fun)  # the batch was refused before any step
+    assert math.isnan(best.f)  # the batch was refused before any step
 
 
 @pytest.mark.parametrize(
@@ -159,8 +159,8 @@ def test_a_half_dead_start_stalls_the_path_but_its_value_still_reports() -> None
 
     # One batch per iteration: a point-less path is re-drawn, never stepped.
     assert res.n_f_g_batches == 10, res.n_f_g_batches
-    assert res.fun == float(batches[0].min())  # and its value is still the answer
-    assert math.isfinite(float(res.fun))
+    assert res.f == float(batches[0].min())  # and its value is still the answer
+    assert math.isfinite(float(res.f))
     assert bool(jnp.all(jnp.isfinite(res.x)))
     assert res.status == "max_iters"
 
@@ -201,4 +201,4 @@ def test_a_half_dead_winner_is_refused_before_it_becomes_a_start() -> None:
 
     assert res.n_f_g_batches == 2, res.n_f_g_batches  # the flock + the one refused step
     assert res.status == "all_stalled"  # and nothing can un-stall the frozen path
-    assert math.isfinite(float(res.fun))
+    assert math.isfinite(float(res.f))

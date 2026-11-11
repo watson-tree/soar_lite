@@ -641,7 +641,7 @@ recognition:
 
 - `unbounded`: some **feasible** point drives the objective to `-inf`. There is no
   lower bound there, no later trial can beat it and no step can move it, so that
-  point becomes the answer (`fun = -inf`, `x` is it) and the run ends. It still
+  point becomes the answer (`f = -inf`, `x` is it) and the run ends. It still
   reads the feasibility mask: an infeasible `-inf` changes nothing. The batch that
   found it is served and recorded, but the iteration did not finish, so it is not
   counted in `n_iters` — the same rule as a refused batch.

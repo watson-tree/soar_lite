@@ -531,9 +531,9 @@ def test_diag_drives_a_quadratic_to_its_minimum_through_the_engine() -> None:
     # would be measuring the momentum instead.
     # θ = 0 makes the post-warm-up step exactly Newton, so g = 0 after it and the
     # next `propose` answers `None` (the stopping test); the point is still the
-    # best, which is what `fun`/`x` report.
+    # best, which is what `f`/`x` report.
     assert close(result.x, center, 1e-9)
-    assert result.fun < 1e-12
+    assert result.f < 1e-12
 
 
 def test_diag_momentum_runs_through_the_engine() -> None:
@@ -563,8 +563,8 @@ def test_diag_momentum_runs_through_the_engine() -> None:
         max_iters=60,
         local_solver=DiagonalPreconditioner(theta=0.0, mu=0.9),
     )
-    assert math.isfinite(result.fun)
-    assert result.fun < 0.5 * float(jnp.sum(h * (x0[0] - center) ** 2))
+    assert math.isfinite(result.f)
+    assert result.f < 0.5 * float(jnp.sum(h * (x0[0] - center) ** 2))
 
 
 def test_a_winner_that_grades_to_nan_stalls_the_path() -> None:
@@ -602,7 +602,7 @@ def test_a_winner_that_grades_to_nan_stalls_the_path() -> None:
 
     assert res.n_f_g_batches == 2, res.n_f_g_batches  # the flock + the winner
     assert res.status == "all_stalled"
-    assert math.isfinite(float(res.fun))  # the start it was left holding
+    assert math.isfinite(float(res.f))  # the start it was left holding
 
 
 def test_beta_zero_is_legal_and_reads_only_the_newest_secant() -> None:

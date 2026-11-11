@@ -69,18 +69,17 @@ result = n_path_schedule(
     max_iters=30,
 )
 print(result.x)  # x ≈ [3. 3]
-print(result.fun)  # fun ≈ 3e-5
+print(result.f)  # f ≈ 3e-5
 ```
 
 `x` is the best point the run evaluated, shape `(d,)` — the argmin over the
-feasible points that were served, a feasible `-inf` naming itself — and `fun` is
+feasible points that were served, a feasible `-inf` naming itself — and `f` is
 its value. Do not read it as a row of `flock_x`: the flock is the points the
 paths hold at one moment, one per path, so `flock_x` is the flock as the run
-ended, and the best point may be one a path has left behind. Field names follow
-scipy's
-`OptimizeResult` (`x` the minimizer, `fun` the minimum); the extra fields are the
-flock pair, four work counts (points and batches, with and without a gradient)
-and a `status`.
+ended, and the best point may be one a path has left behind. The answer is
+spelled the way a point spells it, `x` and `f`, and the flock pair prefixes those
+same two names with `flock_`; the extra fields are four work counts (points and
+batches, with and without a gradient) and a `status`.
 
 ## Results
 
@@ -211,7 +210,7 @@ envelope (working-space reparameterization, the penalty schedule, submission and
 scoring plumbing) lives outside.
 
 The mask is a gate, not a guide: a point it masks out is still served and still
-pulls its path, it just never becomes `best`, so `fun` is a minimum over feasible
+pulls its path, it just never becomes `best`, so `f` is a minimum over feasible
 points only. A constraint the domain cannot state steers nothing until you fold
 it into the objective as a differentiable penalty, and that schedule is yours to
 choose. Both halves of the contract, plus what becomes of a non-finite value or

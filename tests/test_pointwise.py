@@ -144,7 +144,7 @@ def test_the_pair_drives_a_run() -> None:
 
     assert result.status == "max_iters", result.status
     assert bool(jnp.all(jnp.isfinite(result.x))), result.x.tolist()
-    assert result.fun < 1.0, result.fun
+    assert result.f < 1.0, result.f
     # The default method takes one full step and reads nothing, so its only seam
     # is the fused one: `eval_f` being supplied costs it nothing.
     assert result.n_f_points == 0, result.n_f_points
@@ -165,7 +165,7 @@ def test_the_value_only_seam_carries_the_trials_a_method_reads() -> None:
         local_solver=_ValueReader(),
     )
 
-    assert result.fun < 1e-3, result.fun
+    assert result.f < 1e-3, result.f
     # Every iteration served one trial for its value and then bought that
     # winner's gradient on its own: the two counters are the two seams.
     assert result.n_f_points > 0, result.n_f_points

@@ -79,7 +79,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     serves each batch as one call through the seam it came from - `eval_f_g` for
     a fused batch, `eval_f` for a value-only one - buys the iteration's deferred
     gradients in one batch, keeps the n-path state machine, and owns the best
-    `f⋆` (`fun` in the result). Two things are injected, named
+    `f⋆` (`f` in the result). Two things are injected, named
     `global_model` and `local_solver`, in that order wherever they appear:
     `global_model` supplies **where** a restart lands (one point per restarting
     path, clipped into the box) and is also the run's evidence sink, while
@@ -125,11 +125,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     within one batch width below the ceiling. `NPathStatus` names what each of
     these writes.
 
-    `fun` is the true minimum over every feasible eval with a finite value -
+    `f` is the true minimum over every feasible eval with a finite value -
     every served point when the objective reports no mask, only the points its
     mask passes otherwise. A feasible ``-inf`` is the answer rather than a
     contender: the run ends on the spot and reports that point as ``x`` with
-    ``fun = -inf``. The paths themselves move on every served value, mask or no
+    ``f = -inf``. The paths themselves move on every served value, mask or no
     mask. Work is reported, never budgeted: four counts on two
     axes that do not mix - points against batches, and f against f+g - and none
     of them stops the run (see `NPathResult`).
@@ -231,7 +231,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             >>> result.x          # ≈ (3, 3)
             Array([3., 3.], dtype=float32)
 
-            >>> result.fun        # its objective value
+            >>> result.f           # its objective value
             0.0
 
         A per-point scalar can be wrapped into this shape with `pointwise`.
@@ -321,13 +321,13 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
         meter.tick()  # counted after the body: only finished iterations
 
     # Each path's point as the run ended, and its value.
-    flock_x, flock_fun = paths.held()
+    flock_x, flock_f = paths.held()
 
     return NPathResult(
         x=best.x,
-        fun=best.fun,
+        f=best.f,
         flock_x=flock_x,
-        flock_fun=flock_fun,
+        flock_f=flock_f,
         work=meter.work,
         n_iters=meter.n_iters,
         status=status,
@@ -356,7 +356,7 @@ class _OptimumReached(Exception):  # noqa: N818 - a signal, not an error
     Raised inside `_Best.observe`, the single funnel both evaluation seams pass through,
     and caught by the loop. Unlike `_BatchRefused` it arrives after a batch
     was served and charged, and it leaves an answer behind instead of naming a
-    gate: the run stops on that point, so `fun` is `-inf` and `status` is
+    gate: the run stops on that point, so `f` is `-inf` and `status` is
     `"unbounded"`. Nothing is left to unwind - a batch raises before any point is
     placed or advanced.
     """
@@ -512,7 +512,7 @@ class _Meter:
 class _Best:
     """The best the run keeps: the minimum over feasible points served.
 
-    `fun`/`x` are the answer the run reports, defined over feasible designs only
+    `f`/`x` are the answer the run reports, defined over feasible designs only
     - with no mask, every point is feasible. A NaN or +inf trial neither becomes
     `f⋆` nor displaces one: it carries no value to compare. A feasible -inf is
     not an improvement to weigh but the answer itself, so it ends the run
@@ -525,7 +525,7 @@ class _Best:
         # d is the flock's business (it is `x0`'s second axis), so the
         # placeholder is already the right shape.
         self.x = jnp.full(d, math.nan)
-        self.fun = math.nan  # "no answer yet", not `inf`: a value may take it
+        self.f = math.nan  # "no answer yet", not `inf`: a value may take it
         # Set when a feasible point evaluated to -inf: the run has an
         # answer that no later trial can beat, so it stops on it.
         self.unbounded = False
@@ -553,7 +553,7 @@ class _Best:
         # answer itself, not a value to compare, and the run ends on it here.
         j_floor = next((j for j in candidates if f_vals[j] == -math.inf), None)
         if j_floor is not None:
-            self.fun = -math.inf
+            self.f = -math.inf
             self.x = x_batch[j_floor]
             self.unbounded = True
             raise _OptimumReached
@@ -563,8 +563,8 @@ class _Best:
         j = candidates[pos]
         # nan means no answer yet, so the first finite feasible value lands
         # unconditionally; after that one must beat the running best.
-        if math.isnan(self.fun) or f_vals[j] < self.fun:
-            self.fun = f_vals[j]
+        if math.isnan(self.f) or f_vals[j] < self.f:
+            self.f = f_vals[j]
             self.x = x_batch[j]
 
 
@@ -881,7 +881,7 @@ class _Paths:
         path `i`, whatever that path did.
 
         Returns:
-            ``(flock_x, flock_fun)``: coordinates ``(n_paths, d)`` and values
+            ``(flock_x, flock_f)``: coordinates ``(n_paths, d)`` and values
                 ``(n_paths,)``.
 
         """
@@ -889,8 +889,8 @@ class _Paths:
         flock_x = jnp.stack(
             [jnp.full(self.domain.d, math.nan) if p is None else p.x for p in points]
         )
-        flock_fun = jnp.asarray([math.nan if p is None else p.f for p in points])
-        return flock_x, flock_fun
+        flock_f = jnp.asarray([math.nan if p is None else p.f for p in points])
+        return flock_x, flock_f
 
     def _restart_starts(self, restarting: list[int]) -> dict[int, Pending]:
         """Ask for one fresh start per restarting path, clipped into the run's box.

@@ -168,7 +168,7 @@ def run_panel(  # noqa: PLR0913 - roots, panel, budget and two filters
             n_seeds=n_seeds,
             max_batches=max_batches,
         )
-        fins = [t.fun for t in traces]
+        fins = [t.f for t in traces]
         print(
             f"  {prob.name:26s} {arm.key:44s} "
             f"final mean best = {np.mean(fins):.4e}  -> {path.relative_to(HERE)}",

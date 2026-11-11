@@ -453,10 +453,10 @@ def test_the_default_model_is_exactly_a_sample_global_model() -> None:
             restart_stalled=True,
             key=jax.random.PRNGKey(7),
         )
-        return served, res.x, res.fun, res.n_f_g_points
+        return served, res.x, res.f, res.n_f_g_points
 
-    default_served, default_x, default_fun, default_points = run(None)
-    ours_served, ours_x, ours_fun, ours_points = run(
+    default_served, default_x, default_f, default_points = run(None)
+    ours_served, ours_x, ours_f, ours_points = run(
         SampleGlobalModel(key=jax.random.PRNGKey(7)),
     )
     assert default_served, "nothing was ever served"
@@ -464,7 +464,7 @@ def test_the_default_model_is_exactly_a_sample_global_model() -> None:
     for a, b in zip(default_served, ours_served, strict=True):
         assert jnp.array_equal(a, b), (a, b)
     assert jnp.array_equal(default_x, ours_x), (default_x, ours_x)
-    assert default_fun == ours_fun, (default_fun, ours_fun)
+    assert default_f == ours_f, (default_f, ours_f)
     assert default_points == ours_points, (default_points, ours_points)
 
 

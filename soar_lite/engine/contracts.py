@@ -374,20 +374,22 @@ class Work:
 class NPathResult:
     """End state of one n_path_schedule run.
 
-    Field names follow `scipy.optimize.OptimizeResult` where the concepts
-    correspond. It is spelled ``n_iters`` rather than scipy's ``nit`` to sit
+    The answer is spelled the way a point is: ``x`` and ``f`` are the winning
+    `PathPoint`'s coordinates and value, and the flock pair prefixes those same
+    two names with ``flock_``. It is ``n_iters``, not scipy's ``nit``, to sit
     beside the four work counts: one iteration may serve several batches (a
     restart's starts plus the method's trials), so an iteration is not a batch.
 
     The work the run billed lives in `work` (`Work`), which is what those four
     counts are; they also read flat on the result, as its aliases.
 
-    Two deliberate differences from `OptimizeResult`: ``success``/``message`` are
-    absent, because the engine has no convergence criterion of its own - apart
-    from the caller's own gates (``max_iters``, ``time_limit``,
-    ``budget_check``), it stops early on its own initiative only for an
-    objective with no floor or for a flock in which every path stalled with
-    restarts off - and ``fun`` is the best over *feasible* points only.
+    Two deliberate departures from `scipy.optimize.OptimizeResult`, whose
+    fields these otherwise resemble: ``success``/``message`` are absent, because
+    the engine has no convergence criterion of its own - apart from the caller's
+    own gates (``max_iters``, ``time_limit``, ``budget_check``), it stops early
+    on its own initiative only for an objective with no floor or for a flock in
+    which every path stalled with restarts off - and ``f`` is the best over
+    *feasible* points only.
     """
 
     x: jnp.ndarray
@@ -395,13 +397,13 @@ class NPathResult:
 
     Not necessarily a row of `flock_x`: the best point may come from a path that
     was restarted afterwards. All ``nan`` when no feasible point with a *finite*
-    value was ever served - the ``nan`` reading of ``fun``. A feasible ``-inf``
-    names its point instead: ``x`` is that point and ``fun`` is ``-inf``. So
+    value was ever served - the ``nan`` reading of ``f``. A feasible ``-inf``
+    names its point instead: ``x`` is that point and ``f`` is ``-inf``. So
     ``x`` is ``nan`` only when no feasible point carried a finite value and none
     priced the objective at ``-inf``.
     """
 
-    fun: float
+    f: float
     """`x`'s objective value, the minimum over finite feasible recorded evals.
 
     ``nan`` when no feasible point carried a finite value and none evaluated to
@@ -415,7 +417,7 @@ class NPathResult:
     sorted. A path that never held a usable point has an all-``nan`` row.
     """
 
-    flock_fun: jnp.ndarray
+    flock_f: jnp.ndarray
     """Each path's held value as the run ended, shape ``(n_paths,)``.
 
     ``nan`` for a path that never held a usable point.

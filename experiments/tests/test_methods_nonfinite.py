@@ -65,7 +65,7 @@ def test_a_run_with_no_finite_value_records_nan(label: str) -> None:
 
     assert trace.best, "a run records one entry per batch whatever it finds"
     assert all(math.isnan(v) for v in trace.best)
-    assert math.isnan(trace.fun)
+    assert math.isnan(trace.f)
 
 
 @pytest.mark.parametrize("label", list(RUNS))
@@ -75,7 +75,7 @@ def test_a_nan_seed_still_tracks_a_finite_best(label: str) -> None:
 
     assert all(math.isfinite(v) for v in trace.best)
     assert trace.best == sorted(trace.best, reverse=True)  # best-so-far never rises
-    assert math.isfinite(trace.fun)
+    assert math.isfinite(trace.f)
 
 
 def test_a_cohort_of_nan_traces_draws_without_a_crash() -> None:
