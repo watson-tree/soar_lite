@@ -28,6 +28,25 @@ Two entries (v2 and v3) also record wall clock. That is a property of the
 machine that ran them, not an expectation: no comparison here is made on time,
 and a re-run should reproduce the medians, not the hours.
 
+## 2026-11-11 — lineup v6, re-measured after the arm keys were respelled — CURRENT
+
+Budget 20 seeds x 3000 batches, panels `headline,smooth,multimodal,invariance`,
+on CPU, wall clock ~59 min. The lineup is the v6 entry's below, unchanged; what
+changed is what an arm's file is called, from `soar-sample-np16-mu0-restart-off`
+to `soar_lite-sample-n_paths16-mu0-restart-off`.
+
+Every trace was re-measured rather than renamed in place, so this is a
+measurement and not a file move. It reproduced the v6 numbers bit for bit: all
+20 seeds of all 15 soar arms agree element for element with the traces that
+entry measured, and the seven figures redrawn from them are byte-identical to
+the copies in `docs/figures/`. Its medians, quartiles and early-stop counts
+therefore stand as measured, and are not tabulated again here — one number, one
+home.
+
+The traces the old keys named were then deleted, along with the `smoke` panel's
+and the `fun`-key fallback in `record.py` that read a trace written before the
+objective value was spelled `f`. A file at a key is now read one way only.
+
 ## 2026-11-11 — what the rastrigin panel's ordering is made of — CURRENT
 
 A one-off probe, not a lineup. The problem object, the seed list and the start

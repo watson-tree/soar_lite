@@ -101,11 +101,6 @@ def save_arm(  # noqa: PLR0913 - one parameter per fact the file records
 def load_arm(roots: Roots, problem_name: str, arm_key: str) -> LoadedArm | None:
     """Read an arm's traces, or None when nothing readable is at this key.
 
-    The key this reads is `f`, but a trace written before the value was spelled
-    that way says `fun`: the legacy key is read so an old record still draws,
-    and the next save writes the new one, exactly as `budget_of` does for the
-    flag that was once `--max-steps`.
-
     A file that exists but cannot be read is *no trace* here, not a refusal: a
     figure has nothing to draw either way, and refusing a write is
     `refuse_budget_change`'s job.
@@ -118,7 +113,7 @@ def load_arm(roots: Roots, problem_name: str, arm_key: str) -> LoadedArm | None:
                 points=s["points"],
                 batches=s["batches"],
                 best=s["best"],
-                f=s["f"] if "f" in s else s["fun"],
+                f=s["f"],
             )
             for s in payload["seeds"]
         ]
