@@ -225,17 +225,10 @@ section](docs/tutorial/getting-started.md#1-write-the-batched-objective-and-cons
 
 ## Documentation
 
-Published at <https://watson-tree.github.io/soar_lite/>.
-
-- [Tutorial](docs/tutorial/getting-started.md) — one run end to end: the
-  objective contract, the knobs, and the two swap points.
-- [Surrogate restarts](docs/how-to/surrogate-restarts.md) — when
-  `BLRGlobalModel` is in play and its acquisition function has to be descended
-  by the engine itself.
-- [How it works](docs/explanation/how-it-works.md) — the derivation behind the
-  local step, the two cost axes, and what this library does and does not take
-  from SOAR.
-- [API Reference](docs/reference/api.md) — generated from the docstrings.
+The documentation is published at
+<https://watson-tree.github.io/soar_lite/>: the install and minimal-run
+sections above are the top of it, followed by the tutorial, the how-to, the
+reasons behind the local step, and the generated API reference.
 
 ## Contributing
 
