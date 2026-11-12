@@ -393,8 +393,8 @@ make up a panel is the panel's business, not this module's: `panels.PANELS`
 holds the problem list and the arm roster per name, and `every_problem()` is the
 union a sweep iterates.
 3. `experiments/harness/methods.py` — one driver per arm (the rosters are in
-   `Methods × panels`). The restart-model factory
-   (`surrogate_minimize` + the identity / sphere projections) stays wired, but
+   `Methods × panels`). The restart-model factory (the identity / sphere
+   projections, on the package's default `descent_minimize`) stays wired, but
    no panel arms it.
 4. `experiments/compare_baselines.py` — harness over `N=20` seeds, one raw trace
    file per (problem, arm) under `results/`; panels: headline / smooth /

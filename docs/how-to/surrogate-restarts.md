@@ -5,6 +5,14 @@ This page continues [the tutorial](../tutorial/getting-started.md)'s example:
 
 ## The pieces
 
+The package already ships the minimizer this page builds: `descent_minimize` is
+`BLRGlobalModel`'s default `minimize`, one restart-free n-path run over the
+acquisition. Leave `minimize` out and you get it. Write your own only when you
+need an inner knob the default does not expose — e.g. a `time_limit` instead of
+an iteration cap, a different local solver, `budget_check`, restarts inside — and
+the rest of this page is the recipe for doing that: the same function the
+default is, with `inner_iters` opened back up into its parts.
+
 The job is one function: it takes the acquisition `BLRGlobalModel` builds — its
 score for how promising a point looks, here `-log EI` — and returns the points to
 restart from: the local minima of that score. The obvious way to descend it is to
@@ -16,7 +24,8 @@ off `flock_x`.
 but it never descends that acquisition itself: how to descend it is the engine's
 business, so the model receives it as an injected `minimize` — the parameter's
 name, typed `MinimizeFn`, with signature
-`(acquisition, domain, paths, key) -> {path: (d,) point or None}`. The answer is
+`(acquisition, domain, paths, key) -> {path: Point or None}` and defaulting to
+`descent_minimize`. The answer is
 keyed by the paths the model was asked about, so an inner run pairs its
 minimizers with the paths they belong to and says `None` for a path it could not
 place — that path's restart is simply declined, not filled in with a coordinate.
@@ -44,6 +53,7 @@ import jax
 import jax.numpy as jnp
 from soar_lite import (
     BLRGlobalModel,
+    Point,
     SphereProjection,
     n_path_schedule,
 )
@@ -51,7 +61,7 @@ from soar_lite import (
 INNER_ITERS = 40  # long enough to settle; shorter than the outer's horizon
 
 
-def surrogate_minimize(acquisition, domain, paths, key):
+def custom_minimize(acquisition, domain, paths, key):
     """Descend an acquisition with one restart-free n-path run."""
 
     # the acquisition is two slots; the seam wants three, the last one None
@@ -74,16 +84,22 @@ def surrogate_minimize(acquisition, domain, paths, key):
     placed = result.flock_x
     usable = jnp.all(jnp.isfinite(placed), axis=1)
     return {
-        i: (row if bool(ok) else None)
+        i: (Point(row) if bool(ok) else None)
         for i, row, ok in zip(paths, placed, usable, strict=True)
     }
 
 
+# the default: descent_minimize is what you get with no `minimize=` at all
 global_model = BLRGlobalModel(
     projection_factory=SphereProjection,  # the class, not an instance
-    minimize=surrogate_minimize,
     key=jax.random.PRNGKey(0),
 )
+# a tuned one, for an inner knob the default does not expose
+# global_model = BLRGlobalModel(
+#     projection_factory=SphereProjection,
+#     minimize=custom_minimize,
+#     key=jax.random.PRNGKey(0),
+# )
 
 result = n_path_schedule(
     eval_f_g,
@@ -97,9 +113,10 @@ result = n_path_schedule(
 ## Five things to get right
 
 It is the engine inside the engine: the outer run asks the model for a restart
-when a path stalls, the model asks `surrogate_minimize` to descend its
-acquisition, and `surrogate_minimize` runs the engine again — restart-free this
-time. Five things keep it honest:
+when a path stalls, the model asks `custom_minimize` to descend its acquisition,
+and `custom_minimize` runs the engine again — restart-free this time. It is the
+same five things `descent_minimize` does, so a tuned copy can also be read as the
+default with its parts in view:
 
 - **`restart_stalled=False` inside.** The inner run has one job: reach the
   acquisition's local minimum from each start. Restarts would replace this job
@@ -123,9 +140,10 @@ time. Five things keep it honest:
 - **The acquisition has no feasibility mask (`feas=None`).** It is finite
   everywhere, so the fused seam's third slot is `None`.
 
-## INNER_ITERS is a cap, not a test
+## The inner horizon is a cap, not a test
 
-`INNER_ITERS` is an upper bound, not a convergence test. A path that settles
+`inner_iters` (the default driver's knob) and `INNER_ITERS` above are an upper
+bound, not a convergence test. A path that settles
 stops there, so an inner run whose flock settles early ends on `all_stalled`
 before reaching it — provided every path held a usable point, since one holding
 none is still re-drawn even with `restart_stalled=False`; 40 is a cap with room
@@ -136,5 +154,5 @@ The inner run bills its own `Work`, and none of it reaches the outer
 `result.work`: the outer `budget_check` is handed the outer ledger alone, so a
 budget that has to cover the surrogate descents must price them itself.
 
-`MinimizeFn` and both projections are in the [API Reference](../reference/api.md),
-with their exact signatures and defaults.
+`MinimizeFn`, `descent_minimize` and both projections are in the
+[API Reference](../reference/api.md), with their exact signatures and defaults.

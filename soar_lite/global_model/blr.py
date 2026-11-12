@@ -19,8 +19,8 @@ away from data. Two things differ. That implementation fits its lengthscale,
 coefficient and noise hyperparameters by marginal likelihood (it is gpytorch;
 this package is jax-only), so here the same knobs are constructor values. And it
 descends its acquisition with a shipped multi-start L-BFGS-B, where here the
-minimizer is injected (`MinimizeFn`) so a driver can descend with this library's
-own n-path engine.
+minimizer is a `MinimizeFn` defaulting to `descent_minimize`, this library's own
+n-path engine, and overridable by the caller.
 
 References:
     - Doumont et al. (2026), AISTATS — the paper whose fixed-hyperparameter
@@ -61,12 +61,12 @@ call, and one that follows the gradient gets it alongside.
 
 MinimizeFn: TypeAlias = Callable[
     [AcquisitionFn, Domain, Sequence[int], jnp.ndarray],
-    dict[int, jnp.ndarray | None],
+    dict[int, Point | None],
 ]
 """The inner minimizer `propose` hands its acquisition to.
 
 ``minimize(acquisition, domain, paths, key)`` returns one local minimizer of the
-acquisition inside `domain` for each path it was named, a ``(d,)`` point, or
+acquisition inside `domain` for each path it was named, a `Point`, or
 ``None`` for a path it could not place. Keyed by path for the same reason the
 model's own answer is: a minimizer that runs an engine inside, or that enumerates
 per path, keeps its answers paired with the paths they belong to instead of with
@@ -76,13 +76,16 @@ re-derived from it: a caller that declared a `scale` or a sampler meant it for
 every draw inside that box, including the inner minimizer's own starts. The
 paths come before the seed: what to ask for is the caller's question, the key
 only supplies the randomness. The model checks that no other path was answered
-and that each answer is one ``(d,)`` point, and raises ``ValueError`` on a miss;
-a `None` answer is carried out as the model's own decline, so the engine leaves
-that path where it stands instead of restarting it from a point nobody chose.
+and that each answer is one `Point` of the ask's width, and raises
+``ValueError`` on a miss; a `None` answer is carried out as the model's own
+decline, so the engine leaves that path where it stands instead of restarting it
+from a point nobody chose.
 
-Injected by the composition root rather than imported, so this module never
-reaches back into the engine's scheduler - the engine already owns the descent
-recipe, and a second one here would be a second answer to the same question.
+Injected by the composition root and defaulting to `descent_minimize`, imported
+at construction rather than at module load: the model never descends the
+acquisition itself, it borrows the engine's own recipe, so there is one answer
+to how to descend rather than two, and this module still never reaches back into
+the engine's scheduler on import.
 """
 
 _HALF_LOG_2PI = 0.5 * math.log(2.0 * math.pi)
@@ -123,7 +126,7 @@ class BLRGlobalModel(GlobalModel):
         self,
         projection_factory: ProjectionFactory | None = None,
         *,
-        minimize: MinimizeFn,
+        minimize: MinimizeFn | None = None,
         var_prior: float = 1.0,
         noise: float = 0.01,
         key: jnp.ndarray,
@@ -140,8 +143,11 @@ class BLRGlobalModel(GlobalModel):
                 handed, and the domain was already validated by `Domain`'s own
                 constructor.
             minimize: the acquisition's inner optimizer, shape ``MinimizeFn``.
-                Supplied by the caller: this model holds the recipe and calls
-                it, and never picks one itself.
+                ``None`` (the default) is `descent_minimize`, the package's own
+                restart-free n-path descent; a caller that wants another search,
+                or another inner horizon (`partial` it), passes its own. The
+                model holds the acquisition and hands it over, never descending
+                it itself.
             var_prior: weight-prior variance (the ridge scale paired with
                 `noise`).
             noise: observation-noise variance added to the posterior mean's
@@ -153,6 +159,10 @@ class BLRGlobalModel(GlobalModel):
                 value.
 
         """
+        if minimize is None:
+            from soar_lite.global_model.descent import descent_minimize  # noqa: PLC0415
+
+            minimize = descent_minimize
         self._projection_factory = projection_factory
         self._minimize = minimize
         self._var_prior = _check_finite_positive(var_prior, "var_prior")
@@ -265,13 +275,13 @@ class BLRGlobalModel(GlobalModel):
             if answer is None:  # the minimizer's own "could not place it"
                 starts[i] = None
                 continue
-            if answer.shape != (domain.d,):
+            if answer.x.shape != (domain.d,):
                 msg = (
                     f"minimize's start for path {i} must be a ({domain.d},) "
-                    f"point, got shape {answer.shape}"
+                    f"point, got shape {answer.x.shape}"
                 )
                 raise ValueError(msg)
-            starts[i] = Point(answer)
+            starts[i] = answer
         return starts
 
     def _predict(

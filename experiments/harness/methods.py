@@ -17,7 +17,7 @@ gets a start it did not pay for.
 """
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import jax
@@ -28,7 +28,6 @@ from scipy.optimize import minimize
 
 from experiments.harness.problems import Problem
 from soar_lite import (
-    AcquisitionFn,
     DiagonalPreconditioner,
     Domain,
     GlobalModel,
@@ -36,11 +35,6 @@ from soar_lite import (
 )
 
 Carry = tuple[jnp.ndarray, optax.OptState, jnp.ndarray]
-
-# Inner horizon of `surrogate_minimize`: one restart-free descent per path, long
-# enough for a path to reach the acquisition's local minimum from a uniform
-# start, short of the outer run's own horizon.
-_INNER_ITERS = 40
 
 
 @dataclass
@@ -143,64 +137,6 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
     )
     trace.f = float(result.f)
     return trace
-
-
-def surrogate_minimize(
-    objective: AcquisitionFn,
-    domain: Domain,
-    paths: Sequence[int],
-    key: jnp.ndarray,
-) -> dict[int, jnp.ndarray | None]:
-    """Minimize a batched acquisition with one restart-free n-path engine run.
-
-    The injected inner minimizer `BLRGlobalModel.propose` asks for: the
-    model hands out its own acquisition and this driver answers with the
-    library's own descent, one path per minimizer - the same restart-free
-    recipe the n_paths=1 arms use, so the acquisition is optimized by the method
-    it will later drive. Restarts are off because each path has one job: reach
-    the acquisition's local minimum from a uniform start. The starts come from
-    the domain's own draw, so they respect whatever the caller declared about
-    the box, and each path stops at `_INNER_ITERS`; the whole cohort is served
-    one batch per iteration rather than by one run per start.
-
-    Args:
-        objective: the acquisition to descend, `(M, d) -> ((M,), (M, d))`:
-            values and their per-row gradients, the engine's `EvalFG` shape
-            without the feasibility column.
-        domain: the search box, as the ask declared it - the same object the
-            outer run checks its answers against, `scale` and samplers included.
-        paths: the paths to answer for, one local minimizer each.
-        key: the PRNG key the starts are drawn from.
-
-    Returns:
-        One minimizer per path, a `(d,)` point inside `domain`, or ``None`` for a
-        path the inner run could not place at all. A declined path is the model's
-        own news rather than a coordinate to pass on: the engine falls back to
-        its other source or leaves the path where it stands, instead of drawing a
-        start here that the acquisition was never asked about.
-
-    """
-
-    def eval_g(x_batch: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
-        f, g = objective(x_batch)
-        return f, g, None
-
-    n_points = len(paths)
-    result = n_path_schedule(
-        eval_g,
-        n_paths=n_points,  # one path per minimizer: one batch, not n runs
-        domain=domain,
-        max_iters=_INNER_ITERS,
-        local_solver=DiagonalPreconditioner(),
-        restart_stalled=False,
-        key=key,
-    )
-    placed = result.flock_x
-    usable = jnp.all(jnp.isfinite(placed), axis=1)
-    return {
-        i: (row if bool(ok) else None)
-        for i, row, ok in zip(paths, placed, usable, strict=True)
-    }
 
 
 # --- Adam: one compiled scan per run --------------------------------

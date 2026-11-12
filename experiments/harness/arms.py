@@ -18,7 +18,6 @@ from experiments.harness.methods import (
     run_adam,
     run_lbfgs,
     run_soar_lite,
-    surrogate_minimize,
 )
 from soar_lite import (
     BLRGlobalModel,
@@ -124,6 +123,5 @@ def _model_for(model: str) -> Callable[[jnp.ndarray], GlobalModel] | None:
         raise SystemExit(msg) from None
     return lambda key: BLRGlobalModel(
         projection_factory=projection,
-        minimize=surrogate_minimize,
         key=key,
     )

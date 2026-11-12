@@ -4,7 +4,8 @@
 Bayesian linear-regression surrogate (`BLRGlobalModel`), and `projection.py`
 holds the `Projection` geometries its features are read through. Both implement
 the engine's `GlobalModel` protocol, which stays in `engine/contracts.py`
-because the engine owns its seams.
+because the engine owns its seams. `descent.py` is the inner minimizer those
+models borrow (`descent_minimize`), not a model of its own.
 
 `soar_lite/domain.py` - the box these models draw from on every ask -
 deliberately stays outside this package: the engine reads that same object for
@@ -16,6 +17,7 @@ from soar_lite.global_model.blr import (
     BLRGlobalModel,
     MinimizeFn,
 )
+from soar_lite.global_model.descent import descent_minimize
 from soar_lite.global_model.projection import (
     IdentityProjection,
     Projection,
@@ -33,4 +35,5 @@ __all__ = [
     "ProjectionFactory",
     "SampleGlobalModel",
     "SphereProjection",
+    "descent_minimize",
 ]

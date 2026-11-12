@@ -128,9 +128,10 @@ names no other.
 
 `GlobalModel` is the engine's restart seam, called by the engine and never
 calling back. `SampleGlobalModel` draws from the domain; `BLRGlobalModel` fits a
-posterior over the features its `Projection` hands it. `AcquisitionFn` and
-`MinimizeFn` are the pair its inner minimizer works in: what it minimizes, and
-the callable it injects to minimize it.
+posterior over the features its `Projection` hands it and descends its
+acquisition with a `MinimizeFn`, defaulting to `descent_minimize`.
+`AcquisitionFn` is what that minimizer minimizes, `MinimizeFn` the callable's
+shape, and `descent_minimize` the one the package ships.
 
 ::: soar_lite.GlobalModel
 ::: soar_lite.SampleGlobalModel
@@ -143,6 +144,8 @@ the callable it injects to minimize it.
     options:
       show_attribute_values: true
       show_signature_annotations: false
+
+::: soar_lite.descent_minimize
 
 ## Projections
 

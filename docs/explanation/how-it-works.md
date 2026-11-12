@@ -407,15 +407,15 @@ bigger; the surrogate arm below is what pays for a fit.
 **The surrogate arm.** `BLRGlobalModel` fits a Bayesian linear posterior on the
 samples already served (features given by an injected `Projection`), and
 `propose` returns the local minimizers of `−log EI` (expected improvement) found
-inside the domain by `MinimizeFn`. Until `observe` has given the posterior a
-spread to standardize by, `propose` has nothing to fit and answers with the
-domain's own draw, never calling `minimize` — see
+inside the domain by its `MinimizeFn`, which defaults to `descent_minimize` —
+this package's own n-path engine, run restart-free. Until `observe` has given
+the posterior a spread to standardize by, `propose` has nothing to fit and
+answers with the domain's own draw, never calling `minimize` — see
 [Surrogate restarts](../how-to/surrogate-restarts.md). **EI's role here is an
 acquisition function** (Jones et al. 1998), answering "where does the surrogate
 think is still worth trying" — it hands back a start and makes no comparison.
-The descent on `−log EI` uses the caller's injected `MinimizeFn` (usually this
-package's own n-path engine), so this arm trades one inner search for a smarter
-start, at the cost of that inner search's evaluations.
+A caller can inject another `MinimizeFn`, so this arm trades one inner search
+for a smarter start, at the cost of that inner search's evaluations.
 
 ### A restart costs no extra gradient batch
 

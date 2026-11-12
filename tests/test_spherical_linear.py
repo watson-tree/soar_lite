@@ -23,6 +23,7 @@ from soar_lite import (
     Domain,
     GlobalModel,
     IdentityProjection,
+    Point,
     Projection,
     SphereProjection,
     ValuePoint,
@@ -46,7 +47,7 @@ def _grid_minimize(
     domain: Domain,
     paths: Sequence[int],
     key: jnp.ndarray,
-) -> dict[int, jnp.ndarray | None]:
+) -> dict[int, Point | None]:
     """Stand in for the driver's inner minimizer with the best of a grid."""
     grid_key, _ = jax.random.split(key)
     grid = jax.random.uniform(
@@ -57,7 +58,9 @@ def _grid_minimize(
     )
     values, _ = objective(grid)
     ranked = jnp.argsort(jnp.where(jnp.isfinite(values), values, jnp.inf))
-    return dict(zip(paths, grid[ranked[: len(paths)]], strict=True))
+    return {
+        i: Point(row) for i, row in zip(paths, grid[ranked[: len(paths)]], strict=True)
+    }
 
 
 def _short_minimize(
@@ -65,10 +68,10 @@ def _short_minimize(
     domain: Domain,
     paths: Sequence[int],
     key: jnp.ndarray,
-) -> dict[int, jnp.ndarray | None]:
+) -> dict[int, Point | None]:
     """Answer one point too wide, so the shape check has something to reject."""
     del objective, key
-    return {i: jnp.zeros(domain.d + 1) for i in paths}
+    return {i: Point(jnp.zeros(domain.d + 1)) for i in paths}
 
 
 def _box(d: int = 2, half: float = 2.0) -> Domain:
@@ -258,7 +261,7 @@ def test_the_minimizer_is_handed_the_box_the_ask_was_handed() -> None:
         domain: Domain,
         paths: Sequence[int],
         key: jnp.ndarray,
-    ) -> dict[int, jnp.ndarray | None]:
+    ) -> dict[int, Point | None]:
         handed.append(domain)
         return _grid_minimize(objective, domain, paths, key)
 
@@ -451,7 +454,7 @@ def test_a_minimizer_may_decline_a_path() -> None:
         domain: Domain,
         paths: Sequence[int],
         key: jnp.ndarray,
-    ) -> dict[int, jnp.ndarray | None]:
+    ) -> dict[int, Point | None]:
         grid = _grid_minimize(objective, domain, paths, key)
         return {i: (None if i % 2 else grid[i]) for i in paths}
 
@@ -472,10 +475,10 @@ def test_a_minimizer_may_not_answer_for_a_path_nobody_named() -> None:
         domain: Domain,
         paths: Sequence[int],
         key: jnp.ndarray,
-    ) -> dict[int, jnp.ndarray | None]:
+    ) -> dict[int, Point | None]:
         del objective, key  # this stub answers from the ask alone
-        rows: dict[int, jnp.ndarray | None] = {i: jnp.zeros(domain.d) for i in paths}
-        rows[paths[0] + 1] = jnp.zeros(domain.d)
+        rows: dict[int, Point | None] = {i: Point(jnp.zeros(domain.d)) for i in paths}
+        rows[paths[0] + 1] = Point(jnp.zeros(domain.d))
         return rows
 
     model = BLRGlobalModel(minimize=stray, key=jax.random.PRNGKey(3))

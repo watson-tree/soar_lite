@@ -261,6 +261,20 @@ restart decision.
 _Avoid_: restart rule, sampler (the sampler is a per-dimension draw inside the
 domain)
 
+**inner minimizer** (`minimize`, type `MinimizeFn`):
+The global model's own seam, one level further in, owning *how* to descend the
+acquisition the model builds (`-log EI` for `BLRGlobalModel`). The model holds
+the acquisition and never searches it itself: `propose` hands the acquisition,
+the ask's `domain`, the paths and a fresh subkey to `minimize`, and carries its
+answer out as one start per path, `None` for a path it could not place. The
+shipped default is `descent_minimize`, the engine run restart-free at the
+cohort's width, so the acquisition is descended by the method it will later
+drive; a caller that needs an inner knob the default does not expose — e.g. a
+`time_limit`, another local solver, `budget_check`, restarts inside — passes its
+own `MinimizeFn` instead.
+_Avoid_: inner loop, acquisition optimizer (the model does not optimize the
+acquisition, it asks for one)
+
 **restart_stalled**:
 The run's one restart bit, deciding *whether* a stall restarts: on (the
 default), the stalled path is re-drawn by the global model next iteration; off,

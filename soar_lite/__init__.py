@@ -43,6 +43,7 @@ from soar_lite.global_model import (
     ProjectionFactory,
     SampleGlobalModel,
     SphereProjection,
+    descent_minimize,
 )
 from soar_lite.local_solver import DiagonalPreconditioner
 
@@ -70,6 +71,7 @@ __all__ = [
     "SphereProjection",
     "ValuePoint",
     "Work",
+    "descent_minimize",
     "n_path_schedule",
     "pointwise",
 ]
