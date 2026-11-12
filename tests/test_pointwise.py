@@ -14,7 +14,10 @@ import jax.numpy as jnp
 from soar_lite import (
     DiagonalPreconditioner,
     Domain,
+    EvalF,
+    EvalFG,
     LocalSolver,
+    NPathResult,
     PathPoint,
     Point,
     ServeTrials,
@@ -166,3 +169,38 @@ def test_the_value_only_seam_carries_the_trials_a_method_reads() -> None:
     # winner's gradient on its own: the two counters are the two seams.
     assert result.n_f_points > 0, result.n_f_points
     assert result.n_f_g_points > 0, result.n_f_g_points
+
+
+def test_the_seams_can_be_jitted_and_the_engine_still_reads_them() -> None:
+    """A caller may hand in a traced seam: the engine reads it on the host side.
+
+    Wrapping either seam in `jax.jit` is how a caller gets the objective's own
+    ops fused into one kernel per batch instead of compiled one apiece, and it
+    is safe because every host-side read the engine makes - the batch's values,
+    its feasibility flags, the box check - happens after the seam has returned.
+    Pinned here because that is an invariant an edit inside the engine could
+    break by reading a value while it is still a tracer, and the breakage would
+    land in a caller's run rather than in this suite.
+    """
+
+    def run(seam_g: EvalFG, seam_f: EvalF) -> NPathResult:
+        return n_path_schedule(
+            seam_g,
+            n_paths=1,
+            domain=Domain(jnp.asarray([[-2.0, 2.0], [-2.0, 2.0]])),
+            x0=jnp.asarray([[1.5, 1.5]]),
+            eval_f=seam_f,
+            max_iters=20,
+            local_solver=_ValueReader(),
+        )
+
+    eval_f_g, eval_f = pointwise(_objective)
+    plain = run(eval_f_g, eval_f)
+    traced = run(jax.jit(eval_f_g), jax.jit(eval_f))
+
+    assert traced.status == plain.status, traced.status
+    assert jnp.allclose(traced.x, plain.x), (traced.x.tolist(), plain.x.tolist())
+    assert jnp.allclose(traced.f, plain.f), (traced.f, plain.f)
+    # Both seams were reached and both halved the same way, so each was traced.
+    assert traced.n_f_points == plain.n_f_points > 0
+    assert traced.n_f_g_points == plain.n_f_g_points > 0

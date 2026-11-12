@@ -628,6 +628,15 @@ def pointwise(
     lazy closures, so building them runs nothing, and a caller who wants only
     the fused seam discards the other with ``eval_f_g, _ = pointwise(objective)``.
 
+    Both are ordinary functions, so either can be wrapped in `jax.jit` before it
+    is handed over. What that buys is the objective's own ops fused into one
+    kernel per batch instead of compiled one apiece, and what it costs is that
+    jax caches a trace per argument shape: the engine serves only the paths that
+    owe something in a round, so the batch length moves run to run and each new
+    length compiles again. A traced seam is fine on the engine's side of the
+    call - the batch is read on the host (its values, its feasibility flags, the
+    box check), all of it after the seam has returned.
+
     The value-only half is the fused objective's own forward pass,
     ``vmap(objective)`` - the same forward computation, so returning it costs
     nothing and buys the engine's cheap-trial path. That does not make this the
