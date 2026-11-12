@@ -16,13 +16,9 @@ the reasoning.
 
 A run moves `n_paths` paths in lockstep, each following its own descent; an
 iteration is usually one fused pass, a single call returning value and gradient
-for every served point, unless the method enumerates candidates, which spends
-trial rounds of its own first and one fused batch settling whatever still owes a
-gradient — value-only rounds with `eval_f` connected, fused rounds of their own
-without it (see [How it works](explanation/how-it-works.md)). On a GPU a wider
-batch barely costs more wall-clock than a narrow one, which is why the engine is
-built around batched evaluations; on a CPU the same run works, just without that
-saving.
+for every served point. On a GPU a wider batch barely costs more wall-clock than
+a narrow one, which is why the engine is built around batched evaluations; on a
+CPU the same run works, just without that saving.
 
 ## Install
 
