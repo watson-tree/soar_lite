@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 
 from soar_lite.domain import Domain
-from soar_lite.engine import GlobalModel
+from soar_lite.engine import GlobalModel, ValuePoint
 
 
 class SampleGlobalModel(GlobalModel):
@@ -42,7 +42,7 @@ class SampleGlobalModel(GlobalModel):
         """
         self._key = key
 
-    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
+    def observe(self, served: dict[int, ValuePoint]) -> None:
         """Ignore the evidence: a model-free sampler fits nothing."""
 
     def propose(

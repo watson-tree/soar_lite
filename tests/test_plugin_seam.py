@@ -180,10 +180,9 @@ class RecordingModel:
         self.observed: list[int] = []  # one entry per served batch, its width
         self._key = jax.random.PRNGKey(0) if key is None else key
 
-    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
-        """Record the batch's width; this model fits nothing."""
-        del f, g
-        self.observed.append(int(x.shape[0]))
+    def observe(self, served: dict[int, ValuePoint]) -> None:
+        """Record the round's width; this model fits nothing."""
+        self.observed.append(len(served))
 
     def propose(
         self, paths: list[int], domain: Domain
@@ -636,15 +635,11 @@ def test_the_model_is_fed_at_both_bottoms_of_a_batch() -> None:
             super().__init__()
             self.log: list[str] = []
 
-        def observe(
-            self,
-            x: jnp.ndarray,
-            f: list[float],
-            g: jnp.ndarray | None,
-        ) -> None:
-            """Log whether this batch came graded, then record it."""
-            self.log.append("observe:f" if g is None else "observe:g")
-            super().observe(x, f, g)
+        def observe(self, served: dict[int, ValuePoint]) -> None:
+            """Log whether this round came graded, then record it."""
+            graded = isinstance(next(iter(served.values())), PathPoint)
+            self.log.append("observe:g" if graded else "observe:f")
+            super().observe(served)
 
     def run(*, give_up: bool) -> tuple[Loud, NPathResult]:
         domain = unit_domain()

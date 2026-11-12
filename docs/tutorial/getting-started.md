@@ -341,8 +341,8 @@ To replace one outright, implement its protocol and pass the instance:
   - `restart` is the only cold-start call, so it runs at initialization and after
     every restart.
   - `step` is the only place a landed step is announced.
-- **`GlobalModel`** — the restart-point source and evidence sink: `observe`,
-  `propose`. The shipped pair is `SampleGlobalModel` (draws starts from the
+- **`GlobalModel`** — the restart-point source and evidence sink: `observe`
+  (handed one served batch, keyed by path) and `propose`. The shipped pair is `SampleGlobalModel` (draws starts from the
   domain, fits nothing — the default) and `BLRGlobalModel` (fits a Bayesian
   linear posterior and proposes the `-log EI` minimizers).
 

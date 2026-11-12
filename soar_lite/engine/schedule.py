@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
+from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -644,39 +645,29 @@ class _EvalSeams:
             return {}
         asked = set(paths)
         d = self._domain.d
-        keys = list(points)
-        rows = []
-        for i in keys:
+        checked: dict[int, jnp.ndarray] = {}
+        for i, raw in points.items():
             if i not in asked:
                 msg = (
                     f"serve_trials was handed path {i}, which this iteration "
                     f"did not ask to step (asked: {sorted(asked)})"
                 )
                 raise ValueError(msg)
-            x = jnp.asarray(points[i])
+            x = jnp.asarray(raw)
             if x.shape != (d,):
                 msg = (
                     f"serve_trials was handed a {x.shape} point for path {i}, "
                     f"expected a ({d},) point"
                 )
                 raise ValueError(msg)
-            rows.append(
-                _check_inside(
-                    x, what=f"local_solver's trial for path {i}", domain=self._domain
-                )
+            checked[i] = _check_inside(
+                x, what=f"local_solver's trial for path {i}", domain=self._domain
             )
-        x_batch = jnp.stack(rows)
         if self._eval_f is not None:
-            f_vals = self._serve_f(x_batch)
-            return {
-                i: ValuePoint(x_batch[pos], f)
-                for pos, (i, f) in enumerate(zip(keys, f_vals, strict=True))
-            }
-        f_vals, g_batch = self._serve_f_g(x_batch)
-        return {
-            i: PathPoint(x_batch[pos], f_vals[pos], g_batch[pos])
-            for pos, i in enumerate(keys)
-        }
+            return self._serve_f(checked)
+        # Every `PathPoint` is a `ValuePoint`; the cast only widens the dict,
+        # which is invariant in its value type.
+        return cast("dict[int, ValuePoint]", self._serve_f_g(checked))
 
     def settle(self, decided: dict[int, Point]) -> dict[int, PathPoint]:
         """Buy whatever gradient the iteration's points still owe, in one batch.
@@ -696,44 +687,44 @@ class _EvalSeams:
         owed = [i for i, point in decided.items() if not isinstance(point, PathPoint)]
         bought: dict[int, PathPoint] = {}
         if owed:
-            f_vals, g_batch = self._serve_f_g(
-                jnp.stack([decided[i].x for i in owed]),
-            )
-            bought = {
-                i: PathPoint(decided[i].x, f_vals[pos], g_batch[pos])
-                for pos, i in enumerate(owed)
-            }
+            bought = self._serve_f_g({i: decided[i].x for i in owed})
         return {
             i: point if isinstance(point, PathPoint) else bought[i]
             for i, point in decided.items()
         }
 
-    def _serve_f_g(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
+    def _serve_f_g(self, points: dict[int, jnp.ndarray]) -> dict[int, PathPoint]:
         """Serve one fused batch: the gradient comes with the value.
 
-        What is specific to this half is that the pass buys both, so its rows
+        What is specific to this half is that the pass buys both, so its points
         come back settled; the gate, the charge and the two reports are the same
         edges the value-only half goes through.
 
         Args:
-            x_batch: The points to evaluate, shape ``(m, d)``.
+            points: One point per path, in the order to serve them in.
 
         Returns:
-            ``(f_vals, g_batch)``.
+            One `PathPoint` per path, keyed and in the order they were served.
 
         Raises:
             _BatchRefused: When the gate refuses the batch.
 
         """
+        x_batch = jnp.stack(list(points.values()))
         self._meter.admit(x_batch.shape[0], fused=True)
         f_batch, g_batch, feas = self._eval_f_g(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
-        f_vals = f_batch.tolist()
-        self._report(x_batch, f_vals, g_batch, feas)
-        return f_vals, g_batch
+        served: dict[int, ValuePoint] = {
+            i: PathPoint(points[i], f, g)
+            for (i, f, g) in zip(points, f_batch.tolist(), g_batch, strict=True)
+        }
+        self._report(x_batch, served, feas)
+        # The values really are `PathPoint`s; the cast only narrows the widened
+        # dict back, since `dict` is invariant in its value type.
+        return cast("dict[int, PathPoint]", served)
 
-    def _serve_f(self, x_batch: jnp.ndarray) -> list[float]:
+    def _serve_f(self, points: dict[int, jnp.ndarray]) -> dict[int, ValuePoint]:
         """Serve one value-only batch, for a method's own enumeration.
 
         The gate rides along exactly as in the fused half, so a deadline that
@@ -746,10 +737,10 @@ class _EvalSeams:
         unreachable at runtime.
 
         Args:
-            x_batch: The points to evaluate, shape ``(m, d)``.
+            points: One point per path, in the order to serve them in.
 
         Returns:
-            Their objective values, as host floats.
+            One `ValuePoint` per path, keyed and in the order they were served.
 
         Raises:
             _BatchRefused: When the gate refuses the batch.
@@ -759,19 +750,22 @@ class _EvalSeams:
         if eval_f is None:
             msg = "_serve_f requires eval_f"
             raise RuntimeError(msg)
+        x_batch = jnp.stack(list(points.values()))
         self._meter.admit(x_batch.shape[0], fused=False)
         f_batch, feas = eval_f(x_batch)
-        f_vals = f_batch.tolist()
+        served = {
+            i: ValuePoint(points[i], f)
+            for i, f in zip(points, f_batch.tolist(), strict=True)
+        }
         # No gradient in hand: the f half alone. The same point is reported
         # again with `g` if it wins its step and `settle` buys the gradient.
-        self._report(x_batch, f_vals, None, feas)
-        return f_vals
+        self._report(x_batch, served, feas)
+        return served
 
     def _report(
         self,
         x_batch: jnp.ndarray,
-        f_vals: list[float],
-        g_batch: jnp.ndarray | None,
+        served: dict[int, ValuePoint],
         feas: jnp.ndarray | None,
     ) -> None:
         """Report one served batch to the run's two readers.
@@ -781,14 +775,14 @@ class _EvalSeams:
         though the run keeps nothing else from that pass.
 
         Args:
-            x_batch: The points the seam was handed.
-            f_vals: Their objective values, as host floats.
-            g_batch: Their gradients when the seam bought them, else None.
+            x_batch: The points the seam was handed, one row per entry of
+                `served` and in the same order.
+            served: The points the seam read, keyed by path.
             feas: The feasibility mask the seam reported, or None for all-feasible.
 
         """
-        self._observe(x_batch, f_vals, g_batch)
-        self._best.observe(x_batch, f_vals, feas)
+        self._observe(served)
+        self._best.observe(x_batch, [point.f for point in served.values()], feas)
 
 
 @dataclass

@@ -245,7 +245,9 @@ _Avoid_: initialization step
 
 **global model** (type `GlobalModel`):
 The engine's second seam, owner of *where* a redrawn path starts. It observes
-every served batch (`observe(x, f, g?)`) and answers `propose(paths, domain)`
+every served batch as a mapping from path to the point served there
+(`observe(served)`, one entry per path, so a model that only wants stacked rows
+stacks them itself) and answers `propose(paths, domain)`
 with one fresh start per path it was asked about, keyed by that path. `None` for
 a path is the model declining it — its own stopping rule, as `None` from a
 method's `propose` is the method's — and that path starts nowhere this

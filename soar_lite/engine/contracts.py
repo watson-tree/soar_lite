@@ -153,17 +153,25 @@ class GlobalModel(Protocol):
     handed and answers from its posterior once it has enough.
     """
 
-    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
-        """Fold one served batch into the model's evidence.
+    def observe(self, served: dict[int, ValuePoint]) -> None:
+        """Fold one served round into the model's evidence.
 
         Called right after a batch is served, in the engine's coordinates and
-        before anything is decided on it: `x` is the batch's rows, `f` their
-        values (Python floats - the same values the run compares, and one host
-        transfer per batch rather than a device sync per row) and `g` their
-        gradients, or `None` for a batch served for its values alone. A point
-        may arrive twice - a step's trial is served for its value first and for
-        its gradient later if it wins - so a model keyed on coordinates sees the
-        same design with more evidence.
+        before anything is decided on it: `served` maps each path in the batch to
+        the point it was served there, so the model knows whose point it holds
+        rather than only how many rows arrived. The values are Python floats -
+        the same values the run compares, and one host transfer per batch rather
+        than a device sync per row - and a point served for its value alone
+        carries no gradient: a fused batch arrives as `PathPoint`s, which are
+        also `ValuePoint`s, so a model that wants gradients reads them off the
+        type instead of a second nullable argument.
+
+        The mapping's iteration order is the order to stack in, and the engine
+        keeps it stable (ascending path order), so a model that folds rows keeps
+        a seeded fit reproducible. Keys are unique within one call; a point may
+        arrive twice across calls - a step's trial is served for its value first
+        and for its gradient later if it wins - so a model keyed on coordinates
+        sees the same design with more evidence.
 
         Nothing is filtered for feasibility: the model fits the raw objective
         everywhere, and only the value the run reports is filtered. Batches the
@@ -396,13 +404,13 @@ gradients afterwards, together in one fused batch.
 # The two halves of a `GlobalModel`, as the components that call them see them.
 # The model itself never crosses into `_EvalSeams` or `_Paths`: each takes the
 # one method it uses, so neither holds a god object whose other half it ignores.
-# `ObserveFn` is the command that folds a served batch into the evidence; the
-# values arrive as host floats, one per point, because the run's own bookkeeping
+# `ObserveFn` is the command that folds a served round into the evidence: one
+# point per path, values already on the host because the run's own bookkeeping
 # compares and records them one row at a time - a batch then costs one host
 # transfer instead of a device sync per row.
 # `ProposeFn` is the query for fresh starts: one answer per path asked about,
 # handed the run's box because the box is the engine's and a model carries none.
-ObserveFn: TypeAlias = Callable[[jnp.ndarray, list[float], jnp.ndarray | None], None]
+ObserveFn: TypeAlias = Callable[[dict[int, ValuePoint]], None]
 ProposeFn: TypeAlias = Callable[[list[int], Domain], dict[int, jnp.ndarray | None]]
 
 NPathStatus: TypeAlias = Literal[

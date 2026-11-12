@@ -39,7 +39,7 @@ import numpy as np
 from jax.scipy.special import log_ndtr
 
 from soar_lite.domain import Domain
-from soar_lite.engine import GlobalModel
+from soar_lite.engine import GlobalModel, ValuePoint
 from soar_lite.global_model.projection import (
     Projection,
     ProjectionFactory,
@@ -175,16 +175,13 @@ class BLRGlobalModel(GlobalModel):
         self._sq_dev = 0.0
         self._min = math.inf
 
-    def observe(
-        self,
-        x: jnp.ndarray,
-        f: list[float],
-        g: jnp.ndarray | None,
-    ) -> None:
-        """Fold one served batch into the model's value-only evidence.
+    def observe(self, served: dict[int, ValuePoint]) -> None:
+        """Fold one served round into the model's value-only evidence.
 
-        A value-only batch and a fused one contribute the same, since the
-        surrogate fits values over coordinates. The values arrive as host
+        A value-only round and a fused one contribute the same, since the
+        surrogate fits values over coordinates. The round arrives keyed by path
+        and is stacked in that order, so the fit depends on the points, not on
+        how many paths a round happened to carry. The values arrive as host
         floats, one per point, so the finite check below costs no device sync
         per row. A non-finite value is dropped, not fitted: the engine observes
         the objective bottoming out at ``-inf`` before it stops, and one such row
@@ -193,30 +190,24 @@ class BLRGlobalModel(GlobalModel):
         which is what a second look at the same coordinate is worth.
 
         Raises:
-            ValueError: If `x` is not a two-dimensional batch, has a different
-                number of rows than values, or is wider or narrower than the
-                first batch folded in.
+            ValueError: If the round is wider or narrower than the first round
+                folded in.
 
         """
-        del g
+        if not served:
+            return
 
-        rows = jnp.asarray(x)
-        if rows.ndim != 2:
-            msg = f"observe needs an (M, d) batch, got shape {rows.shape}"
-            raise ValueError(msg)
-        if rows.shape[0] != len(f):
-            msg = f"observe got {rows.shape[0]} rows but {len(f)} values"
-            raise ValueError(msg)
-        # The model holds no `d` to check against: the first batch is what fixes
-        # the fit's width, and a later batch of another width would otherwise
+        rows = jnp.stack([point.x for point in served.values()])
+        # The model holds no `d` to check against: the first round is what fixes
+        # the fit's width, and a later round of another width would otherwise
         # only fail at `jnp.stack` inside the fit.
         if self._xs and rows.shape[1] != self._xs[0].shape[-1]:
             msg = (
-                "observe's first batch fixed the width at "
+                "observe's first round fixed the width at "
                 f"{self._xs[0].shape[-1]}, got {rows.shape[1]}"
             )
             raise ValueError(msg)
-        values = jnp.asarray(f, dtype=rows.dtype)
+        values = jnp.asarray([point.f for point in served.values()], dtype=rows.dtype)
         keep = jnp.isfinite(values)
         if bool(keep.any()):
             self._xs.append(rows[keep])

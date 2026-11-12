@@ -62,6 +62,7 @@ from soar_lite.engine import (
     PathPoint,
     Point,
     ServeTrials,
+    ValuePoint,
     Work,
     n_path_schedule,
 )
@@ -89,7 +90,7 @@ class FixedModel:
         self.points = points
         self.d = int(points.shape[1])
 
-    def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
+    def observe(self, served: dict[int, ValuePoint]) -> None:
         """Ignore the evidence: this model fits nothing."""
 
     def propose(
@@ -417,12 +418,7 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
             self.domain = Domain([(0.0, 1.0)])
             self.d = self.domain.d
 
-        def observe(
-            self,
-            x: jnp.ndarray,
-            f: list[float],
-            g: jnp.ndarray | None,
-        ) -> None:
+        def observe(self, served: dict[int, ValuePoint]) -> None:
             """Ignore the evidence: this model fits nothing."""
 
         def propose(
@@ -691,13 +687,8 @@ def test_a_not_finite_path_never_widens_a_batch() -> None:
         def __init__(self, inner: SampleGlobalModel) -> None:
             self.inner = inner
 
-        def observe(
-            self,
-            x: jnp.ndarray,
-            f: list[float],
-            g: jnp.ndarray | None,
-        ) -> None:
-            self.inner.observe(x, f, g)
+        def observe(self, served: dict[int, ValuePoint]) -> None:
+            self.inner.observe(served)
 
         def propose(
             self, paths: list[int], domain: Domain

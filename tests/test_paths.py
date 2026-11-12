@@ -210,7 +210,7 @@ def paths(  # noqa: PLR0913 - each knob names one axis a test varies
         domain=domain,
         meter=meter,
         best=_Best(domain.d),
-        observe=lambda _x, _f, _g: None,
+        observe=lambda _served: None,
     )
     restart_at = jnp.zeros(domain.d) if restart_at is None else restart_at
     started = _Paths(

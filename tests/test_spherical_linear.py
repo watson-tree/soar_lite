@@ -25,6 +25,7 @@ from soar_lite import (
     IdentityProjection,
     Projection,
     SphereProjection,
+    ValuePoint,
 )
 from soar_lite.global_model.blr import _log_h
 
@@ -85,11 +86,19 @@ def _model(noise: float = 0.01) -> BLRGlobalModel:
     )
 
 
+def _served(xs: jnp.ndarray, f: Sequence[float]) -> dict[int, ValuePoint]:
+    """Key a batch's rows by path, the shape the engine hands a model."""
+    return {
+        i: ValuePoint(row, value)
+        for i, (row, value) in enumerate(zip(xs, f, strict=True))
+    }
+
+
 def _observe(model: BLRGlobalModel, n: int) -> None:
     """Feed `n` deterministic box points with a smooth, off-center minimum."""
     axis = jnp.linspace(-1.9, 1.9, n)[:, None] * jnp.asarray([1.0, -1.0])[None, :]
     f = [float(jnp.sum((row - jnp.asarray([0.3, -0.2])) ** 2)) for row in axis]
-    model.observe(axis, f, None)
+    model.observe(_served(axis, f))
 
 
 def _reference_log_h(z: float) -> float:
@@ -207,7 +216,7 @@ def test_a_masked_model_proposes_inside_the_box() -> None:
     )
     xs = jnp.linspace(-1.9, 1.9, 6)[:, None] * jnp.ones(3)[None, :]
     center = jnp.asarray([0.3, -0.2, 0.1])
-    model.observe(xs, [float(jnp.sum((row - center) ** 2)) for row in xs], None)
+    model.observe(_served(xs, [float(jnp.sum((row - center) ** 2)) for row in xs]))
     starts = ask(model, 2, box)
     assert starts.shape == (2, 3)
     mean, sigma = model._predict(starts, box)
@@ -315,7 +324,7 @@ def test_propose_draws_uniformly_until_a_fit_is_possible() -> None:
     model = _model()
     for n_observed in (0, 1):
         if n_observed:
-            model.observe(jnp.asarray([[0.5, -0.5]]), [1.0], None)
+            model.observe(_served(jnp.asarray([[0.5, -0.5]]), [1.0]))
         draws = ask(model, 4, _box())
         assert draws.shape == (4, 2)
         assert bool(jnp.all(jnp.isfinite(draws)))
@@ -334,7 +343,7 @@ def test_integer_bounds_still_normalize_to_a_unit_box() -> None:
     draws = ask(model, 3, box)
     assert bool(jnp.all(draws >= 0.0))
     assert bool(jnp.all(draws <= 1.0))
-    model.observe(jnp.asarray([[0.2, 0.3], [0.8, 0.9]]), [1.0, 2.0], None)
+    model.observe(_served(jnp.asarray([[0.2, 0.3], [0.8, 0.9]]), [1.0, 2.0]))
     mean, sigma = model._predict(jnp.asarray([[0.5, 0.5]]), box)
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
@@ -343,7 +352,7 @@ def test_integer_bounds_still_normalize_to_a_unit_box() -> None:
 def test_predict_refuses_a_fit_it_cannot_standardize() -> None:
     """Refuse a posterior query that has no value spread to work from."""
     model = _model()
-    model.observe(jnp.asarray([[0.5, -0.5]]), [1.0], None)
+    model.observe(_served(jnp.asarray([[0.5, -0.5]]), [1.0]))
     with pytest.raises(ValueError, match="spread to standardize"):
         model._predict(jnp.asarray([[0.0, 0.0]]), _box())
 
@@ -351,7 +360,7 @@ def test_predict_refuses_a_fit_it_cannot_standardize() -> None:
 def test_a_flat_batch_has_no_spread_to_fit() -> None:
     """Fall back like a lone observation: equal values leave nothing to scale."""
     model = _model()
-    model.observe(jnp.asarray([[0.5, -0.5], [-0.5, 0.5]]), [3.0, 3.0], None)
+    model.observe(_served(jnp.asarray([[0.5, -0.5], [-0.5, 0.5]]), [3.0, 3.0]))
     assert not model._can_fit()
     draws = ask(model, 4, _box())
     assert draws.shape == (4, 2)
@@ -369,17 +378,12 @@ def test_posterior_deviation_never_dips_below_the_observation_noise() -> None:
     assert float(jnp.min(sigma)) >= math.sqrt(model._noise) - 1e-6
 
 
-@pytest.mark.parametrize("bad", [(3, 2, 2)])
-def test_observe_and_predict_demand_a_two_dimensional_batch(
-    bad: tuple[int, ...],
-) -> None:
+def test_predict_demands_a_two_dimensional_batch() -> None:
     """Refuse a shape the fit would broadcast into nonsense."""
     model = _model()
     _observe(model, 4)
     with pytest.raises(ValueError, match="needs a"):
-        model.observe(jnp.zeros(bad), [0.0] * bad[0], None)
-    with pytest.raises(ValueError, match="needs a"):
-        model._predict(jnp.zeros(bad), _box())
+        model._predict(jnp.zeros((3, 2, 2)), _box())
 
 
 def test_a_later_batch_cannot_redeclare_the_width() -> None:
@@ -387,7 +391,7 @@ def test_a_later_batch_cannot_redeclare_the_width() -> None:
     model = _model()
     _observe(model, 4)
     with pytest.raises(ValueError, match="fixed the width at 2, got 3"):
-        model.observe(jnp.zeros((3, 3)), [0.0] * 3, None)
+        model.observe(_served(jnp.zeros((3, 3)), [0.0] * 3))
 
 
 def test_posterior_variance_stays_under_the_prior_far_from_data() -> None:
@@ -419,13 +423,11 @@ def test_propose_descends_the_acquisition_into_the_box() -> None:
     assert bool(jnp.all(jnp.isfinite(sigma)))
 
 
-def test_observe_drops_non_finite_values_and_checks_its_rows() -> None:
-    """Drop a value the fit cannot use and refuse a ragged batch."""
+def test_observe_drops_non_finite_values() -> None:
+    """Drop a value the fit cannot use."""
     model = _model()
-    model.observe(jnp.asarray([[0.0, 0.0], [1.0, 1.0]]), [1.0, -math.inf], None)
+    model.observe(_served(jnp.asarray([[0.0, 0.0], [1.0, 1.0]]), [1.0, -math.inf]))
     assert model._values().size == 1
-    with pytest.raises(ValueError, match="rows but"):
-        model.observe(jnp.asarray([[0.0, 0.0]]), [1.0, 2.0], None)
 
 
 def test_minimize_output_shape_is_validated() -> None:
