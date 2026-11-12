@@ -4,8 +4,8 @@ Every problem exposes the engine's seam directly:
 
     eval_f_g(x: (M, d)) -> (f: (M,), grad: (M, d), feas: None)
 
-``feas`` is always ``None``: the box is the only constraint and the engine
-clips into it, so every served point counts toward the best. Each problem
+``feas`` is always ``None``: the box is the only constraint, and nothing outside
+it is ever served, so every served point counts toward the best. Each problem
 is one batched JAX pass, differentiable, and has a known global value
 ``f_star``.
 

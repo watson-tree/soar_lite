@@ -168,12 +168,14 @@ def surrogate_minimize(
             values and their per-row gradients, the engine's `EvalFG` shape
             without the feasibility column.
         domain: the search box, as the ask declared it - the same object the
-            outer run clips into, `scale` and samplers included.
+            outer run checks its answers against, `scale` and samplers included.
         n_points: how many local minimizers to return, one per row.
         key: the PRNG key the starts are drawn from.
 
     Returns:
-        A `(n_points, d)` array, one minimizer per row.
+        A `(n_points, d)` array, one minimizer per row, every row a finite point
+        inside `domain`: a path the inner run could not place carries an all-nan
+        point, which the outer run refuses, so it falls back to a fresh draw.
 
     """
 
@@ -190,7 +192,9 @@ def surrogate_minimize(
         restart_stalled=False,
         key=key,
     )
-    return result.flock_x
+    placed = result.flock_x
+    ok = jnp.all(jnp.isfinite(placed), axis=1)[:, None]
+    return jnp.where(ok, placed, domain.draw(key, n_points))
 
 
 # --- Adam: one compiled scan per run --------------------------------
