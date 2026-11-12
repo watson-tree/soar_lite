@@ -85,7 +85,7 @@ reaches back into the engine's scheduler - the engine already owns the descent
 recipe, and a second one here would be a second answer to the same question.
 """
 
-_HALF_LOG_2PI = 0.5 * jnp.log(2.0 * jnp.pi)
+_HALF_LOG_2PI = 0.5 * math.log(2.0 * math.pi)
 
 
 class BLRGlobalModel(GlobalModel):
