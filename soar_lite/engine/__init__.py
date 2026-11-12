@@ -20,7 +20,7 @@ reverse:
 
 The two concrete defaults are bound lazily inside `n_path_schedule`, which keeps
 that graph acyclic. The engine is first-order (value and gradient),
-coordinate-free, and owns the flock, the domain and its clip, the shared horizon
+coordinate-free, and owns the flock, the domain and its box test, the shared horizon
 and the restart cadence; the local solver owns direction, step size, acceptance
 and its step's enumeration, and the global model only where a restart lands.
 

@@ -10,8 +10,8 @@ model-free restart sampler needs nothing but this and a key.
 
 The box's own spelling lives here too - `Bounds`, and the validation and
 normalization behind it. This module imports nothing from the package, so it is
-the leaf both `n_path_schedule` and the model modules read a box from; the clip
-that keeps every proposal inside it stays the engine's.
+the leaf both `n_path_schedule` and the model modules read a box from; the
+check that holds every point to it stays the engine's.
 
 A side may be unbounded, and there are three cases, not two: a bounded dimension
 draws uniformly, a free one (both sides infinite) draws ``N(0, scale_i^2)``, and

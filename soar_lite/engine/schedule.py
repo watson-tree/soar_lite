@@ -42,9 +42,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     # The run's width: how many paths the engine drives.
     n_paths: int,
     # The run's box, a `Domain`: every point served lies inside it - the engine
-    # clips the starts it draws, and a method clips its own step - and it is the
-    # one statement of the dimension (`domain.d`) and of each coordinate's prior
-    # `scale`.
+    # checks each seam's answer against it and refuses the ones that miss - and
+    # it is the one statement of the dimension (`domain.d`) and of each
+    # coordinate's prior `scale`.
     domain: Domain,
     # The caller's flock: one start per path, ``(n_paths, domain.d)``, placed
     # by iteration 0 exactly where the caller asked rather than drawn.
@@ -75,14 +75,14 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 ) -> NPathResult:
     """Advance a flock of paths in x from the caller's initial points.
 
-    The engine owns the schedule: it clips every restart start into `domain`,
-    serves each batch as one call through the seam it came from - `eval_f_g` for
-    a fused batch, `eval_f` for a value-only one - buys the iteration's deferred
-    gradients in one batch, keeps the n-path state machine, and owns the best
-    `f⋆` (`f` in the result). Two things are injected, named
-    `global_model` and `local_solver`, in that order wherever they appear:
+    The engine owns the schedule: it checks every point against `domain` and
+    refuses the ones that miss, serves each batch as one call through the seam it
+    came from - `eval_f_g` for a fused batch, `eval_f` for a value-only one -
+    buys the iteration's deferred gradients in one batch, keeps the n-path state
+    machine, and owns the best `f⋆` (`f` in the result). Two things are injected,
+    named `global_model` and `local_solver`, in that order wherever they appear:
     `global_model` supplies **where** a restart lands (one point per restarting
-    path, clipped into the box) and is also the run's evidence sink, while
+    path, inside the box) and is also the run's evidence sink, while
     `local_solver` owns direction, step size, acceptance, and the enumeration
     inside a step, keeping its per-path state inside itself. `restart_stalled`
     is one flag on top of them:
@@ -106,10 +106,11 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     is asked for a fresh start every iteration whatever the flag says.
 
     `domain` is the run's box and the coordinate space the engine works in: the
-    engine clips into it and knows nothing about any map from these coordinates
-    to the caller's physical ones. It is also what the default model draws from,
-    and the only statement of the dimension. With `global_model=None` the engine
-    builds a `SampleGlobalModel` and lets the domain draw (`Domain.draw`); `key`
+    engine tests every point against it and knows nothing about any map from
+    these coordinates to the caller's physical ones. It is also what the default
+    model draws from, and the only statement of the dimension. With
+    `global_model=None` the engine builds a `SampleGlobalModel` and lets the
+    domain draw (`Domain.draw`); `key`
     seeds those draws, and an injected model owns its randomness instead.
 
     The run's own stop is the horizon: at most `max_iters` iterations, or the
@@ -210,8 +211,9 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             ``(n_paths, d)`` finite batch inside `domain` (a start the caller
             authored raises rather than being clipped). An injected piece can
             raise the same way later, at the batch that serves it: a
-            feasibility mask holding anything but 0/1, or a restart ask of the
-            wrong shape.
+            feasibility mask holding anything but 0/1, or any point a seam hands
+            the run - a restart ask of the wrong shape, a trial row, a step
+            winner, a start - that is not finite or lands outside `domain`.
 
     Returns:
         The run's end state and work report, an `NPathResult`.
@@ -271,7 +273,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
 
         local_solver = DiagonalPreconditioner()
 
-    # The run's one box, and the only place it is read for the clip; the
+    # The run's one box, and the only place it is read for the box test; the
     # dimension comes with it.
     d = domain.d
     meter = _Meter(max_iters, time_limit, budget_check)
@@ -282,6 +284,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
     eval_seams = _EvalSeams(
         eval_f_g,
         eval_f,
+        domain=domain,
         meter=meter,
         best=best,
         observe=global_model.observe,
@@ -593,17 +596,19 @@ class _EvalSeams:
     both the seam and the meter.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - the seams' collaborators, built once
         self,
         eval_f_g: EvalFG,
         eval_f: EvalF | None,
         *,
+        domain: Domain,
         meter: _Meter,
         best: _Best,
         observe: ObserveFn,
     ) -> None:
         self._eval_f_g = eval_f_g
         self._eval_f = eval_f
+        self._domain = domain
         self._meter = meter
         self._best = best
         self._observe = observe
@@ -611,12 +616,27 @@ class _EvalSeams:
     def serve_trials(self, x_batch: jnp.ndarray) -> list[Pending]:
         """Serve one step's trial batch, as one produced candidate per row.
 
+        The batch is a method's own candidate grid, so it is checked like every
+        other point the run holds: a row that is not finite or lies outside the
+        box is refused, naming the row, before anything is served. A method that
+        rules its trials over a box serves trials from inside it.
+
         A trial's gradient is only wanted for the step's winner, so with the
         value-only seam each trial is served for its value alone and the winners are
         settled once, together (`settle`). Without it a fused pass is the
         only way to a value, so every trial carries its gradient whether or not
         the method's own enumeration keeps it; `settle` then buys nothing.
         """
+        x_batch = jnp.asarray(x_batch)
+        if x_batch.ndim != 2 or x_batch.shape[1] != self._domain.d:
+            msg = (
+                f"a trial batch must be a (n, {self._domain.d}) array, "
+                f"got shape {x_batch.shape}"
+            )
+            raise ValueError(msg)
+        x_batch = _check_inside(
+            x_batch, what="local_solver's trial batch", domain=self._domain
+        )
         if self._eval_f is not None:
             return [
                 Pending(row, f, None)
@@ -796,7 +816,7 @@ class _Paths:
     ) -> None:
         self.n_paths = n_paths
         # Constant for the whole run, so it belongs beside the shape rather than
-        # in `move`'s signature: every proposal below is clipped into this box,
+        # in `move`'s signature: every proposal below is checked against this box,
         # and this is the only copy of it - the model is handed it per ask
         # rather than carrying one.
         self.domain = domain
@@ -900,21 +920,22 @@ class _Paths:
         return flock_x, flock_f
 
     def _restart_starts(self, restarting: list[int]) -> dict[int, Pending]:
-        """Ask for one fresh start per restarting path, clipped into the run's box.
+        """Ask for one fresh start per restarting path, inside the run's box.
 
         The caller's flock, if it handed one, answers the run's first call and
         only that one: iteration 0 is the one move where every path holds no
         point, so `x0` is consumed here and every later restart asks the model.
-        `x0` was validated at the entry, so it is placed as handed; the clip
-        below is the roundoff sliver's snap onto a wall.
+        Both arrive already checked - `x0` at the entry, the model's answer just
+        below - so both are placed as handed.
 
-        Otherwise: ask, check, clip, place. The model is handed the box it must
-        land in and its answer is refused unless it is ``(n_points, domain.d)``,
-        so a model returning another width fails here, naming the shape, instead
-        of deep in a broadcast during the clip. The clip stays as the defensive
-        seam for a model that oversteps. Both halves stay owed - a start has
-        nothing to be compared - so `settle` buys them in the same batch as the
-        step winners, and a restart costs no gradient pass of its own.
+        Otherwise: ask, check, place. The model is handed the box it must land in
+        and its answer is refused unless it is ``(n_points, domain.d)`` and
+        inside that box, so a model that answers with another width, a NaN row,
+        or a point past a wall fails here, naming the row and the dimension,
+        instead of deep inside the iteration that would have served it. Both
+        halves stay owed - a start has nothing to be compared - so `settle` buys
+        them in the same batch as the step winners, and a restart costs no
+        gradient pass of its own.
         """
         if not restarting:
             return {}
@@ -922,17 +943,17 @@ class _Paths:
         n_points = len(restarting)
         if self._x0 is not None:
             proposed, self._x0 = self._x0, None
+            what = "x0"
         else:
             proposed = self.propose(n_points, self.domain)
+            what = "the global model's restart ask"
+        proposed = jnp.asarray(proposed)
         if proposed.shape != (n_points, d):
-            msg = (
-                f"a restart ask must propose a ({n_points}, {d}) array, "
-                f"got {proposed.shape}"
-            )
+            msg = f"{what} must be a ({n_points}, {d}) array, got {proposed.shape}"
             raise ValueError(msg)
-        x_cand = jnp.clip(proposed, self.domain.lo, self.domain.hi)
+        proposed = _check_inside(proposed, what=what, domain=self.domain)
         return dict(
-            zip(restarting, (Pending(row, None, None) for row in x_cand), strict=True)
+            zip(restarting, (Pending(row, None, None) for row in proposed), strict=True)
         )
 
     def _step_winners(self, stepping: list[int]) -> dict[int, Pending]:
@@ -946,6 +967,13 @@ class _Paths:
         read the point, the value alone when it read it through `serve_trials` -
         and `settle` buys the rest.
 
+        A winner is checked where every other point is: one ``(d,)`` point,
+        finite and inside the run's box, and the answer may name no path this
+        iteration did not ask about. Those are the method's own coordinates, so
+        a miss is a bug in the method and is refused here, with the path named.
+        A *value* that comes back unusable is a different thing: it stalls the
+        path, because a landscape nobody can evaluate is the run's own news.
+
         Nothing is committed here but the stall bit: a path ends this iteration
         stalled exactly when its method named no winner, or when `_place` refuses
         the winner as unusable. A stalled path is never in `stepping`: the engine
@@ -957,12 +985,33 @@ class _Paths:
         answers = self.local_solver.propose(
             stepping, self.domain, self.eval_seams.serve_trials
         )
+        d = self.domain.d
+        asked = set(stepping)
         winners: dict[int, Pending] = {}
         for i, answer in answers.items():
+            if i not in asked:
+                msg = (
+                    f"local_solver answered for path {i}, which this iteration "
+                    f"did not ask to step (asked: {sorted(asked)})"
+                )
+                raise ValueError(msg)
             if answer is None:
                 self.slots[i].is_stalled = True
                 continue
-            winners[i] = answer
+            x = jnp.asarray(answer.x)
+            if x.shape != (d,):
+                msg = (
+                    f"local_solver's step on path {i} must be a ({d},) point, "
+                    f"got shape {x.shape}"
+                )
+                raise ValueError(msg)
+            winners[i] = Pending(
+                _check_inside(
+                    x, what=f"local_solver's step on path {i}", domain=self.domain
+                ),
+                answer.f,
+                answer.g,
+            )
         return winners
 
     def _place(self, points: dict[int, PathPoint], *, restart: bool) -> None:
@@ -1032,40 +1081,34 @@ def _validate_run(
     _check_positive_int(n_paths, "n_paths")
 
 
-def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:
-    """Reject a flock the run cannot place: bad shape, not finite, outside.
+def _check_inside(pts: jnp.ndarray, *, what: str, domain: Domain) -> jnp.ndarray:
+    """Refuse a point, or a batch of them, the run cannot hold: not finite, outside.
 
-    Called once at the entry, where the width, the dimension and the box are all
-    known. Three defects, each one no clip or proposal repairs: not a
-    two-dimensional batch whose width and dimension match this run, a
-    non-finite start, or a start outside the box.
+    The one box test the run has, called at every seam that hands the flock a
+    point - the caller's `x0`, the global model's restart ask, a method's trial
+    batch and its step winners - so all of them answer to one rule and one
+    tolerance. A defective point is refused, never repaired: `x0` says "search
+    this box" and "begin there" at once, and a model or method that answers
+    outside is reporting a bug of its own, so clipping it would hide the
+    contradiction and serve a point its author never computed.
 
-    The third is the one not interchangeable with the engine's clip. An
-    out-of-box start is the caller saying "search this box" and "begin there" at
-    once; clipping it would slide the start onto a wall and hide the
-    contradiction. The clip keeps its own job: proposals the model *generates*
-    may overstep, and clamping those is the defensive clip.
+    ``what`` names the seam in the message ("the global model's restart ask row 2
+    is 7.5 in dimension 1, outside the box [-5, 5]"), which is the whole point:
+    the author of a wrong answer has to be able to find it. A batch also names
+    the row; a single point is already identified by its seam.
 
-    The box test carries a machine-precision tolerance: a start computed at a
+    The box test carries a machine-precision tolerance: a point computed at a
     boundary rounds by a few representable steps, so a coordinate within
     ``16 * eps * max(1, |bound|)`` of a finite side counts as on it, where eps
     comes from the points' dtype (at most float32). Free dimensions never
-    trigger it - an infinite side is compared against itself.
+    trigger it - an infinite side is compared against itself. Without it, an
+    answer that missed a wall by one ulp would be reported as outside, its value
+    printing as the bound itself.
+
+    One host sync decides, and only a violation pays for the diagnosis: NaN
+    compares False against both sides, so finiteness folds into the same mask
+    rather than being tested first.
     """
-    pts = jnp.asarray(x0)
-    d = domain.d
-    if pts.ndim != 2 or pts.shape[1] != d:
-        msg = f"x0 must be a (n_paths, {d}) array, got shape {pts.shape}"
-        raise ValueError(msg)
-    if pts.shape[0] != n_paths:
-        msg = f"x0 holds {pts.shape[0]} starts but n_paths is {n_paths}"
-        raise ValueError(msg)
-    if not _is_all_finite(pts):
-        row, dim = (int(v) for v in jnp.argwhere(~jnp.isfinite(pts))[0])
-        msg = (
-            f"x0 row {row} is {float(pts[row, dim]):.6g} in dimension {dim}, not finite"
-        )
-        raise ValueError(msg)
     lo, hi = domain.lo, domain.hi
     eps = jnp.finfo(jnp.result_type(pts.dtype, lo.dtype, jnp.float32)).eps
     # The tolerance's own scale comes from the finite sides only: taking it from
@@ -1075,20 +1118,42 @@ def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:
         jnp.where(jnp.isfinite(hi), jnp.abs(hi), 0.0),
     )
     tol = 16.0 * eps * jnp.maximum(1.0, span)
-    outside = (pts < lo - tol) | (pts > hi + tol)
-    if bool(jnp.any(outside)):
-        row, dim = (int(v) for v in jnp.argwhere(outside)[0])
-        msg = (
-            f"x0 row {row} is {float(pts[row, dim]):.6g} in dimension {dim}, "
-            f"outside the box [{float(lo[dim]):.6g}, {float(hi[dim]):.6g}]"
-        )
+    bad = ~jnp.isfinite(pts) | (pts < lo - tol) | (pts > hi + tol)
+    if not bool(jnp.any(bad)):
+        return pts
+    idx = tuple(int(v) for v in jnp.argwhere(bad)[0])
+    dim = idx[-1]
+    # A single point has no row to name; a batch does.
+    where = f"{what} row {idx[0]}" if pts.ndim > 1 else what
+    value = float(pts[idx])
+    if not math.isfinite(value):
+        msg = f"{where} is {value:.6g} in dimension {dim}, not finite"
         raise ValueError(msg)
-    return pts
+    msg = (
+        f"{where} is {value:.6g} in dimension {dim}, "
+        f"outside the box [{float(lo[dim]):.6g}, {float(hi[dim]):.6g}]"
+    )
+    raise ValueError(msg)
 
 
-def _is_all_finite(a: jnp.ndarray) -> bool:
-    """Report whether every component of an array is finite (all-or-nothing)."""
-    return bool(jnp.all(jnp.isfinite(a)))
+def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:
+    """Reject a flock the run cannot place: bad shape, or a point off the box.
+
+    Called once at the entry, where the width, the row count and the box are all
+    known, and where the caller's row count can still be named against
+    `n_paths`. The box half is `_check_inside`, the same test every other seam
+    answers to, so a start the caller authored is refused exactly like a start a
+    model drew.
+    """
+    pts = jnp.asarray(x0)
+    d = domain.d
+    if pts.ndim != 2 or pts.shape[1] != d:
+        msg = f"x0 must be a (n_paths, {d}) array, got shape {pts.shape}"
+        raise ValueError(msg)
+    if pts.shape[0] != n_paths:
+        msg = f"x0 holds {pts.shape[0]} starts but n_paths is {n_paths}"
+        raise ValueError(msg)
+    return _check_inside(pts, what="x0", domain=domain)
 
 
 def _argmin_finite(values: list[float]) -> int | None:

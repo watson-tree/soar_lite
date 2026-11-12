@@ -390,10 +390,11 @@ def test_a_run_without_an_extra_gate_reports_max_iters() -> None:
 def test_box_is_data_not_a_unit_cube_assumption() -> None:
     """A foreign box [1,2] plus the caller's own θ = x + 1 map: both are honored.
 
-    The engine must clip inside the box it was handed, and must never see the
+    The engine must keep to the box it was handed, and must never see the
     caller's parameterization (that map is composed into `eval_f_g`). Every trial
-    here lands outside the box - the landscape's minimizer x = 3 is not in it - so
-    the clip is load-bearing, not incidental.
+    here would land outside the box unclipped - the landscape's minimizer x = 3
+    is not in it - so this method clips its own step, and the engine's box test
+    never has to refuse one.
     """
     lo, hi = 1.0, 2.0
     served: list[float] = []
@@ -415,7 +416,8 @@ def test_box_is_data_not_a_unit_cube_assumption() -> None:
     assert served, "nothing was ever served"
     assert min(served) >= lo, min(served)
     assert max(served) <= hi, max(served)
-    # the clip really fired (the raw trial was 3.0) and the best point sits on it
+    # the method clipped its own step (the raw trial was 3.0) and the best point
+    # sits on the wall it clipped to
     assert abs(max(served) - hi) < 1e-12, max(served)
     assert abs(float(res.x[0]) - hi) < 1e-12, res.x
     assert res.status == "max_iters", res

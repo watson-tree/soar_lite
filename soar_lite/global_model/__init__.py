@@ -7,9 +7,8 @@ the engine's `GlobalModel` protocol, which stays in `engine/contracts.py`
 because the engine owns its seams.
 
 `soar_lite/domain.py` - the box these models draw from on every ask -
-deliberately stays outside this package: the engine reads that same
-object for its clip, so the domain is a shared leaf, not a member of the model
-family.
+deliberately stays outside this package: the engine reads that same object for
+its box test, so the domain is a shared leaf, not a member of the family.
 """
 
 from soar_lite.global_model.blr import (

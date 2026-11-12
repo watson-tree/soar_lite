@@ -18,8 +18,8 @@ The three promises this pins, which no whole-run test can see cheaply:
   method read through `serve_trials` only still owes its gradient;
 - an iteration buys its gradients once, covering restart starts and step winners
   in the same batch;
-- the clip is asymmetric: the engine clips a restart start it draws, and hands a
-  step through exactly as the method left it.
+- no seam is clipped: a start or a step that lands off the box is refused by the
+  engine, which names the offending row instead of moving it.
 """
 
 # pyright: reportPrivateUsage=false
@@ -115,7 +115,7 @@ class Script:
         self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
         """Return the script's next entry for each path asked about."""
-        del domain  # the script never clips: it states a candidate, not a box
+        del domain  # the script states a candidate verbatim: the box is not its job
         out: dict[int, Pending | None] = {}
         for i in idxs:
             candidate = self._candidates.pop(0)
@@ -132,11 +132,33 @@ class Script:
         return out
 
 
+class _Stray(Script):
+    """A method that answers for a path this iteration never offered it."""
+
+    def propose(
+        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Pending | None]:
+        """Answer one index past every path asked about."""
+        del domain, serve_trials  # one fixed answer, and no trial to serve
+        return {i + 1: Pending(jnp.asarray([0.5]), None, None) for i in idxs}
+
+
+class _Misfit(Script):
+    """A method that answers with a point of the wrong width."""
+
+    def propose(
+        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Pending | None]:
+        """Answer every path with a two-dimensional point."""
+        del domain, serve_trials
+        return {i: Pending(jnp.zeros(2), None, None) for i in idxs}
+
+
 def model_at(x: jnp.ndarray) -> Callable[[int, Domain], jnp.ndarray]:
     """Return a restart source that proposes one fixed row, `n_points` times."""
 
     def propose(n_points: int, domain: Domain) -> jnp.ndarray:
-        del domain  # the engine clips; this stub only repeats its row
+        del domain  # this stub only repeats its row; the box is the engine's to check
         return jnp.repeat(x[None, :], n_points, axis=0)
 
     return propose
@@ -179,6 +201,7 @@ def paths(  # noqa: PLR0913 - each knob names one axis a test varies
     eval_seams = _EvalSeams(
         eval_f_g,
         eval_f if value_only else None,
+        domain=domain,
         meter=meter,
         best=_Best(domain.d),
         observe=lambda _x, _f, _g: None,
@@ -283,43 +306,78 @@ def test_an_unusable_winner_stalls_without_stepping() -> None:
     assert (meter.work.n_f_g_batches, meter.work.n_f_g_points) == (2, 2)
 
 
-def test_a_restart_start_is_clipped_by_the_engine() -> None:
-    """A start drawn outside the box is placed on the wall, not out of bounds."""
+def test_a_start_off_the_box_is_refused_by_the_engine() -> None:
+    """A model's start outside the box is named, not slid onto the wall."""
     solver = Script([])
     run, _ = paths(solver, restart_at=jnp.asarray([5.0]))
 
-    run.move()
+    with pytest.raises(
+        ValueError,
+        match=r"the global model's restart ask row 0 is 5 in dimension 0, outside",
+    ):
+        run.move()
 
-    assert float(held(run).x[0]) == pytest.approx(1.0)  # the box's upper wall
-    assert float(solver.got[0].x[0]) == pytest.approx(1.0)  # told the clipped one
+    assert run.slots[0].point is None
+    assert solver.got == []  # nothing was placed, so nothing was told
 
 
-def test_a_step_reaches_the_engine_as_the_method_left_it() -> None:
-    """The engine clips only the starts it draws: a step is the method's to clip."""
+def test_a_step_off_the_box_is_refused_rather_than_slid() -> None:
+    """A step is the method's own, and the engine checks it instead of clipping."""
     solver = Script([-5.0])
     run, _, _ = placed(solver)
 
-    run.move()
+    with pytest.raises(
+        ValueError, match=r"local_solver's step on path 0 is -5 in dimension 0, outside"
+    ):
+        run.move()
 
-    # No silent relocation: `domain` is handed to `propose` precisely so the
-    # method decides, and a method that ignores it gets what it asked for.
-    assert float(held(run).x[0]) == pytest.approx(-5.0)
+    # The path keeps the point it held, and the method was told nothing about
+    # the winner it never landed on.
+    assert float(held(run).x[0]) == pytest.approx(0.6)
+    assert solver.got == [held(run)]
 
 
-def test_an_unusable_start_is_refused_rather_than_placed() -> None:
-    """A start the engine cannot use leaves the path with no point and no seed."""
+def test_a_trial_row_off_the_box_is_refused_before_it_is_served() -> None:
+    """A method's own trial grid is checked like any other point the run holds."""
+    solver = Script([5.0], serve=True)
+    run, _, _ = placed(solver)
+
+    with pytest.raises(
+        ValueError, match=r"local_solver's trial batch row 0 is 5 in dimension 0"
+    ):
+        run.move()
+
+    assert solver.served == []  # refused before the batch was paid for
+
+
+def test_an_answer_for_a_path_nobody_asked_about_is_refused() -> None:
+    """The winner map is keyed by path: a stray key is a bug, not an extra move."""
+    run, _, _ = placed(_Stray([]))
+
+    with pytest.raises(ValueError, match=r"answered for path 1, which this iteration"):
+        run.move()
+
+
+def test_a_winner_of_the_wrong_width_is_refused() -> None:
+    """A step is one ``(d,)`` point, so a wider answer is named at the seam."""
+    run, _, _ = placed(_Misfit([]))
+
+    with pytest.raises(ValueError, match=r"must be a \(1,\) point, got shape \(2,\)"):
+        run.move()
+
+
+def test_a_non_finite_start_is_refused_by_the_engine() -> None:
+    """A NaN start is named rather than served and stalled."""
     solver = Script([])
     run, meter = paths(solver, restart_at=jnp.asarray([math.nan]))
 
-    run.move()
+    with pytest.raises(ValueError, match=r"row 0 is nan in dimension 0, not finite"):
+        run.move()
 
-    assert run.slots[0].is_stalled
     assert run.slots[0].point is None
-    # Refused before the method was told anything: it holds no point either.
     assert solver.got == []
-    # The batch was still served and charged - a refusal is about the point, not
-    # about the work the run already paid for.
-    assert (meter.work.n_f_g_batches, meter.work.n_f_g_points) == (1, 1)
+    # Refused before anything was served: the box test is the run's own.
+    assert (meter.work.n_f_g_batches, meter.work.n_f_g_points) == (0, 0)
 
 
 def test_a_flock_with_nothing_left_to_do_ends_the_run() -> None:

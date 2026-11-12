@@ -47,8 +47,9 @@ def flock_kwargs(
     The engine takes its width as `n_paths`, every point a path starts from as
     the entry's `x0`, and the one box the run searches as `domain` - so a test
     that chooses its flock says all three here, and the box it names is the box
-    the run clips into. `key` seeds the default model's restarts, so it is
-    passed on as the entry's own knob rather than through a model.
+    every point the run holds is checked against. `key` seeds the default
+    model's restarts, so it is passed on as the entry's own knob rather than
+    through a model.
     """
     return {
         "n_paths": int(x0.shape[0]),

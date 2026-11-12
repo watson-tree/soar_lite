@@ -139,7 +139,7 @@ class GlobalModel(Protocol):
     A model carries no search space of its own. The run has one box, the engine
     owns it, and `propose` is handed that `Domain` at every ask - so a model must
     not remember one. That is what keeps a fitted geometry and a fallback draw
-    in the same coordinate unit as the clip, with no second box to reconcile.
+    in the same coordinate unit as the box test, with no second box to reconcile.
 
     One instance serves the whole run (like `LocalSolver`), so whatever it
     accumulates lives inside it and the engine never reads it. The methods are
@@ -186,12 +186,12 @@ class GlobalModel(Protocol):
         `n_points` is how many paths restart this iteration - on iteration 0,
         every path when the caller handed no `x0` - and `domain` is the box the
         answer must land in and the one statement of the dimension. The answer
-        is in the coordinates the objective takes. The engine still clips it into
-        that box, as a defensive clip for a model that oversteps, not as a way
-        of reconciling two boxes. It checks the shape at the batch boundary and
-        raises ``ValueError`` on a wrong one. A non-finite row is allowed: it is
-        an unusable start, so the engine stalls that path rather than placing
-        it.
+        is in the coordinates the objective takes. The engine checks the answer
+        at the batch boundary - the shape, then that every row is finite and
+        inside the box - and raises ``ValueError`` naming the row and the dimension
+        on a miss: an answer outside the box is a model disagreeing with the box
+        it was handed, which the engine names rather than repairing. The box test
+        allows the few ulps a start computed on a boundary can round by.
 
         The model owns its randomness (an instance holds its key), which is what
         makes a seeded model reproducible.
@@ -202,8 +202,8 @@ class GlobalModel(Protocol):
 class LocalSolver(Protocol):
     """The search method the n-path engine drives (its first plugin point).
 
-    The engine owns the schedule - batch composition, the clip into `domain`,
-    the shared horizon, the n-path state machine (restart/step/stall), the best
+    The engine owns the schedule - batch composition, the box test, the shared
+    horizon, the n-path state machine (restart/step/stall), the best
     `f⋆`, and the gradient purchase - and the method owns the search: direction,
     step size, acceptance, **and how many points a step looks at**. A step is one
     ``propose`` call, so a method that wants a trial grid or a line search runs
@@ -236,9 +236,10 @@ class LocalSolver(Protocol):
     when the caller supplied no ``eval_f`` seam and the hook served the pair.
 
     ``domain`` is handed to ``propose`` rather than stored, because the solver
-    carries no search space of its own; a start is placed by ``restart``. The
-    method clips its own step into that box - the engine clips only the restart
-    starts it draws, and never silently relocates a step.
+    carries no search space of its own; a start is placed by ``restart``. A step
+    and every trial row must already lie inside that box: the engine checks both
+    and refuses what misses, so clipping is the method's own defence against the
+    roundoff in its own arithmetic, not something the engine does for it.
 
     These methods are called by the engine on its own schedule - `restart` on
     every placement, `propose` once per iteration for the paths that step, `step`
@@ -330,10 +331,14 @@ class LocalSolver(Protocol):
         model, exactly as a fused batch is reported, so a method may call it as
         freely as its enumeration needs. With no ``eval_f`` seam the same call
         serves the fused pair, and the returned `Pending` carries both halves.
+        Every row it is handed must lie inside ``domain``: the engine checks the
+        batch and refuses one that misses, naming the row, so a method enumerates
+        over the box it was handed rather than leaving the hook to repair its
+        grid.
 
-        The winner must already lie inside ``domain``: the method is handed the
-        box and clips into it, because the engine will not. A restart start is
-        the only point that arrives clipped.
+        The winner must already lie inside ``domain`` for the same reason: the
+        method is handed the box, and the engine refuses a step that leaves it
+        instead of sliding it back onto a wall.
         """
         ...
 

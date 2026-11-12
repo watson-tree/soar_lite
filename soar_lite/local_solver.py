@@ -241,9 +241,9 @@ class DiagonalPreconditioner(LocalSolver):
         path's stopping test holds: the engine stalls it where it stands and
         takes no step.
 
-        The proposal is clipped into ``domain`` here rather than by the engine,
-        because a step is the method's own and the engine only clips restart
-        starts up front.
+        The proposal is clipped into ``domain`` here because the engine refuses a
+        step that lands outside the box rather than clipping it: a step is the
+        method's own, so holding it inside the box is the method's own job too.
 
         ``serve_trials`` is the value-only evaluation hook, for a method that
         rules its own trial grid; this one takes a single full step, so it leaves

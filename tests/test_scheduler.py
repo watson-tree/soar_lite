@@ -6,15 +6,16 @@ searches
     eval_f_g(x (M,d)) -> (f_vals (M,), grads_x (M,d), feas (M,)|None)
     eval_f(x (M,d)) -> (f_vals (M,), feas (M,)|None)      # optional
     budget_check(work: Work) -> bool
-    domain -> the run's box as a `Domain`, required: every proposal is clipped
-        into it, and its `d` is the run's dimension
+    domain -> the run's box as a `Domain`, required: every point a seam hands
+        over is checked against it and refused if it misses, and its `d` is the
+        run's dimension
     n_paths -> the run's width, the engine's own structure
     global_model -> the restart-point source and the evidence sink: fed every
         served batch, and asked for points only when a restart fires - handed the
         run's `domain` at each ask rather than carrying one
 
 The caller composes x->θ and the chain rule grad_x = grad_θ * dθ_dx(x) into
-eval_f_g; the engine owns clip-to-domain, and the starts are the model's - and
+eval_f_g; the engine owns the box test, and the starts are the model's - and
 the two plugins are spelled `global_model`, `local_solver`
 in that order wherever the engine names them. Whether a stall is re-drawn is
 the `restart_stalled` knob, not a plugin.
@@ -888,7 +889,7 @@ def test_bounds_spellings_are_the_same_box() -> None:
     """scipy-style pairs and the (d, 2) array run byte-identically.
 
     One key stream, one flock: if the two spellings normalized differently, the
-    clips would land elsewhere and every recorded f would differ. This is also
+    walls would sit elsewhere and every recorded f would differ. This is also
     what pins both spellings to one normalization: the (d, 2) array and the pair
     list are the same box.
     """
@@ -978,8 +979,8 @@ def test_the_domain_is_the_runs_only_authority_on_d() -> None:
     assert res.x.shape == (3,)
 
     # A model whose rows are the wrong width is refused at the ask: the engine
-    # owns the width now, and says so instead of failing inside the clip.
-    with pytest.raises(ValueError, match=r"must propose a \(2, 2\) array"):
+    # owns the width now, and says so instead of failing inside a broadcast.
+    with pytest.raises(ValueError, match=r"must be a \(2, 2\) array"):
         n_path_schedule(
             Recorder(quad),
             n_paths=2,
@@ -990,13 +991,13 @@ def test_the_domain_is_the_runs_only_authority_on_d() -> None:
         )
 
 
-def test_a_model_that_oversteps_is_clipped_into_the_runs_box() -> None:
-    """The run clips every proposal into its own box, model promises aside.
+def test_a_model_that_oversteps_is_refused_into_the_runs_box() -> None:
+    """A model overstepping the box is named, not slid back onto the wall.
 
-    A model states nothing about the space: it proposes, and the engine clips
-    into the `domain` the caller handed the run. Clipping is what makes that
+    A model states nothing about the space: it proposes, and the run holds it to
+    the `domain` the caller handed them both. Refusing is what makes that
     promise mean something for a model that oversteps it - here a proposal of
-    3.0 in a `[0,1]` run never reaches the objective unclipped.
+    3.0 in a `[0,1]` run, which no batch ever serves.
     """
     served: list[float] = []
 
@@ -1004,25 +1005,23 @@ def test_a_model_that_oversteps_is_clipped_into_the_runs_box() -> None:
         served.extend(float(v) for v in x[:, 0])
         return jnp.sum(x**2, axis=-1), 2.0 * x, None
 
-    res = n_path_schedule(
-        eval_f_g,
-        n_paths=2,
-        domain=Domain([(0.0, 1.0)]),
-        global_model=FixedModel(jnp.full((2, 1), 3.0)),  # oversteps the box
-        max_iters=1,
-        local_solver=HalfStep(),
-    )
-    assert served, "nothing was ever served"
-    assert max(served) <= 1.0 + 1e-12, served
-    assert float(res.x[0]) <= 1.0 + 1e-12, res.x
+    with pytest.raises(ValueError, match=r"restart ask row 0 is 3 in dimension 0"):
+        n_path_schedule(
+            eval_f_g,
+            n_paths=2,
+            domain=Domain([(0.0, 1.0)]),
+            global_model=FixedModel(jnp.full((2, 1), 3.0)),  # oversteps the box
+            max_iters=1,
+            local_solver=HalfStep(),
+        )
+    assert served == [], served
 
 
 def test_an_unbounded_box_is_really_unbounded() -> None:
     """Unbounded means unbounded: a minimizer outside [0,1] is reached.
 
-    θ* = 3.0 sits outside that box, so a clipped finite-box run could never
-    serve it; with ∓inf bounds the clip is the identity and the descent is free
-    to land on it.
+    θ* = 3.0 sits outside that box, so a finite-box run could never serve it;
+    with ∓inf bounds every side passes and the descent is free to land on it.
     """
     seen: list[float] = []  # max |x| per served batch
 
