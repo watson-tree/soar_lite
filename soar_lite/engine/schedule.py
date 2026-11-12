@@ -966,16 +966,16 @@ class _Paths:
 
         Otherwise: ask, check, place. The model is handed the box its answers
         must land in and may decline a path, which leaves it out of the returned
-        map: it starts nowhere this iteration, so it stays stalled where it
-        stands (a path holding no point is asked again next iteration). An
-        answer it does give is refused unless it is ``(domain.d,)`` and inside
-        that box, so a model answering with another width, a NaN row, or a point
-        past a wall fails here, naming the path and the dimension, instead of
-        deep inside the iteration that would have served it. Nothing is read, so
-        every start stays the bare `Point` the model handed over - a start has
-        nothing to be compared - and `settle` buys its gradient in the same
-        batch as the step winners, so a restart costs no gradient pass of its
-        own.
+        map: nothing is placed for it this iteration, so it keeps the stall bit
+        it had - a stalled path stays stalled, and a path holding no point is
+        asked again next iteration. An answer it does give is refused unless it
+        is ``(domain.d,)`` and inside that box, so a model answering with
+        another width, a NaN row, or a point past a wall fails here, naming the
+        path and the dimension, instead of deep inside the iteration that would
+        have served it. Nothing is read, so every start stays the bare `Point`
+        the model handed over - a start has nothing to be compared - and
+        `settle` buys its gradient in the same batch as the step winners, so a
+        restart costs no gradient pass of its own.
         """
         if not restarting:
             return {}
@@ -1000,7 +1000,10 @@ class _Paths:
                     f"iteration did not ask to restart (asked: {sorted(asked)})"
                 )
                 raise ValueError(msg)
-            if answer is None:  # the model's own stopping rule: no start
+            if answer is None:
+                # Not a stopping rule: this path starts nowhere this round, so it
+                # places nothing and keeps whatever stall bit it had - a path
+                # holding no point is asked again next iteration.
                 continue
             if answer.x.shape != (d,):
                 msg = (
