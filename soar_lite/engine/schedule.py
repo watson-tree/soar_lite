@@ -653,17 +653,18 @@ class _EvalSeams:
                     f"did not ask to step (asked: {sorted(asked)})"
                 )
                 raise ValueError(msg)
-            x = jnp.asarray(point.x)
-            if x.shape != (d,):
+            if point.x.shape != (d,):
                 msg = (
-                    f"serve_trials was handed a {x.shape} point for path {i}, "
+                    f"serve_trials was handed a {point.x.shape} point for path {i}, "
                     f"expected a ({d},) point"
                 )
                 raise ValueError(msg)
             # a round carries coordinates: a point re-served is a fresh trial
             checked[i] = Point(
                 _check_inside(
-                    x, what=f"local_solver's trial for path {i}", domain=self._domain
+                    point.x,
+                    what=f"local_solver's trial for path {i}",
+                    domain=self._domain,
                 )
             )
         if self._eval_f is not None:
@@ -986,8 +987,8 @@ class _Paths:
         if self._x0 is not None:
             # The flock is one row per path in path order, so it pairs by
             # position; only the model answers per path.
-            proposed, self._x0 = self._x0, None
-            proposed = jnp.asarray(proposed)
+            proposed = self._x0
+            self._x0 = None
             n_points = len(restarting)
             if proposed.shape != (n_points, d):
                 msg = f"x0 must be a ({n_points}, {d}) array, got {proposed.shape}"
@@ -1005,16 +1006,15 @@ class _Paths:
                 raise ValueError(msg)
             if answer is None:  # the model's own stopping rule: no start
                 continue
-            x = jnp.asarray(answer)
-            if x.shape != (d,):
+            if answer.shape != (d,):
                 msg = (
                     f"the global model's start for path {i} must be a ({d},) "
-                    f"point, got shape {x.shape}"
+                    f"point, got shape {answer.shape}"
                 )
                 raise ValueError(msg)
             starts[i] = Point(
                 _check_inside(
-                    x,
+                    answer,
                     what=f"the global model's start for path {i}",
                     domain=self.domain,
                 )
@@ -1065,15 +1065,14 @@ class _Paths:
             if answer is None:
                 self.slots[i].is_stalled = True
                 continue
-            x = jnp.asarray(answer.x)
-            if x.shape != (d,):
+            if answer.x.shape != (d,):
                 msg = (
                     f"local_solver's step on path {i} must be a ({d},) point, "
-                    f"got shape {x.shape}"
+                    f"got shape {answer.x.shape}"
                 )
                 raise ValueError(msg)
             x = _check_inside(
-                jnp.asarray(answer.x),
+                answer.x,
                 what=f"local_solver's step on path {i}",
                 domain=self.domain,
             )
@@ -1225,15 +1224,14 @@ def _check_x0(x0: jnp.ndarray, n_paths: int, domain: Domain) -> jnp.ndarray:
     answers to, so a start the caller authored is refused exactly like a start a
     model drew.
     """
-    pts = jnp.asarray(x0)
     d = domain.d
-    if pts.ndim != 2 or pts.shape[1] != d:
-        msg = f"x0 must be a (n_paths, {d}) array, got shape {pts.shape}"
+    if x0.ndim != 2 or x0.shape[1] != d:
+        msg = f"x0 must be a (n_paths, {d}) array, got shape {x0.shape}"
         raise ValueError(msg)
-    if pts.shape[0] != n_paths:
-        msg = f"x0 holds {pts.shape[0]} starts but n_paths is {n_paths}"
+    if x0.shape[0] != n_paths:
+        msg = f"x0 holds {x0.shape[0]} starts but n_paths is {n_paths}"
         raise ValueError(msg)
-    return _check_inside(pts, what="x0", domain=domain)
+    return _check_inside(x0, what="x0", domain=domain)
 
 
 def _argmin_finite(values: list[float]) -> int | None:

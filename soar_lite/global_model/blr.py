@@ -266,14 +266,13 @@ class BLRGlobalModel(GlobalModel):
             if answer is None:  # the minimizer's own "could not place it"
                 starts[i] = None
                 continue
-            x = jnp.asarray(answer)
-            if x.shape != (domain.d,):
+            if answer.shape != (domain.d,):
                 msg = (
                     f"minimize's start for path {i} must be a ({domain.d},) "
-                    f"point, got shape {x.shape}"
+                    f"point, got shape {answer.shape}"
                 )
                 raise ValueError(msg)
-            starts[i] = x
+            starts[i] = answer
         return starts
 
     def _predict(
@@ -299,7 +298,7 @@ class BLRGlobalModel(GlobalModel):
         if not self._can_fit():
             msg = "a posterior read needs a spread to standardize by"
             raise ValueError(msg)
-        batch = jnp.asarray(x)
+        batch = x
         width = self._xs[0].shape[-1]
         if batch.ndim != 2 or batch.shape[1] != width:
             msg = f"a posterior read needs a (M, {width}) batch, got {batch.shape}"
