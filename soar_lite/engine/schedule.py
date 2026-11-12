@@ -15,6 +15,7 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -616,41 +617,66 @@ class _EvalSeams:
         self._best = best
         self._observe = observe
 
-    def serve_trials(self, x_batch: jnp.ndarray) -> list[ValuePoint]:
-        """Serve one step's trial batch, as one produced point per row.
+    def serve_trials(
+        self, points: dict[int, jnp.ndarray], *, paths: list[int]
+    ) -> dict[int, ValuePoint]:
+        """Serve one round of a step's trials: one point per path, one value back.
 
-        The batch is a method's own candidate grid, so it is checked like every
-        other point the run holds: a row that is not finite or lies outside the
-        box is refused, naming the row, before anything is served. A method that
-        rules its trials over a box serves trials from inside it.
+        The paths are the step's own cohort, bound by `_step_winners` before the
+        method sees the hook: a round naming any other path is a bug in the
+        method, refused here rather than served as work nobody asked for. Each
+        point is checked like every other point the run holds - a ``(d,)`` point
+        inside the box - and refused naming the path, before anything is served:
+        a method that rules its trials over a box serves trials from inside it.
+
+        One round is one batch, so a method that looks at its points one at a
+        time costs one batch per round and holds one round in memory, whatever
+        the round's width: multiplicity lives in the number of calls.
 
         A trial's gradient is only wanted for the step's winner, so with the
-        value-only seam each trial is served for its value alone and the winners are
-        settled once, together (`settle`). Without it a fused pass is the
+        value-only seam each trial is served for its value alone and the winners
+        are settled once, together (`settle`). Without it a fused pass is the
         only way to a value, so every trial is served as a `PathPoint` whether
         or not the method's own enumeration keeps the gradient, and `settle`
         then buys nothing.
         """
-        x_batch = jnp.asarray(x_batch)
-        if x_batch.ndim != 2 or x_batch.shape[1] != self._domain.d:
-            msg = (
-                f"a trial batch must be a (n, {self._domain.d}) array, "
-                f"got shape {x_batch.shape}"
+        if not points:
+            return {}
+        asked = set(paths)
+        d = self._domain.d
+        keys = list(points)
+        rows = []
+        for i in keys:
+            if i not in asked:
+                msg = (
+                    f"serve_trials was handed path {i}, which this iteration "
+                    f"did not ask to step (asked: {sorted(asked)})"
+                )
+                raise ValueError(msg)
+            x = jnp.asarray(points[i])
+            if x.shape != (d,):
+                msg = (
+                    f"serve_trials was handed a {x.shape} point for path {i}, "
+                    f"expected a ({d},) point"
+                )
+                raise ValueError(msg)
+            rows.append(
+                _check_inside(
+                    x, what=f"local_solver's trial for path {i}", domain=self._domain
+                )
             )
-            raise ValueError(msg)
-        x_batch = _check_inside(
-            x_batch, what="local_solver's trial batch", domain=self._domain
-        )
+        x_batch = jnp.stack(rows)
         if self._eval_f is not None:
-            return [
-                ValuePoint(row, f)
-                for row, f in zip(x_batch, self._serve_f(x_batch), strict=True)
-            ]
+            f_vals = self._serve_f(x_batch)
+            return {
+                i: ValuePoint(x_batch[pos], f)
+                for pos, (i, f) in enumerate(zip(keys, f_vals, strict=True))
+            }
         f_vals, g_batch = self._serve_f_g(x_batch)
-        return [
-            PathPoint(x_batch[pos], f_vals[pos], g_batch[pos])
-            for pos in range(len(f_vals))
-        ]
+        return {
+            i: PathPoint(x_batch[pos], f_vals[pos], g_batch[pos])
+            for pos, i in enumerate(keys)
+        }
 
     def settle(self, decided: dict[int, Point]) -> dict[int, PathPoint]:
         """Buy whatever gradient the iteration's points still owe, in one batch.
@@ -1028,7 +1054,9 @@ class _Paths:
             # Every path restarted this iteration: nothing steps.
             return {}
         answers = self.local_solver.propose(
-            stepping, self.domain, self.eval_seams.serve_trials
+            stepping,
+            self.domain,
+            partial(self.eval_seams.serve_trials, paths=stepping),
         )
         d = self.domain.d
         asked = set(stepping)

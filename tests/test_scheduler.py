@@ -160,10 +160,10 @@ class HalfStep:
             domain.lo,
             domain.hi,
         )
-        rows = serve_trials(trial)
+        served = serve_trials(dict(zip(paths, trial, strict=True)))
         return {
-            i: (row if row.f < p.f else None)
-            for i, row, p in zip(paths, rows, held, strict=True)
+            i: (served[i] if served[i].f < p.f else None)
+            for i, p in zip(paths, held, strict=True)
         }
 
 
@@ -790,10 +790,13 @@ def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
     step into a stall that only a restart could undo - a stopping rule the method
     never asked for.
 
-    The counts are what the value/gradient split buys. The 31 trials are one
-    value-only batch and owe no gradient at all; the winner's gradient is bought
+    The counts are what the value/gradient split buys. The 31 trials are
+    value-only rounds and owe no gradient at all; the winner's gradient is bought
     once, afterwards, beside the iteration's other deferred work - so a long
-    enumeration costs a long enumeration's values and exactly one gradient.
+    enumeration costs a long enumeration's values and exactly one gradient. A
+    round is one point per path, so the errand is 31 rounds of one row rather
+    than one batch of 31: long enumerations cost more batches, never more
+    memory, and one path's search never scales its round with the cohort.
     """
     n_uphill = 30
 
@@ -815,15 +818,18 @@ def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
         def propose(
             self, paths: list[int], domain: Domain, serve_trials: ServeTrials
         ) -> dict[int, Point | None]:
-            """Read the whole errand in one batch and name the winner."""
+            """Read the whole errand one round at a time and name the winner."""
             out: dict[int, Point | None] = {}
             for i in paths:  # one path in this run: the count stays exact
                 p = self.points[i]
                 errand = [p.x + (k + 1) * 0.1 * p.g for k in range(n_uphill)]
                 errand.append(p.x - p.g)
-                batch = jnp.stack([jnp.clip(x, domain.lo, domain.hi) for x in errand])
-                rows = serve_trials(batch)
-                out[i] = next(r for r in rows if r.f < p.f)
+                for candidate in errand:
+                    inside = jnp.clip(candidate, domain.lo, domain.hi)
+                    read = serve_trials({i: inside})[i]
+                    if read.f < p.f:
+                        out[i] = read
+                        break
             return out
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -837,9 +843,10 @@ def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
         max_iters=2,  # iteration 0 places x0, then this one step
         local_solver=Patient(),
     )
-    # The whole errand reached the seam once, as one batch of 31 points...
-    assert rec.f_only_shapes == [(n_uphill + 1, 1)], rec.f_only_shapes
+    # The whole errand reached the seam, one row at a time...
+    assert rec.f_only_shapes == [(1, 1)] * (n_uphill + 1), rec.f_only_shapes
     assert res.n_f_points == n_uphill + 1, res.n_f_points
+    assert res.n_f_batches == n_uphill + 1, res.n_f_batches
     # ...and cost no gradient: the start and the winner are the only fused points.
     assert res.n_f_g_points == 2, res.n_f_g_points
     assert rec.batch_shapes == [(1, 1), (1, 1)], rec.batch_shapes

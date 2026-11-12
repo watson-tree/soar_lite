@@ -105,11 +105,8 @@ class StubSolver:
     ) -> dict[int, Point | None]:
         """Serve one trial per path, then name the winners (or none of them)."""
         self.trials.extend(paths)
-        rows = serve_trials(self._trial(paths, domain))
-        return {
-            i: (None if self.give_up else row)
-            for i, row in zip(paths, rows, strict=True)
-        }
+        served = serve_trials(dict(zip(paths, self._trial(paths, domain), strict=True)))
+        return {i: (None if self.give_up else served[i]) for i in paths}
 
 
 class UnjudgedSolver(StubSolver):
@@ -149,7 +146,7 @@ class RetryingSolver(StubSolver):
             row: ValuePoint | None = None
             for _attempt in range(self.retries + 1):
                 self.trials.append(i)
-                (row,) = serve_trials(self._trial([i], domain))
+                row = serve_trials({i: self._trial([i], domain)[0]})[i]
             out[i] = row
         return out
 

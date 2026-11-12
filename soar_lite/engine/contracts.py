@@ -98,16 +98,23 @@ class PathPoint(ValuePoint):
         return math.isfinite(self.f) and bool(jnp.all(jnp.isfinite(self.g)))
 
 
-ServeTrials: TypeAlias = Callable[[jnp.ndarray], list[ValuePoint]]
-"""The trial hook a step is handed: a batch of points in, one point per row.
+ServeTrials: TypeAlias = Callable[[dict[int, jnp.ndarray]], dict[int, ValuePoint]]
+"""The trial hook a step is handed: one point per path in, one read point back.
 
-What each row carries follows the run's seams - the value alone when ``eval_f``
-is connected, both halves when it is not - so a row is a `ValuePoint`, and a
-`PathPoint` on the fused seam. It is what `LocalSolver.propose` receives in
-place of the caller's own function. The batch is ``(M, d)`` rows and the list
-comes back in that row order, though nothing has to rely on it: each row
-carries its own ``x``, so a winner is paired with its trial by the point rather
-than by an index the method kept.
+Each call is one round over the paths it names - ``path -> (d,) coordinate`` in,
+the same paths out with their values - and a method calls it as many times as
+its enumeration needs: one round, ten rounds, or none. One point per path per
+call rather than a batch of many is what keeps a round's memory at
+``n_paths * d`` however long the enumeration runs; multiplicity lives in the
+number of calls, so a line search that returns the best of its rounds holds one
+round at a time and the run's peak never grows with how far a method looks.
+
+What each answer carries follows the run's seams - the value alone when
+``eval_f`` is connected, both halves when it is not - so an answer is a
+`ValuePoint`, and a `PathPoint` on the fused seam. It is what
+`LocalSolver.propose` receives in place of the caller's own function. Keys are
+paths the step was asked about: the engine refuses a round naming any other,
+and refuses a point outside the box, naming the path.
 """
 
 
@@ -313,7 +320,7 @@ class LocalSolver(Protocol):
         """Answer one step for each path in ``paths``: its winner, or ``None``.
 
         One call covers every path that steps this iteration, so a method that
-        wants a trial grid proposes the cohort's samples in one batch
+        wants a trial grid proposes the cohort's samples in one round
         rather than once per path. The answer is keyed by the paths asked, and
         ``None`` means the method declines to name a winner: its stopping test
         holds, or the trials it read left it nothing usable to pick. Either way
@@ -328,14 +335,15 @@ class LocalSolver(Protocol):
         the path stalls and ``step`` is never called.
 
         ``serve_trials`` is the run's trial hook. Every call
-        serves one batch and reports it to the run's best and to the global
+        serves one round and reports it to the run's best and to the global
         model, exactly as a fused batch is reported, so a method may call it as
-        freely as its enumeration needs. With no ``eval_f`` seam the same call
-        serves the fused pair, and the returned point is a `PathPoint`.
-        Every row it is handed must lie inside ``domain``: the engine checks the
-        batch and refuses one that misses, naming the row, so a method enumerates
-        over the box it was handed rather than leaving the hook to repair its
-        grid.
+        freely as its enumeration needs - a round is one point per path, so a
+        long enumeration costs more rounds, never more memory. With no ``eval_f``
+        seam the same call serves the fused pair, and the answers are
+        `PathPoint`s. Every point it is handed must lie inside ``domain``: the
+        engine checks the round and refuses one that misses, naming the path, so
+        a method enumerates over the box it was handed rather than leaving the
+        hook to repair its grid.
 
         The winner must already lie inside ``domain`` for the same reason: the
         method is handed the box, and the engine refuses a step that leaves it

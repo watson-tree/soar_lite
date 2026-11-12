@@ -35,7 +35,13 @@ import jax.numpy as jnp
 import pytest
 
 from soar_lite.domain import Domain
-from soar_lite.engine import PathPoint, Point, ServeTrials, pointwise
+from soar_lite.engine import (
+    PathPoint,
+    Point,
+    ServeTrials,
+    ValuePoint,
+    pointwise,
+)
 from soar_lite.engine.schedule import (
     _AllStalled,
     _Best,
@@ -122,7 +128,7 @@ class Script:
                 continue
             x = jnp.asarray([candidate])
             if self._serve:
-                (read,) = serve_trials(x[None, :])
+                read = serve_trials({i: x})[i]
                 self.served.append(read.f)
                 out[i] = read
             else:
@@ -343,7 +349,7 @@ def test_a_trial_row_off_the_box_is_refused_before_it_is_served() -> None:
     run, _, _ = placed(solver)
 
     with pytest.raises(
-        ValueError, match=r"local_solver's trial batch row 0 is 5 in dimension 0"
+        ValueError, match=r"local_solver's trial for path 0 is 5 in dimension 0"
     ):
         run.move()
 
@@ -355,6 +361,103 @@ def test_an_answer_for_a_path_nobody_asked_about_is_refused() -> None:
     run, _, _ = placed(_Stray([]))
 
     with pytest.raises(ValueError, match=r"answered for path 1, which this iteration"):
+        run.move()
+
+
+class _StrayTrial(Script):
+    """A method whose trial round names a path this iteration never asked about."""
+
+    def propose(
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Point | None]:
+        """Serve a trial for one path past the cohort, then decline."""
+        del domain  # the stray path is the point of the test, not the box
+        serve_trials({paths[0] + 1: jnp.asarray([0.5])})
+        return dict.fromkeys(paths, None)
+
+
+class _Rounder(LocalSolver):
+    """A method that reads a fixed number of trial rounds, one point per path.
+
+    Each round serves every path it was asked about at the point that path
+    stands at, so the engine has to pair each answer with its path rather than
+    with a row position, and a test can count the rounds from the meter.
+    """
+
+    def __init__(self, rounds: int) -> None:
+        """Store how many rounds one step reads, and start with nothing held."""
+        self._rounds = rounds
+        self.held: dict[int, PathPoint] = {}
+        self.n_served: list[int] = []
+
+    def restart(self, points: dict[int, PathPoint]) -> None:
+        """Keep the starts the engine placed."""
+        self.held.update(points)
+
+    def step(self, points: dict[int, PathPoint]) -> None:
+        """Keep the points the engine committed."""
+        self.held.update(points)
+
+    def propose(
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Point | None]:
+        """Read its rounds, then name each path's own point as its winner."""
+        del domain  # every round serves points the engine already checked
+        served: dict[int, ValuePoint] = {}
+        for _round in range(self._rounds):
+            served = serve_trials({i: self.held[i].x for i in paths})
+            self.n_served.append(len(served))
+        return dict(served)
+
+
+def test_a_trial_round_off_the_cohort_is_refused() -> None:
+    """A round is keyed by the paths stepping: a stray key is a bug its own way."""
+    run, _, _ = placed(_StrayTrial([]))
+
+    with pytest.raises(
+        ValueError, match=r"serve_trials was handed path 1, which this iteration"
+    ):
+        run.move()
+
+
+def test_a_trial_round_is_one_point_per_path() -> None:
+    """Rounds, not batches: each call carries one point per path, and is priced so.
+
+    A method that enumerates reads one round at a time, so the run's peak is one
+    point per path however long the enumeration runs, and the meter counts one
+    batch per round. The paths keep their answers by key, not by row order.
+    """
+    solver = _Rounder(3)
+    run, meter = paths(solver, x0=jnp.asarray([[0.2], [0.4]]))
+    run.move()  # iteration 0 places the flock
+    run.move()  # this one steps both paths, reading three rounds
+
+    assert solver.n_served == [2, 2, 2], solver.n_served
+    assert meter.work.n_f_batches == 3, meter.work
+    assert meter.work.n_f_points == 6, meter.work
+    assert float(held(run, 0).x[0]) == pytest.approx(0.2)
+    assert float(held(run, 1).x[0]) == pytest.approx(0.4)
+
+
+class _WideTrial(Script):
+    """A method that serves a trial point of the wrong width."""
+
+    def propose(
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+    ) -> dict[int, Point | None]:
+        """Serve a two-dimensional trial for the first path, then decline."""
+        del domain  # the width is the point of the test, not the box
+        serve_trials({paths[0]: jnp.zeros(2)})
+        return dict.fromkeys(paths, None)
+
+
+def test_a_trial_point_of_the_wrong_width_is_refused() -> None:
+    """A round's points are checked one by one, and the path is named."""
+    run, _, _ = placed(_WideTrial([]))
+
+    with pytest.raises(
+        ValueError, match=r"was handed a \(2,\) point for path 0, expected a \(1,\)"
+    ):
         run.move()
 
 
