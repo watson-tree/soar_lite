@@ -9,7 +9,8 @@ The terms below recur throughout:
 - **path** — one descent: one current point plus its solver state.
 - **flock** — the `n_paths` current points taken together as the run's state at
   one moment, one point per path.
-- **batch** — the `(M, d)` points one call serves; a **point** is one row of it.
+- **batch** — the `(M, d)` points one call serves; a **point** is one row of it,
+  and a **round** is the trial hook's own batch: one point per path.
 - **warm-up** / **steady state** — a path's first step (no secant pair yet) and
   every step after one exists.
 
@@ -221,8 +222,8 @@ whole price of the step; the value is recorded, and no step decision reads it.
 Its `propose` serves no trial and names its proposal as the winner.
 
 A method that does want to compare takes the same seam further and pays for it
-itself: it calls `serve_trials` for as many candidates as its own rule needs, per
-step, and names the one that won (see
+itself: it calls `serve_trials` once per candidate it looks at, for as many
+candidates as its own rule needs, and names the one that won (see
 [the step channel](#the-step-channel-trials-a-winner-or-no-winner)). A step
 length that shrinks across those candidates is the method's own state, re-armed
 at `alpha0` when the step commits — so a step never inherits the previous one's
@@ -435,7 +436,7 @@ by a degenerate point.
 
 An iteration first puts the paths in path-index order, then serves its batches in
 that order — a fused `settle` batch when anything is still owed (step 5),
-preceded by whatever trial batches its steps serve out of `serve_trials` (see
+preceded by whatever trial rounds its steps serve out of `serve_trials` (see
 Cost):
 
 1. **Redraw set**: paths that hold no point — iteration 0's whole flock, always,
@@ -473,7 +474,7 @@ The redraw set and the cohort are disjoint, so "decide everything, then buy
 together" and "decide one at a time, then buy" are the same schedule.
 
 Every batch the run spends goes through `global_model.observe` on the way back
-— the trial batches and the `settle` batch alike, in the order they are served —
+— the trial rounds and the `settle` batch alike, in the order they are served —
 because the model is the run's evidence sink. It sees a batch before the run
 decides anything on it, and it sees the batches the run never decides on too (a
 trial that lost its step, the batch that ended an unbounded run), because the
@@ -513,14 +514,18 @@ give an already-decided step a second, invisible stopping rule — so a method
 whose enumeration never terminates blocks the process rather than running
 slowly.
 
-`serve_trials` takes the batch of candidate points and returns one `ValuePoint`
-per row. When `eval_f` is connected a trial costs its value alone; when it is
-not, the same call serves the fused pair and each row comes back a `PathPoint`,
-so the same step code costs `m` value-only batches on one seam and `m` fused ones
-on the other (see [Cost](#cost-two-evaluation-seams-two-rulers)). A trial is served
-for its value, not its fate: every call is reported to the run's best and to the
-global model before the method decides anything, including the trials it goes on
-to reject.
+`serve_trials` is read one round at a time: one `(d,)` point per path of the
+cohort in, the same paths out with their values, and one round is one batch. That
+shape fixes the price and the memory together: a method that enumerates its
+candidates reads them as successive rounds, so a step that looks at `m`
+candidates spends `m` batches and holds one point per path at a time however far
+it looks, instead of a batch that grows with `m`. When `eval_f` is connected a
+trial costs its value alone; when it is not, the same call serves the fused pair
+and each path comes back a `PathPoint`, so the same step code costs `m` value-only
+rounds on one seam and `m` fused ones on the other (see
+[Cost](#cost-two-evaluation-seams-two-rulers)). A trial is served for its value,
+not its fate: every round is reported to the run's best and to the global model
+before the method decides anything, including the trials it goes on to reject.
 
 For a start to be usable in the optimization, **both halves must be finite**: a
 start with finite `f` but a non-finite gradient would look usable on the value
@@ -557,7 +562,7 @@ whatever trials its own rule needs and names the winner, so a step that compares
 six candidates and one that compares none are the same call from where the
 engine stands. What the engine owns is the **price**: it batches whatever
 gradients the iteration still owes into one fused pass, applies the finite gate,
-and moves no point a method placed — a step or a trial row outside the box is
+and moves no point a method placed — a step or a trial point outside the box is
 refused, not clipped. The method learns the landing
 point only through `step(points)`, with each point the one the engine committed, and
 keeps no second copy of what the engine bought.
@@ -626,7 +631,7 @@ the iteration that places the flock). `max_iters=0` stops at the first loop-head
 ask, before that placement, so nothing is placed and `n_iters` stays 0. It is a
 deterministic stop, not a cost proxy:
 how many batches an iteration serves is decided by the method and the evaluation
-seam, from the batch that redraws starts to the method's trial batches.
+seam, from the batch that redraws starts to the method's trial rounds.
 `time_limit` is the wall-clock version of the same thing, for callers who cannot
 say how expensive an iteration is. At least one of them must be given, or the entry
 raises `ValueError`.
@@ -716,14 +721,14 @@ evaluation seam**:
 - **With `eval_f` connected**: each trial a step reads serves `f` only, and the
   iteration's one fused batch (`settle`) buys everything still owed — each read
   winner's gradient, and both halves of every unread winner and redraw start. A
-  step that reads `m` trials therefore spends `m` value-only batches plus the
-  iteration's one fused batch, whatever `m` is: reading more candidates costs
-  serial work, never another gradient pass.
+  step that reads `m` trials per path therefore spends `m` value-only rounds
+  plus the iteration's one fused batch, whatever `m` is: reading more candidates
+  costs serial work, never another gradient pass.
 - **Without `eval_f`**: the fused pass is the only way to read a value, so
   **each trial is itself a fused batch** — its value and gradient arrive
   together, and `settle` has nothing left to buy for it. An unread winner and a
   redraw start still go through `settle`, since both owe both halves. The same
-  step that cost `m` value-only batches costs `m` fused batches here, and
+  step that cost `m` value-only rounds costs `m` fused rounds here, and
   nothing is served for value alone: the `f` pair stays at zero.
 
 Both rulers must be reported: on the serial axis a flock of `n_paths` paths

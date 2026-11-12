@@ -25,8 +25,9 @@ there, with the gradient once it has been bought; the point a path commits -
 coordinates, value and gradient - is a `PathPoint`. A **batch** is the `(M, d)`
 points one call serves. A **fused pass** is one call
 that returns value and gradient together. A **trial** is one point a step looks
-at, served through `serve_trials`: when `eval_f` is connected a trial costs its
-value alone, and without it every trial is itself a fused pass. A **step** is
+at, served through `serve_trials`; one **round** of that hook is one trial per
+path in the cohort and one batch. When `eval_f` is connected a trial costs its
+value alone, and without it each round is itself a fused pass. A **step** is
 one `LocalSolver.propose` call for one cohort: the method reads as many trials
 as it wants and returns a **winner** per path, or `None` to stop that path where
 it stands. A winner that was read travels as a `ValuePoint` with its gradient still

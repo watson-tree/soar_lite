@@ -16,9 +16,13 @@ off `flock_x`.
 but it never descends that acquisition itself: how to descend it is the engine's
 business, so the model receives it as an injected `minimize` — the parameter's
 name, typed `MinimizeFn`, with signature
-`(acquisition, domain, n_points, key) -> (n_points, d)`. The domain is the one
-the outer run's `propose` call carried, not a box re-derived from it, so the
-`scale` and samplers you declared reach the inner run's own draws. The acquisition is
+`(acquisition, domain, paths, key) -> {path: (d,) point or None}`. The answer is
+keyed by the paths the model was asked about, so an inner run pairs its
+minimizers with the paths they belong to and says `None` for a path it could not
+place — that path's restart is simply declined, not filled in with a coordinate.
+The domain is the one the outer run's `propose` call carried, not a box
+re-derived from it, so the `scale` and samplers you declared reach the inner
+run's own draws. The acquisition is
 `(M, d) -> ((M,), (M, d))` (value and gradient, no feasibility column) and `key`
 is a fresh subkey of the model's own key, split for this call alone.
 
@@ -46,7 +50,7 @@ from soar_lite import (
 INNER_ITERS = 40  # long enough to settle; shorter than the outer's horizon
 
 
-def surrogate_minimize(acquisition, domain, n_points, key):
+def surrogate_minimize(acquisition, domain, paths, key):
     """Descend an acquisition with one restart-free n-path run."""
 
     # the acquisition is two slots; the seam wants three, the last one None
@@ -57,17 +61,20 @@ def surrogate_minimize(acquisition, domain, n_points, key):
     result = n_path_schedule(
         fused_seam,
         domain=domain,
-        n_paths=n_points,  # one path per minimizer: one batch, not n runs
+        n_paths=len(paths),  # one path per minimizer: one batch, not n runs
         max_iters=INNER_ITERS,
         restart_stalled=False,  # a pure descent, no restarting inside it
         key=key,
     )
-    # one row per path, and every row has to be a finite point inside the box: a
-    # path the inner run could not place carries an all-nan point, which the outer
-    # run refuses rather than stalls on, so it falls back to a fresh draw
+    # one answer per named path, and every answer has to be a finite point inside
+    # the box: a path the inner run never placed is declined here rather than
+    # filled in with a coordinate the acquisition was never asked about
     placed = result.flock_x
-    ok = jnp.all(jnp.isfinite(placed), axis=1)[:, None]
-    return jnp.where(ok, placed, domain.draw(key, n_points))
+    usable = jnp.all(jnp.isfinite(placed), axis=1)
+    return {
+        i: (row if bool(ok) else None)
+        for i, row, ok in zip(paths, placed, usable, strict=True)
+    }
 
 
 global_model = BLRGlobalModel(
@@ -96,20 +103,21 @@ time. Five things keep it honest:
   acquisition's local minimum from each start. Restarts would replace this job
   with random wandering, so they are off: a path that settles is parked for good
   and never moves again.
-- **`n_paths = n_points`, not a loop.** The acquisition is batched, so one run
-  of width `n_points` serves the whole cohort one row per path. Looping
-  `n_paths=1` runs would buy the same points with `n_points` times the batches
+- **`n_paths = len(paths)`, not a loop.** The acquisition is batched, so one run
+  of width `len(paths)` serves the whole cohort one row per path. Looping
+  `n_paths=1` runs would buy the same points with `n_paths` times the batches
   — the serial shape of a job the GPU wants wide.
 - **The outer run's first ask draws, not descends.** With no `x0`, iteration 0
   asks for the flock's placement and `propose` has nothing to fit, so it answers
   with the domain's own draw, never calling `minimize`. Any later ask also draws
   until `observe` has given the posterior a spread to standardize by.
-- **Every returned row must be a finite point inside the box.** An inner path
-  can end holding no point at all - the acquisition was not finite at its
-  start, and every row of a run that does zero iterations (`max_iters=0`) is
-  one - and an unplaced path carries an all-`nan` point. The outer run refuses
-  such a row instead of stalling on it, so the driver fills it: here the
-  domain's own draw does, in one `jnp.where`.
+- **Every returned answer must be a finite point inside the box.** An inner path
+  can end holding no point at all — the acquisition was not finite at its start,
+  and every row of a run that does zero iterations (`max_iters=0`) is one — and
+  an unplaced path carries an all-`nan` row. That is the one answer to translate
+  rather than pass on: answer `None` for it, so the outer run leaves that path
+  where it stands instead of restarting it from a draw the acquisition never
+  ranked.
 - **The acquisition has no feasibility mask (`feas=None`).** It is finite
   everywhere, so the fused seam's third slot is `None`.
 

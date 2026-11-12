@@ -116,9 +116,9 @@ _Avoid_: initializer, prior (as a name for the *callable*)
 
 **batch**:
 The `(M, d)` points served by one pass — fused (`eval_f_g`) or value-only
-(`eval_f`). The engine composes each batch from either the next candidates a step serves
-through `serve_trials`, or the settle set — the redraw starts and the winners
-still owing a half.
+(`eval_f`). The engine composes each batch from either one trial round — one
+point per path a step is considering — or the settle set: the redraw starts and
+the winners still owing a half.
 _Avoid_: group, lot, chunk
 
 **point**:
@@ -198,16 +198,23 @@ is never called for a winner the engine refused (not usable) or for a path whose
 stopping test held.
 _Avoid_: update, move; accept, commit (as names for this handoff)
 
+**round**:
+One `serve_trials` call: one point per path of the cohort, served and reported as
+one batch. It is the unit of both price and memory — a method that enumerates
+reads its candidates as successive rounds, so however far it looks it holds one
+point per path at a time and pays one batch per look. The method sets how many
+rounds a step reads; the engine sets the width of each.
+_Avoid_: trial (that is one point inside a round)
+
 **trial**:
-One served proposal within a step — one row of a batch the method reads through
-`serve_trials`. What a trial carries is the seam's business: with `eval_f`
-connected it is the coords and value alone — the winner's gradient is bought
-later (see *settle*), so a method that needs a gradient to rule needs the fused
-seam — and without `eval_f` the same call serves the fused pair, gradient
+One served proposal within a step — this path's point on one round the method
+reads through `serve_trials`. What a trial carries is the seam's business: with
+`eval_f` connected it is the coords and value alone — the winner's gradient is
+bought later (see *settle*), so a method that needs a gradient to rule needs the
+fused seam — and without `eval_f` the same round serves the fused pair, gradient
 included. There is no engine-side cap: the method's own stopping test (or its
-own trial budget) ends the enumeration, one batch per `serve_trials` call. A
-step that reads no trial — a single full proposal, like the shipped method's —
-serves none at all.
+own trial budget) ends the enumeration, one batch per round. A step that reads no
+trial — a single full proposal, like the shipped method's — serves none at all.
 _Avoid_: line-search round (retired)
 
 **secant pair**:
@@ -269,7 +276,7 @@ _Avoid_: restart check, reset decision
 **horizon (`max_iters`)**:
 The engine's own stop, counted in iterations: every completed iteration costs
 one, and iteration 0 places the flock. A deterministic bound, not a cost
-proxy — one iteration serves however many trial batches the method's own search
+proxy — one iteration serves however many trial rounds the method's own search
 reads, plus the one settle batch that buys what it kept still owing, while a
 flock with nothing left to do stops the run
 (`all_stalled`) instead of billing a batchless iteration — so the four counters
