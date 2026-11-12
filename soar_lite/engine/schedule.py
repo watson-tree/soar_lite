@@ -708,7 +708,7 @@ class _EvalSeams:
             points: One point per path, in the order to serve them in.
 
         Returns:
-            One `PathPoint` per path, keyed and in the order they were served.
+            One `PathPoint` per path, keyed by path.
 
         Raises:
             _BatchRefused: When the gate refuses the batch.
@@ -742,7 +742,7 @@ class _EvalSeams:
             points: One point per path, in the order to serve them in.
 
         Returns:
-            One `ValuePoint` per path, keyed and in the order they were served.
+            One `ValuePoint` per path, keyed by path.
 
         Raises:
             _BatchRefused: When the gate refuses the batch.

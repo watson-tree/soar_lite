@@ -478,7 +478,8 @@ Every batch the run spends goes through `global_model.observe` on the way back
 because the model is the run's evidence sink. A batch arrives as a mapping from
 path to the point served there, so the model knows whose point it holds; a model
 that only wants piles of `(x, f)` stacks them itself, in the order the mapping
-gives, which the engine keeps as ascending path order. It sees a batch before the
+gives, which the engine makes no promise about - a model that needs a particular
+order arranges one itself. It sees a batch before the
 run decides anything on it, and it sees the batches the run never decides on too
 (a trial that lost its step, the batch that ended an unbounded run), because the
 work was served. A point can arrive twice: a step's trial comes for its value,

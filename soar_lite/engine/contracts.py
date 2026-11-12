@@ -166,9 +166,9 @@ class GlobalModel(Protocol):
         also `ValuePoint`s, so a model that wants gradients reads them off the
         type instead of a second nullable argument.
 
-        The mapping's iteration order is the order to stack in, and the engine
-        keeps it stable (ascending path order), so a model that folds rows keeps
-        a seeded fit reproducible. Keys are unique within one call; a point may
+        The mapping's iteration order carries no promise - nothing downstream
+        is entitled to it - so a model that needs a particular row order
+        arranges one itself. Keys are unique within one call; a point may
         arrive twice across calls - a step's trial is served for its value first
         and for its gradient later if it wins - so a model keyed on coordinates
         sees the same design with more evidence.

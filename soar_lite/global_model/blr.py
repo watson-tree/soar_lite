@@ -180,7 +180,7 @@ class BLRGlobalModel(GlobalModel):
 
         A value-only round and a fused one contribute the same, since the
         surrogate fits values over coordinates. The round arrives keyed by path
-        and is stacked in that order, so the fit depends on the points, not on
+        and is stacked as it arrives, so the fit depends on the points, not on
         how many paths a round happened to carry. The values arrive as host
         floats, one per point, so the finite check below costs no device sync
         per row. A non-finite value is dropped, not fitted: the engine observes
