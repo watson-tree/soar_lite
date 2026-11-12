@@ -43,9 +43,9 @@ def ask(model: GlobalModel, n_points: int, domain: Domain) -> jnp.ndarray:
 def _grid_minimize(
     objective: AcquisitionFn,
     domain: Domain,
-    n_points: int,
+    paths: list[int],
     key: jnp.ndarray,
-) -> jnp.ndarray:
+) -> dict[int, jnp.ndarray | None]:
     """Stand in for the driver's inner minimizer with the best of a grid."""
     grid_key, _ = jax.random.split(key)
     grid = jax.random.uniform(
@@ -56,18 +56,18 @@ def _grid_minimize(
     )
     values, _ = objective(grid)
     ranked = jnp.argsort(jnp.where(jnp.isfinite(values), values, jnp.inf))
-    return grid[ranked[:n_points]]
+    return dict(zip(paths, grid[ranked[: len(paths)]], strict=True))
 
 
 def _short_minimize(
     objective: AcquisitionFn,
     domain: Domain,
-    n_points: int,
+    paths: list[int],
     key: jnp.ndarray,
-) -> jnp.ndarray:
-    """Return fewer rows than asked, so the shape check has something to reject."""
+) -> dict[int, jnp.ndarray | None]:
+    """Answer one point too wide, so the shape check has something to reject."""
     del objective, key
-    return jnp.zeros((max(n_points - 1, 0), domain.d))
+    return {i: jnp.zeros(domain.d + 1) for i in paths}
 
 
 def _box(d: int = 2, half: float = 2.0) -> Domain:
@@ -247,11 +247,11 @@ def test_the_minimizer_is_handed_the_box_the_ask_was_handed() -> None:
     def recording(
         objective: AcquisitionFn,
         domain: Domain,
-        n_points: int,
+        paths: list[int],
         key: jnp.ndarray,
-    ) -> jnp.ndarray:
+    ) -> dict[int, jnp.ndarray | None]:
         handed.append(domain)
-        return _grid_minimize(objective, domain, n_points, key)
+        return _grid_minimize(objective, domain, paths, key)
 
     model = BLRGlobalModel(minimize=recording, key=jax.random.PRNGKey(0))
     _observe(model, 8)
@@ -437,8 +437,50 @@ def test_minimize_output_shape_is_validated() -> None:
         key=jax.random.PRNGKey(1),
     )
     _observe(model, 4)
-    with pytest.raises(ValueError, match=r"\(3, 2\) array"):
+    with pytest.raises(ValueError, match=r"start for path 0 must be a \(2,\)"):
         ask(model, 3, box)
+
+
+def test_a_minimizer_may_decline_a_path() -> None:
+    """A path the inner minimizer could not place comes out declined, not invented."""
+
+    def half(
+        objective: AcquisitionFn,
+        domain: Domain,
+        paths: list[int],
+        key: jnp.ndarray,
+    ) -> dict[int, jnp.ndarray | None]:
+        grid = _grid_minimize(objective, domain, paths, key)
+        return {i: (None if i % 2 else grid[i]) for i in paths}
+
+    model = BLRGlobalModel(minimize=half, key=jax.random.PRNGKey(2))
+    _observe(model, 4)
+    answers = model.propose([0, 1, 2], _box())
+
+    assert answers[0] is not None
+    assert answers[1] is None
+    assert answers[2] is not None
+
+
+def test_a_minimizer_may_not_answer_for_a_path_nobody_named() -> None:
+    """The ask names the paths, so a stray key is a bug on the way back in."""
+
+    def stray(
+        objective: AcquisitionFn,
+        domain: Domain,
+        paths: list[int],
+        key: jnp.ndarray,
+    ) -> dict[int, jnp.ndarray | None]:
+        del objective, key  # this stub answers from the ask alone
+        rows = {i: jnp.zeros(domain.d) for i in paths}
+        rows[paths[0] + 1] = jnp.zeros(domain.d)
+        return rows
+
+    model = BLRGlobalModel(minimize=stray, key=jax.random.PRNGKey(3))
+    _observe(model, 4)
+
+    with pytest.raises(ValueError, match=r"answered for path 1, which this ask"):
+        model.propose([0], _box())
 
 
 def test_the_model_demands_a_positive_noise() -> None:

@@ -60,21 +60,25 @@ call, and one that follows the gradient gets it alongside.
 """
 
 MinimizeFn: TypeAlias = Callable[
-    [AcquisitionFn, Domain, int, jnp.ndarray],
-    jnp.ndarray,
+    [AcquisitionFn, Domain, list[int], jnp.ndarray],
+    dict[int, jnp.ndarray | None],
 ]
 """The inner minimizer `propose` hands its acquisition to.
 
-``minimize(acquisition, domain, n_points, key)`` returns `n_points` local
-minimizers of the acquisition inside `domain`, one per row, shape
-``(n_points, d)``. The domain is the one the ask was handed, not a box
+``minimize(acquisition, domain, paths, key)`` returns one local minimizer of the
+acquisition inside `domain` for each path it was named, a ``(d,)`` point, or
+``None`` for a path it could not place. Keyed by path for the same reason the
+model's own answer is: a minimizer that runs an engine inside, or that enumerates
+per path, keeps its answers paired with the paths they belong to instead of with
+row positions, and reports the one path it could not place without inventing a
+coordinate for it. The domain is the one the ask was handed, not a box
 re-derived from it: a caller that declared a `scale` or a sampler meant it for
 every draw inside that box, including the inner minimizer's own starts. The
-count comes before the seed: what to ask for is the caller's question, the key
-only supplies the randomness. The model checks the shape and raises
-``ValueError`` on a wrong one; a row the inner run could not use may be
-all-``nan``, which the outer run treats as an unusable start and stalls that
-path on.
+paths come before the seed: what to ask for is the caller's question, the key
+only supplies the randomness. The model checks that no other path was answered
+and that each answer is one ``(d,)`` point, and raises ``ValueError`` on a miss;
+a `None` answer is carried out as the model's own decline, so that path's restart
+falls to the engine's other source.
 
 Injected by the composition root rather than imported, so this module never
 reaches back into the engine's scheduler - the engine already owns the descent
@@ -231,13 +235,15 @@ class BLRGlobalModel(GlobalModel):
         side, its prior normal on a free or half-bounded one. Afterwards they are
         the injected `minimize`'s local minimizers of ``-log EI`` over the box;
         the log form keeps the acquisition's gradient alive where the raw
-        improvement has decayed to zero. It hands `minimize` a fresh subkey,
-        split from the model's key, and pairs its rows with the paths in the
-        order they were asked.
+        improvement has decayed to zero. It hands `minimize` the paths it was
+        asked about and a fresh subkey, split from the model's key, and answers
+        with what it returns: a start per path, or ``None`` for a path the
+        minimizer could not place.
 
         Raises:
-            ValueError: If no path was asked about, or if `minimize` returns
-                anything but a ``(len(paths), d)`` array.
+            ValueError: If no path was asked about, if `minimize` answers for a
+                path this ask did not name, or if an answer is not a ``(d,)``
+                point.
 
         """
         n_points = len(paths)
@@ -257,16 +263,27 @@ class BLRGlobalModel(GlobalModel):
         def acquisition(x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
             return self._acquisition_value_and_grad(projection, x, weights, cov, best_f)
 
-        starts = jnp.asarray(
-            self._minimize(acquisition, domain, n_points, sub),
-        )
-        if starts.shape != (n_points, domain.d):
-            msg = (
-                "minimize must return a "
-                f"({n_points}, {domain.d}) array, got shape {starts.shape}"
-            )
-            raise ValueError(msg)
-        return dict(zip(paths, starts, strict=True))
+        asked = set(paths)
+        starts: dict[int, jnp.ndarray | None] = {}
+        for i, answer in self._minimize(acquisition, domain, paths, sub).items():
+            if i not in asked:
+                msg = (
+                    f"minimize answered for path {i}, which this ask did not "
+                    f"name (named: {sorted(asked)})"
+                )
+                raise ValueError(msg)
+            if answer is None:  # the minimizer's own "could not place it"
+                starts[i] = None
+                continue
+            x = jnp.asarray(answer)
+            if x.shape != (domain.d,):
+                msg = (
+                    f"minimize's start for path {i} must be a ({domain.d},) "
+                    f"point, got shape {x.shape}"
+                )
+                raise ValueError(msg)
+            starts[i] = x
+        return starts
 
     def _predict(
         self,

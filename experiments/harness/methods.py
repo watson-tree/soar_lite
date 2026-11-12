@@ -148,9 +148,9 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
 def surrogate_minimize(
     objective: AcquisitionFn,
     domain: Domain,
-    n_points: int,
+    paths: list[int],
     key: jnp.ndarray,
-) -> jnp.ndarray:
+) -> dict[int, jnp.ndarray | None]:
     """Minimize a batched acquisition with one restart-free n-path engine run.
 
     The injected inner minimizer `BLRGlobalModel.propose` asks for: the
@@ -169,13 +169,13 @@ def surrogate_minimize(
             without the feasibility column.
         domain: the search box, as the ask declared it - the same object the
             outer run checks its answers against, `scale` and samplers included.
-        n_points: how many local minimizers to return, one per row.
+        paths: the paths to answer for, one local minimizer each.
         key: the PRNG key the starts are drawn from.
 
     Returns:
-        A `(n_points, d)` array, one minimizer per row, every row a finite point
-        inside `domain`: a path the inner run could not place carries an all-nan
-        point, which the outer run refuses, so it falls back to a fresh draw.
+        One minimizer per path, a `(d,)` point inside `domain`: a path the inner
+        run could not place carries an all-nan point, which the outer run
+        refuses, so that restart falls back to a fresh draw.
 
     """
 
@@ -183,6 +183,7 @@ def surrogate_minimize(
         f, g = objective(x_batch)
         return f, g, None
 
+    n_points = len(paths)
     result = n_path_schedule(
         eval_g,
         n_paths=n_points,  # one path per minimizer: one batch, not n runs
@@ -194,7 +195,8 @@ def surrogate_minimize(
     )
     placed = result.flock_x
     ok = jnp.all(jnp.isfinite(placed), axis=1)[:, None]
-    return jnp.where(ok, placed, domain.draw(key, n_points))
+    kept = jnp.where(ok, placed, domain.draw(key, n_points))
+    return dict(zip(paths, kept, strict=True))
 
 
 # --- Adam: one compiled scan per run --------------------------------
