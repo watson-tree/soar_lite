@@ -687,14 +687,16 @@ class _EvalSeams:
         twice - the value that rides along with the gradient is the one it
         already reported, from the same function at the same point.
         """
-        owed = [i for i, point in decided.items() if not isinstance(point, PathPoint)]
-        bought: dict[int, PathPoint] = {}
-        if owed:
-            bought = self._serve_f_g({i: decided[i] for i in owed})
-        return {
-            i: point if isinstance(point, PathPoint) else bought[i]
-            for i, point in decided.items()
-        }
+        settled: dict[int, PathPoint] = {}
+        owed: dict[int, Point] = {}
+        for i, point in decided.items():
+            if isinstance(point, PathPoint):
+                settled[i] = point
+            else:
+                owed[i] = point
+        bought = self._serve_f_g(owed) if owed else {}
+        settled.update(bought)
+        return settled
 
     def _serve_f_g(self, points: Mapping[int, Point]) -> dict[int, PathPoint]:
         """Serve one fused batch: the gradient comes with the value.
