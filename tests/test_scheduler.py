@@ -92,12 +92,15 @@ class FixedModel:
     def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
         """Ignore the evidence: this model fits nothing."""
 
-    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
-        """Return n_points of the stored rows, tiling them if more are asked."""
+    def propose(
+        self, paths: list[int], domain: Domain
+    ) -> dict[int, jnp.ndarray | None]:
+        """Answer every path with one of the stored rows, tiling them if needed."""
         del domain
         rows = int(self.points.shape[0])
-        reps = -(-n_points // rows)
-        return jnp.concatenate([self.points] * reps)[:n_points]
+        reps = -(-len(paths) // rows)
+        drawn = jnp.concatenate([self.points] * reps)[: len(paths)]
+        return dict(zip(paths, drawn, strict=True))
 
 
 class AskingModel(FixedModel):
@@ -108,10 +111,12 @@ class AskingModel(FixedModel):
         super().__init__(points)
         self.asks: list[int] = []
 
-    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
+    def propose(
+        self, paths: list[int], domain: Domain
+    ) -> dict[int, jnp.ndarray | None]:
         """Record the ask, then answer it from the stored rows."""
-        self.asks.append(n_points)
-        return super().propose(n_points, domain)
+        self.asks.append(len(paths))
+        return super().propose(paths, domain)
 
 
 class HalfStep:
@@ -420,12 +425,14 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
         ) -> None:
             """Ignore the evidence: this model fits nothing."""
 
-        def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
-            """Return n_points of the well this ask is assigned to."""
+        def propose(
+            self, paths: list[int], domain: Domain
+        ) -> dict[int, jnp.ndarray | None]:
+            """Answer every path with the well this ask is assigned to."""
             del domain
             center = shallow if self.asked == 0 else deep
             self.asked += 1
-            return jnp.full((n_points, 1), center)
+            return dict.fromkeys(paths, jnp.full((1,), center))
 
     def run(*, restart_stalled: bool) -> NPathResult:
         return n_path_schedule(
@@ -692,9 +699,11 @@ def test_a_not_finite_path_never_widens_a_batch() -> None:
         ) -> None:
             self.inner.observe(x, f, g)
 
-        def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
-            asks.append(n_points)
-            return self.inner.propose(n_points, domain)
+        def propose(
+            self, paths: list[int], domain: Domain
+        ) -> dict[int, jnp.ndarray | None]:
+            asks.append(len(paths))
+            return self.inner.propose(paths, domain)
 
     def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         widths.append(int(theta.shape[0]))
@@ -978,9 +987,9 @@ def test_the_domain_is_the_runs_only_authority_on_d() -> None:
     assert all(d == 3 for _m, d in rec.batch_shapes), rec.batch_shapes
     assert res.x.shape == (3,)
 
-    # A model whose rows are the wrong width is refused at the ask: the engine
+    # A model whose answer is the wrong width is refused at the ask: the engine
     # owns the width now, and says so instead of failing inside a broadcast.
-    with pytest.raises(ValueError, match=r"must be a \(2, 2\) array"):
+    with pytest.raises(ValueError, match=r"must be a \(2,\) point"):
         n_path_schedule(
             Recorder(quad),
             n_paths=2,
@@ -1005,7 +1014,7 @@ def test_a_model_that_oversteps_is_refused_into_the_runs_box() -> None:
         served.extend(float(v) for v in x[:, 0])
         return jnp.sum(x**2, axis=-1), 2.0 * x, None
 
-    with pytest.raises(ValueError, match=r"restart ask row 0 is 3 in dimension 0"):
+    with pytest.raises(ValueError, match=r"start for path 0 is 3 in dimension 0"):
         n_path_schedule(
             eval_f_g,
             n_paths=2,
@@ -1132,6 +1141,70 @@ def test_the_caller_places_the_flock_and_the_model_is_not_asked_for_it() -> None
     assert len(served) == 1, served  # iteration 0 is one batch and nothing more
     assert jnp.array_equal(served[0], x0)
     assert model.asks == [], model.asks
+
+
+class DecliningModel(FixedModel):
+    """A `FixedModel` that answers only the paths it is told to keep."""
+
+    def __init__(self, points: jnp.ndarray, *, keep: set[int]) -> None:
+        """Store the rows and the paths this model is willing to answer."""
+        super().__init__(points)
+        self.keep = keep
+
+    def propose(
+        self, paths: list[int], domain: Domain
+    ) -> dict[int, jnp.ndarray | None]:
+        """Answer the kept paths and decline the rest."""
+        answered = super().propose(paths, domain)
+        return {i: answered[i] for i in paths if i in self.keep}
+
+
+def test_a_declined_start_leaves_that_path_with_no_point() -> None:
+    """Declining a path places nothing there, and the flock asked for it once."""
+    served: list[jnp.ndarray] = []
+
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        served.append(theta)
+        return jnp.sum(theta**2, axis=1), 2.0 * theta, None
+
+    model = DecliningModel(flock(2), keep={0})
+    res = n_path_schedule(
+        eval_f_g,
+        n_paths=2,
+        domain=unit_domain(),
+        global_model=model,
+        max_iters=2,
+        local_solver=HalfStep(),
+        restart_stalled=False,
+    )
+    # The answered path holds its start; the declined one holds nothing, and the
+    # run's best is the only point it has.
+    assert bool(jnp.all(jnp.isfinite(res.flock_x[0]))), res.flock_x
+    assert bool(jnp.all(jnp.isnan(res.flock_x[1]))), res.flock_x
+    assert float(res.x[0]) == pytest.approx(float(res.flock_x[0, 0]))
+    # Only the answered path was ever served, and it is the one that holds it:
+    # no batch was ever asked for the path the model declined.
+    assert jnp.array_equal(served[0], flock(2)[:1])
+    assert [int(x.shape[0]) for x in served] == [1, 1], served
+
+
+def test_a_run_whose_model_declines_every_path_ends_at_once() -> None:
+    """Every start declined and nothing stepping: `all_stalled`, no batch served."""
+
+    def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
+        return jnp.sum(theta**2, axis=1), 2.0 * theta, None
+
+    res = n_path_schedule(
+        eval_f_g,
+        n_paths=2,
+        domain=unit_domain(),
+        global_model=DecliningModel(flock(2), keep=set()),
+        max_iters=5,
+        local_solver=HalfStep(),
+    )
+    assert res.status == "all_stalled", res.status
+    assert bool(jnp.all(jnp.isnan(res.flock_x))), res.flock_x
+    assert res.work.n_f_g_batches == 0, res.work
 
 
 def test_without_x0_the_model_places_the_flock() -> None:

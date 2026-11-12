@@ -382,10 +382,12 @@ class _AllStalled(Exception):  # noqa: N818 - a signal, not an error
 
     Raised inside `_Paths.move` when no path restarts and every path is stalled
     - only reachable with `restart_stalled=False`, since a stalled path restarts
-    otherwise. Nothing can un-stall a path but `_Paths._place(restart=True)`,
-    which only ever sees the restarting paths, so the state is terminal: the
-    iteration would serve nothing, and repeating it would idle out the horizon.
-    The run stops on it, naming the state in `status`.
+    otherwise - or when every path that was going to restart was declined when
+    nothing else was stepping. Nothing can un-stall a path but
+    `_Paths._place(restart=True)`, which only ever sees the restarting paths, so
+    the state is terminal: the iteration would serve nothing, and repeating it
+    would idle out the horizon. The run stops on it, naming the state in
+    `status`.
     """
 
 
@@ -802,6 +804,8 @@ class _Paths:
       method's own state stands still.
     - A start or a winner is committed only when it is `is_usable` - finite in both
       halves - one gate defined once on the point type.
+    - A path the global model declined gets no start, so it does not move this
+      iteration: it keeps whatever point it holds and stays as stalled as it was.
     - A path holds a point or it does not. "No point" is a slot with no point
       on it, and a refused point is the other case: the path keeps the point it
       holds and is marked stalled, so `restart_stalled` decides whether it is
@@ -870,7 +874,10 @@ class _Paths:
 
         A flock with nothing left to do ends the run instead of idling: when no
         path restarts and every path is stalled, `_AllStalled` is raised before
-        any batch is asked for.
+        any batch is asked for. The same signal ends a run whose model declined
+        every start it was asked about while nothing was stepping: the model
+        that turns down every path is taken at its word, as a method answering
+        `None` for every path would be.
         """
         restarting = [
             i
@@ -895,6 +902,13 @@ class _Paths:
             if i not in restarting and not slot.is_stalled
         ]
         starts = self._restart_starts(restarting)
+        # Every path that was going to restart was declined and nothing is
+        # stepping: this iteration serves nothing, and the model that just
+        # declined every path it was asked about is taken at its word - the same
+        # way a method answering `None` for every path it was given stalls them
+        # all. Ended here rather than idling out the horizon.
+        if not starts and not stepping:
+            raise _AllStalled
         winners = self._step_winners(stepping)
         # One batch over both halves, keyed by path so neither is re-paired by
         # position. A refusal (`_BatchRefused`) cuts the iteration short with
@@ -902,7 +916,7 @@ class _Paths:
         # already carrying both halves (a run without the seam) passes straight
         # through `settle` without being served again.
         settled = self.eval_seams.settle({**starts, **winners})
-        self._place({i: settled[i] for i in restarting}, restart=True)
+        self._place({i: settled[i] for i in starts}, restart=True)
         self._place({i: settled[i] for i in winners}, restart=False)
 
     def held(self) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -934,31 +948,58 @@ class _Paths:
         Both arrive already checked - `x0` at the entry, the model's answer just
         below - so both are placed as handed.
 
-        Otherwise: ask, check, place. The model is handed the box it must land in
-        and its answer is refused unless it is ``(n_points, domain.d)`` and
-        inside that box, so a model that answers with another width, a NaN row,
-        or a point past a wall fails here, naming the row and the dimension,
-        instead of deep inside the iteration that would have served it. Nothing
-        is read, so every start is a bare `Point` - a start has nothing to be
-        compared - and `settle` buys its gradient in the same batch as the step
-        winners, so a restart costs no gradient pass of its own.
+        Otherwise: ask, check, place. The model is handed the box its answers
+        must land in and may decline a path, which leaves it out of the returned
+        map: it starts nowhere this iteration, so it stays stalled where it
+        stands (a path holding no point is asked again next iteration). An
+        answer it does give is refused unless it is ``(domain.d,)`` and inside
+        that box, so a model answering with another width, a NaN row, or a point
+        past a wall fails here, naming the path and the dimension, instead of
+        deep inside the iteration that would have served it. Nothing is read, so
+        every start is a bare `Point` - a start has nothing to be compared - and
+        `settle` buys its gradient in the same batch as the step winners, so a
+        restart costs no gradient pass of its own.
         """
         if not restarting:
             return {}
         d = self.domain.d
-        n_points = len(restarting)
         if self._x0 is not None:
+            # The flock is one row per path in path order, so it pairs by
+            # position; only the model answers per path.
             proposed, self._x0 = self._x0, None
-            what = "x0"
-        else:
-            proposed = self.propose(n_points, self.domain)
-            what = "the global model's restart ask"
-        proposed = jnp.asarray(proposed)
-        if proposed.shape != (n_points, d):
-            msg = f"{what} must be a ({n_points}, {d}) array, got {proposed.shape}"
-            raise ValueError(msg)
-        proposed = _check_inside(proposed, what=what, domain=self.domain)
-        return dict(zip(restarting, (Point(row) for row in proposed), strict=True))
+            proposed = jnp.asarray(proposed)
+            n_points = len(restarting)
+            if proposed.shape != (n_points, d):
+                msg = f"x0 must be a ({n_points}, {d}) array, got {proposed.shape}"
+                raise ValueError(msg)
+            inside = _check_inside(proposed, what="x0", domain=self.domain)
+            return {i: Point(row) for i, row in zip(restarting, inside, strict=True)}
+        asked = set(restarting)
+        starts: dict[int, Point] = {}
+        for i, answer in self.propose(restarting, self.domain).items():
+            if i not in asked:
+                msg = (
+                    f"the global model answered for path {i}, which this "
+                    f"iteration did not ask to restart (asked: {sorted(asked)})"
+                )
+                raise ValueError(msg)
+            if answer is None:  # the model's own stopping rule: no start
+                continue
+            x = jnp.asarray(answer)
+            if x.shape != (d,):
+                msg = (
+                    f"the global model's start for path {i} must be a ({d},) "
+                    f"point, got shape {x.shape}"
+                )
+                raise ValueError(msg)
+            starts[i] = Point(
+                _check_inside(
+                    x,
+                    what=f"the global model's start for path {i}",
+                    domain=self.domain,
+                )
+            )
+        return starts
 
     def _step_winners(self, stepping: list[int]) -> dict[int, Point]:
         """Ask the method for its step on each stepping path, keep the winners.

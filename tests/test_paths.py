@@ -152,12 +152,14 @@ class _Misfit(Script):
         return {i: Point(jnp.zeros(2)) for i in paths}
 
 
-def model_at(x: jnp.ndarray) -> Callable[[int, Domain], jnp.ndarray]:
-    """Return a restart source that proposes one fixed row, `n_points` times."""
+def model_at(
+    x: jnp.ndarray,
+) -> Callable[[list[int], Domain], dict[int, jnp.ndarray | None]]:
+    """Return a restart source that proposes one fixed row for every path."""
 
-    def propose(n_points: int, domain: Domain) -> jnp.ndarray:
+    def propose(paths: list[int], domain: Domain) -> dict[int, jnp.ndarray | None]:
         del domain  # this stub only repeats its row; the box is the engine's to check
-        return jnp.repeat(x[None, :], n_points, axis=0)
+        return dict.fromkeys(paths, x)
 
     return propose
 
@@ -311,7 +313,7 @@ def test_a_start_off_the_box_is_refused_by_the_engine() -> None:
 
     with pytest.raises(
         ValueError,
-        match=r"the global model's restart ask row 0 is 5 in dimension 0, outside",
+        match=r"the global model's start for path 0 is 5 in dimension 0, outside",
     ):
         run.move()
 
@@ -369,7 +371,9 @@ def test_a_non_finite_start_is_refused_by_the_engine() -> None:
     solver = Script([])
     run, meter = paths(solver, restart_at=jnp.asarray([math.nan]))
 
-    with pytest.raises(ValueError, match=r"row 0 is nan in dimension 0, not finite"):
+    with pytest.raises(
+        ValueError, match=r"start for path 0 is nan in dimension 0, not finite"
+    ):
         run.move()
 
     assert run.slots[0].point is None

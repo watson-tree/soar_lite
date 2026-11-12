@@ -16,7 +16,7 @@ The terms below recur throughout:
 Two interfaces supply the method names used below, and each has a `propose`
 called with different arguments:
 
-- `GlobalModel` — `propose(n_points, domain)` and `observe`.
+- `GlobalModel` — `propose(paths, domain)` and `observe`.
 - `LocalSolver` — `restart`, `propose(paths, domain, serve_trials)` and `step`.
 
 `settle` belongs to neither: it is the fused batch that closes an iteration,
@@ -379,8 +379,8 @@ keeps them in three different places, none answering for another:
   occupies its slot, and its last usable point stays in the run's best — only
   the path itself stops moving; while it is on, it is re-drawn on the next
   iteration.
-- **Where**: `global_model.propose(n_points, domain)`, the engine's second
-  plugin point.
+- **Where**: `global_model.propose(paths, domain)`, the engine's second plugin
+  point, one answer per path.
 
 The split is deliberate: *when* is already stated by the method's stopping test,
 *whether* is a policy bit, and only *where* needs a real implementation, so only
@@ -445,13 +445,15 @@ Cost):
    is asked nothing — not even a step that would answer `None` — so a method
    cannot un-stall a path the engine has already stopped; its last usable point
    stays in the run's best.
-3. **Starts**: the redraw set asks `global_model.propose(len(restarted), domain)`
-   for a batch of starts — except on iteration 0 with an `x0`, which the engine
-   places as given and never asks a model for. The engine checks the answer at
-   the batch boundary — the shape, then that every row is finite and inside the
-   box — and a miss is a `ValueError` at once, naming the row. The width belongs
-   to the engine, and a model answering outside its own box fails there instead
-   of being slid onto a wall.
+3. **Starts**: the redraw set asks `global_model.propose(restarted, domain)`
+   for one start per path — except on iteration 0 with an `x0`, which the engine
+   places as given and never asks a model for. The answer is keyed by path, and
+   `None` for a path is the model declining it: that path starts nowhere and
+   stays as stalled as it was. Every start it does answer is checked at the
+   batch boundary — a `(d,)` point, then that it is finite and inside the box —
+   and a miss is a `ValueError` at once, naming the path. The width belongs to
+   the engine, and a model answering outside its own box fails there instead of
+   being slid onto a wall.
 4. **Steps**: the cohort asks `local_solver.propose(paths, domain,
    serve_trials)` once, for the whole cohort, producing each path's winner or
    `None`.

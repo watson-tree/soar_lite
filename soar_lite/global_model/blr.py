@@ -219,31 +219,35 @@ class BLRGlobalModel(GlobalModel):
             self._fs.append(values[keep])
             self._fold_stats(values[keep])
 
-    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
-        """Return `n_points` restart points: a draw until a fit is possible.
+    def propose(
+        self, paths: list[int], domain: Domain
+    ) -> dict[int, jnp.ndarray | None]:
+        """Return one restart point per path: a draw until a fit is possible.
 
         The box is the caller's, handed in per ask: the geometry is rebuilt from
         it here, and nothing about it is remembered between calls. Until the fit
         has a spread to standardize - below two observations, or with every value
-        equal - the answer is the domain's own `draw`: uniform on a bounded side,
-        its prior normal on a free or half-bounded one. Afterwards it is the
-        injected `minimize`'s local
-        minimizers of ``-log EI`` over the box; the log form keeps the
-        acquisition's gradient alive where the raw improvement has decayed to
-        zero. It hands `minimize` a fresh subkey, split from the model's key.
+        equal - the answers are the domain's own `draw`: uniform on a bounded
+        side, its prior normal on a free or half-bounded one. Afterwards they are
+        the injected `minimize`'s local minimizers of ``-log EI`` over the box;
+        the log form keeps the acquisition's gradient alive where the raw
+        improvement has decayed to zero. It hands `minimize` a fresh subkey,
+        split from the model's key, and pairs its rows with the paths in the
+        order they were asked.
 
         Raises:
-            ValueError: If `n_points` is below one, or if `minimize` returns
-                anything but a ``(n_points, d)`` array.
+            ValueError: If no path was asked about, or if `minimize` returns
+                anything but a ``(len(paths), d)`` array.
 
         """
+        n_points = len(paths)
         if n_points <= 0:
-            msg = f"propose needs at least one point, got {n_points}"
+            msg = "propose needs at least one path, got none"
             raise ValueError(msg)
         self._key, sub = jax.random.split(self._key)
         projection = self._projection_for(domain)
         if not self._can_fit():
-            return domain.draw(sub, n_points)
+            return dict(zip(paths, domain.draw(sub, n_points), strict=True))
         weights, cov = self._posterior(projection)
         best_f = self._standardize(jnp.asarray(self._min))
 
@@ -262,7 +266,7 @@ class BLRGlobalModel(GlobalModel):
                 f"({n_points}, {domain.d}) array, got shape {starts.shape}"
             )
             raise ValueError(msg)
-        return starts
+        return dict(zip(paths, starts, strict=True))
 
     def _predict(
         self,

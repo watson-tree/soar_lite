@@ -179,7 +179,7 @@ class RecordingModel:
 
     def __init__(self, *, key: jnp.ndarray | None = None) -> None:
         """Store the stream every draw comes from."""
-        self.calls: list[int] = []  # one entry per ask, holding n_points
+        self.calls: list[int] = []  # one entry per ask, holding len(paths)
         self.observed: list[int] = []  # one entry per served batch, its width
         self._key = jax.random.PRNGKey(0) if key is None else key
 
@@ -188,16 +188,19 @@ class RecordingModel:
         del f, g
         self.observed.append(int(x.shape[0]))
 
-    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
-        """Draw n_points uniform points over the box this ask hands in."""
-        self.calls.append(n_points)
+    def propose(
+        self, paths: list[int], domain: Domain
+    ) -> dict[int, jnp.ndarray | None]:
+        """Draw one uniform point per path over the box this ask hands in."""
+        self.calls.append(len(paths))
         self._key, sub = jax.random.split(self._key)
-        return jax.random.uniform(
+        rows = jax.random.uniform(
             sub,
-            (n_points, domain.d),
+            (len(paths), domain.d),
             minval=domain.lo,
             maxval=domain.hi,
         )
+        return dict(zip(paths, rows, strict=True))
 
 
 def test_injected_solver_is_driven() -> None:

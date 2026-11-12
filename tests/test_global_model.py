@@ -8,7 +8,18 @@ unbounded side is drawn from the domain's own default.
 import jax
 import jax.numpy as jnp
 
-from soar_lite import Domain, SampleGlobalModel
+from soar_lite import Domain, GlobalModel, SampleGlobalModel
+
+
+def ask(model: GlobalModel, n_points: int, domain: Domain) -> jnp.ndarray:
+    """Ask for `n_points` starts as paths ``0..n_points-1``, stacked into rows."""
+    answers = model.propose(list(range(n_points)), domain)
+    rows = []
+    for i in range(n_points):
+        row = answers[i]
+        assert row is not None, f"path {i} was declined"
+        rows.append(row)
+    return jnp.stack(rows)
 
 
 def test_a_model_free_domain_draws_its_unbounded_dimension() -> None:
@@ -16,7 +27,7 @@ def test_a_model_free_domain_draws_its_unbounded_dimension() -> None:
     box = Domain(jnp.asarray([[0.0, jnp.inf], [-5.0, 5.0]]))
     model = SampleGlobalModel(key=jax.random.PRNGKey(0))
 
-    points = model.propose(512, box)
+    points = ask(model, 512, box)
 
     assert points.shape == (512, 2)
     assert bool(jnp.all(jnp.isfinite(points)))
@@ -29,10 +40,10 @@ def test_the_draws_are_the_handed_domains_own() -> None:
     """The box is a per-call argument: one instance serves two different boxes."""
     model = SampleGlobalModel(key=jax.random.PRNGKey(0))
 
-    wide = model.propose(256, Domain([(0.0, 1.0)] * 3))
+    wide = ask(model, 256, Domain([(0.0, 1.0)] * 3))
     assert wide.shape == (256, 3), "the width came from the second ask's domain"
 
-    narrow = model.propose(64, Domain([(10.0, 11.0)] * 2))
+    narrow = ask(model, 64, Domain([(10.0, 11.0)] * 2))
     assert narrow.shape == (64, 2)
     assert bool(jnp.all(narrow >= 10.0)), float(jnp.min(narrow))
     assert bool(jnp.all(narrow <= 11.0)), float(jnp.max(narrow))

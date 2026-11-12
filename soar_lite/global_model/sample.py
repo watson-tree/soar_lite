@@ -45,7 +45,11 @@ class SampleGlobalModel(GlobalModel):
     def observe(self, x: jnp.ndarray, f: list[float], g: jnp.ndarray | None) -> None:
         """Ignore the evidence: a model-free sampler fits nothing."""
 
-    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
-        """Return n_points draws from `domain`, one point per requested start."""
+    def propose(
+        self, paths: list[int], domain: Domain
+    ) -> dict[int, jnp.ndarray | None]:
+        """Draw one point per path, in the order the paths were asked."""
+        if not paths:
+            return {}
         self._key, sub = jax.random.split(self._key)
-        return domain.draw(sub, n_points)
+        return dict(zip(paths, domain.draw(sub, len(paths)), strict=True))

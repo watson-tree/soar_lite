@@ -21,11 +21,23 @@ from soar_lite import (
     AcquisitionFn,
     BLRGlobalModel,
     Domain,
+    GlobalModel,
     IdentityProjection,
     Projection,
     SphereProjection,
 )
 from soar_lite.global_model.blr import _log_h
+
+
+def ask(model: GlobalModel, n_points: int, domain: Domain) -> jnp.ndarray:
+    """Ask for `n_points` starts as paths ``0..n_points-1``, stacked into rows."""
+    answers = model.propose(list(range(n_points)), domain)
+    rows = []
+    for i in range(n_points):
+        row = answers[i]
+        assert row is not None, f"path {i} was declined"
+        rows.append(row)
+    return jnp.stack(rows)
 
 
 def _grid_minimize(
@@ -196,7 +208,7 @@ def test_a_masked_model_proposes_inside_the_box() -> None:
     xs = jnp.linspace(-1.9, 1.9, 6)[:, None] * jnp.ones(3)[None, :]
     center = jnp.asarray([0.3, -0.2, 0.1])
     model.observe(xs, [float(jnp.sum((row - center) ** 2)) for row in xs], None)
-    starts = model.propose(2, box)
+    starts = ask(model, 2, box)
     assert starts.shape == (2, 3)
     mean, sigma = model._predict(starts, box)
     assert bool(jnp.all(jnp.isfinite(starts)))
@@ -215,8 +227,8 @@ def test_the_model_carries_no_box_of_its_own() -> None:
     assert not hasattr(model, "domain")
     assert not hasattr(model, "d")
     _observe(model, 8)
-    tight = model.propose(2, _box(half=1.0))
-    roomy = model.propose(2, _box(half=100.0))
+    tight = ask(model, 2, _box(half=1.0))
+    roomy = ask(model, 2, _box(half=100.0))
     assert tight.shape == (2, 2)
     assert roomy.shape == (2, 2)
     assert bool(jnp.all(jnp.abs(tight) <= 1.0)), tight.tolist()
@@ -245,7 +257,7 @@ def test_the_minimizer_is_handed_the_box_the_ask_was_handed() -> None:
     _observe(model, 8)
     box = Domain([(-2.0, 2.0)] * 2, scale=[3.0, 0.5])
 
-    model.propose(2, box)
+    ask(model, 2, box)
 
     assert handed[0] is box
     assert [float(s) for s in handed[0].scale] == [3.0, 0.5]
@@ -263,7 +275,7 @@ def test_leaving_the_projection_unset_is_the_bent_arm() -> None:
     _observe(default, 6)
     _observe(explicit, 6)
 
-    assert jnp.array_equal(default.propose(4, box), explicit.propose(4, box))
+    assert jnp.array_equal(ask(default, 4, box), ask(explicit, 4, box))
 
 
 def test_the_acquisition_gradient_is_the_jacobian_diagonal() -> None:
@@ -304,7 +316,7 @@ def test_propose_draws_uniformly_until_a_fit_is_possible() -> None:
     for n_observed in (0, 1):
         if n_observed:
             model.observe(jnp.asarray([[0.5, -0.5]]), [1.0], None)
-        draws = model.propose(4, _box())
+        draws = ask(model, 4, _box())
         assert draws.shape == (4, 2)
         assert bool(jnp.all(jnp.isfinite(draws)))
         assert bool(jnp.all(draws >= -2.0))
@@ -319,7 +331,7 @@ def test_integer_bounds_still_normalize_to_a_unit_box() -> None:
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
     )
-    draws = model.propose(3, box)
+    draws = ask(model, 3, box)
     assert bool(jnp.all(draws >= 0.0))
     assert bool(jnp.all(draws <= 1.0))
     model.observe(jnp.asarray([[0.2, 0.3], [0.8, 0.9]]), [1.0, 2.0], None)
@@ -341,7 +353,7 @@ def test_a_flat_batch_has_no_spread_to_fit() -> None:
     model = _model()
     model.observe(jnp.asarray([[0.5, -0.5], [-0.5, 0.5]]), [3.0, 3.0], None)
     assert not model._can_fit()
-    draws = model.propose(4, _box())
+    draws = ask(model, 4, _box())
     assert draws.shape == (4, 2)
     assert bool(jnp.all(draws >= -2.0))
     assert bool(jnp.all(draws <= 2.0))
@@ -397,7 +409,7 @@ def test_propose_descends_the_acquisition_into_the_box() -> None:
     model = _model()
     box = _box()
     _observe(model, 12)
-    starts = model.propose(3, box)
+    starts = ask(model, 3, box)
     assert starts.shape == (3, 2)
     assert bool(jnp.all(jnp.isfinite(starts)))
     assert bool(jnp.all(starts >= -2.0))
@@ -426,7 +438,7 @@ def test_minimize_output_shape_is_validated() -> None:
     )
     _observe(model, 4)
     with pytest.raises(ValueError, match=r"\(3, 2\) array"):
-        model.propose(3, box)
+        ask(model, 3, box)
 
 
 def test_the_model_demands_a_positive_noise() -> None:
@@ -467,7 +479,7 @@ def test_the_identity_model_fits_a_width_d_posterior() -> None:
     mean, sigma = model._predict(jnp.asarray([[0.5, -0.5]]), box)
     assert bool(jnp.all(jnp.isfinite(mean)))
     assert bool(jnp.all(jnp.isfinite(sigma)))
-    draws = model.propose(3, box)
+    draws = ask(model, 3, box)
     assert draws.shape == (3, 2)
     assert bool(jnp.all(jnp.isfinite(draws)))
     assert bool(jnp.all(draws >= -2.0))
@@ -520,7 +532,7 @@ def test_an_unbounded_box_proposes_and_predicts_without_a_width() -> None:
         minimize=_grid_minimize,
         key=jax.random.PRNGKey(0),
     )
-    draws = model.propose(4, box)  # no fit yet: the domain's own draw
+    draws = ask(model, 4, box)  # no fit yet: the domain's own draw
     assert draws.shape == (4, 2)
     assert bool(jnp.all(jnp.isfinite(draws)))
     _observe(model, 6)

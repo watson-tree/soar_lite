@@ -238,8 +238,11 @@ _Avoid_: initialization step
 
 **global model** (type `GlobalModel`):
 The engine's second seam, owner of *where* a redrawn path starts. It observes
-every served batch (`observe(x, f, g?)`) and answers `propose(n, domain)` with
-`n` fresh starts. The default `SampleGlobalModel` fits nothing: it draws starts
+every served batch (`observe(x, f, g?)`) and answers `propose(paths, domain)`
+with one fresh start per path it was asked about, keyed by that path. `None` for
+a path is the model declining it — its own stopping rule, as `None` from a
+method's `propose` is the method's — and that path starts nowhere this
+iteration. The default `SampleGlobalModel` fits nothing: it draws starts
 from the `domain`. An `x0` the caller hands the entry states the first flock
 directly and the model is not asked; with `x0=None` it draws that flock too, as
 iteration 0's one ask. `BLRGlobalModel`

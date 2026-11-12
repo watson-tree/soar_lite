@@ -165,21 +165,31 @@ class GlobalModel(Protocol):
         """
         ...
 
-    def propose(self, n_points: int, domain: Domain) -> jnp.ndarray:
-        """Return ``n_points`` fresh restart starts, shape ``(n_points, d)``.
+    def propose(
+        self, paths: list[int], domain: Domain
+    ) -> dict[int, jnp.ndarray | None]:
+        """Answer one fresh start per path asked about, keyed by that path.
 
-        `n_points` is how many paths restart this iteration - on iteration 0,
-        every path when the caller handed no `x0` - and `domain` is the box the
-        answer must land in and the one statement of the dimension. The answer
-        is in the coordinates the objective takes. The engine checks the answer
-        at the batch boundary - the shape, then that every row is finite and
-        inside the box - and raises ``ValueError`` naming the row and the dimension
-        on a miss: an answer outside the box is a model disagreeing with the box
-        it was handed, which the engine names rather than repairing. The box test
-        allows the few ulps a start computed on a boundary can round by.
+        `paths` is every path that restarts this iteration - on iteration 0,
+        every path when the caller handed no `x0` - in ascending order, and
+        `domain` is the box the answers must land in and the one statement of
+        the dimension. Each answer is one point in the coordinates the objective
+        takes; ``None`` says this path gets no start from this model, and the
+        engine stalls the path where it stands (one holding no point is asked
+        again next iteration). Declining is the model's own stopping rule, as
+        ``None`` from a method's `propose` is the method's.
+
+        The engine checks every answer it is given at the batch boundary - a
+        ``(d,)`` point, finite and inside the box - and raises ``ValueError``
+        naming the path and the dimension on a miss: an answer outside the box is
+        a model disagreeing with the box it was handed, which the engine names
+        rather than repairing. The box test allows the few ulps a start computed
+        on a boundary can round by.
 
         The model owns its randomness (an instance holds its key), which is what
-        makes a seeded model reproducible.
+        makes a seeded model reproducible; ascending order is the other half of
+        that, so a model that draws one row per path and zips them in the order
+        asked reproduces a run from its seed alone.
         """
         ...
 
@@ -382,10 +392,10 @@ gradients afterwards, together in one fused batch.
 # values arrive as host floats, one per point, because the run's own bookkeeping
 # compares and records them one row at a time - a batch then costs one host
 # transfer instead of a device sync per row.
-# `ProposeFn` is the query for fresh starts, handed the run's box because the
-# box is the engine's and a model carries none.
+# `ProposeFn` is the query for fresh starts: one answer per path asked about,
+# handed the run's box because the box is the engine's and a model carries none.
 ObserveFn: TypeAlias = Callable[[jnp.ndarray, list[float], jnp.ndarray | None], None]
-ProposeFn: TypeAlias = Callable[[int, Domain], jnp.ndarray]
+ProposeFn: TypeAlias = Callable[[list[int], Domain], dict[int, jnp.ndarray | None]]
 
 NPathStatus: TypeAlias = Literal[
     "max_iters",
