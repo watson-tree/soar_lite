@@ -137,19 +137,19 @@ class HalfStep:
         """Start with no points: `restart` places them."""
         self.points: dict[int, PathPoint] = {}
 
-    def restart(self, i: int, point: PathPoint) -> None:
-        """Take the start the engine placed."""
-        self.points[i] = point
+    def restart(self, points: dict[int, PathPoint]) -> None:
+        """Take the starts the engine placed."""
+        self.points.update(points)
 
-    def step(self, i: int, point: PathPoint) -> None:
-        """Stand on the committed point; this method keeps no model."""
-        self.points[i] = point
+    def step(self, points: dict[int, PathPoint]) -> None:
+        """Stand on the committed points; this method keeps no model."""
+        self.points.update(points)
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
         """Return half a step for each path that strictly decreases, else none."""
-        held = [self.points[i] for i in idxs]
+        held = [self.points[i] for i in paths]
         trial = jnp.clip(
             jnp.stack([p.x for p in held]) - 0.5 * jnp.stack([p.g for p in held]),
             domain.lo,
@@ -158,7 +158,7 @@ class HalfStep:
         rows = serve_trials(trial)
         return {
             i: (row if row.value() < p.f else None)
-            for i, row, p in zip(idxs, rows, held, strict=True)
+            for i, row, p in zip(paths, rows, held, strict=True)
         }
 
 
@@ -795,20 +795,20 @@ def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
             """Start with no point: `restart` places the first one."""
             self.points: dict[int, PathPoint] = {}
 
-        def restart(self, i: int, point: PathPoint) -> None:
-            """Take the start the engine placed."""
-            self.points[i] = point
+        def restart(self, points: dict[int, PathPoint]) -> None:
+            """Take the starts the engine placed."""
+            self.points.update(points)
 
-        def step(self, i: int, point: PathPoint) -> None:
-            """Take the point the engine committed."""
-            self.points[i] = point
+        def step(self, points: dict[int, PathPoint]) -> None:
+            """Take the points the engine committed."""
+            self.points.update(points)
 
         def propose(
-            self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+            self, paths: list[int], domain: Domain, serve_trials: ServeTrials
         ) -> dict[int, Pending | None]:
             """Read the whole errand in one batch and name the winner."""
             out: dict[int, Pending | None] = {}
-            for i in idxs:  # one path in this run: the count stays exact
+            for i in paths:  # one path in this run: the count stays exact
                 p = self.points[i]
                 errand = [p.x + (k + 1) * 0.1 * p.g for k in range(n_uphill)]
                 errand.append(p.x - p.g)
@@ -857,11 +857,11 @@ def test_a_stalled_path_leaves_the_cohort() -> None:
             self.asked: list[list[int]] = []
 
         def propose(
-            self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+            self, paths: list[int], domain: Domain, serve_trials: ServeTrials
         ) -> dict[int, Pending | None]:
             """Log the cohort, then refuse the step for path 1."""
-            self.asked.append(list(idxs))
-            answers = super().propose(idxs, domain, serve_trials)
+            self.asked.append(list(paths))
+            answers = super().propose(paths, domain, serve_trials)
             return {i: (None if i == 1 else a) for i, a in answers.items()}
 
     def quartic(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:

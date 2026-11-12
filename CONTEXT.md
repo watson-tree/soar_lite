@@ -188,7 +188,7 @@ _Avoid_: validity mask
 **step**:
 One move along a single path: propose → (trial)× → a winner, or none (`None`).
 Each path takes at most one move per iteration — a step, or a redraw start; a
-step consumes zero or more trials. The method lands it through `step(i, point)`: the
+step consumes zero or more trials. The method lands it through `step(points)`: the
 engine hands back the settled `PathPoint` `(x, f, g)` the path now stands at, so
 the method moves the matching state forward. The **method** named the winner in
 `propose`; the engine bought its owed halves in *settle* and commits here, so

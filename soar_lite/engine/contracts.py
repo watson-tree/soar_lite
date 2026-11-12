@@ -212,15 +212,19 @@ class LocalSolver(Protocol):
     caller's horizon, not on the method. All state is per path, lives inside the
     instance, and is opaque to the engine - implementers index it by path ``i``.
 
-    A path's point reaches the method in exactly two places: ``restart(i, point)``,
-    which places it, and ``step(i, point)``, which moves it. Both are the engine's
+    A path's point reaches the method in exactly two places: ``restart(points)``,
+    which places it, and ``step(points)``, which moves it. Both are the engine's
     own commit points, so a method that keeps the point it was handed holds the
-    one the engine holds. A method that steps from a point must keep it, because
-    no later call hands it back: ``propose`` reads the current point off the
-    method's own state and answers from it. ``step`` is the only place a landed
-    point is announced, so it is also the only place the method may advance its
-    model - a secant is a step that was taken, and only the ``step`` callback is
-    told one was.
+    one the engine holds. Both carry one row per path for every path that landed
+    this iteration, keyed by path and in one call, so a method that keeps
+    per-path state updates it in one place. A path that did not land - the
+    method declined it, or its point arrived unusable - is in neither call: it
+    stalls where it stands. A method that steps from a point must keep it,
+    because no later call hands it back: ``propose`` reads the current point off
+    the method's own state and answers from it. ``step`` is the only place a
+    landed point is announced, so it is also the only place the method may
+    advance its model - a secant is a step that was taken, and only the ``step``
+    callback is told one was.
 
     The split between the two evaluation halves is the method's cost lever. A
     step's *value* is what its enumeration compares, so the method reads it:
@@ -241,10 +245,10 @@ class LocalSolver(Protocol):
     and refuses what misses, so clipping is the method's own defence against the
     roundoff in its own arithmetic, not something the engine does for it.
 
-    These methods are called by the engine on its own schedule - `restart` on
-    every placement, `propose` once per iteration for the paths that step, `step`
-    once per committed step - so they trust their arguments: this Protocol is the
-    whole contract.
+    These methods are called by the engine on its own schedule - `restart` and
+    `step` once per iteration with the paths that landed, `propose` once per
+    iteration for the paths that step - so they trust their arguments: this
+    Protocol is the whole contract.
 
     Example:
         A whole method - fixed-step gradient descent, one point per path, no
@@ -257,11 +261,11 @@ class LocalSolver(Protocol):
             >>> class FixedStep:
             ...     def __init__(self, rate=0.25):
             ...         self.rate, self._point = rate, {}
-            ...     def restart(self, i, point):
-            ...         self._point[i] = point
-            ...     def step(self, i, point):
-            ...         self._point[i] = point
-            ...     def propose(self, idxs, domain, serve_trials):
+            ...     def restart(self, points):
+            ...         self._point.update(points)
+            ...     def step(self, points):
+            ...         self._point.update(points)
+            ...     def propose(self, paths, domain, serve_trials):
             ...         del serve_trials          # this method reads no trials
             ...         return {
             ...             i: Pending(
@@ -273,7 +277,7 @@ class LocalSolver(Protocol):
             ...                 None,
             ...                 None,
             ...             )
-            ...             for i in idxs
+            ...             for i in paths
             ...         }
 
             >>> result = n_path_schedule(
@@ -295,27 +299,29 @@ class LocalSolver(Protocol):
 
     """
 
-    def restart(self, i: int, point: PathPoint) -> None:
-        """Seed path i's state from a fresh start point (its one cold start).
+    def restart(self, points: dict[int, PathPoint]) -> None:
+        """Seed each path's state from a fresh start point (its one cold start).
 
-        Called by the engine each time it places a path on a point: once at
+        Called by the engine each time it places paths on points: once at
         initialization, and again on every redraw — of a stalled path with
         `restart_stalled` on, or of a path that holds no point, which is re-drawn
-        either way. The engine has one way to place a path, so
-        a method need not tell "first" from "again" - both drop its per-path
-        state to the cold one. One of the two calls that hand a point over, so
-        a method that steps from a point keeps this one.
+        either way. Every path that landed a start this iteration is in the one
+        call; the engine has one way to place a path, so a method need not tell
+        "first" from "again" - both drop that path's state to the cold one. A
+        restarting path does not also step, so this call and `step` never name
+        the same path in one iteration. One of the two calls that hand a point
+        over, so a method that steps from a point keeps this one.
         """
         ...
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
-        """Answer one step for each path in ``idxs``: its winner, or ``None``.
+        """Answer one step for each path in ``paths``: its winner, or ``None``.
 
         One call covers every path that steps this iteration, so a method that
         wants a trial grid proposes the cohort's samples in one batch
-        rather than once per path. The answer is keyed by the indices asked, and
+        rather than once per path. The answer is keyed by the paths asked, and
         ``None`` means the method declines to name a winner: its stopping test
         holds, or the trials it read left it nothing usable to pick. Either way
         the engine stalls the path where it stands, serving nothing and
@@ -342,17 +348,17 @@ class LocalSolver(Protocol):
         """
         ...
 
-    def step(self, i: int, point: PathPoint) -> None:
-        """Take the step the engine just committed: the path now stands at point.
+    def step(self, points: dict[int, PathPoint]) -> None:
+        """Take the steps the engine just committed: each path stands at its point.
 
-        The engine's only call site is the commit of a usable winner, with
-        ``point`` the settled point it committed, so the recorded step is always
-        one that was taken and can never disagree with the path. It is never
-        called for a point the engine refused (not `is_usable`) or for a path whose
-        stopping test held. ``point`` means what it means in ``restart``: the
-        point the path now stands at. The point it stepped from is the method's
-        own record, not an argument - the same rule that makes ``propose`` read
-        its point instead of being handed it.
+        The engine's only call site is the commit of the usable winners, with
+        each ``point`` the settled one it committed, so every recorded step was
+        taken and can never disagree with the path. No path the engine refused
+        (not `is_usable`) and no path whose stopping test held is in the call.
+        Each ``point`` means what it means in ``restart``: the point that path now
+        stands at. The point it stepped from is the method's own record, not an
+        argument - the same rule that makes ``propose`` read its point instead of
+        being handed it.
         """
         ...
 

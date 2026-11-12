@@ -80,19 +80,19 @@ class StubSolver:
         self.steps: list[int] = []
         self.points: dict[int, PathPoint] = {}
 
-    def restart(self, i: int, point: PathPoint) -> None:
-        """Record path i's cold start (the engine's only seed call)."""
-        self.points[i] = point
-        self.inited.append(i)
+    def restart(self, points: dict[int, PathPoint]) -> None:
+        """Record each path's cold start (the engine's only seed call)."""
+        self.points.update(points)
+        self.inited.extend(points)
 
-    def step(self, i: int, point: PathPoint) -> None:
-        """Record the committed step and stand on it; nothing else is kept."""
-        self.points[i] = point
-        self.steps.append(i)
+    def step(self, points: dict[int, PathPoint]) -> None:
+        """Record the committed steps and stand on them; nothing else is kept."""
+        self.points.update(points)
+        self.steps.extend(points)
 
-    def _trial(self, idxs: list[int], domain: Domain) -> jnp.ndarray:
+    def _trial(self, paths: list[int], domain: Domain) -> jnp.ndarray:
         """Return the cohort's halved steepest-descent steps, clipped."""
-        held = [self.points[i] for i in idxs]
+        held = [self.points[i] for i in paths]
         return jnp.clip(
             jnp.stack([p.x for p in held]) - 0.5 * jnp.stack([p.g for p in held]),
             domain.lo,
@@ -100,14 +100,14 @@ class StubSolver:
         )
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
         """Serve one trial per path, then name the winners (or none of them)."""
-        self.trials.extend(idxs)
-        rows = serve_trials(self._trial(idxs, domain))
+        self.trials.extend(paths)
+        rows = serve_trials(self._trial(paths, domain))
         return {
             i: (None if self.give_up else row)
-            for i, row in zip(idxs, rows, strict=True)
+            for i, row in zip(paths, rows, strict=True)
         }
 
 
@@ -115,13 +115,13 @@ class UnjudgedSolver(StubSolver):
     """A method whose step names its proposal unread: it serves no trial."""
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
         """Hand the steps back owed, so `settle` grades them in one batch."""
         del serve_trials
-        self.trials.extend(idxs)
-        batch = self._trial(idxs, domain)
-        return {i: Pending(batch[k], None, None) for k, i in enumerate(idxs)}
+        self.trials.extend(paths)
+        batch = self._trial(paths, domain)
+        return {i: Pending(batch[k], None, None) for k, i in enumerate(paths)}
 
 
 class RetryingSolver(StubSolver):
@@ -140,11 +140,11 @@ class RetryingSolver(StubSolver):
         self.retries = retries
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
         """Serve trials one at a time and name the last one, read."""
         out: dict[int, Pending | None] = {}
-        for i in idxs:
+        for i in paths:
             row: Pending | None = None
             for _attempt in range(self.retries + 1):
                 self.trials.append(i)
@@ -161,10 +161,10 @@ class PushTo(UnjudgedSolver):
         super().__init__()
         self.x_star = x_star
 
-    def _trial(self, idxs: list[int], domain: Domain) -> jnp.ndarray:
+    def _trial(self, paths: list[int], domain: Domain) -> jnp.ndarray:
         """Return the stored point, whatever the start."""
         del domain
-        return jnp.full((len(idxs), self.points[idxs[0]].x.size), self.x_star)
+        return jnp.full((len(paths), self.points[paths[0]].x.size), self.x_star)
 
 
 class RecordingModel:

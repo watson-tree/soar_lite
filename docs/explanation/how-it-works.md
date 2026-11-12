@@ -17,12 +17,12 @@ Two interfaces supply the method names used below, and each has a `propose`
 called with different arguments:
 
 - `GlobalModel` — `propose(n_points, domain)` and `observe`.
-- `LocalSolver` — `restart`, `propose(idxs, domain, serve_trials)` and `step`.
+- `LocalSolver` — `restart`, `propose(paths, domain, serve_trials)` and `step`.
 
 `settle` belongs to neither: it is the fused batch that closes an iteration,
 where every half the iteration's steps and restarts still owe is bought
 together. `_place` is the engine's own landing half, run once per channel, and is
-what calls the method's `restart(i, p)` or `step(i, p)`. Those two are internal,
+what calls the method's `restart(points)` or `step(points)`. Those two are internal,
 explained where they run, and not callable from outside.
 
 ## The contract: one objective, value and gradient
@@ -452,7 +452,7 @@ Cost):
    box — and a miss is a `ValueError` at once, naming the row. The width belongs
    to the engine, and a model answering outside its own box fails there instead
    of being slid onto a wall.
-4. **Steps**: the cohort asks `local_solver.propose(idxs, domain,
+4. **Steps**: the cohort asks `local_solver.propose(paths, domain,
    serve_trials)` once, for the whole cohort, producing each path's winner or
    `None`.
 5. **The `settle` batch** (issued only when something is still owed): redraw
@@ -462,8 +462,8 @@ Cost):
    Nothing owed (no starts, and winners already carrying their gradient) means
    no batch is issued here and the counters do not move.
 6. **Landing**: `_place` commits each usable point and calls that channel's
-   hook — a start goes through `restart` (unusable leaves it `stalled`, re-drawn
-   next iteration under the rule in
+   hook once, with every path that landed — a start goes through `restart`
+   (unusable leaves it `stalled`, re-drawn next iteration under the rule in
    [Stalled is the only path state](#stalled-is-the-only-path-state)) and a
    winner through `step` (unusable is `stalled`, no `step`).
 
@@ -530,8 +530,8 @@ way (see [Stalled is the only path state](#stalled-is-the-only-path-state)).
 ### The current point is state, not an argument
 
 A method that steps from a point has to know where the path stands, and the
-contract hands that point over in exactly two places: `restart(i, p)` places it
-and `step(i, p)` moves it. Both are the engine's own commit points, so a method
+contract hands that point over in exactly two places: `restart(points)` places it
+and `step(points)` moves it. Both are the engine's own commit points, so a method
 that keeps the point it was handed holds the same one the engine holds.
 `propose` receives the cohort's indices, the run's `domain` and the trial seam —
 never the points; each method reads those out of its own state. The engine
@@ -556,7 +556,7 @@ engine stands. What the engine owns is the **price**: it batches whatever
 gradients the iteration still owes into one fused pass, applies the finite gate,
 and moves no point a method placed — a step or a trial row outside the box is
 refused, not clipped. The method learns the landing
-point only through `step(i, p)`, with `p` the point the engine committed, and
+point only through `step(points)`, with each point the one the engine committed, and
 keeps no second copy of what the engine bought.
 
 A trial carries its **coordinate, its value, and — on the fused seam, where the

@@ -1033,13 +1033,17 @@ class _Paths:
         is not passed on - the method kept it when it was placed or last stepped
         from.
 
+        The hook is called once, with every path that landed, so a method that
+        keeps per-path state updates it in one call and never sees a path this
+        iteration refused.
+
         Args:
             points: The points to commit, keyed by path.
             restart: Whether these are this iteration's fresh starts or its step
                 winners.
 
         """
-        notify = self.local_solver.restart if restart else self.local_solver.step
+        landed: dict[int, PathPoint] = {}
         for i, point in points.items():
             slot = self.slots[i]
             if not point.is_usable:
@@ -1047,7 +1051,10 @@ class _Paths:
                 continue
             slot.is_stalled = False  # a placed path is moving again
             slot.point = point
-            notify(i, point)
+            landed[i] = point
+        if landed:
+            notify = self.local_solver.restart if restart else self.local_solver.step
+            notify(landed)
 
 
 def _validate_run(

@@ -105,24 +105,22 @@ class _ValueReader(LocalSolver):
         """Start with no point: `restart` places the first one."""
         self.point: PathPoint | None = None
 
-    def restart(self, i: int, point: PathPoint) -> None:
+    def restart(self, points: dict[int, PathPoint]) -> None:
         """Take the point the engine placed."""
-        del i
-        self.point = point
+        (self.point,) = points.values()
 
-    def step(self, i: int, point: PathPoint) -> None:
+    def step(self, points: dict[int, PathPoint]) -> None:
         """Take the point the engine committed."""
-        del i
-        self.point = point
+        (self.point,) = points.values()
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
         """Return the read candidate for every path asked about."""
         assert self.point is not None
         x = jnp.clip(self.point.x - 0.1 * self.point.g, domain.lo, domain.hi)
         out: dict[int, Pending | None] = {}
-        for i in idxs:
+        for i in paths:
             (read,) = serve_trials(x[None, :])
             out[i] = read
         return out

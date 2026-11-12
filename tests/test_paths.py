@@ -101,23 +101,21 @@ class Script:
         self.got: list[PathPoint] = []
         self.served: list[float] = []
 
-    def restart(self, i: int, point: PathPoint) -> None:
-        """Keep the point the engine seeded path `i` with."""
-        del i  # one path per run below: the index carries nothing extra
-        self.got.append(point)
+    def restart(self, points: dict[int, PathPoint]) -> None:
+        """Keep the starts the engine placed, one per path of the batch."""
+        self.got.extend(points.values())
 
-    def step(self, i: int, point: PathPoint) -> None:
-        """Keep the point the engine committed for path `i`."""
-        del i
-        self.got.append(point)
+    def step(self, points: dict[int, PathPoint]) -> None:
+        """Keep the points the engine committed, one per path of the batch."""
+        self.got.extend(points.values())
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
         """Return the script's next entry for each path asked about."""
         del domain  # the script states a candidate verbatim: the box is not its job
         out: dict[int, Pending | None] = {}
-        for i in idxs:
+        for i in paths:
             candidate = self._candidates.pop(0)
             if candidate is None:
                 out[i] = None
@@ -136,22 +134,22 @@ class _Stray(Script):
     """A method that answers for a path this iteration never offered it."""
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
-        """Answer one index past every path asked about."""
+        """Answer one path past every path asked about."""
         del domain, serve_trials  # one fixed answer, and no trial to serve
-        return {i + 1: Pending(jnp.asarray([0.5]), None, None) for i in idxs}
+        return {i + 1: Pending(jnp.asarray([0.5]), None, None) for i in paths}
 
 
 class _Misfit(Script):
     """A method that answers with a point of the wrong width."""
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
         """Answer every path with a two-dimensional point."""
         del domain, serve_trials
-        return {i: Pending(jnp.zeros(2), None, None) for i in idxs}
+        return {i: Pending(jnp.zeros(2), None, None) for i in paths}
 
 
 def model_at(x: jnp.ndarray) -> Callable[[int, Domain], jnp.ndarray]:

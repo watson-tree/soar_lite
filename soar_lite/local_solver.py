@@ -178,8 +178,8 @@ class DiagonalPreconditioner(LocalSolver):
         # One record per path, seeded by `restart`.
         self._state: dict[int, _PathState] = {}
 
-    def restart(self, i: int, point: PathPoint) -> None:
-        """Seed path i at point: warm-up armed at alpha0, g0 kept, no estimate yet.
+    def restart(self, points: dict[int, PathPoint]) -> None:
+        """Seed each path at its point: warm-up armed at alpha0, g0 kept, no estimate.
 
         The engine's only cold start, so this runs at initialization and after
         every restart - the secant history never carries across one. The
@@ -188,21 +188,22 @@ class DiagonalPreconditioner(LocalSolver):
         itself is kept, because no later call hands it back: it is the first of
         the contract's two arrivals.
         """
-        # alpha0 is a scalar multiplier; the warm-up direction -g carries the
-        # coordinate scale itself
-        self._state[i] = _PathState.restarted(point, self.alpha0)
+        for i, point in points.items():
+            # alpha0 is a scalar multiplier; the warm-up direction -g carries the
+            # coordinate scale itself
+            self._state[i] = _PathState.restarted(point, self.alpha0)
 
-    def step(self, i: int, point: PathPoint) -> None:
-        """Take the step the engine just committed for path i.
+    def step(self, points: dict[int, PathPoint]) -> None:
+        """Take the steps the engine just committed, one path at a time.
 
-        ``point`` means what it means in `restart`: the point the path now stands
-        at, handed over once. The point it stepped from is the record's own, so
-        the pair the step observed is read entirely off (record, point).
+        Each ``point`` means what it means in `restart`: the point that path now
+        stands at, handed over once. The point it stepped from is the record's
+        own, so the pair the step observed is read entirely off (record, point).
 
-        Only the winner is taken in, never a trial the method's own enumeration
+        Only the winners are taken in, never a trial the method's own enumeration
         rejected: a secant from a point the path never stood on would smear the
-        magnitude EMAs. The engine calls this with the exact point it just
-        committed, so both histories see what the step observed: the pair
+        magnitude EMAs. The engine calls this with the exact points it just
+        committed, so both histories see what each step observed: the pair
         (Δx, Δg) for the curvature, and the gradient at the point arrived at for
         the momentum. The first call after a restart is the warm-up pair and
         seeds the secant EMAs outright; later calls blend at beta - the record's
@@ -210,30 +211,31 @@ class DiagonalPreconditioner(LocalSolver):
         where a step is re-armed: a winner the engine refuses never reaches
         here, so the method is left untouched rather than half-reset.
         """
-        state = self._state[i]
-        s_ema, y_ema = self._blended_secant(
-            state, point.x - state.point.x, point.g - state.point.g
-        )
-        # Read only now that the step has committed, and read from the point it
-        # committed to: the gradient this step started from was already spent on
-        # this step's direction, so the arriving one is the news. `restart`
-        # seeds the descent with the start's own gradient, which is why every
-        # step after it blends rather than seeding; at mu = 0 the blend keeps
-        # only the arriving gradient, which is the default's bare direction.
-        m = self.mu * state.m + (1.0 - self.mu) * point.g
-        self._state[i] = replace(
-            state,
-            point=point,
-            is_warmup=False,
-            s_ema=s_ema,
-            y_ema=y_ema,
-            m=m,
-        ).armed(self.alpha0)
+        for i, point in points.items():
+            state = self._state[i]
+            s_ema, y_ema = self._blended_secant(
+                state, point.x - state.point.x, point.g - state.point.g
+            )
+            # Read only now that the step has committed, and read from the point it
+            # committed to: the gradient this step started from was already spent on
+            # this step's direction, so the arriving one is the news. `restart`
+            # seeds the descent with the start's own gradient, which is why every
+            # step after it blends rather than seeding; at mu = 0 the blend keeps
+            # only the arriving gradient, which is the default's bare direction.
+            m = self.mu * state.m + (1.0 - self.mu) * point.g
+            self._state[i] = replace(
+                state,
+                point=point,
+                is_warmup=False,
+                s_ema=s_ema,
+                y_ema=y_ema,
+                m=m,
+            ).armed(self.alpha0)
 
     def propose(
-        self, idxs: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Pending | None]:
-        """Propose one step for every path in ``idxs``, or ``None`` if it is done.
+        """Propose one step for every path in ``paths``, or ``None`` if it is done.
 
         A `Pending` here carries the clipped proposal alone, both halves still
         owed, so the engine's `settle` can buy its f and g in one fused batch
@@ -263,7 +265,7 @@ class DiagonalPreconditioner(LocalSolver):
             i: Pending(jnp.clip(self._propose(i), domain.lo, domain.hi), None, None)
             if not self._is_stationary(i, domain)
             else None
-            for i in idxs
+            for i in paths
         }
 
     def _propose(self, i: int) -> jnp.ndarray:
