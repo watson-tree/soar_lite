@@ -93,15 +93,13 @@ class FixedModel:
     def observe(self, served: Mapping[int, ValuePoint]) -> None:
         """Ignore the evidence: this model fits nothing."""
 
-    def propose(
-        self, paths: Sequence[int], domain: Domain
-    ) -> dict[int, jnp.ndarray | None]:
+    def propose(self, paths: Sequence[int], domain: Domain) -> dict[int, Point | None]:
         """Answer every path with one of the stored rows, tiling them if needed."""
         del domain
         rows = int(self.points.shape[0])
         reps = -(-len(paths) // rows)
         drawn = jnp.concatenate([self.points] * reps)[: len(paths)]
-        return dict(zip(paths, drawn, strict=True))
+        return {i: Point(row) for i, row in zip(paths, drawn, strict=True)}
 
 
 class AskingModel(FixedModel):
@@ -112,9 +110,7 @@ class AskingModel(FixedModel):
         super().__init__(points)
         self.asks: list[int] = []
 
-    def propose(
-        self, paths: Sequence[int], domain: Domain
-    ) -> dict[int, jnp.ndarray | None]:
+    def propose(self, paths: Sequence[int], domain: Domain) -> dict[int, Point | None]:
         """Record the ask, then answer it from the stored rows."""
         self.asks.append(len(paths))
         return super().propose(paths, domain)
@@ -423,12 +419,12 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
 
         def propose(
             self, paths: Sequence[int], domain: Domain
-        ) -> dict[int, jnp.ndarray | None]:
+        ) -> dict[int, Point | None]:
             """Answer every path with the well this ask is assigned to."""
             del domain
             center = shallow if self.asked == 0 else deep
             self.asked += 1
-            return dict.fromkeys(paths, jnp.full((1,), center))
+            return dict.fromkeys(paths, Point(jnp.full((1,), center)))
 
     def run(*, restart_stalled: bool) -> NPathResult:
         return n_path_schedule(
@@ -692,7 +688,7 @@ def test_a_not_finite_path_never_widens_a_batch() -> None:
 
         def propose(
             self, paths: Sequence[int], domain: Domain
-        ) -> dict[int, jnp.ndarray | None]:
+        ) -> dict[int, Point | None]:
             asks.append(len(paths))
             return self.inner.propose(paths, domain)
 
@@ -1149,9 +1145,7 @@ class DecliningModel(FixedModel):
         super().__init__(points)
         self.keep = keep
 
-    def propose(
-        self, paths: Sequence[int], domain: Domain
-    ) -> dict[int, jnp.ndarray | None]:
+    def propose(self, paths: Sequence[int], domain: Domain) -> dict[int, Point | None]:
         """Answer the kept paths and decline the rest."""
         answered = super().propose(paths, domain)
         return {i: answered[i] for i in paths if i in self.keep}

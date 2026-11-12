@@ -972,9 +972,10 @@ class _Paths:
         that box, so a model answering with another width, a NaN row, or a point
         past a wall fails here, naming the path and the dimension, instead of
         deep inside the iteration that would have served it. Nothing is read, so
-        every start is a bare `Point` - a start has nothing to be compared - and
-        `settle` buys its gradient in the same batch as the step winners, so a
-        restart costs no gradient pass of its own.
+        every start stays the bare `Point` the model handed over - a start has
+        nothing to be compared - and `settle` buys its gradient in the same
+        batch as the step winners, so a restart costs no gradient pass of its
+        own.
         """
         if not restarting:
             return {}
@@ -1001,15 +1002,15 @@ class _Paths:
                 raise ValueError(msg)
             if answer is None:  # the model's own stopping rule: no start
                 continue
-            if answer.shape != (d,):
+            if answer.x.shape != (d,):
                 msg = (
                     f"the global model's start for path {i} must be a ({d},) "
-                    f"point, got shape {answer.shape}"
+                    f"point, got shape {answer.x.shape}"
                 )
                 raise ValueError(msg)
             starts[i] = Point(
                 _check_inside(
-                    answer,
+                    answer.x,
                     what=f"the global model's start for path {i}",
                     domain=self.domain,
                 )

@@ -180,20 +180,27 @@ class GlobalModel(Protocol):
         """
         ...
 
-    def propose(
-        self, paths: Sequence[int], domain: Domain
-    ) -> dict[int, jnp.ndarray | None]:
+    def propose(self, paths: Sequence[int], domain: Domain) -> dict[int, Point | None]:
         """Answer one fresh start per path asked about, keyed by that path.
 
         `paths` is every path that restarts this iteration - on iteration 0,
         every path when the caller handed no `x0` - in ascending order, and
         `domain` is the box the answers must land in and the one statement of
-        the dimension. Each answer is one point in the coordinates the objective
-        takes; ``None`` says this path gets no start from this model, and the
-        engine leaves the path where it stands. Holding no point, it is asked
-        again next iteration, so a decline is not a stopping rule and does not end
-        the run - unlike ``None`` from a method's `propose`, which stalls that path
+        the dimension. Each answer is a bare `Point` - a place the model read
+        nothing of, which is what a start is - and that type is where the shape
+        and the coordinates' frame are stated, so no model restates them.
+        ``None`` says this path gets no start from this model, and the engine
+        leaves the path where it stands. Holding no point, it is asked again
+        next iteration, so a decline is not a stopping rule and does not end the
+        run - unlike ``None`` from a method's `propose`, which stalls that path
         for good and only `restart_stalled` revives.
+
+        The answer crossing the other way is a `ValuePoint`: what a model is
+        handed is always at least read, and what it hands back never is. Those
+        are the two directions of one hierarchy, so a model that wants to read
+        a candidate it is about to place asks the run for the value rather than
+        guessing one - only a method holds a `serve_trials` seam, though, and a
+        model's answer is read by the engine's own `settle` batch.
 
         The engine checks every answer it is given at the batch boundary - a
         ``(d,)`` point, finite and inside the box - and raises ``ValueError``
@@ -415,7 +422,7 @@ gradients afterwards, together in one fused batch.
 # `ProposeFn` is the query for fresh starts: one answer per path asked about,
 # handed the run's box because the box is the engine's and a model carries none.
 ObserveFn: TypeAlias = Callable[[Mapping[int, ValuePoint]], None]
-ProposeFn: TypeAlias = Callable[[Sequence[int], Domain], dict[int, jnp.ndarray | None]]
+ProposeFn: TypeAlias = Callable[[Sequence[int], Domain], dict[int, Point | None]]
 
 NPathStatus: TypeAlias = Literal[
     "max_iters",

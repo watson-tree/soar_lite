@@ -419,8 +419,8 @@ start, at the cost of that inner search's evaluations.
 
 ### A restart costs no extra gradient batch
 
-`propose`'s answer arrives inside the domain, wrapped as a point that still
-owes its `f` and `g`, and handed to `settle` together with the iteration's step
+`propose`'s answer arrives inside the domain, already a `Point` that still owes
+its `f` and `g`, and handed to `settle` together with the iteration's step
 winners, so a restart start never buys a gradient batch of its own. With the
 value-only seam connected the merge is even tighter: the restart start's value
 is deferred and bought once in the same fused batch. An unusable start (`f` or `g`

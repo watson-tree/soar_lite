@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jnp
 
 from soar_lite.domain import Domain
-from soar_lite.engine import GlobalModel, ValuePoint
+from soar_lite.engine import GlobalModel, Point, ValuePoint
 
 
 class SampleGlobalModel(GlobalModel):
@@ -47,11 +47,10 @@ class SampleGlobalModel(GlobalModel):
     def observe(self, served: Mapping[int, ValuePoint]) -> None:
         """Ignore the evidence: a model-free sampler fits nothing."""
 
-    def propose(
-        self, paths: Sequence[int], domain: Domain
-    ) -> dict[int, jnp.ndarray | None]:
+    def propose(self, paths: Sequence[int], domain: Domain) -> dict[int, Point | None]:
         """Draw one point per path, in the order the paths were asked."""
         if not paths:
             return {}
         self._key, sub = jax.random.split(self._key)
-        return dict(zip(paths, domain.draw(sub, len(paths)), strict=True))
+        drawn = domain.draw(sub, len(paths))
+        return {i: Point(row) for i, row in zip(paths, drawn, strict=True)}

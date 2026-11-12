@@ -39,7 +39,7 @@ import numpy as np
 from jax.scipy.special import log_ndtr
 
 from soar_lite.domain import Domain
-from soar_lite.engine import GlobalModel, ValuePoint
+from soar_lite.engine import GlobalModel, Point, ValuePoint
 from soar_lite.global_model.projection import (
     Projection,
     ProjectionFactory,
@@ -214,9 +214,7 @@ class BLRGlobalModel(GlobalModel):
             self._fs.append(values[keep])
             self._fold_stats(values[keep])
 
-    def propose(
-        self, paths: Sequence[int], domain: Domain
-    ) -> dict[int, jnp.ndarray | None]:
+    def propose(self, paths: Sequence[int], domain: Domain) -> dict[int, Point | None]:
         """Return one restart point per path: a draw until a fit is possible.
 
         The box is the caller's, handed in per ask: the geometry is rebuilt from
@@ -244,7 +242,8 @@ class BLRGlobalModel(GlobalModel):
         self._key, sub = jax.random.split(self._key)
         projection = self._projection_for(domain)
         if not self._can_fit():
-            return dict(zip(paths, domain.draw(sub, n_points), strict=True))
+            drawn = domain.draw(sub, n_points)
+            return {i: Point(row) for i, row in zip(paths, drawn, strict=True)}
         weights, cov = self._posterior(projection)
         best_f = self._standardize(jnp.asarray(self._min))
 
@@ -255,7 +254,7 @@ class BLRGlobalModel(GlobalModel):
             return self._acquisition_value_and_grad(projection, x, weights, cov, best_f)
 
         asked = set(paths)
-        starts: dict[int, jnp.ndarray | None] = {}
+        starts: dict[int, Point | None] = {}
         for i, answer in self._minimize(acquisition, domain, paths, sub).items():
             if i not in asked:
                 msg = (
@@ -272,7 +271,7 @@ class BLRGlobalModel(GlobalModel):
                     f"point, got shape {answer.shape}"
                 )
                 raise ValueError(msg)
-            starts[i] = answer
+            starts[i] = Point(answer)
         return starts
 
     def _predict(

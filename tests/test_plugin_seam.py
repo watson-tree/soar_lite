@@ -185,9 +185,7 @@ class RecordingModel:
         """Record the round's width; this model fits nothing."""
         self.observed.append(len(served))
 
-    def propose(
-        self, paths: Sequence[int], domain: Domain
-    ) -> dict[int, jnp.ndarray | None]:
+    def propose(self, paths: Sequence[int], domain: Domain) -> dict[int, Point | None]:
         """Draw one uniform point per path over the box this ask hands in."""
         self.calls.append(len(paths))
         self._key, sub = jax.random.split(self._key)
@@ -197,7 +195,7 @@ class RecordingModel:
             minval=domain.lo,
             maxval=domain.hi,
         )
-        return dict(zip(paths, rows, strict=True))
+        return {i: Point(row) for i, row in zip(paths, rows, strict=True)}
 
 
 def test_injected_solver_is_driven() -> None:

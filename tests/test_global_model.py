@@ -16,9 +16,9 @@ def ask(model: GlobalModel, n_points: int, domain: Domain) -> jnp.ndarray:
     answers = model.propose(list(range(n_points)), domain)
     rows = []
     for i in range(n_points):
-        row = answers[i]
-        assert row is not None, f"path {i} was declined"
-        rows.append(row)
+        point = answers[i]
+        assert point is not None, f"path {i} was declined"
+        rows.append(point.x)
     return jnp.stack(rows)
 
 

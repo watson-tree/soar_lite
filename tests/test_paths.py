@@ -160,12 +160,12 @@ class _Misfit(Script):
 
 def model_at(
     x: jnp.ndarray,
-) -> Callable[[Sequence[int], Domain], dict[int, jnp.ndarray | None]]:
+) -> Callable[[Sequence[int], Domain], dict[int, Point | None]]:
     """Return a restart source that proposes one fixed row for every path."""
 
-    def propose(paths: Sequence[int], domain: Domain) -> dict[int, jnp.ndarray | None]:
+    def propose(paths: Sequence[int], domain: Domain) -> dict[int, Point | None]:
         del domain  # this stub only repeats its row; the box is the engine's to check
-        return dict.fromkeys(paths, x)
+        return dict.fromkeys(paths, Point(x))
 
     return propose
 
