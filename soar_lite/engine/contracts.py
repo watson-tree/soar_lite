@@ -190,9 +190,10 @@ class GlobalModel(Protocol):
         `domain` is the box the answers must land in and the one statement of
         the dimension. Each answer is one point in the coordinates the objective
         takes; ``None`` says this path gets no start from this model, and the
-        engine stalls the path where it stands (one holding no point is asked
-        again next iteration). Declining is the model's own stopping rule, as
-        ``None`` from a method's `propose` is the method's.
+        engine leaves the path where it stands. Holding no point, it is asked
+        again next iteration, so a decline is not a stopping rule and does not end
+        the run - unlike ``None`` from a method's `propose`, which stalls that path
+        for good and only `restart_stalled` revives.
 
         The engine checks every answer it is given at the batch boundary - a
         ``(d,)`` point, finite and inside the box - and raises ``ValueError``

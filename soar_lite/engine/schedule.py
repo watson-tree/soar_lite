@@ -894,10 +894,13 @@ class _Paths:
 
         A flock with nothing left to do ends the run instead of idling: when no
         path restarts and every path is stalled, `_AllStalled` is raised before
-        any batch is asked for. The same signal ends a run whose model declined
-        every start it was asked about while nothing was stepping: the model
-        that turns down every path is taken at its word, as a method answering
-        `None` for every path would be.
+        any batch is asked for. A model declining a start is not that signal: a
+        decline says only that this path starts nowhere this round, and a path
+        holding no point is asked again next iteration, so a round in which
+        every start is declined completes, serves nothing, and costs the horizon
+        one iteration rather than ending the run. The model is the one that
+        could not place a start; whether the run has run out of room is the
+        caller's horizon to say.
         """
         restarting = [
             i
@@ -922,13 +925,6 @@ class _Paths:
             if i not in restarting and not slot.is_stalled
         ]
         starts = self._restart_starts(restarting)
-        # Every path that was going to restart was declined and nothing is
-        # stepping: this iteration serves nothing, and the model that just
-        # declined every path it was asked about is taken at its word - the same
-        # way a method answering `None` for every path it was given stalls them
-        # all. Ended here rather than idling out the horizon.
-        if not starts and not stepping:
-            raise _AllStalled
         winners = self._step_winners(stepping)
         # One batch over both halves, keyed by path so neither is re-paired by
         # position. A refusal (`_BatchRefused`) cuts the iteration short with

@@ -1186,8 +1186,8 @@ def test_a_declined_start_leaves_that_path_with_no_point() -> None:
     assert [int(x.shape[0]) for x in served] == [1, 1], served
 
 
-def test_a_run_whose_model_declines_every_path_ends_at_once() -> None:
-    """Every start declined and nothing stepping: `all_stalled`, no batch served."""
+def test_a_round_of_declined_starts_asks_again_instead_of_ending_the_run() -> None:
+    """A model that places nothing this round is asked again the next one."""
 
     def eval_f_g(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, None]:
         return jnp.sum(theta**2, axis=1), 2.0 * theta, None
@@ -1200,9 +1200,13 @@ def test_a_run_whose_model_declines_every_path_ends_at_once() -> None:
         max_iters=5,
         local_solver=HalfStep(),
     )
-    assert res.status == "all_stalled", res.status
-    assert bool(jnp.all(jnp.isnan(res.flock_x))), res.flock_x
+    # Nothing was placed, so nothing was served - but a decline is the model
+    # failing to place a start, not the run running out of room, so the horizon
+    # is what ends it: every iteration asked again, none of them ended the run.
+    assert res.status == "max_iters", res.status
+    assert res.n_iters == 5, res.n_iters
     assert res.work.n_f_g_batches == 0, res.work
+    assert bool(jnp.all(jnp.isnan(res.flock_x))), res.flock_x
 
 
 def test_without_x0_the_model_places_the_flock() -> None:
