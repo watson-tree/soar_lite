@@ -322,6 +322,20 @@ class LocalSolver(Protocol):
         """
         ...
 
+    def step(self, points: Mapping[int, PathPoint]) -> None:
+        """Take the steps the engine just committed: each path stands at its point.
+
+        The engine's only call site is the commit of the usable winners, with
+        each ``point`` the settled one it committed, so every recorded step was
+        taken and can never disagree with the path. No path the engine refused
+        (not `is_usable`) and no path whose stopping test held is in the call.
+        Each ``point`` means what it means in ``restart``: the point that path now
+        stands at. The point it stepped from is the method's own record, not an
+        argument - the same rule that makes ``propose`` read its point instead of
+        being handed it.
+        """
+        ...
+
     def propose(
         self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
@@ -356,20 +370,6 @@ class LocalSolver(Protocol):
         The winner must already lie inside ``domain`` for the same reason: the
         method is handed the box, and the engine refuses a step that leaves it
         instead of sliding it back onto a wall.
-        """
-        ...
-
-    def step(self, points: Mapping[int, PathPoint]) -> None:
-        """Take the steps the engine just committed: each path stands at its point.
-
-        The engine's only call site is the commit of the usable winners, with
-        each ``point`` the settled one it committed, so every recorded step was
-        taken and can never disagree with the path. No path the engine refused
-        (not `is_usable`) and no path whose stopping test held is in the call.
-        Each ``point`` means what it means in ``restart``: the point that path now
-        stands at. The point it stepped from is the method's own record, not an
-        argument - the same rule that makes ``propose`` read its point instead of
-        being handed it.
         """
         ...
 
