@@ -17,7 +17,7 @@ gets a start it did not pay for.
 """
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import jax
@@ -148,7 +148,7 @@ def run_soar_lite(  # noqa: PLR0913 - the experiment's dials, named once
 def surrogate_minimize(
     objective: AcquisitionFn,
     domain: Domain,
-    paths: list[int],
+    paths: Sequence[int],
     key: jnp.ndarray,
 ) -> dict[int, jnp.ndarray | None]:
     """Minimize a batched acquisition with one restart-free n-path engine run.

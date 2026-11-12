@@ -10,6 +10,7 @@ It implements the engine's `LocalSolver` contract and owns only direction, step
 size and acceptance - no full curvature model and no Hessian.
 """
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -178,7 +179,7 @@ class DiagonalPreconditioner(LocalSolver):
         # One record per path, seeded by `restart`.
         self._state: dict[int, _PathState] = {}
 
-    def restart(self, points: dict[int, PathPoint]) -> None:
+    def restart(self, points: Mapping[int, PathPoint]) -> None:
         """Seed each path at its point: warm-up armed at alpha0, g0 kept, no estimate.
 
         The engine's only cold start, so this runs at initialization and after
@@ -193,7 +194,7 @@ class DiagonalPreconditioner(LocalSolver):
             # coordinate scale itself
             self._state[i] = _PathState.restarted(point, self.alpha0)
 
-    def step(self, points: dict[int, PathPoint]) -> None:
+    def step(self, points: Mapping[int, PathPoint]) -> None:
         """Take the steps the engine just committed, one path at a time.
 
         Each ``point`` means what it means in `restart`: the point that path now
@@ -233,7 +234,7 @@ class DiagonalPreconditioner(LocalSolver):
             ).armed(self.alpha0)
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Propose one step for every path in ``paths``, or ``None`` if it is done.
 

@@ -16,6 +16,8 @@ Import direction is one-way - this module reads the engine's types and the
 `n_path_schedule` - so neither import is circular.
 """
 
+from collections.abc import Mapping, Sequence
+
 import jax
 import jax.numpy as jnp
 
@@ -42,11 +44,11 @@ class SampleGlobalModel(GlobalModel):
         """
         self._key = key
 
-    def observe(self, served: dict[int, ValuePoint]) -> None:
+    def observe(self, served: Mapping[int, ValuePoint]) -> None:
         """Ignore the evidence: a model-free sampler fits nothing."""
 
     def propose(
-        self, paths: list[int], domain: Domain
+        self, paths: Sequence[int], domain: Domain
     ) -> dict[int, jnp.ndarray | None]:
         """Draw one point per path, in the order the paths were asked."""
         if not paths:

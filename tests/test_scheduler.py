@@ -48,7 +48,7 @@ model for them, so a test that wants known starts says so at the entry.
 # here is the intended read, not a boundary crossing.
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import TypeAlias
 
 import jax
@@ -90,11 +90,11 @@ class FixedModel:
         self.points = points
         self.d = int(points.shape[1])
 
-    def observe(self, served: dict[int, ValuePoint]) -> None:
+    def observe(self, served: Mapping[int, ValuePoint]) -> None:
         """Ignore the evidence: this model fits nothing."""
 
     def propose(
-        self, paths: list[int], domain: Domain
+        self, paths: Sequence[int], domain: Domain
     ) -> dict[int, jnp.ndarray | None]:
         """Answer every path with one of the stored rows, tiling them if needed."""
         del domain
@@ -113,7 +113,7 @@ class AskingModel(FixedModel):
         self.asks: list[int] = []
 
     def propose(
-        self, paths: list[int], domain: Domain
+        self, paths: Sequence[int], domain: Domain
     ) -> dict[int, jnp.ndarray | None]:
         """Record the ask, then answer it from the stored rows."""
         self.asks.append(len(paths))
@@ -143,16 +143,16 @@ class HalfStep:
         """Start with no points: `restart` places them."""
         self.points: dict[int, PathPoint] = {}
 
-    def restart(self, points: dict[int, PathPoint]) -> None:
+    def restart(self, points: Mapping[int, PathPoint]) -> None:
         """Take the starts the engine placed."""
         self.points.update(points)
 
-    def step(self, points: dict[int, PathPoint]) -> None:
+    def step(self, points: Mapping[int, PathPoint]) -> None:
         """Stand on the committed points; this method keeps no model."""
         self.points.update(points)
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Return half a step for each path that strictly decreases, else none."""
         held = [self.points[i] for i in paths]
@@ -418,11 +418,11 @@ def test_a_stall_hands_a_redraw_to_the_global_model() -> None:
             self.domain = Domain([(0.0, 1.0)])
             self.d = self.domain.d
 
-        def observe(self, served: dict[int, ValuePoint]) -> None:
+        def observe(self, served: Mapping[int, ValuePoint]) -> None:
             """Ignore the evidence: this model fits nothing."""
 
         def propose(
-            self, paths: list[int], domain: Domain
+            self, paths: Sequence[int], domain: Domain
         ) -> dict[int, jnp.ndarray | None]:
             """Answer every path with the well this ask is assigned to."""
             del domain
@@ -687,11 +687,11 @@ def test_a_not_finite_path_never_widens_a_batch() -> None:
         def __init__(self, inner: SampleGlobalModel) -> None:
             self.inner = inner
 
-        def observe(self, served: dict[int, ValuePoint]) -> None:
+        def observe(self, served: Mapping[int, ValuePoint]) -> None:
             self.inner.observe(served)
 
         def propose(
-            self, paths: list[int], domain: Domain
+            self, paths: Sequence[int], domain: Domain
         ) -> dict[int, jnp.ndarray | None]:
             asks.append(len(paths))
             return self.inner.propose(paths, domain)
@@ -798,16 +798,16 @@ def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
             """Start with no point: `restart` places the first one."""
             self.points: dict[int, PathPoint] = {}
 
-        def restart(self, points: dict[int, PathPoint]) -> None:
+        def restart(self, points: Mapping[int, PathPoint]) -> None:
             """Take the starts the engine placed."""
             self.points.update(points)
 
-        def step(self, points: dict[int, PathPoint]) -> None:
+        def step(self, points: Mapping[int, PathPoint]) -> None:
             """Take the points the engine committed."""
             self.points.update(points)
 
         def propose(
-            self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+            self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
         ) -> dict[int, Point | None]:
             """Read the whole errand one round at a time and name the winner."""
             out: dict[int, Point | None] = {}
@@ -864,7 +864,7 @@ def test_a_stalled_path_leaves_the_cohort() -> None:
             self.asked: list[list[int]] = []
 
         def propose(
-            self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+            self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
         ) -> dict[int, Point | None]:
             """Log the cohort, then refuse the step for path 1."""
             self.asked.append(list(paths))
@@ -1150,7 +1150,7 @@ class DecliningModel(FixedModel):
         self.keep = keep
 
     def propose(
-        self, paths: list[int], domain: Domain
+        self, paths: Sequence[int], domain: Domain
     ) -> dict[int, jnp.ndarray | None]:
         """Answer the kept paths and decline the rest."""
         answered = super().propose(paths, domain)

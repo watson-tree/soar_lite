@@ -28,7 +28,7 @@ The three promises this pins, which no whole-run test can see cheaply:
 # intended use rather than a boundary crossing.
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -107,16 +107,16 @@ class Script:
         self.got: list[PathPoint] = []
         self.served: list[float] = []
 
-    def restart(self, points: dict[int, PathPoint]) -> None:
+    def restart(self, points: Mapping[int, PathPoint]) -> None:
         """Keep the starts the engine placed, one per path of the batch."""
         self.got.extend(points.values())
 
-    def step(self, points: dict[int, PathPoint]) -> None:
+    def step(self, points: Mapping[int, PathPoint]) -> None:
         """Keep the points the engine committed, one per path of the batch."""
         self.got.extend(points.values())
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Return the script's next entry for each path asked about."""
         del domain  # the script states a candidate verbatim: the box is not its job
@@ -140,7 +140,7 @@ class _Stray(Script):
     """A method that answers for a path this iteration never offered it."""
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Answer one path past every path asked about."""
         del domain, serve_trials  # one fixed answer, and no trial to serve
@@ -151,7 +151,7 @@ class _Misfit(Script):
     """A method that answers with a point of the wrong width."""
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Answer every path with a two-dimensional point."""
         del domain, serve_trials
@@ -160,10 +160,10 @@ class _Misfit(Script):
 
 def model_at(
     x: jnp.ndarray,
-) -> Callable[[list[int], Domain], dict[int, jnp.ndarray | None]]:
+) -> Callable[[Sequence[int], Domain], dict[int, jnp.ndarray | None]]:
     """Return a restart source that proposes one fixed row for every path."""
 
-    def propose(paths: list[int], domain: Domain) -> dict[int, jnp.ndarray | None]:
+    def propose(paths: Sequence[int], domain: Domain) -> dict[int, jnp.ndarray | None]:
         del domain  # this stub only repeats its row; the box is the engine's to check
         return dict.fromkeys(paths, x)
 
@@ -368,7 +368,7 @@ class _StrayTrial(Script):
     """A method whose trial round names a path this iteration never asked about."""
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Serve a trial for one path past the cohort, then decline."""
         del domain  # the stray path is the point of the test, not the box
@@ -390,20 +390,20 @@ class _Rounder(LocalSolver):
         self.held: dict[int, PathPoint] = {}
         self.n_served: list[int] = []
 
-    def restart(self, points: dict[int, PathPoint]) -> None:
+    def restart(self, points: Mapping[int, PathPoint]) -> None:
         """Keep the starts the engine placed."""
         self.held.update(points)
 
-    def step(self, points: dict[int, PathPoint]) -> None:
+    def step(self, points: Mapping[int, PathPoint]) -> None:
         """Keep the points the engine committed."""
         self.held.update(points)
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Read its rounds, then name each path's own point as its winner."""
         del domain  # every round serves points the engine already checked
-        served: dict[int, ValuePoint] = {}
+        served: Mapping[int, ValuePoint] = {}
         for _round in range(self._rounds):
             served = serve_trials({i: self.held[i].x for i in paths})
             self.n_served.append(len(served))
@@ -443,7 +443,7 @@ class _WideTrial(Script):
     """A method that serves a trial point of the wrong width."""
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Serve a two-dimensional trial for the first path, then decline."""
         del domain  # the width is the point of the test, not the box

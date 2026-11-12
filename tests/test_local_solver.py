@@ -14,7 +14,7 @@ engine wiring beyond the two round-trips at the end. Run with:
 # pyright: reportPrivateUsage=false
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 
 import jax
@@ -47,7 +47,7 @@ def wide_domain(d: int) -> Domain:
     return Domain(jnp.tile(jnp.asarray([[-1e12, 1e12]]), (d, 1)))
 
 
-def _unread(points: dict[int, jnp.ndarray]) -> dict[int, ValuePoint]:
+def _unread(points: Mapping[int, jnp.ndarray]) -> Mapping[int, ValuePoint]:
     """Return nothing: this method takes one full step and reads no trials."""
     msg = f"propose served {len(points)} trials; this method reads none"
     raise AssertionError(msg)

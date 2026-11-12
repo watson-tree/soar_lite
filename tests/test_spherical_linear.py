@@ -44,7 +44,7 @@ def ask(model: GlobalModel, n_points: int, domain: Domain) -> jnp.ndarray:
 def _grid_minimize(
     objective: AcquisitionFn,
     domain: Domain,
-    paths: list[int],
+    paths: Sequence[int],
     key: jnp.ndarray,
 ) -> dict[int, jnp.ndarray | None]:
     """Stand in for the driver's inner minimizer with the best of a grid."""
@@ -63,7 +63,7 @@ def _grid_minimize(
 def _short_minimize(
     objective: AcquisitionFn,
     domain: Domain,
-    paths: list[int],
+    paths: Sequence[int],
     key: jnp.ndarray,
 ) -> dict[int, jnp.ndarray | None]:
     """Answer one point too wide, so the shape check has something to reject."""
@@ -256,7 +256,7 @@ def test_the_minimizer_is_handed_the_box_the_ask_was_handed() -> None:
     def recording(
         objective: AcquisitionFn,
         domain: Domain,
-        paths: list[int],
+        paths: Sequence[int],
         key: jnp.ndarray,
     ) -> dict[int, jnp.ndarray | None]:
         handed.append(domain)
@@ -449,7 +449,7 @@ def test_a_minimizer_may_decline_a_path() -> None:
     def half(
         objective: AcquisitionFn,
         domain: Domain,
-        paths: list[int],
+        paths: Sequence[int],
         key: jnp.ndarray,
     ) -> dict[int, jnp.ndarray | None]:
         grid = _grid_minimize(objective, domain, paths, key)
@@ -470,7 +470,7 @@ def test_a_minimizer_may_not_answer_for_a_path_nobody_named() -> None:
     def stray(
         objective: AcquisitionFn,
         domain: Domain,
-        paths: list[int],
+        paths: Sequence[int],
         key: jnp.ndarray,
     ) -> dict[int, jnp.ndarray | None]:
         del objective, key  # this stub answers from the ask alone

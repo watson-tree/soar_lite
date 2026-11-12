@@ -19,7 +19,7 @@ Run with:
 """
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -81,17 +81,17 @@ class StubSolver:
         self.steps: list[int] = []
         self.points: dict[int, PathPoint] = {}
 
-    def restart(self, points: dict[int, PathPoint]) -> None:
+    def restart(self, points: Mapping[int, PathPoint]) -> None:
         """Record each path's cold start (the engine's only seed call)."""
         self.points.update(points)
         self.inited.extend(points)
 
-    def step(self, points: dict[int, PathPoint]) -> None:
+    def step(self, points: Mapping[int, PathPoint]) -> None:
         """Record the committed steps and stand on them; nothing else is kept."""
         self.points.update(points)
         self.steps.extend(points)
 
-    def _trial(self, paths: list[int], domain: Domain) -> jnp.ndarray:
+    def _trial(self, paths: Sequence[int], domain: Domain) -> jnp.ndarray:
         """Return the cohort's halved steepest-descent steps, clipped."""
         held = [self.points[i] for i in paths]
         return jnp.clip(
@@ -101,7 +101,7 @@ class StubSolver:
         )
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Serve one trial per path, then name the winners (or none of them)."""
         self.trials.extend(paths)
@@ -113,7 +113,7 @@ class UnjudgedSolver(StubSolver):
     """A method whose step names its proposal unread: it serves no trial."""
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Hand the steps back owed, so `settle` grades them in one batch."""
         del serve_trials
@@ -138,7 +138,7 @@ class RetryingSolver(StubSolver):
         self.retries = retries
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Serve trials one at a time and name the last one, read."""
         out: dict[int, Point | None] = {}
@@ -159,7 +159,7 @@ class PushTo(UnjudgedSolver):
         super().__init__()
         self.x_star = x_star
 
-    def _trial(self, paths: list[int], domain: Domain) -> jnp.ndarray:
+    def _trial(self, paths: Sequence[int], domain: Domain) -> jnp.ndarray:
         """Return the stored point, whatever the start."""
         del domain
         return jnp.full((len(paths), self.points[paths[0]].x.size), self.x_star)
@@ -180,12 +180,12 @@ class RecordingModel:
         self.observed: list[int] = []  # one entry per served batch, its width
         self._key = jax.random.PRNGKey(0) if key is None else key
 
-    def observe(self, served: dict[int, ValuePoint]) -> None:
+    def observe(self, served: Mapping[int, ValuePoint]) -> None:
         """Record the round's width; this model fits nothing."""
         self.observed.append(len(served))
 
     def propose(
-        self, paths: list[int], domain: Domain
+        self, paths: Sequence[int], domain: Domain
     ) -> dict[int, jnp.ndarray | None]:
         """Draw one uniform point per path over the box this ask hands in."""
         self.calls.append(len(paths))
@@ -635,7 +635,7 @@ def test_the_model_is_fed_at_both_bottoms_of_a_batch() -> None:
             super().__init__()
             self.log: list[str] = []
 
-        def observe(self, served: dict[int, ValuePoint]) -> None:
+        def observe(self, served: Mapping[int, ValuePoint]) -> None:
             """Log whether this round came graded, then record it."""
             graded = isinstance(next(iter(served.values())), PathPoint)
             self.log.append("observe:g" if graded else "observe:f")

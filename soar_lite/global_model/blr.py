@@ -30,7 +30,7 @@ References:
 """
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import TypeAlias, cast
 
 import jax
@@ -60,7 +60,7 @@ call, and one that follows the gradient gets it alongside.
 """
 
 MinimizeFn: TypeAlias = Callable[
-    [AcquisitionFn, Domain, list[int], jnp.ndarray],
+    [AcquisitionFn, Domain, Sequence[int], jnp.ndarray],
     dict[int, jnp.ndarray | None],
 ]
 """The inner minimizer `propose` hands its acquisition to.
@@ -175,7 +175,7 @@ class BLRGlobalModel(GlobalModel):
         self._sq_dev = 0.0
         self._min = math.inf
 
-    def observe(self, served: dict[int, ValuePoint]) -> None:
+    def observe(self, served: Mapping[int, ValuePoint]) -> None:
         """Fold one served round into the model's value-only evidence.
 
         A value-only round and a fused one contribute the same, since the
@@ -215,7 +215,7 @@ class BLRGlobalModel(GlobalModel):
             self._fold_stats(values[keep])
 
     def propose(
-        self, paths: list[int], domain: Domain
+        self, paths: Sequence[int], domain: Domain
     ) -> dict[int, jnp.ndarray | None]:
         """Return one restart point per path: a draw until a fit is possible.
 

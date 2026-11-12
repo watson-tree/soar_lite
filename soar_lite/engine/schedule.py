@@ -13,10 +13,9 @@ acyclic.
 
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import cast
 
 import jax
 import jax.numpy as jnp
@@ -619,8 +618,8 @@ class _EvalSeams:
         self._observe = observe
 
     def serve_trials(
-        self, points: dict[int, jnp.ndarray], *, paths: list[int]
-    ) -> dict[int, ValuePoint]:
+        self, points: Mapping[int, jnp.ndarray], *, paths: Sequence[int]
+    ) -> Mapping[int, ValuePoint]:
         """Serve one round of a step's trials: one point per path, one value back.
 
         The paths are the step's own cohort, bound by `_step_winners` before the
@@ -665,9 +664,8 @@ class _EvalSeams:
             )
         if self._eval_f is not None:
             return self._serve_f(checked)
-        # Every `PathPoint` is a `ValuePoint`; the cast only widens the dict,
-        # which is invariant in its value type.
-        return cast("dict[int, ValuePoint]", self._serve_f_g(checked))
+        # Every `PathPoint` is a `ValuePoint`, so a fused round fits the shape.
+        return self._serve_f_g(checked)
 
     def settle(self, decided: dict[int, Point]) -> dict[int, PathPoint]:
         """Buy whatever gradient the iteration's points still owe, in one batch.
@@ -693,7 +691,7 @@ class _EvalSeams:
             for i, point in decided.items()
         }
 
-    def _serve_f_g(self, points: dict[int, jnp.ndarray]) -> dict[int, PathPoint]:
+    def _serve_f_g(self, points: Mapping[int, jnp.ndarray]) -> dict[int, PathPoint]:
         """Serve one fused batch: the gradient comes with the value.
 
         What is specific to this half is that the pass buys both, so its points
@@ -715,16 +713,14 @@ class _EvalSeams:
         f_batch, g_batch, feas = self._eval_f_g(x_batch)
         # per-path bookkeeping (secant/restart) stays Python float,
         # so pull the batch values onto the host in one shot.
-        served: dict[int, ValuePoint] = {
+        served: dict[int, PathPoint] = {
             i: PathPoint(points[i], f, g)
             for (i, f, g) in zip(points, f_batch.tolist(), g_batch, strict=True)
         }
         self._report(x_batch, served, feas)
-        # The values really are `PathPoint`s; the cast only narrows the widened
-        # dict back, since `dict` is invariant in its value type.
-        return cast("dict[int, PathPoint]", served)
+        return served
 
-    def _serve_f(self, points: dict[int, jnp.ndarray]) -> dict[int, ValuePoint]:
+    def _serve_f(self, points: Mapping[int, jnp.ndarray]) -> dict[int, ValuePoint]:
         """Serve one value-only batch, for a method's own enumeration.
 
         The gate rides along exactly as in the fused half, so a deadline that
@@ -765,7 +761,7 @@ class _EvalSeams:
     def _report(
         self,
         x_batch: jnp.ndarray,
-        served: dict[int, ValuePoint],
+        served: Mapping[int, ValuePoint],
         feas: jnp.ndarray | None,
     ) -> None:
         """Report one served batch to the run's two readers.

@@ -13,7 +13,7 @@ half a plugin author reads.
 """
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias
 
@@ -98,7 +98,7 @@ class PathPoint(ValuePoint):
         return math.isfinite(self.f) and bool(jnp.all(jnp.isfinite(self.g)))
 
 
-ServeTrials: TypeAlias = Callable[[dict[int, jnp.ndarray]], dict[int, ValuePoint]]
+ServeTrials: TypeAlias = Callable[[Mapping[int, jnp.ndarray]], Mapping[int, ValuePoint]]
 """The trial hook a step is handed: one point per path in, one read point back.
 
 Each call is one round over the paths it names - ``path -> (d,) coordinate`` in,
@@ -153,7 +153,7 @@ class GlobalModel(Protocol):
     handed and answers from its posterior once it has enough.
     """
 
-    def observe(self, served: dict[int, ValuePoint]) -> None:
+    def observe(self, served: Mapping[int, ValuePoint]) -> None:
         """Fold one served round into the model's evidence.
 
         Called right after a batch is served, in the engine's coordinates and
@@ -181,7 +181,7 @@ class GlobalModel(Protocol):
         ...
 
     def propose(
-        self, paths: list[int], domain: Domain
+        self, paths: Sequence[int], domain: Domain
     ) -> dict[int, jnp.ndarray | None]:
         """Answer one fresh start per path asked about, keyed by that path.
 
@@ -307,7 +307,7 @@ class LocalSolver(Protocol):
 
     """
 
-    def restart(self, points: dict[int, PathPoint]) -> None:
+    def restart(self, points: Mapping[int, PathPoint]) -> None:
         """Seed each path's state from a fresh start point (its one cold start).
 
         Called by the engine each time it places paths on points: once at
@@ -323,7 +323,7 @@ class LocalSolver(Protocol):
         ...
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Answer one step for each path in ``paths``: its winner, or ``None``.
 
@@ -359,7 +359,7 @@ class LocalSolver(Protocol):
         """
         ...
 
-    def step(self, points: dict[int, PathPoint]) -> None:
+    def step(self, points: Mapping[int, PathPoint]) -> None:
         """Take the steps the engine just committed: each path stands at its point.
 
         The engine's only call site is the commit of the usable winners, with
@@ -410,8 +410,8 @@ gradients afterwards, together in one fused batch.
 # transfer instead of a device sync per row.
 # `ProposeFn` is the query for fresh starts: one answer per path asked about,
 # handed the run's box because the box is the engine's and a model carries none.
-ObserveFn: TypeAlias = Callable[[dict[int, ValuePoint]], None]
-ProposeFn: TypeAlias = Callable[[list[int], Domain], dict[int, jnp.ndarray | None]]
+ObserveFn: TypeAlias = Callable[[Mapping[int, ValuePoint]], None]
+ProposeFn: TypeAlias = Callable[[Sequence[int], Domain], dict[int, jnp.ndarray | None]]
 
 NPathStatus: TypeAlias = Literal[
     "max_iters",

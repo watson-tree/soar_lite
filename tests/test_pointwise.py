@@ -6,6 +6,8 @@ replaces, and check the pair actually drives the engine - including the value-on
 half, which only a method that reads its own trials ever reaches.
 """
 
+from collections.abc import Mapping, Sequence
+
 import jax
 import jax.numpy as jnp
 
@@ -105,16 +107,16 @@ class _ValueReader(LocalSolver):
         """Start with no point: `restart` places the first one."""
         self.point: PathPoint | None = None
 
-    def restart(self, points: dict[int, PathPoint]) -> None:
+    def restart(self, points: Mapping[int, PathPoint]) -> None:
         """Take the point the engine placed."""
         (self.point,) = points.values()
 
-    def step(self, points: dict[int, PathPoint]) -> None:
+    def step(self, points: Mapping[int, PathPoint]) -> None:
         """Take the point the engine committed."""
         (self.point,) = points.values()
 
     def propose(
-        self, paths: list[int], domain: Domain, serve_trials: ServeTrials
+        self, paths: Sequence[int], domain: Domain, serve_trials: ServeTrials
     ) -> dict[int, Point | None]:
         """Return the read candidate for every path asked about."""
         assert self.point is not None
