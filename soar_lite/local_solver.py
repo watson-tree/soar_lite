@@ -156,6 +156,11 @@ class DiagonalPreconditioner(LocalSolver):
             tau_rel: relative gradient-norm stopping threshold, tested against
                 ``‖g_0‖``, in (0, 1).
 
+        Raises:
+            ValueError: If a numeric knob is outside its range: ``beta`` and
+                ``mu`` in [0, 1), ``theta`` >= 0, ``alpha0`` > 0, ``tau_rel``
+                in (0, 1).
+
         """
         for name, value, ok, want in (
             ("beta", beta, 0.0 <= beta < 1.0, "in [0, 1)"),
@@ -253,7 +258,8 @@ class DiagonalPreconditioner(LocalSolver):
         the hook unused and lets `settle` buy the gradient. That is also why
         every proposal comes back unread: nothing was.
 
-        Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x + alpha·(-precon⊙m).
+        Warm-up: x + alpha0·(-g). Afterwards: x + alpha0·(-precon⊙m), since each
+        commit and each restart re-arms the path at the knob's own multiplier.
         Steps from the point the record holds - `restart` placed it and `step`
         moved it - so the step's start is not passed in a second time. ``m`` is
         the history ``step`` left behind: the EMA over the gradients at

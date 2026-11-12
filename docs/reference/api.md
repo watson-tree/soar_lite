@@ -37,6 +37,12 @@ adds one fused pass however many trials it read. A winner that does not survive
 that batch's finite check, or that was read as non-finite, stalls the path rather
 than being committed.
 
+The other refusal is not a stall. A **coordinate** the run cannot hold - not
+finite, or outside `domain` - is a bug in whoever produced it, so the engine
+raises `ValueError` at the seam that handed it over. And the settle batch is
+conditional: it serves whatever still owes a gradient, so an iteration that
+decides nothing buys nothing.
+
 **The seams.** A **seam** is a name the engine calls through, named by what it
 carries: an **evaluation seam** is a function handed in (`eval_f_g`, the fused
 pass, and `eval_f`, value only), while a **plugin seam** is a protocol whose

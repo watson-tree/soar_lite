@@ -159,7 +159,8 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             outside the declared box raises rather than clips, so a start the
             caller authored is never silently relocated. It still passes the
             same finite gate as any start, so a non-finite value or gradient
-            there is refused rather than placed.
+            there leaves the path unplaced: it stalls with no point of its own,
+            and is asked again next iteration.
         eval_f: the objective's value half alone, same ``x`` rows, returning
             ``(f: (M,), feas: (M,) | None)``. ``None`` means every served trial
             takes its gradient in the same fused pass; supplying it lets a
@@ -213,9 +214,12 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             ``(n_paths, d)`` finite batch inside `domain` (a start the caller
             authored raises rather than being clipped). An injected piece can
             raise the same way later, at the batch that serves it: a
-            feasibility mask holding anything but 0/1, or any point a seam hands
-            the run - a restart ask of the wrong shape, a trial row, a step
-            winner, a start - that is not finite or lands outside `domain`.
+            feasibility mask holding anything but 0/1, or a **coordinate** a
+            seam hands the run - a restart ask of the wrong shape, a trial row,
+            a step winner, a start - that is not finite or lands outside
+            `domain`. A served ``f`` or ``g`` that is not finite is no error of
+            that kind: nothing is committed and the path stalls, which the run
+            carries on from.
 
     Returns:
         The run's end state and work report, an `NPathResult`.

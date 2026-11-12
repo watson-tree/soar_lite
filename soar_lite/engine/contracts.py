@@ -49,7 +49,7 @@ class ValuePoint(Point):
 
     A value-only trial row is one of these, and stays one until `settle` buys
     the gradient and it becomes a `PathPoint`. It is also what a method holds
-    for a weight it named unread and then had read: the read is the only thing
+    for a winner it named unread and then had read: the read is the only thing
     this class says about a point, whoever asked for it.
 
     The interesting half of the definition is the missing one. There is no
@@ -357,7 +357,7 @@ class LocalSolver(Protocol):
         rather than once per path. The answer is keyed by the paths asked, and
         ``None`` means the method declines to name a winner: its stopping test
         holds, or the trials it read left it nothing usable to pick. Either way
-        the engine stalls the path where it stands, serving nothing and
+        the engine stalls the path where it stands, serving nothing further and
         committing nothing.
 
         A non-``None`` entry is the step's winner, held as the kind of point the
@@ -489,10 +489,12 @@ class Work:
 class NPathResult:
     """End state of one n_path_schedule run.
 
-    The answer is spelled the way a point is: ``x`` and ``f`` are the winning
-    `PathPoint`'s coordinates and value, and the flock pair prefixes those same
-    two names with ``flock_``. It is ``n_iters``, not scipy's ``nit``, to sit
-    beside the four work counts: one iteration may serve several batches (a
+    The answer is spelled the way a point is: ``x`` and ``f`` are the best
+    feasible evaluation the run recorded, which need not be a `PathPoint` the run
+    committed: a value-only trial counts, and so does a served point whose
+    gradient never passed the commit gate. The flock pair prefixes those same two
+    names with ``flock_``. It is ``n_iters``, not scipy's ``nit``, to sit beside
+    the four work counts: one iteration may serve several batches (a
     restart's starts plus the method's trials), so an iteration is not a batch.
 
     The work the run billed lives in `work` (`Work`), which is what those four
@@ -542,8 +544,10 @@ class NPathResult:
     x: jnp.ndarray
     """The argmin in the coordinates the engine was handed, shape ``(d,)``.
 
-    Not necessarily a row of `flock_x`: the best point may come from a path that
-    was restarted afterwards. All ``nan`` when no feasible point with a *finite*
+    Not necessarily a row of `flock_x`, and not necessarily a `PathPoint`: the
+    best point may come from a path that was restarted afterwards, or from a
+    value-only trial no path ever held. All ``nan`` when no feasible point with
+    a *finite*
     value was ever served - the ``nan`` reading of ``f``. A feasible ``-inf``
     names its point instead: ``x`` is that point and ``f`` is ``-inf``. So
     ``x`` is ``nan`` only when no feasible point carried a finite value and none

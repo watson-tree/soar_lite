@@ -67,9 +67,10 @@ def surrogate_minimize(acquisition, domain, paths, key):
         restart_stalled=False,  # a pure descent, no restarting inside it
         key=key,
     )
-    # one answer per named path, and every answer has to be a finite point inside
-    # the box: a path the inner run never placed is declined here rather than
-    # filled in with a coordinate the acquisition was never asked about
+    # one answer per named path, and every answer has to be finite: the inner
+    # run was handed this same `domain`, so the box needs no check of its own
+    # here, and a path it never placed is declined rather than filled in with a
+    # coordinate the acquisition was never asked about
     placed = result.flock_x
     usable = jnp.all(jnp.isfinite(placed), axis=1)
     return {

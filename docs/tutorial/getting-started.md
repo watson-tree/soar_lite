@@ -188,10 +188,10 @@ time its own stopping test fires or a non-usable point stalls it, so the flock �
 the points the paths hold — keeps working until the horizon.
 Ask for `restart_stalled=False` instead and the same run ends much sooner: with
 it a stalled path is parked for good — it holds its point
-and still counts toward `best`, but never moves again — and once every path is
-parked the run has nothing left to do and stops with status `all_stalled`. The
-four counters of §3 report what either run actually served, which is why the
-cost is read off them and not off `n_iters`.
+and still counts toward `best`, but never moves again — and once every path that
+holds one is parked the run has nothing left to do and stops with status
+`all_stalled`. The four counters of §3 report what either run actually served,
+which is why the cost is read off them and not off `n_iters`.
 
 ## 3. Read the result
 
@@ -225,7 +225,7 @@ feasibility — the value is the one that path stopped on, not a fresh
 evaluation, so a path parked under `restart_stalled=False` reports the value it
 stalled with. Nothing gets you the flock of an earlier iteration, and `x`/`f`
 need not be a row of this one: the best point may come from a path that was
-restarted afterwards.
+restarted afterwards, or from a value-only trial that no path ever held.
 
 ## 4. Turn the knobs you actually need
 
@@ -233,7 +233,7 @@ restarted afterwards.
 | --- | --- |
 | `n_paths` | engine width: paths advanced in lockstep each iteration |
 | `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
-| `x0` | the flock's start, one point per path `(n_paths, d)`; iteration 0 places it exactly where given, so runs compared on the same starts share it. `None` lets the global model draw. An outside row is refused, not clipped. It still passes the same finite gate as any start, so a non-finite value or gradient there is refused rather than placed |
+| `x0` | the flock's start, one point per path `(n_paths, d)`; iteration 0 places it exactly where given, so runs compared on the same starts share it. `None` lets the global model draw. An outside row is refused, not clipped. It still passes the same finite gate as any start, so a non-finite value or gradient there leaves the path unplaced — it stalls |
 | `eval_f` | the optional value-only seam: points in, `(f, feas?)` out, no gradient — pass it to save budget, omit it in a fused-only comparison |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given. `0` is legal: nothing is placed, so `n_iters` is `0` and every `flock_x` row and `flock_f` entry is `nan` |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
