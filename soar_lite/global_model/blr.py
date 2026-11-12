@@ -77,8 +77,8 @@ every draw inside that box, including the inner minimizer's own starts. The
 paths come before the seed: what to ask for is the caller's question, the key
 only supplies the randomness. The model checks that no other path was answered
 and that each answer is one ``(d,)`` point, and raises ``ValueError`` on a miss;
-a `None` answer is carried out as the model's own decline, so that path's restart
-falls to the engine's other source.
+a `None` answer is carried out as the model's own decline, so the engine leaves
+that path where it stands instead of restarting it from a point nobody chose.
 
 Injected by the composition root rather than imported, so this module never
 reaches back into the engine's scheduler - the engine already owns the descent

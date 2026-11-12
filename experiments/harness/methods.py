@@ -173,9 +173,11 @@ def surrogate_minimize(
         key: the PRNG key the starts are drawn from.
 
     Returns:
-        One minimizer per path, a `(d,)` point inside `domain`: a path the inner
-        run could not place carries an all-nan point, which the outer run
-        refuses, so that restart falls back to a fresh draw.
+        One minimizer per path, a `(d,)` point inside `domain`, or ``None`` for a
+        path the inner run could not place at all. A declined path is the model's
+        own news rather than a coordinate to pass on: the engine falls back to
+        its other source or leaves the path where it stands, instead of drawing a
+        start here that the acquisition was never asked about.
 
     """
 
@@ -194,9 +196,11 @@ def surrogate_minimize(
         key=key,
     )
     placed = result.flock_x
-    ok = jnp.all(jnp.isfinite(placed), axis=1)[:, None]
-    kept = jnp.where(ok, placed, domain.draw(key, n_points))
-    return dict(zip(paths, kept, strict=True))
+    usable = jnp.all(jnp.isfinite(placed), axis=1)
+    return {
+        i: (row if bool(ok) else None)
+        for i, row, ok in zip(paths, placed, usable, strict=True)
+    }
 
 
 # --- Adam: one compiled scan per run --------------------------------

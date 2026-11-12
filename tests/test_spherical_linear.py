@@ -472,7 +472,7 @@ def test_a_minimizer_may_not_answer_for_a_path_nobody_named() -> None:
         key: jnp.ndarray,
     ) -> dict[int, jnp.ndarray | None]:
         del objective, key  # this stub answers from the ask alone
-        rows = {i: jnp.zeros(domain.d) for i in paths}
+        rows: dict[int, jnp.ndarray | None] = {i: jnp.zeros(domain.d) for i in paths}
         rows[paths[0] + 1] = jnp.zeros(domain.d)
         return rows
 
