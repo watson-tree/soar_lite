@@ -201,10 +201,13 @@ class GlobalModel(Protocol):
         rather than repairing. The box test allows the few ulps a start computed
         on a boundary can round by.
 
-        The model owns its randomness (an instance holds its key), which is what
-        makes a seeded model reproducible; ascending order is the other half of
-        that, so a model that draws one row per path and zips them in the order
-        asked reproduces a run from its seed alone.
+        The model owns its randomness - an instance holds its key - so a seeded
+        model answers the same way twice. The engine builds `paths` in ascending
+        order every time it asks, which is what lets a model draw one row per
+        path and zip it in the order asked: the row a path gets is fixed by the
+        path, not by when the request was made. The engine is the only caller of
+        this hook, and it validates what comes back rather than the model
+        validating what it was handed.
         """
         ...
 
