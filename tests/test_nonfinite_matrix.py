@@ -39,7 +39,13 @@ import jax.numpy as jnp
 import pytest
 
 from soar_lite.engine import n_path_schedule
-from soar_lite.engine.schedule import _argmin_finite, _Best, _OptimumReached
+from soar_lite.engine.contracts import ValuePoint
+from soar_lite.engine.schedule import (
+    _argmin_finite,
+    _Best,
+    _feas_flags,
+    _OptimumReached,
+)
 from tests.flock import flock_kwargs, unit_domain
 
 jax.config.update("jax_enable_x64", val=True)
@@ -71,14 +77,14 @@ def test_best_counts_a_value_only_when_it_is_feasible_and_finite(
 ) -> None:
     """One served point, every row of the table, against one fresh `_Best`."""
     best = _Best(1)
-    x_batch = jnp.array([[0.25]])
-    feas = None if feasible is None else jnp.array([feasible])
+    points = {0: ValuePoint(jnp.array([0.25]), f)}
+    flags = None if feasible is None else {0: feasible}
 
     if ends_run:
         with pytest.raises(_OptimumReached):
-            best.observe(x_batch, [f], feas)
+            best.observe(points, flags)
     else:
-        best.observe(x_batch, [f], feas)
+        best.observe(points, flags)
 
     if math.isnan(best_f):
         assert math.isnan(best.f)
@@ -90,21 +96,31 @@ def test_best_counts_a_value_only_when_it_is_feasible_and_finite(
 
 def test_a_mask_of_zero_and_one_flags_is_accepted() -> None:
     """The one accepted shape: 0/1 numbers, or the booleans they stand for."""
+    points = {
+        0: ValuePoint(jnp.array([0.1]), 1.0),
+        1: ValuePoint(jnp.array([0.9]), 2.0),
+    }
     for mask in (jnp.array([0.0, 1.0]), jnp.array([False, True])):
         best = _Best(1)
-        best.observe(jnp.array([[0.1], [0.9]]), [1.0, 2.0], mask)
-        # Row 0 is the cheaper value and row 1 is the flagged one, so the read has
-        # to follow the mask row by row rather than dropping the flagged points.
+        best.observe(points, _feas_flags(mask, [0, 1]))
+        # Path 0 is the cheaper value and path 1 is the flagged one, so the read
+        # has to follow the flag rather than drop the flagged point.
         assert best.f == 2.0
+
+
+def test_a_mask_must_hold_one_flag_per_point() -> None:
+    """A mask that is short, long or column-shaped is refused, not paired off."""
+    masks = (jnp.array([1.0]), jnp.array([1.0, 1.0, 1.0]), jnp.array([[1.0], [1.0]]))
+    for mask in masks:
+        with pytest.raises(ValueError, match="one flag per point"):
+            _feas_flags(mask, [0, 1])
 
 
 @pytest.mark.parametrize("flag", [math.nan, -2.0, 0.5, 2.0, 1e-12])
 def test_a_mask_flag_that_is_not_zero_or_one_is_refused(flag: float) -> None:
-    """Every truthy-but-not-1 flag is refused, and refused before any step."""
-    best = _Best(1)
+    """Every truthy-but-not-1 flag is refused, where the mask is read."""
     with pytest.raises(ValueError, match="feas mask"):
-        best.observe(jnp.array([[0.25]]), [1.0], jnp.array([flag]))
-    assert math.isnan(best.f)  # the batch was refused before any step
+        _feas_flags(jnp.array([flag]), [0])
 
 
 @pytest.mark.parametrize(

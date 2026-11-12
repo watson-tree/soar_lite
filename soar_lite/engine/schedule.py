@@ -547,39 +547,38 @@ class _Best:
 
     def observe(
         self,
-        x_batch: jnp.ndarray,
-        f_vals: list[float],
-        feas: jnp.ndarray | None,
+        points: Mapping[int, ValuePoint],
+        flags: Mapping[int, bool] | None,
     ) -> None:
-        """Fold one served batch's values into the best, stopping on -inf.
+        """Fold one served round into the best, stopping on a feasible -inf.
 
-        Raises:
-            ValueError: If a feasibility mask holds anything but 0/1. Nothing
-                is folded in that case, so a batch's values are never added
-                under a mask that cannot be read.
+        The mask is read as flags keyed like `points`, so a point is weighed
+        against its own flag rather than against a row order. `None` means the
+        seam reported no mask, and then every point counts as feasible.
+
+        Args:
+            points: The points the seam read, keyed by path.
+            flags: Which of them are feasible, keyed like `points`, or None for
+                all-feasible.
 
         """
-        # The mask is read first, and read as flags: it is the caller's claim, so
-        # a batch whose mask cannot be read is refused before either best moves.
-        # With no aux a batch has no mask and every point counts.
-        ok_feas = [True] * len(f_vals) if feas is None else _feas_flags(feas)
-        candidates = [j for j, feasible in enumerate(ok_feas) if feasible]
+        feasible = [point for i, point in points.items() if flags is None or flags[i]]
         # Ahead of the finite read, which skips it: a feasible -inf is the
         # answer itself, not a value to compare, and the run ends on it here.
-        j_floor = next((j for j in candidates if f_vals[j] == -math.inf), None)
-        if j_floor is not None:
+        floor = next((point for point in feasible if point.f == -math.inf), None)
+        if floor is not None:
             self.f = -math.inf
-            self.x = x_batch[j_floor]
+            self.x = floor.x
             raise _OptimumReached
-        pos = _argmin_finite([f_vals[j] for j in candidates])
+        pos = _argmin_finite([point.f for point in feasible])
         if pos is None:  # nothing feasible served, or all of it non-finite
             return
-        j = candidates[pos]
+        point = feasible[pos]
         # nan means no answer yet, so the first finite feasible value lands
         # unconditionally; after that one must beat the running best.
-        if math.isnan(self.f) or f_vals[j] < self.f:
-            self.f = f_vals[j]
-            self.x = x_batch[j]
+        if math.isnan(self.f) or point.f < self.f:
+            self.f = point.f
+            self.x = point.x
 
 
 class _EvalSeams:
@@ -724,7 +723,7 @@ class _EvalSeams:
             i: PathPoint(points[i].x, f, g)
             for (i, f, g) in zip(points, f_batch.tolist(), g_batch, strict=True)
         }
-        self._report(x_batch, served, feas)
+        self._report(served, None if feas is None else _feas_flags(feas, list(points)))
         return served
 
     def _serve_f(self, points: Mapping[int, Point]) -> dict[int, ValuePoint]:
@@ -762,30 +761,28 @@ class _EvalSeams:
         }
         # No gradient in hand: the f half alone. The same point is reported
         # again with `g` if it wins its step and `settle` buys the gradient.
-        self._report(x_batch, served, feas)
+        self._report(served, None if feas is None else _feas_flags(feas, list(points)))
         return served
 
     def _report(
         self,
-        x_batch: jnp.ndarray,
         served: Mapping[int, ValuePoint],
-        feas: jnp.ndarray | None,
+        flags: Mapping[int, bool] | None,
     ) -> None:
-        """Report one served batch to the run's two readers.
+        """Report one served round to the run's two readers.
 
         The model first: a feasible -inf below raises `_OptimumReached`, and the
-        batch was served and charged either way, so the model still sees it even
+        round was served and charged either way, so the model still sees it even
         though the run keeps nothing else from that pass.
 
         Args:
-            x_batch: The points the seam was handed, one row per entry of
-                `served` and in the same order.
             served: The points the seam read, keyed by path.
-            feas: The feasibility mask the seam reported, or None for all-feasible.
+            flags: The seam's feasibility mask, read as flags and keyed like
+                `served`, or None for all-feasible.
 
         """
         self._observe(served)
-        self._best.observe(x_batch, [point.f for point in served.values()], feas)
+        self._best.observe(served, flags)
 
 
 @dataclass
@@ -1251,15 +1248,31 @@ def _argmin_finite(values: list[float]) -> int | None:
     return best
 
 
-def _feas_flags(feas: jnp.ndarray) -> list[bool]:
-    """Read the caller's feasibility mask as flags, refusing anything but 0/1.
+def _feas_flags(feas: jnp.ndarray, paths: Sequence[int]) -> dict[int, bool]:
+    """Read the caller's feasibility mask as flags keyed by path.
 
     Only 0 and 1 are read: 0 marks an infeasible point, 1 a feasible one, and
     the mask is never read as a truthiness test - a signed constraint margin
     arrives looking feasible on every point it rules out, and a NaN arrives
     looking feasible too, both silently promoting a point into the reported
-    best. No cast repairs that (a NaN casts to True), so the batch is refused
+    best. No cast repairs that (a NaN casts to True), so the round is refused
     rather than guessed at.
+
+    Keying the flags by path is what keeps a point and its flag together: the
+    mask arrives one row per served point, in the order the paths were served,
+    and nothing downstream has to re-pair the two by position.
+
+    Args:
+        feas: The mask the seam reported, one flag per served point.
+        paths: The paths that round was served for, in the order it was served.
+
+    Returns:
+        One flag per path, keyed by path.
+
+    Raises:
+        ValueError: If a flag is not 0/1, or if the mask does not hold exactly
+            one flag per path.
+
     """
     if not bool(jnp.all((feas == 0) | (feas == 1))):
         msg = (
@@ -1267,7 +1280,13 @@ def _feas_flags(feas: jnp.ndarray) -> list[bool]:
             f"1 feasible, got {feas.tolist()}"
         )
         raise ValueError(msg)
-    return [bool(v) for v in feas.tolist()]
+    if feas.shape != (len(paths),):
+        msg = (
+            "the feas mask must hold one flag per point: "
+            f"{len(paths)} points, got shape {tuple(feas.shape)}"
+        )
+        raise ValueError(msg)
+    return dict(zip(paths, (bool(v) for v in feas.tolist()), strict=True))
 
 
 def _check_positive_int(value: int, name: str) -> int:
