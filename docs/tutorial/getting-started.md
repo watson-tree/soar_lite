@@ -204,7 +204,7 @@ coordinates, `f` for the value — and prefixes the flock's own pair with `flock
 | `f` | its value: the best feasible value, `nan` when no feasible point had a finite one and none priced it at `-inf`, `-inf` when one did |
 | `flock_x` | each path's held coordinates as the run ended, `(n_paths, d)`; `nan` where the path never held a usable point |
 | `flock_f` | each path's held value, `(n_paths,)`; `nan` where the path never held a usable point |
-| `work` | a `Work`: the single home of the four counts below |
+| `work` | a `Work`: the single home of the four counts below, which also read flat on the result as read-only aliases |
 | `n_f_g_batches` | fused batches billed, one per `eval_f_g` call — the parallel-cost count |
 | `n_f_g_points` | fused points billed — the serial-cost count |
 | `n_f_batches` | value-only batches billed (the `eval_f` seam) |
@@ -233,7 +233,7 @@ restarted afterwards.
 | --- | --- |
 | `n_paths` | engine width: paths advanced in lockstep each iteration |
 | `domain` | the search region, a `Domain`: its sides, per-dimension `scale`, and its injected draws (a side may be unbounded) |
-| `x0` | the flock's start, one point per path `(n_paths, d)`; iteration 0 places it exactly where given, so runs compared on the same starts share it. `None` lets the global model draw. An outside row is refused, not clipped |
+| `x0` | the flock's start, one point per path `(n_paths, d)`; iteration 0 places it exactly where given, so runs compared on the same starts share it. `None` lets the global model draw. An outside row is refused, not clipped. It still passes the same finite gate as any start, so a non-finite value or gradient there is refused rather than placed |
 | `eval_f` | the optional value-only seam: points in, `(f, feas?)` out, no gradient — pass it to save budget, omit it in a fused-only comparison |
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given. `0` is legal: nothing is placed, so `n_iters` is `0` and every `flock_x` row and `flock_f` entry is `nan` |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
@@ -344,7 +344,8 @@ To replace one outright, implement its protocol and pass the instance:
 - **`GlobalModel`** — the restart-point source and evidence sink: `observe`
   (handed one served batch, keyed by path) and `propose`. The shipped pair is `SampleGlobalModel` (draws starts from the
   domain, fits nothing — the default) and `BLRGlobalModel` (fits a Bayesian
-  linear posterior and proposes the `-log EI` minimizers).
+  linear posterior and proposes the `-log EI` minimizers its injected `minimize`
+  returns).
 
 Both protocols are documented in the [API Reference](../reference/api.md), which
 is the contract to code against.

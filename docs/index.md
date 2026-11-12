@@ -84,16 +84,16 @@ schedules the work, and nothing beyond JAX and the standard library.
   only with `restart_stalled` on; one that holds none is always re-drawn.
 - **The local method, `LocalSolver`** — one path's descent step: direction,
   step size, acceptance, and how many points a step looks at. One `propose` call
-  is one step, so a method may rule its own trial grid and name its own winner,
-  which the engine then settles. `DiagonalPreconditioner` is the default: a
-  per-coordinate inverse-curvature scale re-estimated from successive gradients,
-  no matrix and no scalar learning rate to tune, and a momentum `mu` (0 by
-  default) blending the gradient with its own history.
+  is the cohort's one step, so a method may rule its own trial grid and name its
+  own winner, which the engine then settles. `DiagonalPreconditioner` is the
+  default: a per-coordinate inverse-curvature scale re-estimated from successive
+  gradients, no matrix and no scalar learning rate to tune, and a momentum `mu`
+  (0 by default) blending the gradient with its own history.
 - **The restart source, `GlobalModel`** — where a restarted path is placed, plus
   the run's evidence sink; it also places iteration 0's flock when `x0` is left
   `None`. `SampleGlobalModel` is the default: it ignores the evidence and draws
   from the domain; `BLRGlobalModel` accumulates it into a Bayesian surrogate for
-  the same contract.
+  the same contract, with the descent of its acquisition injected as `minimize`.
 
 The two plugin seams are keyword arguments: pass `local_solver=` or
 `global_model=` to replace either.

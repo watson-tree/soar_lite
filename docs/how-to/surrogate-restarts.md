@@ -27,8 +27,9 @@ run's own draws. The acquisition is
 is a fresh subkey of the model's own key, split for this call alone.
 
 The outer engine is the model's only caller: it hands it every batch it serves
-(`observe`) and asks it for points when a path restarts (`propose`), and the
-model only ever answers. What it answers with, and when, is the rest of this page.
+(`observe`) and asks it for points when a path restarts (`propose`), or for
+iteration 0's flock when no `x0` was handed in, and the model only ever answers.
+What it answers with, and when, is the rest of this page.
 
 The projection is the other knob — it supplies the prior the model fits.
 `SphereProjection` keeps the posterior variance bounded far from data;
@@ -125,8 +126,10 @@ time. Five things keep it honest:
 
 `INNER_ITERS` is an upper bound, not a convergence test. A path that settles
 stops there, so an inner run whose flock settles early ends on `all_stalled`
-before reaching it; 40 is a cap with room to spare, not an iteration count to aim
-at. Raise it if the outer run keeps restarting paths that barely moved.
+before reaching it — provided every path held a usable point, since one holding
+none is still re-drawn even with `restart_stalled=False`; 40 is a cap with room
+to spare, not an iteration count to aim at. Raise it if the outer run keeps
+restarting paths that barely moved.
 
 The inner run bills its own `Work`, and none of it reaches the outer
 `result.work`: the outer `budget_check` is handed the outer ledger alone, so a
