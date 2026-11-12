@@ -383,12 +383,10 @@ class _AllStalled(Exception):  # noqa: N818 - a signal, not an error
 
     Raised inside `_Paths.move` when no path restarts and every path is stalled
     - only reachable with `restart_stalled=False`, since a stalled path restarts
-    otherwise - or when every path that was going to restart was declined when
-    nothing else was stepping. Nothing can un-stall a path but
-    `_Paths._place(restart=True)`, which only ever sees the restarting paths, so
-    the state is terminal: the iteration would serve nothing, and repeating it
-    would idle out the horizon. The run stops on it, naming the state in
-    `status`.
+    otherwise. Nothing can un-stall a path but `_Paths._place(restart=True)`,
+    which only ever sees the restarting paths, so the state is terminal: the
+    iteration would serve nothing, and repeating it would idle out the horizon.
+    The run stops on it, naming the state in `status`.
     """
 
 
