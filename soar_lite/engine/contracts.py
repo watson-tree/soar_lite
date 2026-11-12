@@ -98,11 +98,11 @@ class PathPoint(ValuePoint):
         return math.isfinite(self.f) and bool(jnp.all(jnp.isfinite(self.g)))
 
 
-ServeTrials: TypeAlias = Callable[[Mapping[int, jnp.ndarray]], Mapping[int, ValuePoint]]
+ServeTrials: TypeAlias = Callable[[Mapping[int, Point]], Mapping[int, ValuePoint]]
 """The trial hook a step is handed: one point per path in, one read point back.
 
-Each call is one round over the paths it names - ``path -> (d,) coordinate`` in,
-the same paths out with their values - and a method calls it as many times as
+Each call is one round over the paths it names - ``path -> Point`` in, the same
+paths out with their values - and a method calls it as many times as
 its enumeration needs: one round, ten rounds, or none. One point per path per
 call rather than a batch of many is what keeps a round's memory at
 ``n_paths * d`` however long the enumeration runs; multiplicity lives in the

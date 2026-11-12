@@ -128,7 +128,7 @@ class Script:
                 continue
             x = jnp.asarray([candidate])
             if self._serve:
-                read = serve_trials({i: x})[i]
+                read = serve_trials({i: Point(x)})[i]
                 self.served.append(read.f)
                 out[i] = read
             else:
@@ -372,7 +372,7 @@ class _StrayTrial(Script):
     ) -> dict[int, Point | None]:
         """Serve a trial for one path past the cohort, then decline."""
         del domain  # the stray path is the point of the test, not the box
-        serve_trials({paths[0] + 1: jnp.asarray([0.5])})
+        serve_trials({paths[0] + 1: Point(jnp.asarray([0.5]))})
         return dict.fromkeys(paths, None)
 
 
@@ -405,7 +405,7 @@ class _Rounder(LocalSolver):
         del domain  # every round serves points the engine already checked
         served: Mapping[int, ValuePoint] = {}
         for _round in range(self._rounds):
-            served = serve_trials({i: self.held[i].x for i in paths})
+            served = serve_trials({i: self.held[i] for i in paths})
             self.n_served.append(len(served))
         return dict(served)
 
@@ -447,7 +447,7 @@ class _WideTrial(Script):
     ) -> dict[int, Point | None]:
         """Serve a two-dimensional trial for the first path, then decline."""
         del domain  # the width is the point of the test, not the box
-        serve_trials({paths[0]: jnp.zeros(2)})
+        serve_trials({paths[0]: Point(jnp.zeros(2))})
         return dict.fromkeys(paths, None)
 
 

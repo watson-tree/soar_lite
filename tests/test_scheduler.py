@@ -161,7 +161,7 @@ class HalfStep:
             domain.lo,
             domain.hi,
         )
-        served = serve_trials(dict(zip(paths, trial, strict=True)))
+        served = serve_trials({i: Point(x) for i, x in zip(paths, trial, strict=True)})
         return {
             i: (served[i] if served[i].f < p.f else None)
             for i, p in zip(paths, held, strict=True)
@@ -817,7 +817,7 @@ def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
                 errand.append(p.x - p.g)
                 for candidate in errand:
                     inside = jnp.clip(candidate, domain.lo, domain.hi)
-                    read = serve_trials({i: inside})[i]
+                    read = serve_trials({i: Point(inside)})[i]
                     if read.f < p.f:
                         out[i] = read
                         break

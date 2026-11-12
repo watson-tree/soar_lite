@@ -47,7 +47,7 @@ def wide_domain(d: int) -> Domain:
     return Domain(jnp.tile(jnp.asarray([[-1e12, 1e12]]), (d, 1)))
 
 
-def _unread(points: Mapping[int, jnp.ndarray]) -> Mapping[int, ValuePoint]:
+def _unread(points: Mapping[int, Point]) -> Mapping[int, ValuePoint]:
     """Return nothing: this method takes one full step and reads no trials."""
     msg = f"propose served {len(points)} trials; this method reads none"
     raise AssertionError(msg)

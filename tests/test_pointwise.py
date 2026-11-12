@@ -121,7 +121,7 @@ class _ValueReader(LocalSolver):
         """Return the read candidate for every path asked about."""
         assert self.point is not None
         x = jnp.clip(self.point.x - 0.1 * self.point.g, domain.lo, domain.hi)
-        return {i: serve_trials({i: x})[i] for i in paths}
+        return {i: serve_trials({i: Point(x)})[i] for i in paths}
 
 
 def test_the_pair_drives_a_run() -> None:

@@ -518,7 +518,7 @@ give an already-decided step a second, invisible stopping rule — so a method
 whose enumeration never terminates blocks the process rather than running
 slowly.
 
-`serve_trials` is read one round at a time: one `(d,)` point per path of the
+`serve_trials` is read one round at a time: one bare `Point` per path of the
 cohort in, the same paths out with their values, and one round is one batch. That
 shape fixes the price and the memory together: a method that enumerates its
 candidates reads them as successive rounds, so a step that looks at `m`
