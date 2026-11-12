@@ -29,7 +29,7 @@ at, served through `serve_trials`: when `eval_f` is connected a trial costs its
 value alone, and without it every trial is itself a fused pass. A **step** is
 one `LocalSolver.propose` call for one cohort: the method reads as many trials
 as it wants and returns a **winner** per path, or `None` to stop that path where
-it stands. A winner that was read travels as a `Pending` with its gradient still
+it stands. A winner that was read travels as a `ValuePoint` with its gradient still
 **owed**, and whatever the step owes is bought in one fused batch over the whole
 iteration - the engine's *settle* phase - so with `eval_f` connected an iteration
 adds one fused pass however many trials it read. A winner that does not survive
@@ -59,7 +59,8 @@ there is no such import.
 
 One run's end state — the result, the work it billed, and the status that names
 why it ended — and the two point types the plugins exchange: a `PathPoint` is a
-committed point, a `Pending` is one still owed a half.
+committed point, a `ValuePoint` is one whose value is read and whose gradient is
+still owed, and a bare `Point` is one nothing has been read from yet.
 
 ::: soar_lite.NPathResult
 ::: soar_lite.Work
@@ -67,8 +68,9 @@ committed point, a `Pending` is one still owed a half.
     options:
       show_attribute_values: true
       show_signature_annotations: false
+::: soar_lite.Point
+::: soar_lite.ValuePoint
 ::: soar_lite.PathPoint
-::: soar_lite.Pending
 
 ## The domain
 

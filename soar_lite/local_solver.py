@@ -16,7 +16,7 @@ from typing import Literal
 import jax.numpy as jnp
 
 from soar_lite.domain import Domain
-from soar_lite.engine import LocalSolver, PathPoint, Pending, ServeTrials
+from soar_lite.engine import LocalSolver, PathPoint, Point, ServeTrials
 
 
 @dataclass(frozen=True, eq=False)
@@ -234,14 +234,14 @@ class DiagonalPreconditioner(LocalSolver):
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Propose one step for every path in ``paths``, or ``None`` if it is done.
 
-        A `Pending` here carries the clipped proposal alone, both halves still
-        owed, so the engine's `settle` can buy its f and g in one fused batch
-        together with everything else the iteration produced. ``None`` means the
-        path's stopping test holds: the engine stalls it where it stands and
-        takes no step.
+        A `Point` here carries the clipped proposal alone, nothing read, so the
+        engine's `settle` can buy its f and g in one fused batch together with
+        everything else the iteration produced. ``None`` means the path's
+        stopping test holds: the engine stalls it where it stands and takes no
+        step.
 
         The proposal is clipped into ``domain`` here because the engine refuses a
         step that lands outside the box rather than clipping it: a step is the
@@ -250,7 +250,7 @@ class DiagonalPreconditioner(LocalSolver):
         ``serve_trials`` is the value-only evaluation hook, for a method that
         rules its own trial grid; this one takes a single full step, so it leaves
         the hook unused and lets `settle` buy the gradient. That is also why
-        every proposal comes back with both halves owed: nothing was read.
+        every proposal comes back unread: nothing was.
 
         Warm-up: x + alpha·(-g) at the current alpha. Afterwards: x + alpha·(-precon⊙m).
         Steps from the point the record holds - `restart` placed it and `step`
@@ -262,7 +262,7 @@ class DiagonalPreconditioner(LocalSolver):
         """
         del serve_trials  # single full step: nothing to rule, so nothing to read
         return {
-            i: Pending(jnp.clip(self._propose(i), domain.lo, domain.hi), None, None)
+            i: Point(jnp.clip(self._propose(i), domain.lo, domain.hi))
             if not self._is_stationary(i, domain)
             else None
             for i in paths

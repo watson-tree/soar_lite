@@ -35,7 +35,7 @@ import jax.numpy as jnp
 import pytest
 
 from soar_lite.domain import Domain
-from soar_lite.engine import PathPoint, Pending, ServeTrials, pointwise
+from soar_lite.engine import PathPoint, Point, ServeTrials, pointwise
 from soar_lite.engine.schedule import (
     _AllStalled,
     _Best,
@@ -76,7 +76,7 @@ class Script:
     states a step as the list it already is: a number is a raw candidate for that
     path, and ``None`` is its method's stopping test firing.
 
-    `serve` picks what the returned `Pending` already holds. False hands the
+    `serve` picks what the returned point already holds. False hands the
     candidate back unread, the shape a method that takes one full step returns.
     True reads the candidate's value through `serve_trials` first, the shape a
     method that enumerates its step returns - so its winner still owes only its
@@ -111,10 +111,10 @@ class Script:
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Return the script's next entry for each path asked about."""
         del domain  # the script states a candidate verbatim: the box is not its job
-        out: dict[int, Pending | None] = {}
+        out: dict[int, Point | None] = {}
         for i in paths:
             candidate = self._candidates.pop(0)
             if candidate is None:
@@ -123,10 +123,10 @@ class Script:
             x = jnp.asarray([candidate])
             if self._serve:
                 (read,) = serve_trials(x[None, :])
-                self.served.append(read.value())
+                self.served.append(read.f)
                 out[i] = read
             else:
-                out[i] = Pending(x, None, None)
+                out[i] = Point(x)
         return out
 
 
@@ -135,10 +135,10 @@ class _Stray(Script):
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Answer one path past every path asked about."""
         del domain, serve_trials  # one fixed answer, and no trial to serve
-        return {i + 1: Pending(jnp.asarray([0.5]), None, None) for i in paths}
+        return {i + 1: Point(jnp.asarray([0.5])) for i in paths}
 
 
 class _Misfit(Script):
@@ -146,10 +146,10 @@ class _Misfit(Script):
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Answer every path with a two-dimensional point."""
         del domain, serve_trials
-        return {i: Pending(jnp.zeros(2), None, None) for i in paths}
+        return {i: Point(jnp.zeros(2)) for i in paths}
 
 
 def model_at(x: jnp.ndarray) -> Callable[[int, Domain], jnp.ndarray]:

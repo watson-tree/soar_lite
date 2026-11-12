@@ -7,7 +7,7 @@ composed into `eval_f_g` must be honored too. These also pin the documented
 zero-caller hook — a method naming no winner — and the run with no extra gate
 (`budget_check=None` -> `status == "max_iters"`).
 
-The two answers a method can give are the whole of its contract here: a `Pending`
+The two answers a method can give are the whole of its contract here: a point
 winner, which `settle` grades in one batch, or `None`, which stops that path
 where it stands. Whether it read its trial first is the method's business, and
 this suite pins both lanes against the same counters - a read trial spends `f`
@@ -28,8 +28,9 @@ from soar_lite.domain import Domain
 from soar_lite.engine import (
     NPathResult,
     PathPoint,
-    Pending,
+    Point,
     ServeTrials,
+    ValuePoint,
     n_path_schedule,
 )
 from soar_lite.global_model import SampleGlobalModel
@@ -101,7 +102,7 @@ class StubSolver:
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Serve one trial per path, then name the winners (or none of them)."""
         self.trials.extend(paths)
         rows = serve_trials(self._trial(paths, domain))
@@ -116,12 +117,12 @@ class UnjudgedSolver(StubSolver):
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Hand the steps back owed, so `settle` grades them in one batch."""
         del serve_trials
         self.trials.extend(paths)
         batch = self._trial(paths, domain)
-        return {i: Pending(batch[k], None, None) for k, i in enumerate(paths)}
+        return {i: Point(batch[k]) for k, i in enumerate(paths)}
 
 
 class RetryingSolver(StubSolver):
@@ -141,11 +142,11 @@ class RetryingSolver(StubSolver):
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Serve trials one at a time and name the last one, read."""
-        out: dict[int, Pending | None] = {}
+        out: dict[int, Point | None] = {}
         for i in paths:
-            row: Pending | None = None
+            row: ValuePoint | None = None
             for _attempt in range(self.retries + 1):
                 self.trials.append(i)
                 (row,) = serve_trials(self._trial([i], domain))

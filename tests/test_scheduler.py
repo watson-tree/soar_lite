@@ -60,7 +60,7 @@ from soar_lite.engine import (
     LocalSolver,
     NPathResult,
     PathPoint,
-    Pending,
+    Point,
     ServeTrials,
     Work,
     n_path_schedule,
@@ -147,7 +147,7 @@ class HalfStep:
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Return half a step for each path that strictly decreases, else none."""
         held = [self.points[i] for i in paths]
         trial = jnp.clip(
@@ -157,7 +157,7 @@ class HalfStep:
         )
         rows = serve_trials(trial)
         return {
-            i: (row if row.value() < p.f else None)
+            i: (row if row.f < p.f else None)
             for i, row, p in zip(paths, rows, held, strict=True)
         }
 
@@ -805,16 +805,16 @@ def test_a_step_runs_the_whole_enumeration_the_method_asks_for() -> None:
 
         def propose(
             self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-        ) -> dict[int, Pending | None]:
+        ) -> dict[int, Point | None]:
             """Read the whole errand in one batch and name the winner."""
-            out: dict[int, Pending | None] = {}
+            out: dict[int, Point | None] = {}
             for i in paths:  # one path in this run: the count stays exact
                 p = self.points[i]
                 errand = [p.x + (k + 1) * 0.1 * p.g for k in range(n_uphill)]
                 errand.append(p.x - p.g)
                 batch = jnp.stack([jnp.clip(x, domain.lo, domain.hi) for x in errand])
                 rows = serve_trials(batch)
-                out[i] = next(r for r in rows if r.value() < p.f)
+                out[i] = next(r for r in rows if r.f < p.f)
             return out
 
     def quad(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -858,7 +858,7 @@ def test_a_stalled_path_leaves_the_cohort() -> None:
 
         def propose(
             self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-        ) -> dict[int, Pending | None]:
+        ) -> dict[int, Point | None]:
             """Log the cohort, then refuse the step for path 1."""
             self.asked.append(list(paths))
             answers = super().propose(paths, domain, serve_trials)

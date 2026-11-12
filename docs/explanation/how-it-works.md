@@ -485,14 +485,15 @@ path: a **winner**, or `None` to stop that path where it stands. That answer is
 the whole of the protocol — the engine has no second question to ask, and
 `propose` cannot answer one path at a time.
 
-A winner is a `Pending` point, and what it carries says what the step read. A
-**read** winner carries `x` and `f`: the method served it as a trial through
-`serve_trials` and ruled on the value itself, so on the value-only seam its
-gradient is still owed and `settle` buys it in the iteration's fused batch (on
-the fused seam the trial brought the gradient too, and nothing is owed). An
-**unread** winner carries `x` alone: the method named its proposal without
-reading anything, so both halves are owed and both arrive in that same batch —
-exactly what `DiagonalPreconditioner` does.
+A winner is one of three kinds of point, and which kind it is says what the step
+read. A **read** winner is a `ValuePoint`, carrying `x` and `f`: the method served
+it as a trial through `serve_trials` and ruled on the value itself, so on the
+value-only seam its gradient is still owed and `settle` buys it in the
+iteration's fused batch (on the fused seam the trial brought the gradient too, so
+it already arrives a `PathPoint` and nothing is owed). An **unread** winner is a
+bare `Point`, carrying `x` alone: the method named its proposal without reading
+anything, so both halves are owed and both arrive in that same batch — exactly
+what `DiagonalPreconditioner` does.
 
 Which of the two a method sends is its own business. The engine stocks
 `serve_trials`, calls `propose` once, and settles whatever comes back, so the
@@ -510,11 +511,11 @@ give an already-decided step a second, invisible stopping rule — so a method
 whose enumeration never terminates blocks the process rather than running
 slowly.
 
-`serve_trials` takes the batch of candidate points and returns one `Pending` per
-row. When `eval_f` is connected a trial costs its value alone; when it is not,
-the same call serves the fused pair and the returned `Pending` carries both, so
-the same step code costs `m` value-only batches on one seam and `m` fused ones on
-the other (see [Cost](#cost-two-evaluation-seams-two-rulers)). A trial is served
+`serve_trials` takes the batch of candidate points and returns one `ValuePoint`
+per row. When `eval_f` is connected a trial costs its value alone; when it is
+not, the same call serves the fused pair and each row comes back a `PathPoint`,
+so the same step code costs `m` value-only batches on one seam and `m` fused ones
+on the other (see [Cost](#cost-two-evaluation-seams-two-rulers)). A trial is served
 for its value, not its fate: every call is reported to the run's best and to the
 global model before the method decides anything, including the trials it goes on
 to reject.

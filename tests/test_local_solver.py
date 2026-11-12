@@ -23,7 +23,8 @@ import jax.numpy as jnp
 from soar_lite.domain import Domain
 from soar_lite.engine import (
     PathPoint,
-    Pending,
+    Point,
+    ValuePoint,
     n_path_schedule,
 )
 from soar_lite.local_solver import DiagonalPreconditioner
@@ -46,14 +47,14 @@ def wide_domain(d: int) -> Domain:
     return Domain(jnp.tile(jnp.asarray([[-1e12, 1e12]]), (d, 1)))
 
 
-def _unread(x_batch: jnp.ndarray) -> list[Pending]:
+def _unread(x_batch: jnp.ndarray) -> list[ValuePoint]:
     """Return nothing: this method takes one full step and reads no trials."""
     msg = f"propose served {x_batch.shape[0]} trials; this method reads none"
     raise AssertionError(msg)
 
 
-def proposed(solver: DiagonalPreconditioner, i: int = 0) -> Pending:
-    """Return the `Pending` path `i` proposes, failing if the method stalls.
+def proposed(solver: DiagonalPreconditioner, i: int = 0) -> Point:
+    """Return the unread point path `i` proposes, failing if the method stalls.
 
     One path per call, in a box wide enough that the clip never bites: the tests
     that care about the clip pass their own box to `propose`.
@@ -76,13 +77,10 @@ def test_diag_warmup_is_one_gradient_step() -> None:
     solver.restart({0: p})
     assert solver._state[0].is_warmup
     assert solver._state[0].alpha == 1.0
-    pending = proposed(solver)
-    assert is_close(pending.x, p.x + 1.0 * (-p.g), 1e-12)
-    # Both halves are owed: the method read nothing, so the engine's `settle`
-    # buys this candidate's f and g in the same fused batch as everything else
-    # the iteration produced.
-    assert pending.f is None
-    assert pending.g is None
+    point = proposed(solver)
+    assert isinstance(point, Point)
+    assert not isinstance(point, ValuePoint)  # nothing read: no f, no g
+    assert is_close(point.x, p.x + 1.0 * (-p.g), 1e-12)
     # Committed exactly as proposed: the step need not beat the start's value.
     above = PathPoint(x=p.x - p.g, f=9.0, g=p.g)
     solver.step({0: above})
@@ -131,7 +129,7 @@ def test_the_wall_decides_what_pins_a_point_not_the_gradient() -> None:
     lower_wall = Domain(jnp.asarray([[0.0, 1e6]]))
     upper_wall = Domain(jnp.asarray([[-1e6, 0.0]]))
 
-    def verdict(box: Domain) -> Pending | None:
+    def verdict(box: Domain) -> Point | None:
         solver = DiagonalPreconditioner()
         solver.restart({0: start})
         solver.step({0: point})

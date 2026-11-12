@@ -130,7 +130,7 @@ _Avoid_: query, sample, evaluation (retired)
 
 **settle**:
 The iteration's one fused batch that buys whatever a kept point still owes, and
-the only place a produced `Pending` becomes a settled `PathPoint`. A redraw start
+the only place a produced `Point` becomes a settled `PathPoint`. A redraw start
 and a winner the method never read owe both halves and take f and g from this
 one pass; a winner the method read through `serve_trials` owes only its gradient
 when the `eval_f` seam served it value-only — with no such seam the same call

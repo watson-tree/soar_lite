@@ -29,8 +29,9 @@ from soar_lite.engine.contracts import (
     NPathStatus,
     ObserveFn,
     PathPoint,
-    Pending,
+    Point,
     ProposeFn,
+    ValuePoint,
     Work,
 )
 
@@ -613,8 +614,8 @@ class _EvalSeams:
         self._best = best
         self._observe = observe
 
-    def serve_trials(self, x_batch: jnp.ndarray) -> list[Pending]:
-        """Serve one step's trial batch, as one produced candidate per row.
+    def serve_trials(self, x_batch: jnp.ndarray) -> list[ValuePoint]:
+        """Serve one step's trial batch, as one produced point per row.
 
         The batch is a method's own candidate grid, so it is checked like every
         other point the run holds: a row that is not finite or lies outside the
@@ -624,8 +625,9 @@ class _EvalSeams:
         A trial's gradient is only wanted for the step's winner, so with the
         value-only seam each trial is served for its value alone and the winners are
         settled once, together (`settle`). Without it a fused pass is the
-        only way to a value, so every trial carries its gradient whether or not
-        the method's own enumeration keeps it; `settle` then buys nothing.
+        only way to a value, so every trial is served as a `PathPoint` whether
+        or not the method's own enumeration keeps the gradient, and `settle`
+        then buys nothing.
         """
         x_batch = jnp.asarray(x_batch)
         if x_batch.ndim != 2 or x_batch.shape[1] != self._domain.d:
@@ -639,27 +641,31 @@ class _EvalSeams:
         )
         if self._eval_f is not None:
             return [
-                Pending(row, f, None)
+                ValuePoint(row, f)
                 for row, f in zip(x_batch, self._serve_f(x_batch), strict=True)
             ]
         f_vals, g_batch = self._serve_f_g(x_batch)
         return [
-            Pending(x_batch[pos], f_vals[pos], g_batch[pos])
+            PathPoint(x_batch[pos], f_vals[pos], g_batch[pos])
             for pos in range(len(f_vals))
         ]
 
-    def settle(self, decided: dict[int, Pending]) -> dict[int, PathPoint]:
+    def settle(self, decided: dict[int, Point]) -> dict[int, PathPoint]:
         """Buy whatever gradient the iteration's points still owe, in one batch.
 
-        Everything the value-only seam left pending goes out as a single batch, so an
+        Everything still short of a gradient goes out as a single batch, so an
         iteration costs one gradient pass however many moves it deferred - its
         restart starts plus its step winners - instead of one pass per trial. A
-        point that already carries its gradient is promoted as it stands, so a
+        point that already carries its gradient is passed on as it stands, so a
         run that owes nothing buys nothing and the counters do not move. Keyed by
         path on both sides, so a caller's halves come back keyed rather than
         re-paired by position.
+
+        The gradient is only sold as the fused pair, so a `ValuePoint` is read
+        twice - the value that rides along with the gradient is the one it
+        already reported, from the same function at the same point.
         """
-        owed = [i for i, point in decided.items() if point.g is None]
+        owed = [i for i, point in decided.items() if not isinstance(point, PathPoint)]
         bought: dict[int, PathPoint] = {}
         if owed:
             f_vals, g_batch = self._serve_f_g(
@@ -670,8 +676,8 @@ class _EvalSeams:
                 for pos, i in enumerate(owed)
             }
         return {
-            i: bought[i] if pending.g is None else pending.point()
-            for i, pending in decided.items()
+            i: point if isinstance(point, PathPoint) else bought[i]
+            for i, point in decided.items()
         }
 
     def _serve_f_g(self, x_batch: jnp.ndarray) -> tuple[list[float], jnp.ndarray]:
@@ -919,7 +925,7 @@ class _Paths:
         flock_f = jnp.asarray([math.nan if p is None else p.f for p in points])
         return flock_x, flock_f
 
-    def _restart_starts(self, restarting: list[int]) -> dict[int, Pending]:
+    def _restart_starts(self, restarting: list[int]) -> dict[int, Point]:
         """Ask for one fresh start per restarting path, inside the run's box.
 
         The caller's flock, if it handed one, answers the run's first call and
@@ -932,10 +938,10 @@ class _Paths:
         and its answer is refused unless it is ``(n_points, domain.d)`` and
         inside that box, so a model that answers with another width, a NaN row,
         or a point past a wall fails here, naming the row and the dimension,
-        instead of deep inside the iteration that would have served it. Both
-        halves stay owed - a start has nothing to be compared - so `settle` buys
-        them in the same batch as the step winners, and a restart costs no
-        gradient pass of its own.
+        instead of deep inside the iteration that would have served it. Nothing
+        is read, so every start is a bare `Point` - a start has nothing to be
+        compared - and `settle` buys its gradient in the same batch as the step
+        winners, so a restart costs no gradient pass of its own.
         """
         if not restarting:
             return {}
@@ -952,20 +958,18 @@ class _Paths:
             msg = f"{what} must be a ({n_points}, {d}) array, got {proposed.shape}"
             raise ValueError(msg)
         proposed = _check_inside(proposed, what=what, domain=self.domain)
-        return dict(
-            zip(restarting, (Pending(row, None, None) for row in proposed), strict=True)
-        )
+        return dict(zip(restarting, (Point(row) for row in proposed), strict=True))
 
-    def _step_winners(self, stepping: list[int]) -> dict[int, Pending]:
+    def _step_winners(self, stepping: list[int]) -> dict[int, Point]:
         """Ask the method for its step on each stepping path, keep the winners.
 
         One call covers every stepping path, so a method that enumerates a step
         does so here, inside its own ``propose``. A ``None`` answer is the
         method's own stopping test firing: the path stalls where it stands, and
-        nothing is served and no point is committed for it. A `Pending` winner
-        goes out with whatever halves the method holds - both owed when it never
-        read the point, the value alone when it read it through `serve_trials` -
-        and `settle` buys the rest.
+        nothing is served and no point is committed for it. A winner goes out as
+        whatever the method read it to - a bare `Point` when it never read it, a
+        `ValuePoint` when it read it through `serve_trials` - and `settle` buys
+        the rest.
 
         A winner is checked where every other point is: one ``(d,)`` point,
         finite and inside the run's box, and the answer may name no path this
@@ -987,7 +991,7 @@ class _Paths:
         )
         d = self.domain.d
         asked = set(stepping)
-        winners: dict[int, Pending] = {}
+        winners: dict[int, Point] = {}
         for i, answer in answers.items():
             if i not in asked:
                 msg = (
@@ -1005,13 +1009,19 @@ class _Paths:
                     f"got shape {x.shape}"
                 )
                 raise ValueError(msg)
-            winners[i] = Pending(
-                _check_inside(
-                    x, what=f"local_solver's step on path {i}", domain=self.domain
-                ),
-                answer.f,
-                answer.g,
+            x = _check_inside(
+                jnp.asarray(answer.x),
+                what=f"local_solver's step on path {i}",
+                domain=self.domain,
             )
+            # Re-seated at the checked coordinates, keeping how much of it the
+            # method had read: `settle` buys what is owed by type.
+            if isinstance(answer, PathPoint):
+                winners[i] = PathPoint(x, answer.f, answer.g)
+            elif isinstance(answer, ValuePoint):
+                winners[i] = ValuePoint(x, answer.f)
+            else:
+                winners[i] = Point(x)
         return winners
 
     def _place(self, points: dict[int, PathPoint], *, restart: bool) -> None:

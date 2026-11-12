@@ -332,8 +332,8 @@ To replace one outright, implement its protocol and pass the instance:
   step keeps.
   - `propose` gets the cohort (the indices of every path stepping this
     iteration, one call for all of them), the run's `domain` and `serve_trials`,
-    and answers a winner (a `Pending` point, read or unread) or `None` to stop
-    that path. With `eval_f` connected a trial is read for its value alone, never
+    and answers a winner (a bare `Point` it never read, or the `ValuePoint` it
+    read) or `None` to stop that path. With `eval_f` connected a trial is read for its value alone, never
     for its gradient; without it the same call brings both.
   - `restart` is the only cold-start call, so it runs at initialization and after
     every restart.

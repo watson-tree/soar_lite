@@ -14,7 +14,7 @@ from soar_lite import (
     Domain,
     LocalSolver,
     PathPoint,
-    Pending,
+    Point,
     ServeTrials,
     n_path_schedule,
     pointwise,
@@ -115,11 +115,11 @@ class _ValueReader(LocalSolver):
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Return the read candidate for every path asked about."""
         assert self.point is not None
         x = jnp.clip(self.point.x - 0.1 * self.point.g, domain.lo, domain.hi)
-        out: dict[int, Pending | None] = {}
+        out: dict[int, Point | None] = {}
         for i in paths:
             (read,) = serve_trials(x[None, :])
             out[i] = read

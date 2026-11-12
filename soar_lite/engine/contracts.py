@@ -1,10 +1,10 @@
 """The plugin contracts, the data they exchange, and the evaluation seams.
 
 `LocalSolver` and `GlobalModel` are the two seams a caller plugs into;
-`PathPoint`, `Pending`, `Work` and the evaluation-seam aliases are what crosses
-them; and `NPathResult` with `NPathStatus` is the other half of the same
-exchange, what the caller reads back. `pointwise` builds both evaluation seams
-from one per-point objective.
+`Point`, `ValuePoint`, `PathPoint`, `Work` and the evaluation-seam aliases are
+what crosses them; and `NPathResult` with `NPathStatus` is the other half of the
+same exchange, what the caller reads back. `pointwise` builds both evaluation
+seams from one per-point objective.
 
 The machine depends on these types, never the reverse: nothing here imports
 `soar_lite.engine.schedule`. The package facade re-exports both halves, so a
@@ -24,7 +24,47 @@ from soar_lite.domain import Domain
 
 
 @dataclass(frozen=True)
-class PathPoint:
+class Point:
+    """A point the run has located, with nothing of it read yet.
+
+    Three kinds of point say how much of one the run has read, and each is the
+    next one's base class: coordinates alone here, the value in `ValuePoint`,
+    the gradient as well in `PathPoint`. What has been read is therefore the
+    point's type rather than a field that may hold ``None`` - a half still owed
+    cannot be asked for at all, and no caller has to check whether it may.
+
+    Everything the run produces starts as one of these, because producing a
+    point and reading it are two decisions: a restart start arrives from a model
+    that read nothing, and a method may name a winner by its own rule instead of
+    by its value.
+    """
+
+    x: jnp.ndarray
+    """Coordinates, shape ``(d,)``, in the run's coordinates."""
+
+
+@dataclass(frozen=True)
+class ValuePoint(Point):
+    """A point whose value has been read; its gradient is still owed.
+
+    A value-only trial row is one of these, and stays one until `settle` buys
+    the gradient and it becomes a `PathPoint`. It is also what a method holds
+    for a weight it named unread and then had read: the read is the only thing
+    this class says about a point, whoever asked for it.
+
+    The interesting half of the definition is the missing one. There is no
+    gradient-only point, and no `eval_g` seam that would serve one: a caller
+    hands in a single objective whose value and gradient come back from one
+    call, so a gradient is only ever bought as the pair, and the value that
+    rides free with it is kept rather than thrown away.
+    """
+
+    f: float
+    """The objective's value there."""
+
+
+@dataclass(frozen=True)
+class PathPoint(ValuePoint):
     """One path's point: coords x, value f, gradient g = ∂f/∂x.
 
     The engine builds these and the local method receives them; a caller
@@ -58,71 +98,16 @@ class PathPoint:
         return math.isfinite(self.f) and bool(jnp.all(jnp.isfinite(self.g)))
 
 
-@dataclass(frozen=True)
-class Pending:
-    """A produced point that `settle` has not promoted to a `PathPoint` yet.
-
-    Producing a point is one decision and settling it is one batch, so a point
-    travels between them as this: each half is either served or still owed.
-    Everything produced goes through here, and one batch promotes it, which keeps
-    "does it still need g" a question about the point rather than about which
-    producer made it.
-
-    `g is not None` implies `f is not None`: a fused pass serves both, and only
-    a value-only trial arrives with `f` alone, its gradient waiting for
-    `settle`.
-    """
-
-    x: jnp.ndarray
-    """Coordinates, shape ``(d,)``, in the run's coordinates."""
-
-    f: float | None
-    """The value served with it, or ``None`` while the value is still owed."""
-
-    g: jnp.ndarray | None
-    """The gradient, shape ``(d,)``, or ``None`` while the gradient is still
-    owed - a fused pass serves both halves at once, a value-only trial serves
-    ``f`` alone."""
-
-    def value(self) -> float:
-        """Return the served value, or raise if this point was never read.
-
-        Raises:
-            RuntimeError: When the row carries no value. Every row
-                `serve_trials` serves has one, so this is a `Pending` built
-                somewhere else rather than a caller asking too early.
-
-        """
-        if self.f is None:
-            msg = "Pending is missing its f"
-            raise RuntimeError(msg)
-        return self.f
-
-    def point(self) -> PathPoint:
-        """Return this point as a `PathPoint`, or raise if either half is owed.
-
-        Raises:
-            RuntimeError: When a half is still owed - a value-only trial that
-                has not been through `settle`, or a row whose value was never
-                served at all.
-
-        """
-        if self.f is None or self.g is None:
-            missing = "f" if self.f is None else "g"
-            msg = f"Pending is missing its {missing}"
-            raise RuntimeError(msg)
-        return PathPoint(self.x, self.f, self.g)
-
-
-ServeTrials: TypeAlias = Callable[[jnp.ndarray], list[Pending]]
-"""The trial hook a step is handed: a batch of points in, one `Pending` per row.
+ServeTrials: TypeAlias = Callable[[jnp.ndarray], list[ValuePoint]]
+"""The trial hook a step is handed: a batch of points in, one point per row.
 
 What each row carries follows the run's seams - the value alone when ``eval_f``
-is connected, both halves when it is not. It is what `LocalSolver.propose`
-receives in place of the caller's own function. The batch is ``(M, d)`` rows and
-the list comes back in that row order, though nothing has to rely on it: each
-`Pending` carries its own ``x``, so a winner is paired with its trial by the
-point rather than by an index the method kept.
+is connected, both halves when it is not - so a row is a `ValuePoint`, and a
+`PathPoint` on the fused seam. It is what `LocalSolver.propose` receives in
+place of the caller's own function. The batch is ``(M, d)`` rows and the list
+comes back in that row order, though nothing has to rely on it: each row
+carries its own ``x``, so a winner is paired with its trial by the point rather
+than by an index the method kept.
 """
 
 
@@ -234,10 +219,10 @@ class LocalSolver(Protocol):
     for the winner, so the engine buys it afterwards, in the iteration's one
     fused batch (``settle``): whatever is still owed, which is every read
     winner's gradient and both halves of every unread winner and restart start.
-    ``step`` then hands the result back. A `Pending` therefore leaves ``propose``
-    with whatever halves the method already holds: both owed when it never read
-    the point, the value alone when it read it through ``serve_trials``, and both
-    when the caller supplied no ``eval_f`` seam and the hook served the pair.
+    ``step`` then hands the result back. A point therefore leaves ``propose`` as
+    whatever it has read: a bare `Point` when the method never read it, a
+    `ValuePoint` when it read it through ``serve_trials``, and a `PathPoint` when
+    the caller supplied no ``eval_f`` seam and the hook served the pair.
 
     ``domain`` is handed to ``propose`` rather than stored, because the solver
     carries no search space of its own; a start is placed by ``restart``. A step
@@ -256,7 +241,7 @@ class LocalSolver(Protocol):
         the gradient this method never asks for:
 
             >>> import jax.numpy as jnp
-            >>> from soar_lite import Domain, Pending, n_path_schedule
+            >>> from soar_lite import Domain, Point, n_path_schedule
 
             >>> class FixedStep:
             ...     def __init__(self, rate=0.25):
@@ -268,14 +253,12 @@ class LocalSolver(Protocol):
             ...     def propose(self, paths, domain, serve_trials):
             ...         del serve_trials          # this method reads no trials
             ...         return {
-            ...             i: Pending(
+            ...             i: Point(
             ...                 jnp.clip(
             ...                     self._point[i].x - self.rate * self._point[i].g,
             ...                     domain.lo,
             ...                     domain.hi,
-            ...                 ),
-            ...                 None,
-            ...                 None,
+            ...                 )
             ...             )
             ...             for i in paths
             ...         }
@@ -291,10 +274,10 @@ class LocalSolver(Protocol):
             >>> bool(jnp.allclose(result.x, 3.0, atol=1e-2))
             True
 
-        Both halves are owed because `Pending` was handed `None` for each, so
-        the winner reaches `step` with a gradient the engine bought in `settle`.
-        A method that reads its candidates through `serve_trials` hands each
-        winner back with `f` set instead, and the same batch settles only the
+        Nothing is read yet, so the winner is a bare `Point` and the gradient
+        reaches `step` through the engine's `settle` batch. A method that reads
+        its candidates through `serve_trials` hands each winner back as the
+        `ValuePoint` it read instead, and the same batch settles only the
         gradient.
 
     """
@@ -316,7 +299,7 @@ class LocalSolver(Protocol):
 
     def propose(
         self, paths: list[int], domain: Domain, serve_trials: ServeTrials
-    ) -> dict[int, Pending | None]:
+    ) -> dict[int, Point | None]:
         """Answer one step for each path in ``paths``: its winner, or ``None``.
 
         One call covers every path that steps this iteration, so a method that
@@ -327,16 +310,18 @@ class LocalSolver(Protocol):
         the engine stalls the path where it stands, serving nothing and
         committing nothing.
 
-        A non-``None`` entry is the step's winner, held as a `Pending`. The
-        engine promotes it by buying the halves still owed, then commits it as
-        the path's next point and calls ``step`` - unless it is not `is_usable`, in
-        which case the path stalls and ``step`` is never called.
+        A non-``None`` entry is the step's winner, held as the kind of point the
+        method has read it to: a bare `Point` it never read, or a `ValuePoint`
+        it read through ``serve_trials`` (a `PathPoint` on the fused seam). The
+        engine buys whatever is still owed, then commits it as the path's next
+        point and calls ``step`` - unless it is not `is_usable`, in which case
+        the path stalls and ``step`` is never called.
 
         ``serve_trials`` is the run's trial hook. Every call
         serves one batch and reports it to the run's best and to the global
         model, exactly as a fused batch is reported, so a method may call it as
         freely as its enumeration needs. With no ``eval_f`` seam the same call
-        serves the fused pair, and the returned `Pending` carries both halves.
+        serves the fused pair, and the returned point is a `PathPoint`.
         Every row it is handed must lie inside ``domain``: the engine checks the
         batch and refuses one that misses, naming the row, so a method enumerates
         over the box it was handed rather than leaving the hook to repair its
