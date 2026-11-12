@@ -20,8 +20,9 @@ for you.
 | output 2 | `(M, d)` | gradients `∂f/∂x` |
 | output 3 | `(M,)` or `None` | feasibility mask: 0/1 (or booleans); `None` means all feasible |
 
-Every point served is inside `domain` already: the engine clips the restart
-starts it draws, and a method clips its own step.
+Every point served is inside `domain` already: the engine checks every point a
+seam hands over and refuses one that misses, so a start or a step outside the
+box raises instead of being moved.
 
 ### 1.1 The objective
 
@@ -120,7 +121,8 @@ the answer you want but a sign the objective was handed a point outside its real
 domain, mark those points infeasible with `pointwise`'s `feasible` predicate,
 and the short-circuit never fires: an infeasible `-inf` is skipped like any other
 non-finite value. Narrowing the domain's sides is not a substitute: the engine
-clips into the box, so such a point is never served at all.
+serves nothing outside the box, so such a point never reaches your objective at
+all.
 
 `pointwise` differentiates with `jax.value_and_grad`, and that is where the
 entry contract shows through. A function that cannot be traced (a Python `if` on a
@@ -323,9 +325,11 @@ result = n_path_schedule(
 To replace one outright, implement its protocol and pass the instance:
 
 - **`LocalSolver`** — the search method: `restart`, `propose`, `step`. You own
-  direction, step size, acceptance, how many candidates a step looks at and the
-  clip of your own step into the domain; the engine owns the horizon, the finite
-  gate and the one fused batch that settles what a step keeps.
+  direction, step size, acceptance, how many candidates a step looks at, and
+  keeping your own step and your own trials inside the domain — the engine
+  refuses a point outside the box rather than sliding it back in; the engine
+  owns the horizon, the finite gate and the one fused batch that settles what a
+  step keeps.
   - `propose` gets the cohort (the indices of every path stepping this
     iteration, one call for all of them), the run's `domain` and `serve_trials`,
     and answers a winner (a `Pending` point, read or unread) or `None` to stop

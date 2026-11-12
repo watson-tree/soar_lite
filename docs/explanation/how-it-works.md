@@ -418,7 +418,7 @@ start, at the cost of that inner search's evaluations.
 
 ### A restart costs no extra gradient batch
 
-`propose`'s answer is clipped into the domain, wrapped as a point that still
+`propose`'s answer arrives inside the domain, wrapped as a point that still
 owes its `f` and `g`, and handed to `settle` together with the iteration's step
 winners, so a restart start never buys a gradient batch of its own. With the
 value-only seam connected the merge is even tighter: the restart start's value
@@ -447,11 +447,11 @@ Cost):
    stays in the run's best.
 3. **Starts**: the redraw set asks `global_model.propose(len(restarted), domain)`
    for a batch of starts — except on iteration 0 with an `x0`, which the engine
-   places as given and never asks a model for. The engine checks the shape and
-   clips into the domain;
-   a wrong shape is a `ValueError` at once — the width belongs to the engine, and
-   a model returning a different width fails at the batch boundary instead of
-   deep inside a broadcast.
+   places as given and never asks a model for. The engine checks the answer at
+   the batch boundary — the shape, then that every row is finite and inside the
+   box — and a miss is a `ValueError` at once, naming the row. The width belongs
+   to the engine, and a model answering outside its own box fails there instead
+   of being slid onto a wall.
 4. **Steps**: the cohort asks `local_solver.propose(idxs, domain,
    serve_trials)` once, for the whole cohort, producing each path's winner or
    `None`.
@@ -554,7 +554,8 @@ whatever trials its own rule needs and names the winner, so a step that compares
 six candidates and one that compares none are the same call from where the
 engine stands. What the engine owns is the **price**: it batches whatever
 gradients the iteration still owes into one fused pass, applies the finite gate,
-and clips nothing that a method already placed. The method learns the landing
+and moves no point a method placed — a step or a trial row outside the box is
+refused, not clipped. The method learns the landing
 point only through `step(i, p)`, with `p` the point the engine committed, and
 keeps no second copy of what the engine bought.
 
@@ -573,11 +574,19 @@ never taken back.
 `stalled` means the path took no step this iteration; redrawing a stalled path is
 `restart_stalled`'s separate decision, one layer up. The flag is written in two
 places: inside the step — `propose` answering `None` — and by the commit gate,
-which refuses a non-finite start or winner. A refused start **does not** become
-the point the path holds, the slot that always means "where this path stands" —
-so an unusable start stays `stalled` — re-drawn next iteration when
-`restart_stalled` is on, or regardless of that flag when the path holds no
-point — rather than being clipped or forced into a degenerate point.
+which refuses a start or a winner whose served `f` or `g` is non-finite. A
+refused point **does not** become the point the path holds, the slot that always
+means "where this path stands" — so a path whose start was refused stays
+`stalled` — re-drawn next iteration when `restart_stalled` is on, or regardless
+of that flag when the path holds no point — rather than landing as a degenerate
+point.
+
+The two refusals answer different questions, and only one of them is a stall. A
+**coordinate** the run cannot hold — not finite, or outside `domain` — is a bug
+in whoever produced it: the engine raises at the seam and names the row, because
+a start roundoff can push off a wall is the producer's to clip, not the engine's
+to repair. A **value** that is not finite is news about the objective, which
+nobody authored wrongly, so the path stalls and the run goes on.
 
 `stalled` and "has no point" are two different things, and only the latter is
 outside `restart_stalled`'s control. A path starts with no point at all, holding

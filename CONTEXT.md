@@ -100,9 +100,10 @@ _Avoid_: paused, idle, dead
 The object that carries everything the engine knows about the search space: the
 per-dimension `(lb, ub)` sides (either may be unbounded), the per-dimension
 `scale` the draws use, and the injected per-dimension samplers. It is the sole
-authority on the dimension `d`, and every point the run serves lies inside it:
-the engine clips the starts it draws, and a method clips its own step. Bounds
-are data, never a unit-cube assumption.
+authority on the dimension `d`, and the box every point the run serves must lie
+inside: the engine checks each point a seam hands over and refuses one that
+misses, instead of moving it onto a wall. Bounds are data, never a unit-cube
+assumption.
 _Avoid_: box (the box is only the bounded-sides part of the domain)
 
 **sampler**:

@@ -36,6 +36,7 @@ instance: the model calls it with the `domain`, once per `propose`.
 ```python
 # eval_f_g and domain come from the tutorial's §1.2
 import jax
+import jax.numpy as jnp
 from soar_lite import (
     BLRGlobalModel,
     SphereProjection,
@@ -61,7 +62,12 @@ def surrogate_minimize(acquisition, domain, n_points, key):
         restart_stalled=False,  # a pure descent, no restarting inside it
         key=key,
     )
-    return result.flock_x  # one row per path; a refused path is a nan row
+    # one row per path, and every row has to be a finite point inside the box: a
+    # path the inner run could not place carries an all-nan point, which the outer
+    # run refuses rather than stalls on, so it falls back to a fresh draw
+    placed = result.flock_x
+    ok = jnp.all(jnp.isfinite(placed), axis=1)[:, None]
+    return jnp.where(ok, placed, domain.draw(key, n_points))
 
 
 global_model = BLRGlobalModel(
@@ -98,10 +104,12 @@ time. Five things keep it honest:
   asks for the flock's placement and `propose` has nothing to fit, so it answers
   with the domain's own draw, never calling `minimize`. Any later ask also draws
   until `observe` has given the posterior a spread to standardize by.
-- **A returned row can be all-`nan`.** A start at which the acquisition is not
-  finite is refused, and so is every row of an inner run that does zero
-  iterations (`max_iters=0`). An unplaced path carries an all-`nan` point; the
-  outer run treats that row as an unusable start and stalls the path.
+- **Every returned row must be a finite point inside the box.** An inner path
+  can end holding no point at all - the acquisition was not finite at its
+  start, and every row of a run that does zero iterations (`max_iters=0`) is
+  one - and an unplaced path carries an all-`nan` point. The outer run refuses
+  such a row instead of stalling on it, so the driver fills it: here the
+  domain's own draw does, in one `jnp.where`.
 - **The acquisition has no feasibility mask (`feas=None`).** It is finite
   everywhere, so the fused seam's third slot is `None`.
 
