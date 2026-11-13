@@ -48,15 +48,25 @@ unless you have a reason not to. `projection_factory` takes the class, not an
 instance: the model calls it with the `domain`, once per `propose`.
 
 ```python
-# eval_f_g and domain come from the tutorial's §1.2
 import jax
 import jax.numpy as jnp
 from soar_lite import (
     BLRGlobalModel,
+    Domain,
     Point,
     SphereProjection,
     n_path_schedule,
+    pointwise,
 )
+
+
+# the tutorial's objective, built here so the block stands alone
+def squares(x):
+    return jnp.sum((x - 3.0) ** 2)
+
+
+eval_f_g, _ = pointwise(squares)
+domain = Domain([(-5.0, 5.0), (-5.0, 5.0)])
 
 INNER_ITERS = 40  # long enough to settle; shorter than the outer's horizon
 
@@ -148,7 +158,9 @@ stops there, so an inner run whose flock settles early ends on `all_stalled`
 before reaching it — provided every path held a usable point, since one holding
 none is still re-drawn even with `restart_stalled=False`; 40 is a cap with room
 to spare, not an iteration count to aim at. Raise it if the outer run keeps
-restarting paths that barely moved.
+restarting paths that barely moved - and it is a `descent_minimize` knob, not a
+`BLRGlobalModel` one: hand the model a bound copy via
+`minimize=functools.partial(descent_minimize, inner_iters=80)`.
 
 The inner run bills its own `Work`, and none of it reaches the outer
 `result.work`: the outer `budget_check` is handed the outer ledger alone, so a

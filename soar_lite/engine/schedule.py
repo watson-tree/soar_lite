@@ -251,7 +251,7 @@ def n_path_schedule(  # noqa: PLR0913 (the caller's knobs, all keyword-only
             >>> result.x          # ≈ [3., 3.]
             Array([3., 3.], dtype=float32)
 
-            >>> result.f           # exact here: the explicit x0 reaches [3., 3.]
+            >>> result.f           # 0.0: this quadratic is solvable exactly
             0.0
 
         A per-point scalar can be wrapped into this shape with `pointwise`.

@@ -1,15 +1,22 @@
 # Spend less time in the objective
 
-This page continues [the tutorial](../tutorial/getting-started.md)'s example:
-`eval_f_g`, `eval_f` and `domain` below are the ones built there.
-
 ## The change
 
-Wrap the fused seam in `jax.jit` before handing it over:
+Wrap the fused seam in `jax.jit` before handing it over. The example is the
+tutorial's objective, built here so the block stands alone:
 
 ```python
 import jax
-from soar_lite import n_path_schedule
+import jax.numpy as jnp
+from soar_lite import Domain, n_path_schedule, pointwise
+
+
+def squares(x):
+    return jnp.sum((x - 3.0) ** 2)
+
+
+eval_f_g, eval_f = pointwise(squares)
+domain = Domain([(-5.0, 5.0), (-5.0, 5.0)])
 
 fast_f_g = jax.jit(eval_f_g)
 

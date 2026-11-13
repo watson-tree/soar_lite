@@ -90,9 +90,9 @@ secant pair, not on the ratio itself**:
 [The floor](#the-floor-a-guard-on-the-denominator).
 
 On a single pair the two variants agree (`|s|/|y| = |s/y|`); they differ only in
-which moment is smoothed — `"abs"` averages the magnitude, so every pair counts in
+which moment is smoothed (the `moment` keyword) — `"abs"` averages the magnitude, so every pair counts in
 proportion to its size, while `"rms"` averages the square, so large pairs
-dominate. The EMA window is about `1/(1−β)` steps, where `β` is the EMA decay
+dominate. The EMA window is about `1/(1−β)` steps, where `β` (`beta`) is the EMA decay
 rate, and the default `β = 0.63` is about 2.7 steps (`β = 0` keeps none, so one
 pair decides). Magnitudes rather than the
 signed `sᵢ` or `yᵢ` are used to keep the estimate strictly positive: a signed
@@ -112,7 +112,8 @@ scalar learning rate.
 
 Everything above steps along the bare gradient `g` — the quasi-Newton form just
 reconstructed. The step can also carry a momentum, the gradient EMA
-`m = (1−μ)·g + μ·m_{k−1}` with `μ ∈ [0,1)`; at `μ = 0` that is `m = g` and
+`m = (1−μ)·g + μ·m_{k−1}` with `μ ∈ [0,1)` (the `mu` keyword is the mixing rate
+`μ`, not the momentum itself); at `μ = 0` that is `m = g` and
 nothing above changes. Because `precon ≥ 0` by construction (absolute value or
 square, then a positive floor), `(−precon⊙g)·(−g) ≥ 0` holds coordinate-wise,
 so a preconditioned gradient-like direction is a descent direction, and at
@@ -182,7 +183,7 @@ can be right for all coordinates at once. (The warm-up step is the one exception
 ### The floor: a guard on the denominator
 
 `λ = θ·|gᵢ|` for `"abs"` (units `[f]/[x]`) or `λ = θ·gᵢ²` for `"rms"` (units
-`[f]²/[x]²`), with `θ ≥ 0` unitless (default `1e-3`; `θ = 0` turns the floor
+`[f]²/[x]²`), with `θ ≥ 0` unitless (`theta`, default `1e-3`; `θ = 0` turns the floor
 off, so `precon = S/Y` has nothing catching a vanishing `Y`), and the denominator is
 `max(Y, λ)`. It is anchored to the **current gradient** rather than to the first
 secant `y₀` or the current value `|f_k|`: the floor has to vanish with `g`, not
@@ -242,7 +243,7 @@ the direction's units differ.
 ### Stopping
 
 A path stops when `‖P g‖ ≤ τ_rel·‖g₀‖`, where `P` drops the components on a
-bound whose descent direction points out of the box, `τ_rel` is unitless and
+bound whose descent direction points out of the box, `τ_rel` (`tau_rel`) is unitless and
 defaults to `1e-6` (a `DiagonalPreconditioner` knob, not a schedule one), and
 `g₀` is the gradient at the path's current start, reset at each restart, and it
 is **not** projected: the test is relative to the start's overall scale rather

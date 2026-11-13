@@ -178,7 +178,7 @@ result = n_path_schedule(
     eval_f=eval_f,
 )
 print(result.x, result.f, result.status)
-# x ≈ [3. 3], f ≈ 3e-5, status = max_iters
+# x ≈ [3. 3], f ≈ 0, status = max_iters
 ```
 
 The status says only why the loop stopped, never that it converged: it is

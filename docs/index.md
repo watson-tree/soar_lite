@@ -36,6 +36,10 @@ pins. JAX picks its backend from what is installed; to pin one inside a process,
 call `jax.config.update("jax_platform_name", "cpu")` — or `"cuda"` — before any
 JAX work.
 
+Those `pip` lines install the released version. To run `main` itself — before
+the first release is out, or after it to be ahead of the tag — `pip install
+git+https://github.com/watson-tree/soar_lite` builds from the branch.
+
 ## Minimal run
 
 ```python
@@ -59,7 +63,7 @@ result = n_path_schedule(
     max_iters=30,
 )
 print(result.x)  # x ≈ [3. 3]
-print(result.f)  # f ≈ 3e-5
+print(result.f)  # f ≈ 0
 ```
 
 `x` is the best point the run evaluated, shape `(d,)`, and `f` is its value: the
