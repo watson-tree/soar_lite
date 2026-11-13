@@ -108,7 +108,8 @@ _Avoid_: box (the box is only the bounded-sides part of the domain)
 
 **sampler**:
 The injected per-dimension callable that draws starts; the default is uniform on
-a bounded side and normal on a free side. The *domain* remains the sole
+a bounded side, `N(0, scale²)` on a free one, and that same normal truncated to
+the declared side on a half-bounded one. The *domain* remains the sole
 authority on `d`.
 _Avoid_: initializer, prior (as a name for the *callable*)
 
@@ -117,7 +118,7 @@ _Avoid_: initializer, prior (as a name for the *callable*)
 **batch**:
 The `(M, d)` points served by one pass — fused (`eval_f_g`) or value-only
 (`eval_f`). The engine composes each batch from either one trial round — one
-point per path a step is considering — or the settle set: the redraw starts and
+point per path the round names — or the settle set: the redraw starts and
 the winners still owing a half.
 _Avoid_: group, lot, chunk
 
@@ -199,7 +200,7 @@ stopping test held.
 _Avoid_: update, move; accept, commit (as names for this handoff)
 
 **round**:
-One `serve_trials` call: one point per path of the cohort, served and reported as
+One `serve_trials` call: one point per path it names, served and reported as
 one batch. It is the unit of both price and memory — a method that enumerates
 reads its candidates as successive rounds, so however far it looks it holds one
 point per path at a time and pays one batch per look. The method sets how many

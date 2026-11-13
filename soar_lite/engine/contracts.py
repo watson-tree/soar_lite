@@ -114,7 +114,8 @@ What each answer carries follows the run's seams - the value alone when
 `ValuePoint`, and a `PathPoint` on the fused seam. It is what
 `LocalSolver.propose` receives in place of the caller's own function. Keys are
 paths the step was asked about: the engine refuses a round naming any other,
-and refuses a point outside the box, naming the path.
+and refuses a point outside the box, naming the path. A path the round leaves
+out is simply not served - nothing requires a round to cover the cohort.
 """
 
 
@@ -192,8 +193,9 @@ class GlobalModel(Protocol):
         ``None`` says this path gets no start from this model, and the engine
         leaves the path where it stands. Holding no point, it is asked again
         next iteration, so a decline is not a stopping rule and does not end the
-        run - unlike ``None`` from a method's `propose`, which stalls that path
-        for good and only `restart_stalled` revives.
+        run - unlike ``None`` from a method's `propose`, which stalls that path:
+        it is asked again only when `restart_stalled` is on, which is the
+        default.
 
         The answer crossing the other way is a `ValuePoint`: what a model is
         handed is always at least read, and what it hands back never is. Those
@@ -451,8 +453,9 @@ class Work:
     the work decides the pair: ``n_f_g_batches`` and ``n_f_g_points`` for the
     fused one, ``n_f_batches`` and ``n_f_points`` for the value-only seam.
     Batches are the parallel wall-clock cost and points the serial one. Which
-    axis a comparison reads is the caller's business; a run handed no ``eval_f``
-    seam reports zero on both f counts.
+    axis a comparison reads is the caller's business; a run that never serves a
+    value-only batch - no ``eval_f`` seam, or one no method reads - reports zero
+    on both f counts.
 
     These are reports, not caps: no count stops a run on its own, only the run's
     stop predicates decide. A caller's ``budget_check`` gate is handed one of

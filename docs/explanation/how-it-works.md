@@ -493,8 +493,9 @@ path: a **winner**, or `None` to stop that path where it stands. That answer is
 the whole of the protocol — the engine has no second question to ask, and
 `propose` cannot answer one path at a time.
 
-A winner is one of three kinds of point, and which kind it is says what the step
-read. A **read** winner is a `ValuePoint`, carrying `x` and `f`: the method served
+A winner is one of three kinds of point — a bare `Point`, a `ValuePoint`, a
+`PathPoint` — and which kind it is says what the step read. A **read** winner is
+a `ValuePoint`, carrying `x` and `f`: the method served
 it as a trial through `serve_trials` and ruled on the value itself, so on the
 value-only seam its gradient is still owed and `settle` buys it in the
 iteration's fused batch (on the fused seam the trial brought the gradient too, so
@@ -808,7 +809,8 @@ nothing and simply draws satisfies it too, with no acquisition to speak of.
 
 The default `SampleGlobalModel` — the model-free arm above — fits nothing and
 draws from the `Domain` with a plain per-dimension sampler, uniform on a bounded
-side and `N(0, scale²)` on a free one, independent points rather than a
+side, `N(0, scale²)` on a free one, and that normal truncated to the declared
+side on a half-bounded one, independent points rather than a
 low-discrepancy sequence because the mid-to-high regime is the target. The
 surrogate arm `BLRGlobalModel` fits a Bayesian linear posterior on projected
 coordinates — inverse-stereographic by default (`SphereProjection`),

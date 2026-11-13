@@ -34,18 +34,18 @@ kernel per batch, instead of dispatched one at a time. What it costs is a
 compile per argument shape, because jax caches a trace by shape. Which shape a
 run serves, then, decides the payoff.
 
-The batch a round serves holds the paths that owe work in it, so it narrows when
-a path sits the round out. Two things make a path sit out: a point that came
-back unusable — a non-finite value or gradient — and a path whose own stopping
-test holds, which a converged line search reaches on a perfectly finite
+The batch an iteration serves holds the paths that owe work in it, so it narrows
+when a path sits the iteration out. Two things make a path sit out: a point that
+came back unusable — a non-finite value or gradient — and a path whose own
+stopping test holds, which a converged line search reaches on a perfectly finite
 landscape. A finite objective therefore makes a stall rarer, not impossible, and
 does not on its own pin the width.
 
 What decides whether the width comes back is `restart_stalled`. With the default
-`True` the stalled path is drawn back in next round, so the width dips for that
-round and returns to `(n_paths, d)`; paths that converge together stall
-together, so such a round often serves no batch at all and takes every path back
-at full width next time. With `False` a stalled path is parked for good: every
+`True` the stalled path is drawn back in next iteration, so the width dips for
+that iteration and returns to `(n_paths, d)`; paths that converge together stall
+together, so such an iteration often serves no batch at all and takes every path
+back at full width next time. With `False` a stalled path is parked for good: every
 stall narrows the flock permanently, the width only ratchets down, and the tail
 of such a run is where its distinct widths pile up. That run also reaches
 `all_stalled` and stops before it can serve many batches, so there is little

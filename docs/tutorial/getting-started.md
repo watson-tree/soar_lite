@@ -190,9 +190,11 @@ time its own stopping test fires or a non-usable point stalls it, so the flock �
 the points the paths hold — keeps working until the horizon.
 Ask for `restart_stalled=False` instead and the same run ends much sooner: with
 it a stalled path is parked for good — it holds its point
-and still counts toward `best`, but never moves again — and once every path that
-holds one is parked the run has nothing left to do and stops with status
-`all_stalled`. The four counters of §3 report what either run actually served,
+and still counts toward `best`, but never moves again — and once every path is
+parked the run has nothing left to do and stops with status `all_stalled`. A path
+holding no point never parks: it is asked for a start again next iteration, so a
+run carrying one of those never reaches `all_stalled` and runs out its horizon
+instead. The four counters of §3 report what either run actually served,
 which is why the cost is read off them and not off `n_iters`.
 
 ## 3. Read the result
@@ -240,7 +242,7 @@ restarted afterwards, or from a value-only trial that no path ever held.
 | `max_iters` | the horizon, counted in iterations (iteration 0 places the flock); at least one of `max_iters`/`time_limit` must be given. `0` is legal: nothing is placed, so `n_iters` is `0` and every `flock_x` row and `flock_f` entry is `nan` |
 | `time_limit` | the deadline, a wall-clock stop in seconds, for when an iteration's cost is too uneven to budget in iterations |
 | `budget_check` | an extra gate for a budget the engine cannot see, asked each iteration and before every batch; handed the run's `Work`, so it reads the engine's own counts |
-| `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` parks the flock, and the run ends on `all_stalled` once every path parks |
+| `restart_stalled` | whether a stalled path is re-drawn (default `True`); `False` parks a stalled path that holds a point, so the run ends on `all_stalled` once no path is left to move |
 | `global_model` | the restart-point source and evidence sink; `None` binds `SampleGlobalModel` |
 | `local_solver` | the search method; `None` binds `DiagonalPreconditioner` |
 | `key` | PRNG seed; `None` uses a fixed default so unseeded runs stay deterministic; ignored when `global_model` is supplied, since that model owns its key |
@@ -291,7 +293,8 @@ whether your objective is really parallel:
 - **On a CPU.** Batches run mostly serially, so the point count is the honest axis,
   and width spreads the same point budget thinner across paths instead of speeding
   anything up. The flock advances in lockstep — every path gets one move an
-  iteration (a redraw or a step; a stalled path moves nowhere) — so at a fixed
+  iteration (a redraw or a step; a path parked by `restart_stalled=False` moves
+  nowhere) — so at a fixed
   point budget each path gets about `1/n_paths` of the steps a single path
   would, and best-of-`n_paths` only shrinks the spread
   across starts; it cannot put the missing steps back. Whenever the budget runs

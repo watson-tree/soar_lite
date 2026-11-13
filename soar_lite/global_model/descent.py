@@ -68,7 +68,7 @@ def descent_minimize(
 
     Returns:
         One `Point` inside `domain` per named path, or `None` for a path the
-        inner run could not place.
+            inner run could not place.
 
     Raises:
         ValueError: If `paths` is empty.
