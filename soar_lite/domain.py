@@ -108,10 +108,10 @@ class Domain:
     """
 
     center: jnp.ndarray
-    """The box's midpoint per dimension, ``(d,)``; zero where it is unbounded."""
+    """The box's midpoint per dimension, ``(d,)``; zero outside `bounded_dims`."""
 
     width: jnp.ndarray
-    """The box's width per dimension, ``(d,)``; zero where it is unbounded."""
+    """The box's width per dimension, ``(d,)``; zero outside `bounded_dims`."""
 
     bounded_dims: jnp.ndarray
     """The dimensions with both sides finite, ``(d,)``.

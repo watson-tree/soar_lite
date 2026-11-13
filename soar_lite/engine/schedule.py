@@ -1090,7 +1090,7 @@ class _Paths:
 
         The channels differ in one thing: which hook is called. A restart resets
         the method's per-path state to cold start and seeds it from the fresh
-        start; it is this iteration's move for every restarting path, usable or
+        start; it is this iteration's move for every restarting path, landed or
         not, so none of them also steps. A step tells the method the winner
         landed, and is where the secant is read: a winner refused here is refused
         before the method has been told anything. The point a step started from
@@ -1170,11 +1170,12 @@ def _check_inside(pts: jnp.ndarray, *, what: str, domain: Domain) -> jnp.ndarray
 
     The box test carries a machine-precision tolerance: a point computed at a
     boundary rounds by a few representable steps, so a coordinate within
-    ``16 * eps * max(1, |bound|)`` of a finite side counts as on it, where eps
-    comes from the points' dtype (at most float32). Free dimensions never
-    trigger it - an infinite side is compared against itself. Without it, an
-    answer that missed a wall by one ulp would be reported as outside, its value
-    printing as the bound itself.
+    ``16 * eps * max(1, span)`` of a finite side counts as on it, where ``span``
+    is the largest absolute finite side in that dimension - both sides of a
+    dimension share the one scale - and eps comes from the points' dtype (at
+    most float32). Free dimensions never trigger it - an infinite side is
+    compared against itself. Without it, an answer that missed a wall by one ulp
+    would be reported as outside, its value printing as the bound itself.
 
     One host sync decides, and only a violation pays for the diagnosis: NaN
     compares False against both sides, so finiteness folds into the same mask

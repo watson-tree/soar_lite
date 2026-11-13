@@ -89,7 +89,7 @@ class DiagonalPreconditioner(LocalSolver):
 
     Each coordinate carries its own effective inverse curvature precon_i, of
     dimension [x]²/[f], estimated from the magnitude ratio of one secant
-    (s = x_k - x_{k-1}, y = g_k - g_{k-1}), and the step is Δx_i = -precon_i·g_i.
+    (s = x_k - x_{k-1}, y = g_k - g_{k-1}), and the step is Δx_i = -precon_i·m_i.
     Every step takes the full proposal at ``alpha0`` along its own direction,
     and ``step`` records the committed step. The two phases differ only in the
     direction: the warm-up - the first step after a restart, with no secant pair
