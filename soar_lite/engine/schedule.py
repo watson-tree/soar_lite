@@ -1072,14 +1072,10 @@ class _Paths:
                 what=f"local_solver's step on path {i}",
                 domain=self.domain,
             )
-            # Re-seated at the checked coordinates, keeping how much of it the
-            # method had read: `settle` buys what is owed by type.
-            if isinstance(answer, PathPoint):
-                winners[i] = PathPoint(x, answer.f, answer.g)
-            elif isinstance(answer, ValuePoint):
-                winners[i] = ValuePoint(x, answer.f)
-            else:
-                winners[i] = Point(x)
+            # Re-seated at the checked coordinates. `replace` reads the kind
+            # off the instance, so the read half (f, g) rides along without an
+            # `isinstance` ladder to enumerate the kinds.
+            winners[i] = replace(answer, x=x)
         return winners
 
     def _place(self, points: dict[int, PathPoint], *, restart: bool) -> None:
