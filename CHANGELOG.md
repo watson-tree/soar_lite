@@ -5,6 +5,15 @@ release: what happened before it is in `git log`, and the internal record
 (a rename sweep, a default flipped three times before anyone could have
 depended on it) is not a thing a user upgrading between versions needs to read.
 
+## 0.1.1
+
+The PyPI page was showing this README's four figures as broken images and its
+relative links as dead ones. PyPI stores the description verbatim and rewrites
+nothing, so `docs/figures/headline-batches.png` was resolved against the
+project's PyPI URL. The README now carries absolute destinations — the raw files
+for the figures, the repository pages for the links — so one copy of it renders
+on both GitHub and PyPI. No API change.
+
 ## 0.1.0
 
 First public release. `README.md` and the site describe what this version is, so

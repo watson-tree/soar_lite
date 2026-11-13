@@ -14,7 +14,7 @@ or money, and the search space is moderate- to high-dimensional.
 **Skip it when** there is no gradient to pass — a gradient-free objective is out
 of scope — or when a plain multistart local solve is affordable: if a few
 scrambled starts plus a quasi-Newton method find the answer cheaply, that costs
-you less. See [when this fits](docs/site/explanation/how-it-works.md#when-this-fits) for
+you less. See [when this fits](https://github.com/watson-tree/soar_lite/blob/main/docs/site/explanation/how-it-works.md#when-this-fits) for
 the reasoning.
 
 A run moves `n_paths` paths in lockstep, each following its own descent; an
@@ -89,7 +89,7 @@ the batches axis: one batch is one parallel pass - the wall clock of a GPU
 setting, which is what this library is built for - and on that axis a wider
 batch barely costs more. The points axis charges that width per point instead,
 so `n_paths=16` pays there for what it got nearly free here; the points-axis
-copies are in [`docs/figures/`](docs/figures/), and they are worth a look before
+copies are in [`docs/figures/`](https://github.com/watson-tree/soar_lite/tree/main/docs/figures/), and they are worth a look before
 the batches axis is read as a ranking.
 
 A curve is best-so-far, the line a median over 20 seeds and the band its Q1-Q3
@@ -107,13 +107,13 @@ single-knob, since Adam also carries a second moment and a tuned learning rate.
 Neither `mu` wins on every panel: start from `mu=0`, the default, and read the
 momentum arm panel by panel.
 
-[![The two real inverse problems, best-so-far against batches served](docs/figures/headline-batches.png)](docs/figures/headline-batches.png)
+[![The two real inverse problems, best-so-far against batches served](https://raw.githubusercontent.com/watson-tree/soar_lite/main/docs/figures/headline-batches.png)](https://raw.githubusercontent.com/watson-tree/soar_lite/main/docs/figures/headline-batches.png)
 
 **The two real inverse problems** - a mixed-unit oscillator chain and a
 non-convex compartment chain. The wide `n_paths=16` arm is shown whole, paying
 16 objective points per batch for that width; it is not ahead on both axes.
 
-[![Two preconditioned quadratics, one where a diagonal metric is exact](docs/figures/smooth-batches.png)](docs/figures/smooth-batches.png)
+[![Two preconditioned quadratics, one where a diagonal metric is exact](https://raw.githubusercontent.com/watson-tree/soar_lite/main/docs/figures/smooth-batches.png)](https://raw.githubusercontent.com/watson-tree/soar_lite/main/docs/figures/smooth-batches.png)
 
 **Two quadratics, 100 dimensions each** - one diagonal and conditioned at `1e4`,
 where a per-coordinate estimate is exact, one rotated and conditioned at `1e6`,
@@ -122,7 +122,7 @@ the case the secant was built for. On the rotated one soar-lite trails Adam and
 L-BFGS-B by design: the dropped off-diagonal curvature is the boundary the
 global side exists to cross.
 
-[![Rastrigin in 100 dimensions](docs/figures/multimodal-batches.png)](docs/figures/multimodal-batches.png)
+[![Rastrigin in 100 dimensions](https://raw.githubusercontent.com/watson-tree/soar_lite/main/docs/figures/multimodal-batches.png)](https://raw.githubusercontent.com/watson-tree/soar_lite/main/docs/figures/multimodal-batches.png)
 
 **A multimodal landscape, read as a boundary** - Rastrigin in 100 dimensions.
 It is not a race but a boundary: the secant damps where the gradient reverses
@@ -131,17 +131,17 @@ crossing a ridge into a better one. Multimodal reach is the global layer's job -
 more paths and restarts do the exploring. The wider arm's lead is its sixteen
 starts rather than a faster descent.
 
-[![One physics measured in two unit systems, with no retuning](docs/figures/invariance-units.png)](docs/figures/invariance-units.png)
+[![One physics measured in two unit systems, with no retuning](https://raw.githubusercontent.com/watson-tree/soar_lite/main/docs/figures/invariance-units.png)](https://raw.githubusercontent.com/watson-tree/soar_lite/main/docs/figures/invariance-units.png)
 
 **Unit invariance.** One physics measured in two unit systems (`x' = 10x`) with
 nothing retuned: the per-coordinate secant overlaps, while a single global
 learning rate separates because the effective step rescales with the unit.
 
 Both axes of all four panels, and the Adam `lr` sweep, are in
-[`docs/figures/`](docs/figures/); the medians behind every curve and the caveats
+[`docs/figures/`](https://github.com/watson-tree/soar_lite/tree/main/docs/figures/); the medians behind every curve and the caveats
 that qualify them are in `experiments/RESULTS.md`, what the comparison measures
 is in `experiments/DESIGN.md`, and the commands that redraw the set are in
-[`docs/figures/README.md`](docs/figures/README.md).
+[`docs/figures/README.md`](https://github.com/watson-tree/soar_lite/blob/main/docs/figures/README.md).
 
 Those files are named by path rather than linked because the harness under
 `experiments/` is a benchmark sub-library, not a dependency: it imports
@@ -150,7 +150,7 @@ neither the wheel nor the sdist. The figures are a snapshot of one run, so
 reading a result does not need the harness.
 
 To run any panel yourself, open
-[`notebooks/run_panels.ipynb`](notebooks/run_panels.ipynb) from a clone of this
+[`notebooks/run_panels.ipynb`](https://github.com/watson-tree/soar_lite/blob/main/notebooks/run_panels.ipynb) from a clone of this
 repository — the notebook imports the `experiments/` harness, which ships in
 neither the wheel nor the sdist: one section per panel, with the figure each
 run writes.
@@ -192,10 +192,10 @@ and nobody has to non-dimensionalize the problem by hand first. The warm-up step
 is the exception — its whole-step length is still chosen for the units in play.
 
 The name nods to the **adaptive restart** framework of
-[Mathesen et al. (2021)](docs/site/explanation/how-it-works.md#references): a local method
+[Mathesen et al. (2021)](https://github.com/watson-tree/soar_lite/blob/main/docs/site/explanation/how-it-works.md#references): a local method
 runs between restarts, and a global side decides where each start comes from.
 This library borrows that division of labor, not its code —
-[how it works](docs/site/explanation/how-it-works.md#soar-attribution-and-distinction) says
+[how it works](https://github.com/watson-tree/soar_lite/blob/main/docs/site/explanation/how-it-works.md#soar-attribution-and-distinction) says
 where the two depart.
 
 ## Scope
@@ -213,7 +213,7 @@ points only. A constraint the domain cannot state steers nothing until you fold
 it into the objective as a differentiable penalty, and that schedule is yours to
 choose. Both halves of the contract, plus what becomes of a non-finite value or
 gradient, are set out in [the tutorial's first
-section](docs/site/tutorial/getting-started.md#1-write-the-batched-objective-and-constraints).
+section](https://github.com/watson-tree/soar_lite/blob/main/docs/site/tutorial/getting-started.md#1-write-the-batched-objective-and-constraints).
 
 ## Documentation
 
@@ -225,7 +225,7 @@ reasons behind the local step, and the generated API reference.
 ## Contributing
 
 Local setup, the checks a change must pass, and the naming conventions are in
-[`CONTRIBUTING.md`](CONTRIBUTING.md): `uv sync --all-groups` installs JAX, the
+[`CONTRIBUTING.md`](https://github.com/watson-tree/soar_lite/blob/main/CONTRIBUTING.md): `uv sync --all-groups` installs JAX, the
 dev tools and the docs build, and `uv run python -m pytest` runs the suite.
 
 ## Citing
@@ -238,4 +238,4 @@ code that produced it.
 
 ## License
 
-MIT - see [`LICENSE`](LICENSE).
+MIT - see [`LICENSE`](https://github.com/watson-tree/soar_lite/blob/main/LICENSE).
