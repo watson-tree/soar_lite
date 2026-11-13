@@ -39,9 +39,9 @@ pins. JAX picks its backend from what is installed; to pin one inside a process,
 call `jax.config.update("jax_platform_name", "cpu")` — or `"cuda"` — before any
 JAX work.
 
-Those `pip` lines install the released version. To run `main` itself — before
-the first release is out, or after it to be ahead of the tag — `pip install
-git+https://github.com/watson-tree/soar_lite` builds from the branch.
+Those `pip` lines install the released version. To run `main` itself — ahead of
+the latest tag — `pip install git+https://github.com/watson-tree/soar_lite`
+builds from the branch.
 
 ## Minimal run
 

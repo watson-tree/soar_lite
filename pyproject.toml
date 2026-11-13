@@ -1,6 +1,6 @@
 [project]
 name = "soar-lite"
-version = "0.1.1"
+version = "0.1.2"
 description = "First-order n-path descent with stalled-path restarts and a unit-invariant diagonal preconditioner default"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,6 +35,7 @@ dependencies = ["jax"]
 [project.urls]
 Homepage = "https://github.com/watson-tree/soar_lite"
 Documentation = "https://watson-tree.github.io/soar_lite"
+Changelog = "https://github.com/watson-tree/soar_lite/blob/main/CHANGELOG.md"
 Repository = "https://github.com/watson-tree/soar_lite"
 
 [build-system]

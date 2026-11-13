@@ -5,6 +5,14 @@ release: what happened before it is in `git log`, and the internal record
 (a rename sweep, a default flipped three times before anyone could have
 depended on it) is not a thing a user upgrading between versions needs to read.
 
+## 0.1.2
+
+The install section still told a reader to build from `main` before the first
+release was out. The first release is out, so the sentence now says only what it
+still means: how to run `main` ahead of the latest tag. The metadata also gains a
+`Changelog` link, so PyPI shows one beside the other project links. No API
+change.
+
 ## 0.1.1
 
 The PyPI page was showing this README's four figures as broken images and its
