@@ -23,8 +23,49 @@ uv run mkdocs build --strict  # the docs site; a warning fails the build
 ```
 
 The tests are assert-style self-checks: plain `assert` in `test_*` functions,
-pytest-collectable, each module also runnable as a script — no fixtures, no
-recorded golden numbers that would encode this repository's history.
+pytest-collectable, no recorded golden numbers that would encode this
+repository's history. The four `python -m` modules above double as plain
+scripts; the rest, like everything under `experiments/tests`, are pytest-only
+and some use fixtures.
+
+## Commits and releases
+
+A commit subject names the kind of change before it describes it —
+`type(scope): what changed` — so `engine: settle only the points that still owe
+a gradient` becomes `fix(engine): settle only the points that still owe a
+gradient`. The types are `feat`, `fix`, `docs`, `test`, `refactor`, `perf`,
+`build`, `ci` and `chore`; the scope is optional — the module or the area the
+change lands in, added as `fix(engine): …` when the type alone does not say
+where. The rule starts with this release: earlier subjects are a mix of untyped
+`area: …` and occasional typed ones, and they stay as written, so read them as
+prose and type every subject you author from here on. The type earns its place
+because a user is the intended reader of `CHANGELOG.md`: `docs`, `test`, `ci`,
+`build` and `chore` never reach them, and that is the set a changelog generated
+from the log skips.
+
+Versions are SemVer read under its `0.x` rule: below `1.0.0`, any change a caller
+can notice — including one that breaks their code — bumps the minor version, and
+a patch is only for a fix that leaves the API as it was. `1.0.0` is where the
+compatibility promise starts.
+
+A release is four steps, in this order:
+
+1. Put the version in every place it is written: `version` in `pyproject.toml`,
+   `version` in `CITATION.cff`, the `## ` heading of a new top entry in
+   `CHANGELOG.md`, and a `uv lock` so `uv.lock` re-syncs it. The heading
+   carries no date; the tag is the date.
+2. Land it behind the checks above.
+3. Tag that commit on `main` `v<version>` and push the tag. Publishing is a
+   tag's business: nothing ships from a branch or a pull request, and the tag
+   must start with `v` — a tag like `0.1.0` matches no workflow and ships
+   nothing.
+4. Watch `publish.yml` run the tests, build and upload.
+
+PyPI never lets a version number be used twice — a published version can be
+yanked but not replaced, so an upload is the irreversible step. That is what the
+release-tag check in `publish.yml` stands in front of: a tag that does not name
+the version in `pyproject.toml` fails the build before anything is uploaded, and
+the tag can be deleted and pushed again.
 
 ## Front doors
 
