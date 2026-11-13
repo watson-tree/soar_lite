@@ -245,4 +245,6 @@ run wrote. Nothing is measured outside the command line above.
 It carries a `MODE` switch. `"record"` runs the canonical budget into the
 record's own roots — the committed images came from that run. `"demo"` runs
 4 seeds x 600 batches under `--out demo`, so a cheap pass cannot overwrite the
-record.
+record. The lr sweep is the one section the switch does not reach: its budget
+belongs to the record it writes, `tuning/adam.json`, and a demo-sized sweep of
+it would be refused rather than measured.
