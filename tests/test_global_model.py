@@ -47,3 +47,11 @@ def test_the_draws_are_the_handed_domains_own() -> None:
     assert narrow.shape == (64, 2)
     assert bool(jnp.all(narrow >= 10.0)), float(jnp.min(narrow))
     assert bool(jnp.all(narrow <= 11.0)), float(jnp.max(narrow))
+
+
+if __name__ == "__main__":
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print(f"ok {name}")
+    print("all global model tests passed")
