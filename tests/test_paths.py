@@ -266,7 +266,7 @@ def test_a_winner_read_for_its_value_still_owes_its_gradient() -> None:
     run.move()
 
     assert float(held(run).x[0]) == pytest.approx(0.2)
-    assert solver.served == pytest.approx([bowl(jnp.asarray([0.2]))])
+    assert solver.served == pytest.approx([float(bowl(jnp.asarray([0.2])))])
     # One value-only turn for the candidate, then one fused batch buying the
     # winner's gradient alone - and the path is graded, not just valued.
     assert (meter.work.n_f_batches, meter.work.n_f_points) == (1, 1)
