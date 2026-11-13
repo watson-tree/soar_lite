@@ -400,7 +400,7 @@ Why the window moves back, in one line: memory damps the scaled spectrum and
 shrinks direction noise, and both are landscape properties the preconditioner
 cannot see — so the default is the branch that assumes neither, and it is also
 the one that keeps a descending direction. The argument is in
-`docs/explanation/how-it-works.md` §Momentum.
+`docs/site/explanation/how-it-works.md` §Momentum.
 
 ## 2026-11-04 — lineup v4 supplement: the compartment-kinetics problem
 

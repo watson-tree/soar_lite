@@ -4,7 +4,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-site/
+/site/
 
 # Local scratch / working notes (never committed)
 .scratch/

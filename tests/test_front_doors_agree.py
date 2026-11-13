@@ -1,6 +1,6 @@
 """The two front doors are one document with two addresses.
 
-`docs/index.md` is canonical: it is the page mkdocs builds, and the tutorial
+`docs/site/index.md` is canonical: it is the page mkdocs builds, and the tutorial
 links into it for its install section. The root README mirrors it verbatim for
 the shared sections, so a fact gets corrected in one place and copied, not
 re-invented in the other. Sections only the README needs -- `Results`, `Scope`,
@@ -11,10 +11,10 @@ before the two openings are compared. What is left of the opening is shared: a
 reader arriving from the package index and a reader arriving from the site meet
 the same four paragraphs.
 
-Link destinations are the one thing that cannot be copied: `docs/index.md`
-addresses its neighbours from inside `docs/`, the README from the root, so the
-same sentence carries `explanation/how-it-works.md` in one and
-`docs/explanation/how-it-works.md` in the other. Text is compared with the
+Link destinations are the one thing that cannot be copied: `docs/site/index.md`
+addresses its neighbours from inside `docs/site/`, the README from the root, so
+the same sentence carries `explanation/how-it-works.md` in one and
+`docs/site/explanation/how-it-works.md` in the other. Text is compared with the
 destinations masked, and their resolution is checked separately: the sentence is
 one fact, the two addresses are two.
 """
@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-CANONICAL = "docs/index.md"
+CANONICAL = "docs/site/index.md"
 MIRROR = "README.md"
 SHARED = ("Install", "Minimal run", "What's inside", "Citing")
 LINK = re.compile(r"\]\(([^)\s]+)\)")

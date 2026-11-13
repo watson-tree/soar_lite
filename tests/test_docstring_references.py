@@ -1,7 +1,7 @@
 """Every reference a docstring cites is one the reference list already carries.
 
 The full entries live in one place - the `## References` list in
-`docs/explanation/how-it-works.md` - and a docstring carries only a locator
+`docs/site/explanation/how-it-works.md` - and a docstring carries only a locator
 (first author, year, venue). That split is what makes the list reviewable: one
 surface holds the author lists, page ranges and URLs, and nothing else restates
 them. This test keeps the split honest: a docstring may not cite a paper the
@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "soar_lite"
-PAGE = ROOT / "docs" / "explanation" / "how-it-works.md"
+PAGE = ROOT / "docs" / "site" / "explanation" / "how-it-works.md"
 
 # `- Mathesen, L., Pedrielli, G., ... (2021).` and `- Conn et al. (2000), ...`
 ENTRY = re.compile(r"^-\s+(?P<surname>[A-Z][A-Za-z'\-]+)")

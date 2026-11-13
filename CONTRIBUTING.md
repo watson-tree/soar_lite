@@ -69,10 +69,10 @@ the tag can be deleted and pushed again.
 
 ## Front doors
 
-`docs/index.md` is the canonical home page and the root `README.md` mirrors it
+`docs/site/index.md` is the canonical home page and the root `README.md` mirrors it
 for the sections both carry. A fact in the opening, or in any section either one
 carries from the other — `Install`, `Minimal run`, `What's inside`, `Citing` — is
-corrected in `docs/index.md` and copied across;
+corrected in `docs/site/index.md` and copied across;
 `tests/test_front_doors_agree.py` fails if the two drift apart, or if a link in
 either one stops resolving. Link destinations are the sole exception — the site
 addresses its neighbours from inside `docs/`, the README from the root.
@@ -103,7 +103,7 @@ follows in `experiments/DESIGN.md`, and the numbers in `experiments/RESULTS.md`.
 
 The two plugin seams (`LocalSolver`, `GlobalModel`) are the natural extension
 points. Writing your own is currently documented only as the contracts in
-`docs/reference/api.md` and the `Protocol`s in `soar_lite/engine/contracts.py`,
+`docs/site/reference/api.md` and the `Protocol`s in `soar_lite/engine/contracts.py`,
 not yet as a how-to guide. `BLRGlobalModel`'s acquisition has a known upgrade
 (see the `shortcut:` note in `soar_lite/global_model/blr.py`), and more global
 models or local solvers (e.g. line search) are welcome — `experiments/RESULTS.md`

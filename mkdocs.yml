@@ -3,13 +3,7 @@ site_url: https://watson-tree.github.io/soar_lite/
 site_description: First-order n-path descent with stalled-path restarts and a unit-invariant diagonal preconditioner default
 repo_url: https://github.com/watson-tree/soar_lite
 repo_name: watson-tree/soar_lite
-docs_dir: docs
-
-# `docs/figures/README.md` is maintenance notes for the copies the root README
-# shows; it is not a page a reader of these docs needs, so it is not in the nav.
-# It cites `experiments/` by path only, so nothing here points out of `docs_dir`.
-exclude_docs: |
-  figures/README.md
+docs_dir: docs/site
 
 theme:
   name: readthedocs
@@ -24,7 +18,7 @@ nav:
 
 # Marks the blocks mkdocstrings generates, which carry no language of their own.
 hooks:
-  - docs/hooks.py
+  - docs/site/hooks.py
 
 markdown_extensions:
   - tables

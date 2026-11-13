@@ -34,7 +34,7 @@ a claim on its own:
   endpoint. The figures are read for rate as well as for final position, and a
   memory is what moves that rate: it trades overshoot along steep directions
   against slow progress along flat ones, on the window the *scaled spectrum*
-  calls for (see `docs/explanation/how-it-works.md` §Momentum). No panel here
+  calls for (see `docs/site/explanation/how-it-works.md` §Momentum). No panel here
   has a problem whose discriminator is a stall — a stalled chain has already
   settled, so a memory cannot change where it stops, only how fast it got
   there. It is a trade, not a repair: momentum re-shapes the iteration along the

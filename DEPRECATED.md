@@ -181,7 +181,7 @@ caller's landscape should pick.
 
 `μ = 0` (no memory), `β = 0.63` unchanged. The `μ` knob stays, and
 `experiments` keeps a `μ = 0.9` arm as the momentum comparison against Adam's
-`b1 = 0.9`. Argument and wording: `docs/explanation/how-it-works.md`
+`b1 = 0.9`. Argument and wording: `docs/site/explanation/how-it-works.md`
 §Momentum.
 
 ## Additive denominator floor (`+` instead of `max`)

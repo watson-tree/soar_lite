@@ -18,7 +18,7 @@ from it.
 ## Where this sits
 
 A benchmark sub-library, not a dependency. It imports `soar_lite` and cites
-`docs/explanation/how-it-works.md`; nothing in `soar_lite/`, `docs/` or the root
+`docs/site/explanation/how-it-works.md`; nothing in `soar_lite/`, `docs/` or the root
 `README.md` links back in, and neither the wheel nor the sdist ships this
 directory. Its one entry point is `compare_baselines.py`; its record stays in
 the files next to this one.
@@ -218,7 +218,7 @@ happen. `--plot-only` and `--lr-sweep` measure no arm at all, so they refuse
 - **No *tuned* knobs on soar-lite** — which is not the same as no knobs.
   `DiagonalPreconditioner` exposes six (`moment`, `beta`, `mu`, `theta`,
   `alpha0`, `tau_rel`), and two are live smoothing windows: `beta` sets the
-  preconditioner's memory (see `docs/explanation/how-it-works.md` §Smoothing),
+  preconditioner's memory (see `docs/site/explanation/how-it-works.md` §Smoothing),
   `mu` the direction's (0 by default, so a run takes direction memory only if it
   asks — §Momentum on the same page). What the formal runs do is take them at
   their factory defaults end to end, so soar-lite pays no per-problem search;

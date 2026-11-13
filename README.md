@@ -14,7 +14,7 @@ or money, and the search space is moderate- to high-dimensional.
 **Skip it when** there is no gradient to pass — a gradient-free objective is out
 of scope — or when a plain multistart local solve is affordable: if a few
 scrambled starts plus a quasi-Newton method find the answer cheaply, that costs
-you less. See [when this fits](docs/explanation/how-it-works.md#when-this-fits) for
+you less. See [when this fits](docs/site/explanation/how-it-works.md#when-this-fits) for
 the reasoning.
 
 A run moves `n_paths` paths in lockstep, each following its own descent; an
@@ -192,10 +192,10 @@ and nobody has to non-dimensionalize the problem by hand first. The warm-up step
 is the exception — its whole-step length is still chosen for the units in play.
 
 The name nods to the **adaptive restart** framework of
-[Mathesen et al. (2021)](docs/explanation/how-it-works.md#references): a local method
+[Mathesen et al. (2021)](docs/site/explanation/how-it-works.md#references): a local method
 runs between restarts, and a global side decides where each start comes from.
 This library borrows that division of labor, not its code —
-[how it works](docs/explanation/how-it-works.md#soar-attribution-and-distinction) says
+[how it works](docs/site/explanation/how-it-works.md#soar-attribution-and-distinction) says
 where the two depart.
 
 ## Scope
@@ -213,7 +213,7 @@ points only. A constraint the domain cannot state steers nothing until you fold
 it into the objective as a differentiable penalty, and that schedule is yours to
 choose. Both halves of the contract, plus what becomes of a non-finite value or
 gradient, are set out in [the tutorial's first
-section](docs/tutorial/getting-started.md#1-write-the-batched-objective-and-constraints).
+section](docs/site/tutorial/getting-started.md#1-write-the-batched-objective-and-constraints).
 
 ## Documentation
 
