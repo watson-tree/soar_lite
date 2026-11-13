@@ -1,0 +1,61 @@
+# Weekly dependency pull requests. Two ecosystems: the uv project (pyproject
+# constraints, [dependency-groups], uv.lock) and the action versions pinned in
+# .github/workflows.
+#
+# The groups exist to keep the PR count near three a week. `numerics` holds the
+# packages that move together - optax releases track jax releases - so they
+# arrive as one PR to test and one to merge. `open-pull-requests-limit` caps
+# what the groups do not absorb; version-update PRs are limited separately from
+# security ones.
+#
+# No `labels:`: this repository has no `dependencies` label, and a PR from
+# dependabot[bot] is as filterable as a label.
+#
+# `cooldown` is explicit at 7 days. Dependabot's own default is 3; a week is long
+# enough for a yanked or hijacked release to be caught upstream, and the delay
+# applies only to version updates - security updates still land immediately.
+version: 2
+
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    commit-message:
+      # Dependabot's default ("Bump x from a to b") is not a conventional
+      # commit. `include: scope` appends `deps` or `deps-dev`.
+      prefix: "chore"
+      include: "scope"
+    open-pull-requests-limit: 5
+    groups:
+      numerics:
+        patterns: ["jax", "jaxlib", "optax", "numpy", "scipy", "matplotlib"]
+      tooling:
+        patterns:
+          - "ruff"
+          - "pyright"
+          - "pytest"
+          - "pytest-*"
+          - "mkdocs"
+          - "mkdocs-*"
+          - "mkdocstrings"
+          - "mkdocstrings-*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        # one PR for every action bump: they are validated by the same CI run
+        patterns: ["*"]
