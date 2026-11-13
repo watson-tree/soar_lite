@@ -40,7 +40,9 @@ eval_f_g, eval_f = pointwise(squares)
 
 You write one function, the per-point scalar; `pointwise` builds the batch from
 it — `vmap` of `jax.value_and_grad` for the fused seam, the function the engine
-calls once per batch.
+calls once per batch. When the objective is the expensive part of a batch, that
+seam is where `jax.jit` pays: [Spend less time in the objective](../how-to/speed.md)
+works through what tracing buys and which batch shapes let it.
 
 The call returns two callables. The second is the plain forward pass, the optional value-only
 seam: pass it as `eval_f=eval_f` to serve a step's trials for their value alone
