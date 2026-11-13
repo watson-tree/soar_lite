@@ -13,7 +13,7 @@ half a plugin author reads.
 """
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias
 
@@ -709,3 +709,50 @@ def pointwise(
         return f, g, feas_at(x)
 
     return eval_f_g, eval_f
+
+
+def check_answer(  # noqa: PLR0913 (the ask's facts and its two refusals)
+    answer: Point | None,
+    i: int,
+    *,
+    asked: Collection[int],
+    d: int,
+    membership: str,
+    shape: str,
+) -> None:
+    """Refuse an answer an ask cannot hold: a path it did not name, or the wrong width.
+
+    The one gate every seam that reads a per-path answer runs first, so the
+    order holds everywhere. A key the ask did not name is refused even when its
+    answer is ``None`` - a stray key is a bug, not a decline - because accepting
+    it would hand the caller a path it never asked about. A declined path then
+    passes through untouched for the caller to give it meaning, and a
+    non-declined answer must be a ``(d,)`` point.
+
+    The box test is not part of this gate: it belongs to the run, which owns the
+    box and applies it after this check wherever the answer lands. Nor is
+    ``None`` given a meaning here - declining a path is a different decision at
+    every seam, so the caller keeps it.
+
+    ``membership`` and ``shape`` are the caller's own refusal wording, filled
+    here with ``i``, ``asked`` (sorted), ``d`` and ``shape``. Naming the actor
+    is the whole point of the message, so the words stay the caller's.
+
+    Args:
+        answer: The answer for path `i`, or ``None`` for a declined path.
+        i: The path the answer is keyed by.
+        asked: The paths this ask named.
+        d: The run's dimension.
+        membership: Refusal for a key the ask did not name.
+        shape: Refusal for an answer that is not ``(d,)`` wide.
+
+    Raises:
+        ValueError: If `i` was not asked about, or if `answer` is not ``(d,)``.
+
+    """
+    if i not in asked:
+        raise ValueError(membership.format(i=i, asked=sorted(asked)))
+    if answer is None:
+        return
+    if answer.x.shape != (d,):
+        raise ValueError(shape.format(i=i, d=d, shape=answer.x.shape))

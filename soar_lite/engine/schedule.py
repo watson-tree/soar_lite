@@ -34,6 +34,7 @@ from soar_lite.engine.contracts import (
     ProposeFn,
     ValuePoint,
     Work,
+    check_answer,
 )
 
 
@@ -648,18 +649,16 @@ class _EvalSeams:
         d = self._domain.d
         checked: dict[int, Point] = {}
         for i, point in points.items():
-            if i not in asked:
-                msg = (
-                    f"serve_trials was handed path {i}, which this iteration "
-                    f"did not ask to step (asked: {sorted(asked)})"
-                )
-                raise ValueError(msg)
-            if point.x.shape != (d,):
-                msg = (
-                    f"serve_trials was handed a {point.x.shape} point for path {i}, "
-                    f"expected a ({d},) point"
-                )
-                raise ValueError(msg)
+            check_answer(
+                point,
+                i,
+                asked=asked,
+                d=d,
+                membership="serve_trials was handed path {i}, which this "
+                "iteration did not ask to step (asked: {asked})",
+                shape="serve_trials was handed a {shape} point for path {i}, "
+                "expected a ({d},) point",
+            )
             # a round carries coordinates: a point re-served is a fresh trial
             checked[i] = Point(
                 _check_inside(
@@ -996,23 +995,21 @@ class _Paths:
         asked = set(restarting)
         starts: dict[int, Point] = {}
         for i, answer in self.propose(restarting, self.domain).items():
-            if i not in asked:
-                msg = (
-                    f"the global model answered for path {i}, which this "
-                    f"iteration did not ask to restart (asked: {sorted(asked)})"
-                )
-                raise ValueError(msg)
+            check_answer(
+                answer,
+                i,
+                asked=asked,
+                d=d,
+                membership="the global model answered for path {i}, which this "
+                "iteration did not ask to restart (asked: {asked})",
+                shape="the global model's start for path {i} must be a ({d},) "
+                "point, got shape {shape}",
+            )
             if answer is None:
                 # Not a stopping rule: this path starts nowhere this round, so it
                 # places nothing and keeps whatever stall bit it had - a path
                 # holding no point is asked again next iteration.
                 continue
-            if answer.x.shape != (d,):
-                msg = (
-                    f"the global model's start for path {i} must be a ({d},) "
-                    f"point, got shape {answer.x.shape}"
-                )
-                raise ValueError(msg)
             starts[i] = Point(
                 _check_inside(
                     answer.x,
@@ -1057,21 +1054,19 @@ class _Paths:
         asked = set(stepping)
         winners: dict[int, Point] = {}
         for i, answer in answers.items():
-            if i not in asked:
-                msg = (
-                    f"local_solver answered for path {i}, which this iteration "
-                    f"did not ask to step (asked: {sorted(asked)})"
-                )
-                raise ValueError(msg)
+            check_answer(
+                answer,
+                i,
+                asked=asked,
+                d=d,
+                membership="local_solver answered for path {i}, which this "
+                "iteration did not ask to step (asked: {asked})",
+                shape="local_solver's step on path {i} must be a ({d},) point, "
+                "got shape {shape}",
+            )
             if answer is None:
                 self.slots[i].is_stalled = True
                 continue
-            if answer.x.shape != (d,):
-                msg = (
-                    f"local_solver's step on path {i} must be a ({d},) point, "
-                    f"got shape {answer.x.shape}"
-                )
-                raise ValueError(msg)
             x = _check_inside(
                 answer.x,
                 what=f"local_solver's step on path {i}",

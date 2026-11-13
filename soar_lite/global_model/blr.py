@@ -40,6 +40,7 @@ from jax.scipy.special import log_ndtr
 
 from soar_lite.domain import Domain
 from soar_lite.engine import GlobalModel, Point, ValuePoint
+from soar_lite.engine.contracts import check_answer
 from soar_lite.global_model.projection import (
     Projection,
     ProjectionFactory,
@@ -266,21 +267,19 @@ class BLRGlobalModel(GlobalModel):
         asked = set(paths)
         starts: dict[int, Point | None] = {}
         for i, answer in self._minimize(acquisition, domain, paths, sub).items():
-            if i not in asked:
-                msg = (
-                    f"minimize answered for path {i}, which this ask did not "
-                    f"name (named: {sorted(asked)})"
-                )
-                raise ValueError(msg)
+            check_answer(
+                answer,
+                i,
+                asked=asked,
+                d=domain.d,
+                membership="minimize answered for path {i}, which this ask did "
+                "not name (named: {asked})",
+                shape="minimize's start for path {i} must be a ({d},) point, "
+                "got shape {shape}",
+            )
             if answer is None:  # the minimizer's own "could not place it"
                 starts[i] = None
                 continue
-            if answer.x.shape != (domain.d,):
-                msg = (
-                    f"minimize's start for path {i} must be a ({domain.d},) "
-                    f"point, got shape {answer.x.shape}"
-                )
-                raise ValueError(msg)
             starts[i] = answer
         return starts
 
