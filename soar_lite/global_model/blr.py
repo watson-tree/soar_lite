@@ -331,7 +331,12 @@ class BLRGlobalModel(GlobalModel):
         return self._count > 1 and self._sq_dev > 0
 
     def _values(self) -> jnp.ndarray:
-        """Return every kept value, in the order the batches were folded in."""
+        """Return every kept value, in the order the batches were folded in.
+
+        Kept `_`-private for the tests, like `_predict`: `propose` folds each
+        batch's products as it walks them and never reassembles the values, so
+        a test reading them is the only caller.
+        """
         return jnp.concatenate(self._fs)
 
     def _fold_stats(self, kept: jnp.ndarray) -> None:

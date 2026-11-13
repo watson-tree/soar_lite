@@ -149,8 +149,8 @@ class SphereProjection(Projection):
                 between the bent dimensions' entries move the features - the
                 projection derives one global lengthscale from `scale` and
                 `kappa` and divides it back out - but the common magnitude is
-                what the fallback draw and an unbounded dimension's radius are
-                measured in.
+                what the fallback draw and the radius of a dimension outside
+                `bounded_dims` are measured in.
             kappa: the tie between the projection's radius and the domain - a
                 bent dimension's far end lands at ``|z|^2 = 1/kappa`` whatever
                 ``d`` is. Must lie in ``(0, 1)``; without such a tie a
@@ -174,10 +174,10 @@ class SphereProjection(Projection):
         # bent dimension's reference radius, divided by `global_lengthscale`, is
         # `1/sqrt(kappa)` in total, so `d` raises the features' typical radius
         # without ever pushing the farthest point past the pole. A bounded
-        # dimension's radius is half its width in `scale` units; an unbounded
-        # one has no width, so its radius is one `scale`. Summed over the bent
-        # dimensions only - a dimension the projection leaves out has no radius
-        # to tie.
+        # dimension's radius is half its width in `scale` units; a dimension
+        # outside `bounded_dims` has no width, so its radius is one `scale`.
+        # Summed over the bent dimensions only - a dimension the projection
+        # leaves out has no radius to tie.
         radius = jnp.where(
             domain.bounded_dims,
             domain.width / (2.0 * domain.scale),
